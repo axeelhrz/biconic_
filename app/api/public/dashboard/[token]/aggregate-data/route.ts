@@ -1,0 +1,322 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
+
+// --- Interfaces (Copied from internal route) ---
+interface Metric {
+  field: string;
+  func: string;
+  alias: string;
+  cast?: "numeric" | "sanitize";
+}
+
+interface Filter {
+  field: string;
+  operator: string;
+  value: any;
+  cast?: "numeric";
+}
+
+interface OrderBy {
+  field: string;
+  direction: "ASC" | "DESC";
+}
+
+interface AggregationRequest {
+  tableName: string;
+  dimension?: string;
+  metrics: Metric[];
+  filters?: Filter[];
+  orderBy?: OrderBy;
+  limit?: number;
+}
+
+// --- Constantes ---
+function toSqlLiteral(v: any): string {
+  if (v === null || typeof v === "undefined") return "NULL";
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+  const s = String(v).replace(/'/g, "''");
+  return `'${s}'`;
+}
+
+const normalizeStr = (str: string) =>
+  str ? str.replace(/\s+/g, "").toUpperCase() : "";
+
+export async function POST(
+  req: NextRequest,
+  { params }: { params: Promise<{ token: string }> }
+) {
+  try {
+    const awaitedParams = await params;
+    const token = awaitedParams["token"];
+    const body: AggregationRequest = await req.json();
+
+    if (!token) {
+      return NextResponse.json({ error: "Token required" }, { status: 400 });
+    }
+
+    if (!body.tableName) {
+      throw new Error("Nombre de tabla inválido o no permitido.");
+    }
+
+    const supabase = createServiceRoleClient();
+
+    // --- SECURITY CHECK: Validate Table ---
+    // 1. Get ETL ID via Token
+    const { data: dashboard } = await supabase
+      .from("dashboard")
+      .select("etl_id, visibility")
+      .eq("share_token", token)
+      .maybeSingle();
+
+    if (!dashboard?.etl_id) {
+      return NextResponse.json(
+        { error: "Dashboard invalid or not found" },
+        { status: 404 }
+      );
+    }
+
+    if (dashboard.visibility === "private") {
+      return NextResponse.json({ error: "Dashboard private" }, { status: 403 });
+    }
+
+    // 2. Get Valid Table Name
+    const { data: latestRun } = await supabase
+      .from("etl_runs_log")
+      .select("destination_schema,destination_table_name")
+      .eq("etl_id", dashboard.etl_id)
+      .eq("status", "completed")
+      .order("completed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    let validTable = "";
+    if (latestRun) {
+      const schema = latestRun.destination_schema || "etl_output";
+      validTable = `${schema}.${latestRun.destination_table_name}`;
+    } else {
+      // Fallback for legacy
+      validTable = "public.etl_data_warehouse";
+    }
+
+    if (
+      body.tableName !== validTable &&
+      body.tableName !== "etl_output." + latestRun?.destination_table_name
+    ) {
+      // Allow some fuzzy matching if necessary (like missing schema), but best to be strict.
+      // Internal DashboardViewer sends schema.
+      // If mismatch, block.
+      // Note: DashboardViewer might send "etl_output.foo" and DB has "etl_output.foo".
+      // Use a more robust check?
+      // Let's assume strict equality OR check if validTable ends with body.tableName if schema is missing in body?
+      // Actually, let's just use strict logic:
+      // If `latestRun` exists, we require it to match.
+    }
+
+    // Simplification for prototype: If verify fails, 403.
+    // However, string comparison can be tricky.
+    // Let's rely on standardizing:
+    const requested = body.tableName.includes(".")
+      ? body.tableName
+      : `etl_output.${body.tableName}`;
+    const allowed = validTable;
+
+    // allow query if it strictly matches allowed table
+    if (requested !== allowed) {
+      // Check legacy fallback explicitly
+      if (
+        requested !== "public.etl_data_warehouse" ||
+        allowed !== "public.etl_data_warehouse"
+      ) {
+        // It's a mismatch
+        console.warn(
+          `[Public API] Security Block: Requested ${requested} != Allowed ${allowed}`
+        );
+        return NextResponse.json(
+          { error: "Unauthorized table access" },
+          { status: 403 }
+        );
+      }
+    }
+    // --------------------------------------
+
+    const [schema, table] = requested.split(".");
+
+    // 1. Construcción de Métricas (Usamos metric_X internamente para seguridad SQL)
+    const metricClauses = body.metrics
+      .map((m, i) => {
+        const func = m.func.toUpperCase();
+        const safeField = m.field.replace(/"/g, '""');
+
+        const fieldExpr = (() => {
+          if (m.cast === "sanitize")
+            return `regexp_replace("${safeField}"::text, '[^0-9\\.-]', '', 'g')::numeric`;
+          if (m.cast === "numeric") return `"${safeField}"::numeric`;
+          return `"${safeField}"`;
+        })();
+
+        // Internamente usamos metric_0, metric_1 para evitar errores de SQL con caracteres raros
+        const internalAlias = `metric_${i}`;
+
+        // Guardamos el internalAlias en el objeto métrica para usarlo en OrderBy
+        (m as any).internalAlias = internalAlias;
+
+        if (func.startsWith("COUNT(DISTINCT"))
+          return `COUNT(DISTINCT ${fieldExpr}) AS "${internalAlias}"`;
+        return `${func}(${fieldExpr}) AS "${internalAlias}"`;
+      })
+      .join(", ");
+
+    // 2. Construcción de Dimensión
+    let dimensionSelectClause = "";
+    let dimensionGroupByClause = "";
+
+    if (body.dimension) {
+      const safeDimension = body.dimension.replace(/"/g, '""');
+      const coalesceExpression = `COALESCE("${safeDimension}"::text, 'Sin Categoría')`;
+      dimensionSelectClause = `${coalesceExpression} AS "${safeDimension}"`;
+      dimensionGroupByClause = coalesceExpression;
+    }
+
+    const selectClause = [dimensionSelectClause, metricClauses]
+      .filter(Boolean)
+      .join(", ");
+    let query = `SELECT ${selectClause} FROM "${schema}"."${table}"`;
+
+    // 3. Filtros
+    if (body.filters && body.filters.length > 0) {
+      const whereClauses = body.filters
+        .map((f) => {
+          const safeField = f.field.replace(/"/g, '""');
+          const op = (f.operator || "=").toUpperCase().trim();
+
+          let fieldExpression;
+          if (op === "MONTH" || op === "DAY" || op === "YEAR") {
+            fieldExpression = `(
+              CASE
+                WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, 'DD/MM/YYYY')
+                WHEN "${safeField}"::text LIKE '%, % de % de %' THEN to_date("${safeField}"::text, 'Day, DD "de" Month "de" YYYY')
+                ELSE "${safeField}"::date
+              END
+            )`;
+          } else {
+            fieldExpression =
+              f.cast === "numeric"
+                ? `"${safeField}"::numeric`
+                : `"${safeField}"`;
+          }
+
+          if (op === "MONTH") {
+            if (Array.isArray(f.value)) {
+              const list = f.value
+                .map((v) => Number(v))
+                .filter((n) => !isNaN(n))
+                .join(", ");
+              return `EXTRACT(MONTH FROM ${fieldExpression}) IN (${list})`;
+            }
+            return `EXTRACT(MONTH FROM ${fieldExpression}) = ${Number(
+              f.value
+            )}`;
+          }
+          if (op === "YEAR") {
+            if (Array.isArray(f.value)) {
+              const list = f.value
+                .map((v) => Number(v))
+                .filter((n) => !isNaN(n))
+                .join(", ");
+              return `EXTRACT(YEAR FROM ${fieldExpression}) IN (${list})`;
+            }
+            return `EXTRACT(YEAR FROM ${fieldExpression}) = ${Number(f.value)}`;
+          }
+          if (op === "DAY") {
+            const dayStr = String(f.value || "").trim();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) return "TRUE";
+            return `${fieldExpression} = DATE '${dayStr}'`;
+          }
+          if (op === "IN") {
+            const list = (Array.isArray(f.value) ? f.value : [])
+              .map((x) => toSqlLiteral(x))
+              .join(", ");
+            return `${fieldExpression} IN (${list})`;
+          }
+          if (op === "BETWEEN") {
+            let from: any, to: any;
+            if (Array.isArray(f.value)) [from, to] = f.value;
+            else if (f.value && typeof f.value === "object") {
+              from = (f.value as any).from;
+              to = (f.value as any).to;
+            }
+            return `${fieldExpression} BETWEEN ${toSqlLiteral(
+              from
+            )} AND ${toSqlLiteral(to)}`;
+          }
+          if ((op === "IS" || op === "IS NOT") && f.value === null)
+            return `"${safeField}" ${op} NULL`;
+
+          return `${fieldExpression} ${op} ${toSqlLiteral(f.value)}`;
+        })
+        .join(" AND ");
+      if (whereClauses) query += ` WHERE ${whereClauses}`;
+    }
+
+    // 4. Group By
+    if (dimensionGroupByClause) {
+      query += ` GROUP BY ${dimensionGroupByClause}`;
+    }
+
+    // 5. Order By Inteligente
+    if (body.orderBy) {
+      let orderByField = `"${body.orderBy.field}"`;
+      const requestedSortNormalized = normalizeStr(body.orderBy.field);
+
+      // Buscar si el orden solicitado coincide con alguna métrica
+      const matchedMetric = body.metrics.find((m, i) => {
+        const signature = `${m.func}(${m.field})`;
+        // Comparar con el Alias que pidió el usuario O la firma de la función
+        return (
+          requestedSortNormalized === normalizeStr(m.alias || "") ||
+          requestedSortNormalized === normalizeStr(signature)
+        );
+      });
+
+      if (matchedMetric) {
+        // Ordenamos por el alias interno (metric_0) para que SQL no falle
+        orderByField = `"${(matchedMetric as any).internalAlias}"`;
+      }
+
+      query += ` ORDER BY ${orderByField} ${body.orderBy.direction.toUpperCase()}`;
+    }
+
+    if (body.limit) {
+      const lim = Math.max(1, Math.min(5000, parseInt(String(body.limit), 10)));
+      query += ` LIMIT ${lim}`;
+    }
+
+    // 6. Ejecución via RPC (using service role)
+    const { data, error } = await (supabase as any).rpc("execute_sql", {
+      sql_query: query,
+    });
+
+    if (error) throw new Error(error.message);
+
+    const results = data || [];
+
+    const mappedResults = results.map((row: any) => {
+      const newRow = { ...row };
+      body.metrics.forEach((m, i) => {
+        const internalKey = `metric_${i}`;
+        const externalKey = m.alias ? m.alias : `${m.func}(${m.field})`;
+        if (Object.prototype.hasOwnProperty.call(newRow, internalKey)) {
+          newRow[externalKey] = newRow[internalKey];
+          delete newRow[internalKey];
+        }
+      });
+      return newRow;
+    });
+
+    return NextResponse.json(mappedResults);
+  } catch (err: any) {
+    console.error("Error en API:", err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
