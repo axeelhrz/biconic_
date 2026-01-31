@@ -42,7 +42,7 @@ export default function AdminClientSelectionModal({
       const supabase = createClient();
       const { data, error } = await supabase
         .from("clients")
-        .select("id, company_name")
+        .select("id, company_name, logo_url")
         .order("company_name", { ascending: true });
       
       if (!error && data) {

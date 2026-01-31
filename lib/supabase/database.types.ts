@@ -1,4 +1,4 @@
-﻿export type Json =
+export type Json =
   | string
   | number
   | boolean
@@ -2278,6 +2278,7 @@ export type Database = {
           identification_number: string | null
           identification_type: string | null
           individual_full_name: string | null
+          logo_url: string | null
           province_id: string | null
           status: string
           type: Database["public"]["Enums"]["client_type"]
@@ -2293,6 +2294,7 @@ export type Database = {
           identification_number?: string | null
           identification_type?: string | null
           individual_full_name?: string | null
+          logo_url?: string | null
           province_id?: string | null
           status?: string
           type: Database["public"]["Enums"]["client_type"]
@@ -2308,6 +2310,7 @@ export type Database = {
           identification_number?: string | null
           identification_type?: string | null
           individual_full_name?: string | null
+          logo_url?: string | null
           province_id?: string | null
           status?: string
           type?: Database["public"]["Enums"]["client_type"]

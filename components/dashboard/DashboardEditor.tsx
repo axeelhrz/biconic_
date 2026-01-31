@@ -29,7 +29,19 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  MoreVertical,
+  BringToFront,
+  SendToBack,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -54,6 +66,11 @@ import FieldSelector from "./FieldSelector";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 import { SaveVersionButton, HistoryDialog } from "./DashboardVersioning";
 import { DashboardViewer } from "./DashboardViewer"; // Import Viewer
+import {
+  buildChartOptions,
+  type ChartStyleConfig,
+  type ValueFormatType,
+} from "@/lib/dashboard/chartOptions";
 
 // 2. Registrar el plugin globalmente para Chart.js
 ChartJS.register(
@@ -190,6 +207,9 @@ type Widget = {
     objectFit?: "contain" | "cover" | "fill" | "none" | "scale-down";
   };
   isLoading?: boolean;
+  /** Orden de capas: mayor = más al frente */
+  zIndex?: number;
+  chartStyle?: ChartStyleConfig;
 };
 
 const PALETTE: { label: string; type: WidgetType }[] = [
@@ -1135,6 +1155,7 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
         : type === "image"
         ? { w: 200, h: 200 }
         : { w: 520, h: 260 };
+    const maxZ = Math.max(0, ...widgets.map((x) => x.zIndex ?? 0));
     const newWidget: Widget = {
       id,
       type,
@@ -1146,6 +1167,7 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
       labelDisplayMode:
         type === "pie" || type === "doughnut" ? "percent" : undefined,
       aggregationConfig: { enabled: false, metrics: [] },
+      zIndex: maxZ + 1,
     };
     setWidgets((prev) => [...prev, newWidget]);
     setSelectedId(id);
@@ -1416,6 +1438,45 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
     // Remove widget from state
     setWidgets((prev) => prev.filter((w) => w.id !== widgetId));
     if (selectedId === widgetId) setSelectedId(null);
+  };
+
+  const bringToFront = (widgetId: string) => {
+    const maxZ = Math.max(...widgets.map((x) => x.zIndex ?? 0), 0);
+    const w = widgets.find((x) => x.id === widgetId);
+    if (!w || (w.zIndex ?? 0) >= maxZ) return;
+    setWidgets((prev) =>
+      prev.map((x) =>
+        x.id === widgetId ? { ...x, zIndex: maxZ + 1 } : x
+      )
+    );
+  };
+  const sendToBack = (widgetId: string) => {
+    const minZ = Math.min(...widgets.map((x) => x.zIndex ?? 0), 0);
+    const w = widgets.find((x) => x.id === widgetId);
+    if (!w || (w.zIndex ?? 0) <= minZ) return;
+    setWidgets((prev) =>
+      prev.map((x) =>
+        x.id === widgetId ? { ...x, zIndex: minZ - 1 } : x
+      )
+    );
+  };
+  const bringForward = (widgetId: string) => {
+    const w = widgets.find((x) => x.id === widgetId);
+    if (!w) return;
+    const currentZ = w.zIndex ?? 0;
+    const nextZ = currentZ + 1;
+    setWidgets((prev) =>
+      prev.map((x) => (x.id === widgetId ? { ...x, zIndex: nextZ } : x))
+    );
+  };
+  const sendBackward = (widgetId: string) => {
+    const w = widgets.find((x) => x.id === widgetId);
+    if (!w) return;
+    const currentZ = w.zIndex ?? 0;
+    const nextZ = currentZ - 1;
+    setWidgets((prev) =>
+      prev.map((x) => (x.id === widgetId ? { ...x, zIndex: nextZ } : x))
+    );
   };
 
   // Cargar opciones de forma automática al abrir el panel de filtros
@@ -2101,7 +2162,12 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
               transformOrigin: "top left",
             }}
           >
-            {widgets.map((w) => {
+            {(function () {
+              const sorted = [...widgets].sort(
+                (a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0)
+              );
+              return sorted;
+            })().map((w) => {
               const isImage = w.type === "image";
               return (
                 <Card
@@ -2111,7 +2177,13 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                       ? "bg-transparent shadow-none border-none"
                       : "bg-white shadow-sm border"
                   } ${selectedId === w.id ? "ring-2 ring-emerald-400" : ""}`}
-                  style={{ left: w.x, top: w.y, width: w.w, height: w.h }}
+                  style={{
+                    left: w.x,
+                    top: w.y,
+                    width: w.w,
+                    height: w.h,
+                    zIndex: w.zIndex ?? 0,
+                  }}
                   onPointerDown={() => setSelectedId(w.id)}
                 >
                   <div
@@ -2126,16 +2198,6 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                       {w.title || w.type.toUpperCase()}
                     </span>
                     <div className="flex items-center gap-1">
-                      <button
-                        className="h-7 px-2 rounded-full hover:bg-gray-100 text-xs text-gray-700"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          loadETLDataIntoWidget(w.id);
-                        }}
-                      >
-                        Recargar
-                      </button>
-                      {/* Toggle exclusión de filtros globales */}
                       <button
                         className={`h-7 px-2 rounded-full text-xs ${
                           w.excludeGlobalFilters
@@ -2156,15 +2218,43 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                       >
                         {w.excludeGlobalFilters ? "Sin Global" : "Global"}
                       </button>
-                      <button
-                        className="h-7 w-7 rounded-full hover:bg-gray-100 flex items-center justify-center"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteWidget(w.id);
-                        }}
-                      >
-                        ×
-                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            className="h-7 w-7 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-600"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Orden y más"
+                          >
+                            <MoreVertical size={16} />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                          <DropdownMenuItem onClick={() => bringToFront(w.id)}>
+                            <BringToFront className="mr-2 h-4 w-4" />
+                            Traer al frente
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => bringForward(w.id)}>
+                            <ChevronUp className="mr-2 h-4 w-4" />
+                            Adelante
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => sendBackward(w.id)}>
+                            <ChevronDown className="mr-2 h-4 w-4" />
+                            Atrás
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => sendToBack(w.id)}>
+                            <SendToBack className="mr-2 h-4 w-4" />
+                            Enviar al fondo
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-red-600 focus:text-red-600"
+                            onClick={() => handleDeleteWidget(w.id)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Eliminar
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </div>
                   <div
@@ -2791,159 +2881,164 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                       </div>
                     )}
 
-                    <div className="flex-1 min-h-0 flex items-center justify-center">
+                    <div className="flex-1 min-h-0 flex items-center justify-center w-full">
                       {w.type === "bar" && w.config ? (
-                        <Bar
-                          data={w.config as ChartData<"bar">}
-                          options={{
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                              legend: { display: true },
-                              datalabels: {
-                                display: true,
-                                color: "#374151",
-                                font: { weight: "bold" },
-                                formatter: (value) => value.toLocaleString(),
-                                anchor: "end",
-                                align: "end",
+                        <div className="w-full flex-1 min-h-[120px] relative">
+                          <Bar
+                            data={w.config as ChartData<"bar">}
+                            options={{
+                              ...buildChartOptions("bar", w.chartStyle, w.labelDisplayMode),
+                              layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                              plugins: {
+                                ...(buildChartOptions("bar", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                datalabels: {
+                                  ...(buildChartOptions("bar", w.chartStyle, w.labelDisplayMode).plugins as any).datalabels,
+                                  anchor: "end",
+                                  align: "end",
+                                },
                               },
-                            },
-                            scales: {
-                              x: { grid: { display: false } },
-                              y: { grid: { color: "#eee" } },
-                            },
-                          }}
-                        />
+                              scales: {
+                                x: {
+                                  display: w.chartStyle?.axisXVisible ?? true,
+                                  reverse: w.chartStyle?.axisXReverse ?? false,
+                                  grid: { display: false },
+                                  ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                },
+                                y: {
+                                  display: w.chartStyle?.axisYVisible ?? true,
+                                  reverse: w.chartStyle?.axisYReverse ?? false,
+                                  grid: { color: "#eee" },
+                                  ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                },
+                              },
+                              ...({
+                                barPercentage: 0.8,
+                                borderRadius: w.chartStyle?.barBorderRadius ?? 4,
+                                barThickness: w.chartStyle?.barThickness,
+                              } as Record<string, unknown>),
+                            }}
+                          />
+                        </div>
                       ) : w.type === "horizontalBar" && w.config ? (
-                        <Bar
-                          data={w.config as ChartData<"bar">}
-                          options={{
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            indexAxis: "y",
-                            plugins: {
-                              legend: { display: true },
-                              datalabels: {
-                                display: true,
-                                color: "#374151",
-                                font: { weight: "bold" },
-                                formatter: (value) => value.toLocaleString(),
-                                anchor: "end",
-                                align: "end",
+                        <div className="w-full flex-1 min-h-[120px] relative">
+                          <Bar
+                            data={w.config as ChartData<"bar">}
+                            options={{
+                              ...buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode),
+                              indexAxis: "y",
+                              layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                              plugins: {
+                                ...(buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                datalabels: {
+                                  ...(buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode).plugins as any).datalabels,
+                                  anchor: "end",
+                                  align: "end",
+                                },
                               },
-                            },
-                            scales: {
-                              x: { grid: { color: "#eee" } },
-                              y: { grid: { display: false } },
-                            },
-                          }}
-                        />
+                              scales: {
+                                x: {
+                                  display: w.chartStyle?.axisXVisible ?? true,
+                                  reverse: w.chartStyle?.axisXReverse ?? false,
+                                  grid: { color: "#eee" },
+                                  ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                },
+                                y: {
+                                  display: w.chartStyle?.axisYVisible ?? true,
+                                  reverse: w.chartStyle?.axisYReverse ?? false,
+                                  grid: { display: false },
+                                  ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                },
+                              },
+                              ...({
+                                barPercentage: 0.8,
+                                borderRadius: w.chartStyle?.barBorderRadius ?? 4,
+                                barThickness: w.chartStyle?.barThickness,
+                              } as Record<string, unknown>),
+                            }}
+                          />
+                        </div>
                       ) : w.type === "line" && w.config ? (
-                        <Line
-                          data={w.config as ChartData<"line">}
-                          options={{
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                              legend: { display: true },
-                              datalabels: {
-                                display: true,
-                                color: "#374151",
-                                font: { weight: "bold" },
-                                formatter: (value) => value.toLocaleString(),
-                                backgroundColor: "rgba(255, 255, 255, 0.7)",
-                                borderRadius: 4,
-                                padding: 4,
+                        <div className="w-full flex-1 min-h-[120px] relative">
+                          <Line
+                            data={w.config as ChartData<"line">}
+                            options={{
+                              ...buildChartOptions("line", w.chartStyle, w.labelDisplayMode),
+                              layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                              plugins: {
+                                ...(buildChartOptions("line", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                datalabels: {
+                                  ...(buildChartOptions("line", w.chartStyle, w.labelDisplayMode).plugins as any).datalabels,
+                                  backgroundColor: "rgba(255, 255, 255, 0.7)",
+                                  borderRadius: 4,
+                                  padding: 4,
+                                },
                               },
-                            },
-                          }}
-                        />
+                              elements: {
+                                line: { borderWidth: w.chartStyle?.lineBorderWidth ?? 2 },
+                                point: { radius: w.chartStyle?.pointRadius ?? 3 },
+                              },
+                            }}
+                          />
+                        </div>
                       ) : w.type === "pie" && w.config ? (
-                        <Pie
-                          data={w.config as ChartData<"pie">}
-                          options={{
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                              legend: { display: true },
-                              datalabels: {
-                                display: true,
-                                color: "#ffffff",
-                                font: { weight: "bold" },
-                                formatter: (value: unknown, context) => {
-                                  const mode = w.labelDisplayMode || "percent";
-                                  const current = Number((value as any) ?? 0);
-                                  if (mode === "value") {
-                                    return current.toLocaleString();
-                                  }
-                                  const dataArr = (context.chart.data
-                                    .datasets?.[0]?.data || []) as any[];
-                                  const total = dataArr.reduce(
-                                    (sum: number, v: any) =>
-                                      sum + Number(v ?? 0),
-                                    0
-                                  );
-                                  const pct = total
-                                    ? (current / total) * 100
-                                    : 0;
-                                  return `${pct.toFixed(1)}%`;
+                        <div className="w-full flex-1 min-h-[120px] relative">
+                          <Pie
+                            data={w.config as ChartData<"pie">}
+                            options={{
+                              ...buildChartOptions("pie", w.chartStyle, w.labelDisplayMode),
+                              layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                              plugins: {
+                                ...(buildChartOptions("pie", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                datalabels: {
+                                  ...(buildChartOptions("pie", w.chartStyle, w.labelDisplayMode).plugins as any).datalabels,
+                                  color: "#ffffff",
                                 },
                               },
-                            },
-                          }}
-                        />
+                            }}
+                          />
+                        </div>
                       ) : w.type === "doughnut" && w.config ? (
-                        <Doughnut
-                          data={w.config as ChartData<"doughnut">}
-                          options={{
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                              legend: { display: true },
-                              datalabels: {
-                                display: true,
-                                color: "#ffffff",
-                                font: { weight: "bold" },
-                                formatter: (value: unknown, context) => {
-                                  const mode = w.labelDisplayMode || "percent";
-                                  const current = Number((value as any) ?? 0);
-                                  if (mode === "value") {
-                                    return current.toLocaleString();
-                                  }
-                                  const dataArr = (context.chart.data
-                                    .datasets?.[0]?.data || []) as any[];
-                                  const total = dataArr.reduce(
-                                    (sum: number, v: any) =>
-                                      sum + Number(v ?? 0),
-                                    0
-                                  );
-                                  const pct = total
-                                    ? (current / total) * 100
-                                    : 0;
-                                  return `${pct.toFixed(1)}%`;
+                        <div className="w-full flex-1 min-h-[120px] relative">
+                          <Doughnut
+                            data={w.config as ChartData<"doughnut">}
+                            options={{
+                              ...buildChartOptions("doughnut", w.chartStyle, w.labelDisplayMode),
+                              layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                              plugins: {
+                                ...(buildChartOptions("doughnut", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                datalabels: {
+                                  ...(buildChartOptions("doughnut", w.chartStyle, w.labelDisplayMode).plugins as any).datalabels,
+                                  color: "#ffffff",
                                 },
                               },
-                            },
-                          }}
-                        />
+                            }}
+                          />
+                        </div>
                       ) : w.type === "combo" && w.config ? (
-                        <Bar
-                          data={w.config as ChartData<"bar">}
-                          options={{
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                              legend: { display: true },
-                              datalabels: {
-                                display: true,
-                                color: "#374151",
-                                font: { weight: "bold" },
-                                formatter: (value) => value.toLocaleString(),
+                        <div className="w-full flex-1 min-h-[120px] relative">
+                          <Bar
+                            data={w.config as ChartData<"bar">}
+                            options={{
+                              ...buildChartOptions("bar", w.chartStyle, w.labelDisplayMode),
+                              layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                              plugins: {
+                                ...(buildChartOptions("bar", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                datalabels: {
+                                  ...(buildChartOptions("bar", w.chartStyle, w.labelDisplayMode).plugins as any).datalabels,
+                                },
                               },
-                            },
-                          }}
-                        />
+                              scales: {
+                                x: { grid: { display: false }, display: w.chartStyle?.axisXVisible ?? true, reverse: w.chartStyle?.axisXReverse ?? false },
+                                y: { grid: { color: "#eee" }, display: w.chartStyle?.axisYVisible ?? true, reverse: w.chartStyle?.axisYReverse ?? false },
+                              },
+                              ...({
+                                barPercentage: 0.8,
+                                borderRadius: w.chartStyle?.barBorderRadius ?? 4,
+                                barThickness: w.chartStyle?.barThickness,
+                              } as Record<string, unknown>),
+                            }}
+                          />
+                        </div>
                       ) : w.type === "kpi" ? (
                         <div className="text-4xl font-bold text-gray-800">
                           {w.config?.datasets?.[0]?.data?.[0]?.toLocaleString() ??
@@ -3202,6 +3297,242 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                   />
                 </div>
               </div>
+
+              {["bar", "horizontalBar", "line", "pie", "doughnut", "combo"].includes(selected.type) && (
+                <div className="space-y-4 border-t pt-4">
+                  <h4 className="font-medium text-sm text-gray-700">
+                    Estilo del gráfico
+                  </h4>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs">Formato de valor</Label>
+                      <select
+                        value={selected.chartStyle?.valueFormat ?? "none"}
+                        onChange={(e) =>
+                          updateSelected({
+                            chartStyle: {
+                              ...selected.chartStyle,
+                              valueFormat: e.target.value as ValueFormatType,
+                            },
+                          })
+                        }
+                        className="w-full text-xs border rounded h-8 mt-0.5"
+                      >
+                        <option value="none">Ninguno</option>
+                        <option value="currency">Moneda</option>
+                        <option value="percent">Porcentaje</option>
+                        <option value="K">Miles (K)</option>
+                        <option value="M">Millones (M)</option>
+                        <option value="Bi">Billones (Bi)</option>
+                      </select>
+                    </div>
+                    {(selected.chartStyle?.valueFormat ?? "none") === "currency" && (
+                      <div>
+                        <Label className="text-xs">Símbolo moneda</Label>
+                        <Input
+                          className="h-8 text-xs mt-0.5"
+                          value={selected.chartStyle?.currencySymbol ?? "$"}
+                          onChange={(e) =>
+                            updateSelected({
+                              chartStyle: {
+                                ...selected.chartStyle,
+                                currencySymbol: e.target.value || "$",
+                              },
+                            })
+                          }
+                          placeholder="$"
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs">Padding (etiquetas)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={40}
+                        className="h-8 text-xs mt-0.5"
+                        value={selected.chartStyle?.layoutPadding ?? 16}
+                        onChange={(e) =>
+                          updateSelected({
+                            chartStyle: {
+                              ...selected.chartStyle,
+                              layoutPadding: parseInt(e.target.value || "16") || 16,
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Tamaño fuente</Label>
+                      <Input
+                        type="number"
+                        min={8}
+                        max={24}
+                        className="h-8 text-xs mt-0.5"
+                        value={selected.chartStyle?.fontSize ?? 11}
+                        onChange={(e) =>
+                          updateSelected({
+                            chartStyle: {
+                              ...selected.chartStyle,
+                              fontSize: parseInt(e.target.value || "11") || 11,
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                  {["bar", "horizontalBar", "combo"].includes(selected.type) && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">Grosor barras</Label>
+                        <Input
+                          type="number"
+                          min={4}
+                          max={80}
+                          className="h-8 text-xs mt-0.5"
+                          value={selected.chartStyle?.barThickness ?? ""}
+                          onChange={(e) =>
+                            updateSelected({
+                              chartStyle: {
+                                ...selected.chartStyle,
+                                barThickness: e.target.value ? parseInt(e.target.value) : undefined,
+                              },
+                            })
+                          }
+                          placeholder="Auto"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Bordes redondeados</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={20}
+                          className="h-8 text-xs mt-0.5"
+                          value={selected.chartStyle?.barBorderRadius ?? 4}
+                          onChange={(e) =>
+                            updateSelected({
+                              chartStyle: {
+                                ...selected.chartStyle,
+                                barBorderRadius: parseInt(e.target.value || "4") ?? 4,
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {selected.type === "line" && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">Grosor línea</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={8}
+                          className="h-8 text-xs mt-0.5"
+                          value={selected.chartStyle?.lineBorderWidth ?? 2}
+                          onChange={(e) =>
+                            updateSelected({
+                              chartStyle: {
+                                ...selected.chartStyle,
+                                lineBorderWidth: parseInt(e.target.value || "2") ?? 2,
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Radio puntos</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={12}
+                          className="h-8 text-xs mt-0.5"
+                          value={selected.chartStyle?.pointRadius ?? 3}
+                          onChange={(e) =>
+                            updateSelected({
+                              chartStyle: {
+                                ...selected.chartStyle,
+                                pointRadius: parseInt(e.target.value || "3") ?? 3,
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {["bar", "horizontalBar", "line", "combo"].includes(selected.type) && (
+                    <div className="space-y-2">
+                      <Label className="text-xs">Ejes</Label>
+                      <div className="flex flex-wrap gap-2">
+                        <label className="flex items-center gap-1 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={selected.chartStyle?.axisXVisible ?? true}
+                            onChange={(e) =>
+                              updateSelected({
+                                chartStyle: {
+                                  ...selected.chartStyle,
+                                  axisXVisible: e.target.checked,
+                                },
+                              })
+                            }
+                          />
+                          Eje X visible
+                        </label>
+                        <label className="flex items-center gap-1 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={selected.chartStyle?.axisYVisible ?? true}
+                            onChange={(e) =>
+                              updateSelected({
+                                chartStyle: {
+                                  ...selected.chartStyle,
+                                  axisYVisible: e.target.checked,
+                                },
+                              })
+                            }
+                          />
+                          Eje Y visible
+                        </label>
+                        <label className="flex items-center gap-1 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={selected.chartStyle?.axisXReverse ?? false}
+                            onChange={(e) =>
+                              updateSelected({
+                                chartStyle: {
+                                  ...selected.chartStyle,
+                                  axisXReverse: e.target.checked,
+                                },
+                              })
+                            }
+                          />
+                          Invertir X
+                        </label>
+                        <label className="flex items-center gap-1 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={selected.chartStyle?.axisYReverse ?? false}
+                            onChange={(e) =>
+                              updateSelected({
+                                chartStyle: {
+                                  ...selected.chartStyle,
+                                  axisYReverse: e.target.checked,
+                                },
+                              })
+                            }
+                          />
+                          Invertir Y
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {selected.type === "filter" && (
                 <div className="space-y-4 border-t pt-4">

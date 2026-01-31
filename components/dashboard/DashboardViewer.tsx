@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { useDashboardEtlData } from "@/hooks/useDashboardEtlData";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Pencil, X, List, CheckSquare, Download, Loader2 } from "lucide-react";
+import { Pencil, List, CheckSquare, Download, Loader2, ChevronRight, Maximize2, Minimize2, ZoomIn, ZoomOut, Filter, ArrowLeft, RefreshCw, GripVertical } from "lucide-react";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import JSZip from "jszip";
@@ -70,6 +70,12 @@ ChartJS.register(
 );
 
 import { DashboardTextWidget } from "./DashboardTextWidget";
+import { buildChartOptions } from "@/lib/dashboard/chartOptions";
+import {
+  type DashboardTheme,
+  DEFAULT_DASHBOARD_THEME,
+  mergeTheme,
+} from "@/types/dashboard";
 
 export type WidgetType =
   | "bar"
@@ -173,10 +179,88 @@ type Widget = {
     height?: number;
     objectFit?: "contain" | "cover" | "fill" | "none" | "scale-down";
   };
-};
+  /** Orden de capas: mayor = más al frente */
+  zIndex?: number;
+  chartStyle?: import("@/lib/dashboard/chartOptions").ChartStyleConfig;
+  /** Orden en el grid (estilo Power BI). Si existe, la vista ordena por este valor. */
+  gridOrder?: number;
+  /** Columnas que ocupa en el grid (1, 2 o 4). Vista cliente: 4 columnas; KPI=1, resto 2 o 4. */
+  gridSpan?: 1 | 2 | 4;
+  /** Altura mínima de la tarjeta en px (moldeable). */
+  minHeight?: number;
+  /** KPI: etiqueta secundaria (ej. "Ticket promedio"). */
+  kpiSecondaryLabel?: string;
+  /** KPI: valor secundario (ej. "$ 3.202"). */
+  kpiSecondaryValue?: string;
+}
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
+}
+
+/** Dado un array ordenado de widgets con gridSpan, devuelve { row, col, span } para cada uno en un grid de 4 columnas. */
+function computeGridPlacements(
+  ordered: Widget[]
+): { widget: Widget; row: number; col: number; span: number }[] {
+  const placements: { widget: Widget; row: number; col: number; span: number }[] = [];
+  let row = 0,
+    col = 0;
+  for (const w of ordered) {
+    const span = Math.min(4, Math.max(1, (w.gridSpan ?? 2) as number)) as 1 | 2 | 4;
+    placements.push({ widget: w, row, col, span });
+    col += span;
+    if (col >= 4) {
+      col = 0;
+      row += 1;
+    }
+  }
+  return placements;
+}
+
+/** Luminancia aproximada de un color (0 = negro, 1 = blanco). */
+function getColorLuminance(cssColor: string | undefined): number {
+  if (!cssColor || typeof cssColor !== "string") return 0;
+  const hex = cssColor.replace(/^#/, "").slice(0, 6);
+  if (/^[0-9A-Fa-f]{6}$/.test(hex)) {
+    const r = parseInt(hex.slice(0, 2), 16) / 255;
+    const g = parseInt(hex.slice(2, 4), 16) / 255;
+    const b = parseInt(hex.slice(4, 6), 16) / 255;
+    return 0.299 * r + 0.587 * g + 0.114 * b;
+  }
+  if (cssColor.startsWith("rgb")) {
+    const m = cssColor.match(/\d+/g);
+    if (m && m.length >= 3) {
+      const r = Number(m[0]) / 255;
+      const g = Number(m[1]) / 255;
+      const b = Number(m[2]) / 255;
+      return 0.299 * r + 0.587 * g + 0.114 * b;
+    }
+  }
+  return 0;
+}
+
+/** Formato compacto para KPIs: K, M, B, T; valor completo en tooltip. */
+function formatKpiDisplay(value: number): { display: string; full: string } {
+  const n = Number(value);
+  if (Number.isNaN(n)) return { display: "—", full: "" };
+  const full = n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (Math.abs(n) >= 1e12) return { display: `${(n / 1e12).toFixed(1)}T`, full };
+  if (Math.abs(n) >= 1e9) return { display: `${(n / 1e9).toFixed(1)}B`, full };
+  if (Math.abs(n) >= 1e6) return { display: `${(n / 1e6).toFixed(1)}M`, full };
+  if (Math.abs(n) >= 1e3) return { display: `${(n / 1e3).toFixed(1)}K`, full };
+  return { display: full, full };
+}
+
+/** Formato automático para celdas: si es número grande → K/M/B; si no, string. */
+function formatCompactNumber(value: unknown): string {
+  if (value == null || value === "") return "";
+  const n = Number(value);
+  if (Number.isNaN(n)) return String(value);
+  if (Math.abs(n) >= 1e12) return `${(n / 1e12).toFixed(1)}T`;
+  if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
 const GRID = 16;
@@ -195,6 +279,12 @@ interface DashboardViewerProps {
   initialWidgets?: Widget[];
   initialTitle?: string;
   initialGlobalFilters?: AggregationFilter[];
+  /** Admin view: back link and label; also enables premium header/canvas styling */
+  backHref?: string;
+  backLabel?: string;
+  variant?: "default" | "admin";
+  /** When true (and variant=admin), header is not rendered; for use with custom wrapper layout */
+  hideHeader?: boolean;
 }
 
 export function DashboardViewer({
@@ -204,12 +294,18 @@ export function DashboardViewer({
   initialWidgets,
   initialTitle,
   initialGlobalFilters,
+  backHref,
+  backLabel = "Volver al Editor",
+  variant = "default",
+  hideHeader = false,
 }: DashboardViewerProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [title, setTitle] = useState<string>("Dashboard");
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<AggregationFilter[]>([]);
+  const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>(() => ({ ...DEFAULT_DASHBOARD_THEME }));
+  const [companyLogoUrl, setCompanyLogoUrl] = useState<string | null>(null);
   const [globalDialogOpen, setGlobalDialogOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -257,16 +353,80 @@ export function DashboardViewer({
     setNewTitle(widget.title || "");
   };
 
-  const saveRename = () => {
-    if (widgetToRename) {
-      setWidgets((prev) =>
-        prev.map((w) =>
-          w.id === widgetToRename.id ? { ...w, title: newTitle } : w
-        )
+  const persistLayout = useCallback(
+    async (updatedWidgets: Widget[]) => {
+      if (!dashboardId || isPublic) return;
+      try {
+        const cleanWidgets = updatedWidgets.map(
+          ({ rows, config, columns, facetValues, ...rest }: any) => rest
+        );
+        const supabase = createClient();
+        const layoutToSave = { widgets: cleanWidgets, theme: dashboardTheme };
+        const { error } = await supabase
+          .from("dashboard")
+          .update({ layout: layoutToSave })
+          .eq("id", dashboardId);
+        if (error) throw error;
+        toast.success("Diseño guardado");
+      } catch (e: any) {
+        console.error("[DashboardViewer] Error al guardar diseño:", e);
+        toast.error(e?.message || "No se pudo guardar el diseño");
+      }
+    },
+    [dashboardId, isPublic, dashboardTheme]
+  );
+
+  const saveRename = useCallback(async () => {
+    if (!widgetToRename) return;
+    const updatedWidgets = widgets.map((w) =>
+      w.id === widgetToRename.id ? { ...w, title: newTitle } : w
+    );
+    setWidgets(updatedWidgets);
+    setWidgetToRename(null);
+    await persistLayout(updatedWidgets);
+    toast.success("Nombre actualizado");
+  }, [widgetToRename, newTitle, widgets, persistLayout]);
+
+  const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
+  const [dropTargetWidgetId, setDropTargetWidgetId] = useState<string | null>(null);
+
+  const handleReorderOnDrop = useCallback(
+    (draggedId: string, dropTargetId: string) => {
+      const hasGridOrder = widgets.some((w) => w.gridOrder != null);
+      const ordered = hasGridOrder
+        ? [...widgets].sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999))
+        : (() => {
+            const kpis = widgets.filter((w) => w.type === "kpi");
+            const tables = widgets.filter((w) => w.type === "table");
+            const rest = widgets.filter((w) => w.type !== "kpi" && w.type !== "table");
+            return [...kpis, ...tables, ...rest];
+          })();
+      const dragIndex = ordered.findIndex((w) => w.id === draggedId);
+      const dropIndex = ordered.findIndex((w) => w.id === dropTargetId);
+      if (dragIndex === -1 || dropIndex === -1 || dragIndex === dropIndex) return;
+      const newOrdered = [...ordered];
+      const [removed] = newOrdered.splice(dragIndex, 1);
+      newOrdered.splice(dropIndex, 0, removed);
+      const updatedWidgets = widgets.map((w) => {
+        const idx = newOrdered.findIndex((o) => o.id === w.id);
+        return { ...w, gridOrder: idx >= 0 ? idx : w.gridOrder };
+      });
+      setWidgets(updatedWidgets);
+      persistLayout(updatedWidgets);
+    },
+    [widgets, persistLayout]
+  );
+
+  const handleResizeWidget = useCallback(
+    (widgetId: string, newSpan: 1 | 2 | 4) => {
+      const updatedWidgets = widgets.map((w) =>
+        w.id === widgetId ? { ...w, gridSpan: newSpan } : w
       );
-      setWidgetToRename(null);
-    }
-  };
+      setWidgets(updatedWidgets);
+      persistLayout(updatedWidgets);
+    },
+    [widgets, persistLayout]
+  );
 
   const fetchDistinctOptions = useCallback(
     async (widgetId: string, field: string) => {
@@ -599,10 +759,21 @@ export function DashboardViewer({
       const d = etlData.dashboard as any;
       if (!cancelled) {
         setTitle(d.title || "Dashboard");
-        setWidgets(Array.isArray(d.layout) ? d.layout : []);
+        const rawLayout = d.layout;
+        let loadedWidgets: any[] = [];
+        let loadedTheme: DashboardTheme = { ...DEFAULT_DASHBOARD_THEME };
+        if (Array.isArray(rawLayout)) {
+          loadedWidgets = rawLayout;
+        } else if (rawLayout && typeof rawLayout === "object" && Array.isArray(rawLayout.widgets)) {
+          loadedWidgets = rawLayout.widgets;
+          loadedTheme = mergeTheme(rawLayout.theme);
+        }
+        setWidgets(loadedWidgets);
+        setDashboardTheme(loadedTheme);
         setGlobalFilters(
           Array.isArray(d.global_filters_config) ? d.global_filters_config : []
         );
+        setCompanyLogoUrl(null);
       }
       return;
     }
@@ -615,6 +786,7 @@ export function DashboardViewer({
         if (initialGlobalFilters) {
           setGlobalFilters(initialGlobalFilters);
         }
+        setCompanyLogoUrl(null);
       }
       return;
     }
@@ -627,19 +799,42 @@ export function DashboardViewer({
         const supabase = createClient();
         const { data, error } = await supabase
           .from("dashboard")
-          .select("title,layout,global_filters_config")
+          .select("title,layout,global_filters_config,client_id")
           .eq("id", dashboardId)
           .maybeSingle();
         if (error) throw error;
         if (!data) return;
         if (!cancelled) {
           setTitle(data.title || "Dashboard");
-          setWidgets(Array.isArray(data.layout) ? (data.layout as any) : []);
+          const rawLayout = (data as any).layout;
+          let loadedWidgets: any[] = [];
+          let loadedTheme: DashboardTheme = { ...DEFAULT_DASHBOARD_THEME };
+          if (Array.isArray(rawLayout)) {
+            loadedWidgets = rawLayout;
+          } else if (rawLayout && typeof rawLayout === "object" && Array.isArray(rawLayout.widgets)) {
+            loadedWidgets = rawLayout.widgets;
+            loadedTheme = mergeTheme(rawLayout.theme);
+          }
+          setWidgets(loadedWidgets);
+          setDashboardTheme(loadedTheme);
           setGlobalFilters(
             Array.isArray(data.global_filters_config)
               ? (data.global_filters_config as any)
               : []
           );
+          const clientId = (data as any).client_id;
+          if (clientId) {
+            const { data: client } = await supabase
+              .from("clients")
+              .select("logo_url")
+              .eq("id", clientId)
+              .maybeSingle();
+            if (!cancelled) {
+              setCompanyLogoUrl((client as any)?.logo_url ?? null);
+            }
+          } else {
+            setCompanyLogoUrl(null);
+          }
         }
       } catch (e: any) {
         console.error("[DashboardViewer] No se pudo cargar el dashboard:", e);
@@ -1367,9 +1562,11 @@ export function DashboardViewer({
           "#0ea5e9",
           "#22c55e",
         ];
-
+        const accentColor = (dashboardTheme as DashboardTheme).accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor;
         const effectivePalette = widget.color
           ? [widget.color, ...palette]
+          : accentColor
+          ? [accentColor, ...palette]
           : palette;
 
         let config: ChartConfig | undefined;
@@ -1468,7 +1665,7 @@ export function DashboardViewer({
         // toast.error(e?.message || "Error al cargar o procesar los datos.");
       }
     },
-    [widgets, etlData, globalFilters, filterValues]
+    [widgets, etlData, globalFilters, filterValues, dashboardTheme]
   );
 
   const reloadAll = useCallback(() => {
@@ -1826,58 +2023,120 @@ export function DashboardViewer({
     }
   };
 
-  return (
-    <div ref={rootRef} className="flex flex-col gap-0 h-full w-full">
-      <header className="flex items-center justify-between bg-white border rounded-2xl p-4 z-10">
-        <div>
-          <h2 className="text-xl font-semibold text-emerald-600">{title}</h2>
-          <p className="text-xs text-gray-500">Vista de solo lectura</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="sm" onClick={handleZoomOut}>
-              −
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleZoomIn}>
-              +
-            </Button>
-          </div>
-          <Button variant="outline" size="sm" onClick={toggleFullscreen}>
-            {isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
-          </Button>
+  const handleExportTableWidget = (w: Widget) => {
+    if (w.type !== "table" || !w.rows?.length) {
+      toast.warning("No hay datos en esta tabla");
+      return;
+    }
+    try {
+      const ws = XLSX.utils.json_to_sheet(w.rows);
+      const csv = XLSX.utils.sheet_to_csv(ws);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const filename = `${(w.title || w.id).replace(/[\\/]/g, "_")}.csv`;
+      saveAs(blob, filename);
+      toast.success("Tabla exportada");
+    } catch (e) {
+      console.error("[Export table]", e);
+      toast.error("Error al exportar la tabla");
+    }
+  };
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
-                <Download className="w-4 h-4 mr-2" />
-                Exportar
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Formatos de Exportación</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleDownloadPDF}>
-                Exportar como PDF
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleDownloadPPTX}>
-                Exportar como PowerPoint (PPTX)
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleDownloadExcel}>
-                Exportar Datos (Excel)
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleDownloadCSV}>
-                Exportar Datos (CSV/ZIP)
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button variant="outline" size="sm" asChild>
-            <Link href={`/dashboard/${dashboardId}`}>Volver al Editor</Link>
-          </Button>
-          <Dialog open={globalDialogOpen} onOpenChange={setGlobalDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="default">Filtros Globales</Button>
-            </DialogTrigger>
+  const backUrl = backHref ?? `/dashboard/${dashboardId}`;
+  const isAdminVariant = variant === "admin";
+  const useClientTheme = variant === "default";
+
+  const bgColor = dashboardTheme.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor;
+  const bgLuminance = getColorLuminance(bgColor);
+  const isLightBg = bgLuminance > 0.45;
+
+  const themeVars = useClientTheme
+    ? {
+        ["--client-accent" as string]: dashboardTheme.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor,
+        ["--client-bg" as string]: bgColor,
+        ["--client-card" as string]: isLightBg
+          ? "rgba(255,255,255,0.95)"
+          : (() => {
+              const card = dashboardTheme.cardBackgroundColor ?? DEFAULT_DASHBOARD_THEME.cardBackgroundColor ?? "rgba(255,255,255,0.03)";
+              const match = card.match(/,\s*([\d.]+)\)$/);
+              const opacity = match ? parseFloat(match[1]) : 0.08;
+              if (opacity < 0.08) {
+                return card.replace(/,\s*[\d.]+\)$/, `, ${Math.max(0.08, opacity)})`);
+              }
+              return card;
+            })(),
+        ["--client-text" as string]: isLightBg
+          ? "#1a1a1a"
+          : (dashboardTheme.textColor ?? DEFAULT_DASHBOARD_THEME.textColor),
+        ["--client-text-muted" as string]: isLightBg
+          ? "#525252"
+          : (dashboardTheme.textMutedColor ?? DEFAULT_DASHBOARD_THEME.textMutedColor),
+        ["--client-filters-bg" as string]: dashboardTheme.filtersPanelBackground ?? DEFAULT_DASHBOARD_THEME.filtersPanelBackground,
+        ["--client-header-bg" as string]: dashboardTheme.headerBackgroundColor ?? DEFAULT_DASHBOARD_THEME.headerBackgroundColor,
+        ["--client-font" as string]: dashboardTheme.fontFamily ?? DEFAULT_DASHBOARD_THEME.fontFamily,
+        ["--client-header-font-size" as string]: `${dashboardTheme.headerFontSize ?? DEFAULT_DASHBOARD_THEME.headerFontSize}rem`,
+        ["--client-card-title-font-size" as string]: `${dashboardTheme.cardTitleFontSize ?? DEFAULT_DASHBOARD_THEME.cardTitleFontSize}rem`,
+        ["--client-kpi-value-font-size" as string]: `${dashboardTheme.kpiValueFontSize ?? DEFAULT_DASHBOARD_THEME.kpiValueFontSize}rem`,
+      }
+    : undefined;
+
+  const logoUrl = useClientTheme
+    ? (companyLogoUrl ?? dashboardTheme.logoUrl ?? DEFAULT_DASHBOARD_THEME.logoUrl) || "/images/biconic-logo.png"
+    : "";
+  const logoSize = useClientTheme ? (dashboardTheme.logoSize ?? DEFAULT_DASHBOARD_THEME.logoSize ?? 24) : 24;
+  const logoOpacity = useClientTheme ? (dashboardTheme.logoOpacity ?? DEFAULT_DASHBOARD_THEME.logoOpacity ?? 0.06) : 0.06;
+  const logoPosition = useClientTheme ? (dashboardTheme.logoPosition ?? DEFAULT_DASHBOARD_THEME.logoPosition ?? "center") : "center";
+
+  const chartAxisColor = useClientTheme && isLightBg ? "rgba(0,0,0,0.7)" : "rgba(255,255,255,0.8)";
+  const chartGridColor = useClientTheme && isLightBg ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.1)";
+
+  const showHeader = !(isAdminVariant && hideHeader);
+
+  const rootContent = (
+    <>
+      {showHeader && (
+      <header
+        data-role="header"
+        className={
+          isAdminVariant
+            ? "admin-view-header-wrap z-10"
+            : useClientTheme
+            ? "client-view-header z-10"
+            : "flex items-center justify-between bg-white border rounded-2xl p-4 z-10"
+        }
+      >
+        {isAdminVariant ? (
+          <div className="admin-view-header">
+            <div className="admin-view-header__left">
+              <nav className="admin-view-header__breadcrumb" aria-label="Navegación">
+                <Link href="/admin" className="admin-view-header__crumb">Admin</Link>
+                <span className="admin-view-header__sep">/</span>
+                <Link href="/admin/dashboard" className="admin-view-header__crumb">Dashboards</Link>
+              </nav>
+              <h1 className="admin-view-header__title">{title}</h1>
+            </div>
+            <div className="admin-view-header__actions">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="admin-view-header__btn">
+                    <Download className="w-4 h-4 mr-1.5" />
+                    Exportar
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem onClick={handleDownloadPDF}>PDF</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleDownloadPPTX}>PowerPoint</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleDownloadExcel}>Excel</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleDownloadCSV}>CSV / ZIP</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Dialog open={globalDialogOpen} onOpenChange={setGlobalDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="ghost" size="sm" className="admin-view-header__btn">
+                    <Filter className="w-4 h-4 mr-1.5" />
+                    Filtros
+                  </Button>
+                </DialogTrigger>
             <DialogContent className="sm:max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Filtros globales</DialogTitle>
@@ -2069,44 +2328,1283 @@ export function DashboardViewer({
               </DialogFooter>
             </DialogContent>
           </Dialog>
-        </div>
+                <Button variant="ghost" size="sm" asChild className="admin-view-header__btn">
+                  <Link href={backUrl}>
+                    <ArrowLeft className="w-4 h-4 mr-1.5" />
+                    {backLabel}
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          ) : useClientTheme ? (
+            <>
+              {backHref && backLabel && (
+                <Link href={backHref} className="client-view-header-back" aria-label={backLabel}>
+                  ← {backLabel}
+                </Link>
+              )}
+              <h1>{title}</h1>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="client-view-header-refresh"
+                onClick={() => reloadAll()}
+                disabled={!etlData || widgets.length === 0 || widgets.some((w) => w.isLoading)}
+                title="Actualizar todas las métricas"
+              >
+                {widgets.some((w) => w.isLoading) ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4" />
+                )}
+                <span className="client-view-header-refresh-label">Actualizar métricas</span>
+              </Button>
+            </>
+          ) : (
+            <>
+              <div>
+                <h2 className="text-xl font-semibold text-emerald-600">{title}</h2>
+                <p className="text-xs text-gray-500">Vista de solo lectura</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <Button variant="outline" size="sm" onClick={handleZoomOut}>
+                    −
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleZoomIn}>
+                    +
+                  </Button>
+                </div>
+                <Button variant="outline" size="sm" onClick={toggleFullscreen}>
+                  {isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm">
+                      <Download className="w-4 h-4 mr-2" />
+                      Exportar
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuLabel>Formatos de Exportación</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={handleDownloadPDF}>
+                      Exportar como PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleDownloadPPTX}>
+                      Exportar como PowerPoint (PPTX)
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={handleDownloadExcel}>
+                      Exportar Datos (Excel)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleDownloadCSV}>
+                      Exportar Datos (CSV/ZIP)
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={backUrl}>{backLabel}</Link>
+                </Button>
+                <Dialog open={globalDialogOpen} onOpenChange={setGlobalDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="default">Filtros Globales</Button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-2xl">
+                    <DialogHeader>
+                      <DialogTitle>Filtros globales</DialogTitle>
+                      <DialogDescription>
+                        Aplica filtros a todos los widgets visibles.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            reloadAll();
+                            setGlobalDialogOpen(false);
+                          }}
+                          disabled={!etlData || globalFilters.length === 0}
+                        >
+                          Aplicar a todos
+                        </Button>
+                      </div>
+                      {globalFilters.length === 0 ? (
+                        <div className="text-sm text-gray-500">
+                          Sin filtros globales configurados.
+                        </div>
+                      ) : (
+                        <div className="space-y-2 max-h-[60vh] overflow-auto border rounded-md p-3 bg-gray-50">
+                          {globalFilters.map((f) => (
+                            <div
+                              key={f.id}
+                              className="grid grid-cols-12 gap-2 items-center"
+                            >
+                              <div className="col-span-5">
+                                <select
+                                  disabled
+                                  value={f.field}
+                                  className="w-full text-xs border-gray-300 rounded-md bg-gray-100 shadow-sm h-8"
+                                >
+                                  {(etlData?.fields?.all || []).map((n: string) => (
+                                    <option key={n} value={n}>{n}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="col-span-3">
+                                <select
+                                  disabled
+                                  value={f.operator}
+                                  className="w-full text-xs border-gray-300 rounded-md bg-gray-100 shadow-sm h-8"
+                                >
+                                  <option value="=">Igual (=)</option>
+                                  <option value=">">Mayor (&gt;)</option>
+                                  <option value=">=">Mayor o igual (&gt;=)</option>
+                                  <option value="<">Menor (&lt;)</option>
+                                  <option value="<=">Menor o igual (&lt;=)</option>
+                                  <option value="!=">Distinto (!=)</option>
+                                  <option value="LIKE">Contiene (LIKE)</option>
+                                  <option value="ILIKE">Contiene (ILIKE)</option>
+                                  <option value="IN">En lista (IN)</option>
+                                  <option value="BETWEEN">Entre (BETWEEN)</option>
+                                  <option value="MONTH">Mes (1-12)</option>
+                                  <option value="YEAR">Año</option>
+                                  <option value="DAY">Día específico</option>
+                                  <option value="IS">Es NULL</option>
+                                  <option value="IS NOT">No es NULL</option>
+                                </select>
+                              </div>
+                              <div className="col-span-3">
+                                {(f as any).inputType === "select" ? (
+                                  <select
+                                    className="h-8 text-xs w-full border rounded-md px-2"
+                                    value={f.value || ""}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      setGlobalFilters((prev) =>
+                                        prev.map((x) =>
+                                          x.id === f.id ? { ...x, value: v } : x
+                                        )
+                                      );
+                                    }}
+                                  >
+                                    <option value="">Todos</option>
+                                    {((f as any).distinctValues || []).map(
+                                      (opt: any, idx: number) => (
+                                        <option key={idx} value={String(opt)}>
+                                          {String(opt)}
+                                        </option>
+                                      )
+                                    )}
+                                  </select>
+                                ) : f.operator === "YEAR" ? (
+                                  <input
+                                    type="number"
+                                    className="h-8 text-xs w-full border rounded-md px-2"
+                                    placeholder="Ej: 2023"
+                                    value={f.value || ""}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      setGlobalFilters((prev) =>
+                                        prev.map((x) =>
+                                          x.id === f.id ? { ...x, value: v } : x
+                                        )
+                                      );
+                                    }}
+                                  />
+                                ) : (f as any).inputType === "date" ? (
+                                  <input
+                                    type="date"
+                                    className="h-8 text-xs w-full border rounded-md px-2"
+                                    value={f.value || ""}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      setGlobalFilters((prev) =>
+                                        prev.map((x) =>
+                                          x.id === f.id ? { ...x, value: v } : x
+                                        )
+                                      );
+                                    }}
+                                  />
+                                ) : (f as any).inputType === "number" ? (
+                                  <input
+                                    type="number"
+                                    className="h-8 text-xs w-full border rounded-md px-2"
+                                    placeholder="Valor"
+                                    value={f.value || ""}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      setGlobalFilters((prev) =>
+                                        prev.map((x) =>
+                                          x.id === f.id ? { ...x, value: v } : x
+                                        )
+                                      );
+                                    }}
+                                  />
+                                ) : (
+                                  <input
+                                    className="h-8 text-xs w-full border rounded-md px-2"
+                                    placeholder="Valor"
+                                    value={
+                                      f.value == null
+                                        ? ""
+                                        : Array.isArray(f.value)
+                                        ? f.value.join(",")
+                                        : String(f.value)
+                                    }
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      setGlobalFilters((prev) =>
+                                        prev.map((x) =>
+                                          x.id === f.id ? { ...x, value: v } : x
+                                        )
+                                      );
+                                    }}
+                                  />
+                                )}
+                              </div>
+                              <div className="col-span-1 flex justify-end">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 w-6 p-0"
+                                  onClick={() => pinFilterToCanvas(f)}
+                                  title="Añadir al lienzo"
+                                >
+                                  📌
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setGlobalDialogOpen(false)}>
+                        Cerrar
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          reloadAll();
+                          setGlobalDialogOpen(false);
+                        }}
+                      >
+                        Aplicar y cerrar
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </>
+          )}
       </header>
+      )}
 
-      <section className="col-span-12 flex-1">
-        <div
-          ref={canvasRef}
-          onWheel={onCanvasWheel}
-          onPointerDown={onCanvasPointerDown}
-          onPointerMove={onCanvasPointerMove}
-          onPointerUp={onCanvasPointerUp}
-          onPointerLeave={onCanvasPointerUp}
-          className="bg-white/60 rounded-2xl p-6 min-h-[700px] h-full border relative overflow-hidden"
-        >
+      {useClientTheme ? (
+        <div className="client-view-body">
+          {logoUrl ? (
+            <div
+              className="client-view-logo-bg"
+              aria-hidden
+              style={{
+                justifyContent: logoPosition === "center" ? "center" : logoPosition === "top-right" || logoPosition === "bottom-right" ? "flex-end" : "flex-start",
+                alignItems: logoPosition === "center" ? "center" : logoPosition === "bottom-left" || logoPosition === "bottom-right" ? "flex-end" : "flex-start",
+              }}
+            >
+              <img
+                src={logoUrl}
+                alt=""
+                className="client-view-logo-img"
+                style={{
+                  maxWidth: logoSize <= 100 ? `${logoSize}%` : `${logoSize}px`,
+                  maxHeight: logoSize <= 100 ? `${logoSize}%` : `${logoSize}px`,
+                  opacity: logoOpacity,
+                }}
+              />
+            </div>
+          ) : null}
+          <section data-role="canvas" className="client-view-canvas">
+            {(() => {
+              const sorted = [...widgets].sort((a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x));
+              const metricWidgets = sorted.filter((w) => w.type !== "image");
+              const kpiWidgets = metricWidgets.filter((w) => w.type === "kpi");
+              const tableWidgets = metricWidgets.filter((w) => w.type === "table");
+              const restWidgets = metricWidgets.filter((w) => w.type !== "kpi" && w.type !== "table");
+
+              const renderClientWidget = (w: typeof metricWidgets[0], opts: { gridColumn?: string; slotClass?: string }) => {
+                const minH = (w as any).minHeight;
+                return (
+                  <div
+                    key={w.id}
+                    style={{
+                      ...(opts.gridColumn ? { gridColumn: opts.gridColumn } : {}),
+                      ...(minH ? { minHeight: minH } : {}),
+                    }}
+                    className={`client-view-widget flex flex-col min-h-0 ${w.type === "kpi" ? "client-view-kpi-widget" : ""} ${opts.slotClass ?? ""}`}
+                  >
+                      <div className="client-view-widget-header">
+                        <span className="truncate">{w.title || w.type}</span>
+                        {useClientTheme && (
+                          <button
+                            type="button"
+                            className="client-view-widget-rename-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openRenameDialog(w);
+                            }}
+                            title="Cambiar nombre"
+                            aria-label="Cambiar nombre"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      <div className="client-view-widget-body flex flex-col min-h-0">
+                        {w.isLoading && (
+                          <div className="absolute inset-0 bg-black/20 z-10 flex items-center justify-center rounded-b-xl">
+                            <Loader2 className="w-8 h-8 animate-spin text-white" />
+                          </div>
+                        )}
+                        {w.type !== "image" && w.type !== "filter" && !w.config && w.type !== "table" && w.type !== "text" && (
+                          <div className="text-sm text-[var(--client-text-muted)]">Sin datos.</div>
+                        )}
+                        {w.type === "filter" && (
+                          <div className="w-full flex flex-col gap-2 py-2">
+                            <label className="text-sm font-medium text-[var(--client-text-muted)]">
+                              {w.filterConfig?.label || "Filtro"}
+                            </label>
+                            {w.filterConfig?.inputType === "select" ? (
+                              <select
+                                className="w-full text-sm border border-white/20 rounded-lg h-9 px-3 bg-white/10 text-white"
+                                value={Array.isArray(filterValues[w.id]) ? "" : filterValues[w.id] || ""}
+                                onChange={(e) => handleFilterChange(w.id, e.target.value)}
+                              >
+                                <option value="">(Todo)</option>
+                                {(w.facetValues?.[w.filterConfig?.field || ""] || []).map((opt: any, i: number) => (
+                                  <option key={i} value={String(opt)}>{String(opt)}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type={w.filterConfig?.inputType === "number" ? "number" : "text"}
+                                className="w-full text-sm border border-white/20 rounded-lg h-9 px-3 bg-white/10 text-white"
+                                value={filterValues[w.id] ?? ""}
+                                onChange={(e) => handleFilterChange(w.id, e.target.value)}
+                              />
+                            )}
+                          </div>
+                        )}
+                        {w.config && ["bar", "horizontalBar", "line", "pie", "doughnut", "combo"].includes(w.type) && (
+                          <div className="w-full flex-1 client-view-chart-wrap relative">
+                            {w.type === "bar" || w.type === "combo" ? (
+                              <Bar
+                                data={w.config as any}
+                                options={{
+                                  ...buildChartOptions("bar", w.chartStyle, w.labelDisplayMode),
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  plugins: {
+                                    ...(buildChartOptions("bar", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                    datalabels: { color: isLightBg ? "#374151" : "#fff" },
+                                  },
+                                  scales: {
+                                    x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
+                                    y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
+                                  },
+                                }}
+                              />
+                            ) : w.type === "horizontalBar" ? (
+                              <Bar
+                                data={w.config as any}
+                                options={{
+                                  ...buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode),
+                                  indexAxis: "y",
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  plugins: {
+                                    ...(buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                    datalabels: { color: isLightBg ? "#374151" : "#fff" },
+                                  },
+                                  scales: {
+                                    x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
+                                    y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
+                                  },
+                                }}
+                              />
+                            ) : w.type === "line" ? (
+                              <Line
+                                data={w.config as any}
+                                options={{
+                                  ...buildChartOptions("line", w.chartStyle, w.labelDisplayMode),
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  plugins: { datalabels: { color: isLightBg ? "#374151" : "#fff" } },
+                                  scales: {
+                                    x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
+                                    y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
+                                  },
+                                }}
+                              />
+                            ) : w.type === "pie" ? (
+                              <Pie
+                                data={w.config as any}
+                                options={{
+                                  ...buildChartOptions("pie", w.chartStyle, w.labelDisplayMode),
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  plugins: { datalabels: { color: isLightBg ? "#374151" : "#fff" } },
+                                }}
+                              />
+                            ) : w.type === "doughnut" ? (
+                              <Doughnut
+                                data={w.config as any}
+                                options={{
+                                  ...buildChartOptions("doughnut", w.chartStyle, w.labelDisplayMode),
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  plugins: { datalabels: { color: isLightBg ? "#374151" : "#fff" } },
+                                }}
+                              />
+                            ) : null}
+                          </div>
+                        )}
+                        {w.type === "kpi" && (
+                          <div className="client-view-kpi-body">
+                            <div className="client-view-kpi-left">
+                              <div
+                                className="client-view-kpi-value"
+                                style={{ fontSize: "var(--client-kpi-value-font-size, 1.125rem)" }}
+                                title={w.config?.datasets?.[0]?.data?.[0] != null ? formatKpiDisplay(Number(w.config.datasets[0].data[0])).full : undefined}
+                              >
+                                {w.config?.datasets?.[0]?.data?.[0] != null
+                                  ? formatKpiDisplay(Number(w.config.datasets[0].data[0])).display
+                                  : "—"}
+                              </div>
+                              {w.config?.datasets?.[0]?.data?.[0] != null && (() => {
+                                const num = Number(w.config?.datasets?.[0]?.data?.[0]);
+                                const { display, full } = formatKpiDisplay(num);
+                                return full !== display ? <div className="client-view-kpi-value-full">{full}</div> : null;
+                              })()}
+                              {(w as any).kpiSecondaryLabel != null || (w as any).kpiSecondaryValue != null ? (
+                                <div className="client-view-kpi-secondary text-[var(--client-text-muted)]">
+                                  {(w as any).kpiSecondaryLabel}
+                                  {(w as any).kpiSecondaryValue != null && (w as any).kpiSecondaryValue !== "" ? ` ${(w as any).kpiSecondaryValue}` : ""}
+                                </div>
+                              ) : w.config?.datasets?.[0]?.label ? (
+                                <div className="client-view-kpi-secondary text-[var(--client-text-muted)]">
+                                  {w.config.datasets[0].label}
+                                </div>
+                              ) : null}
+                            </div>
+                            {w.config?.datasets?.[0]?.data && Array.isArray(w.config.datasets[0].data) && (w.config.datasets[0].data as number[]).length > 1 ? (
+                              <div className="client-view-kpi-sparkline" style={{ height: "100%", minHeight: "32px" }}>
+                                <Line
+                                  data={{
+                                    labels: (w.config.datasets[0].data as number[]).map((_, i) => ""),
+                                    datasets: [{
+                                      data: w.config.datasets[0].data as number[],
+                                      borderColor: "var(--client-accent)",
+                                      backgroundColor: "transparent",
+                                      borderWidth: 2,
+                                      fill: true,
+                                      tension: 0.3,
+                                      pointRadius: 0,
+                                    }],
+                                  }}
+                                  options={{
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    plugins: { legend: { display: false }, tooltip: { enabled: false }, datalabels: { display: false } },
+                                    scales: {
+                                      x: { display: false },
+                                      y: { display: false, min: "auto", max: "auto" },
+                                    },
+                                  }}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+                        {w.type === "table" && w.rows && (
+                          <div className="w-full overflow-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b border-white/10">
+                                  {(w.columns || []).map((c) => (
+                                    <th key={c.name} className="text-left py-2 px-2 text-[var(--client-text-muted)] font-medium">{c.name}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {w.rows.map((r: any, idx: number) => (
+                                  <tr key={idx} className="border-b border-white/5">
+                                    {(w.columns || []).map((c) => {
+                                      const raw = r?.[c.name];
+                                      const isNumeric = c.type === "number" || (typeof raw === "number" && !Number.isNaN(raw)) || (typeof raw === "string" && raw !== "" && !Number.isNaN(Number(raw)));
+                                      const display = isNumeric && raw != null && raw !== "" ? formatCompactNumber(raw) : String(raw ?? "");
+                                      return (
+                                        <td key={c.name} className="py-1.5 px-2 text-[var(--client-text)] tabular-nums" title={typeof raw === "number" || (typeof raw === "string" && !Number.isNaN(Number(raw))) ? String(raw) : undefined}>
+                                          {display}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        {w.type === "text" && w.content && (
+                          <div className="prose prose-invert prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: w.content }} />
+                        )}
+                      </div>
+                    </div>
+                );
+              };
+
+              const firstRestWidget = restWidgets[0];
+              const remainingRestWidgets = restWidgets.slice(1);
+
+              return (
+                <>
+                  {kpiWidgets.length > 0 && (
+                    <div className="client-view-kpi-row">
+                      {kpiWidgets.map((w) => renderClientWidget(w, { slotClass: "client-view-kpi-slot" }))}
+                    </div>
+                  )}
+                  {tableWidgets.length > 0 && (
+                    <div className="client-view-table-metric-row">
+                      <div className="client-view-table-half">
+                        {tableWidgets.map((w) => renderClientWidget(w, { slotClass: "client-view-table-slot" }))}
+                      </div>
+                      {firstRestWidget ? (
+                        <div className="client-view-metric-half">
+                          {renderClientWidget(firstRestWidget, { slotClass: "client-view-metric-slot" })}
+                        </div>
+                      ) : (
+                        <div className="client-view-metric-half client-view-metric-half-empty" />
+                      )}
+                    </div>
+                  )}
+                  {tableWidgets.length > 0 && remainingRestWidgets.length > 0 && (
+                    <div className="client-view-grid">
+                      {remainingRestWidgets.map((w) => {
+                        const defaultSpan =
+                          w.type === "line"
+                            ? 4
+                            : w.type === "pie" || w.type === "doughnut"
+                              ? 2
+                              : (w.gridSpan ?? 2);
+                        const span = Math.min(4, Math.max(1, defaultSpan as number));
+                        return renderClientWidget(w, { gridColumn: `span ${span}` });
+                      })}
+                    </div>
+                  )}
+                  {tableWidgets.length === 0 && restWidgets.length > 0 && (
+                    <div className="client-view-grid">
+                      {restWidgets.map((w) => {
+                        const defaultSpan =
+                          w.type === "line"
+                            ? 4
+                            : w.type === "pie" || w.type === "doughnut"
+                              ? 2
+                              : (w.gridSpan ?? 2);
+                        const span = Math.min(4, Math.max(1, defaultSpan as number));
+                        return renderClientWidget(w, { gridColumn: `span ${span}` });
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </section>
+          <aside className="client-view-filters">
+            <h3>Filtros</h3>
+            {globalFilters.map((f) => (
+              <div key={f.id} className="client-view-filters-section">
+                <label>{f.field}</label>
+                {(f as any).inputType === "select" && (f as any).distinctValues ? (
+                  <div className="client-view-filters-radio-group">
+                    <label>
+                      <input
+                        type="radio"
+                        name={`gf-${f.id}`}
+                        checked={!f.value || (Array.isArray(f.value) ? f.value.length === 0 : f.value === "")}
+                        onChange={() => {
+                          setGlobalFilters((prev) =>
+                            prev.map((x) => (x.id === f.id ? { ...x, value: x.operator === "IN" ? [] : "" } : x))
+                          );
+                          setTimeout(() => reloadAll(), 0);
+                        }}
+                      />
+                      (Todo)
+                    </label>
+                    {((f as any).distinctValues || []).slice(0, 20).map((opt: any, i: number) => {
+                      const valStr = String(opt);
+                      const isChecked = Array.isArray(f.value) ? (f.value as any[]).includes(valStr) : f.value === valStr;
+                      return (
+                        <label key={i}>
+                          <input
+                            type="radio"
+                            name={`gf-${f.id}`}
+                            checked={!!isChecked}
+                            onChange={() => {
+                              setGlobalFilters((prev) =>
+                                prev.map((x) => (x.id === f.id ? { ...x, value: valStr } : x))
+                              );
+                              setTimeout(() => reloadAll(), 0);
+                            }}
+                          />
+                          {valStr}
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : f.operator === "YEAR" ? (
+                  <select
+                    className="w-full border rounded-md h-8 px-2 text-sm"
+                    value={f.value || ""}
+                    onChange={(e) => {
+                      setGlobalFilters((prev) =>
+                        prev.map((x) => (x.id === f.id ? { ...x, value: e.target.value } : x))
+                      );
+                      setTimeout(() => reloadAll(), 0);
+                    }}
+                  >
+                    <option value="">(Todo)</option>
+                    {[2022, 2023, 2024, 2025].map((y) => (
+                      <option key={y} value={String(y)}>{y}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    className="w-full border rounded-md h-8 px-2 text-sm"
+                    value={Array.isArray(f.value) ? (f.value as string[]).join(",") : f.value || ""}
+                    onChange={(e) => {
+                      setGlobalFilters((prev) =>
+                        prev.map((x) => (x.id === f.id ? { ...x, value: e.target.value } : x))
+                      );
+                      setTimeout(() => reloadAll(), 0);
+                    }}
+                  />
+                )}
+              </div>
+            ))}
+          </aside>
+        </div>
+      ) : (
+      <section data-role="canvas" className={isAdminVariant ? "flex-1 min-h-0 flex flex-col overflow-auto relative" : "col-span-12 flex-1"}>
+        {isAdminVariant ? (
+          /* Layout: logo/marca + grid de métricas (tarjetas modernas) */
+          <>
+            {(function () {
+              const sorted = [...widgets].sort(
+                (a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x)
+              );
+              const imageWidgets = sorted.filter((w) => w.type === "image");
+              const metricWidgets = sorted.filter((w) => w.type !== "image");
+              const mainLogo = imageWidgets[0];
+
+              return (
+                <>
+                  {/* Logo/marca: fondo sutil (watermark) + barra opcional */}
+                  {mainLogo?.content && (
+                    <div data-role="dashboard-branding" className="absolute inset-0 pointer-events-none z-0 flex items-center justify-center overflow-hidden">
+                      <img
+                        src={mainLogo.content}
+                        alt={mainLogo.title || "Logo"}
+                        className="max-w-[min(60%,420px)] max-h-[50%] w-auto h-auto object-contain opacity-[0.065]"
+                        aria-hidden
+                      />
+                    </div>
+                  )}
+                  {imageWidgets.length > 0 && (
+                    <div data-role="dashboard-branding-bar" className="admin-view-branding">
+                      {imageWidgets.map((imgW) =>
+                        imgW.content ? (
+                          <img
+                            key={imgW.id}
+                            src={imgW.content}
+                            alt={imgW.title || "Logo"}
+                            className="max-h-8 w-auto object-contain"
+                            style={{
+                              maxWidth: imgW.imageConfig?.width ? `${imgW.imageConfig.width}px` : "140px",
+                              objectFit: imgW.imageConfig?.objectFit || "contain",
+                            }}
+                          />
+                        ) : null
+                      )}
+                    </div>
+                  )}
+                  <div data-role="metrics-summary" className="admin-view-live-hint" aria-hidden>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>En vivo</span>
+                  </div>
+                  {/* Grid: 4 columnas, posiciones por gridOrder + gridSpan; arrastrar para reordenar, selector de tamaño */}
+                  {(function () {
+                    const hasGridOrder = metricWidgets.some((w) => w.gridOrder != null);
+                    const ordered = hasGridOrder
+                      ? [...metricWidgets].sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999))
+                      : (() => {
+                          const kpis = metricWidgets.filter((w) => w.type === "kpi");
+                          const tables = metricWidgets.filter((w) => w.type === "table");
+                          const rest = metricWidgets.filter((w) => w.type !== "kpi" && w.type !== "table");
+                          return [...kpis, ...tables, ...rest];
+                        })();
+                    return computeGridPlacements(ordered);
+                  })().length === 0 ? null : (() => {
+                    const hasGridOrder = metricWidgets.some((w) => w.gridOrder != null);
+                    const ordered = hasGridOrder
+                      ? [...metricWidgets].sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999))
+                      : (() => {
+                          const kpis = metricWidgets.filter((w) => w.type === "kpi");
+                          const tables = metricWidgets.filter((w) => w.type === "table");
+                          const rest = metricWidgets.filter((w) => w.type !== "kpi" && w.type !== "table");
+                          return [...kpis, ...tables, ...rest];
+                        })();
+                    const placements = computeGridPlacements(ordered);
+                    return (
+                  <div
+                    className="admin-view-grid grid grid-cols-1 lg:grid-cols-4 gap-6 lg:gap-8 pt-2 pb-10 relative z-10 items-stretch"
+                  >
+                    {placements.map(({ widget: w, row, col, span }) => {
+                      const isFilterList =
+                        w.type === "filter" && filterDisplayModes[w.id] === "list";
+                      const currentSpan = (w.gridSpan ?? (w.type === "kpi" ? 1 : w.type === "table" ? 2 : 2)) as 1 | 2 | 4;
+                      const isDragging = draggedWidgetId === w.id;
+                      const isDropTarget = dropTargetWidgetId === w.id;
+
+                      return (
+                <div
+                  key={w.id}
+                  style={{
+                    gridRow: row + 1,
+                    gridColumn: `${col + 1} / span ${span}`,
+                  }}
+                  className={`flex flex-col min-h-0 admin-view-grid-item ${isDragging ? "opacity-50" : ""} ${isDropTarget ? "ring-2 ring-emerald-400 ring-offset-2 rounded-2xl" : ""}`}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("text/plain", w.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    setDraggedWidgetId(w.id);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedWidgetId(null);
+                    setDropTargetWidgetId(null);
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (draggedWidgetId && draggedWidgetId !== w.id) setDropTargetWidgetId(w.id);
+                  }}
+                  onDragLeave={() => setDropTargetWidgetId((prev) => (prev === w.id ? null : prev))}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const draggedId = e.dataTransfer.getData("text/plain");
+                    if (draggedId && draggedId !== w.id) handleReorderOnDrop(draggedId, w.id);
+                    setDraggedWidgetId(null);
+                    setDropTargetWidgetId(null);
+                  }}
+                >
+                  <Card
+                    data-id={w.id}
+                    data-role="widget"
+                    className={`dashboard-metric-card w-full h-full min-h-0 flex flex-col rounded-2xl border-0 shadow-[0_1px_3px_rgba(15,23,42,0.08),0_8px_24px_-4px_rgba(15,23,42,0.06)] hover:shadow-[0_4px_12px_rgba(15,23,42,0.08),0_12px_32px_-4px_rgba(15,23,42,0.08)] transition-all duration-200 bg-white ${w.type === "kpi" ? "overflow-visible" : "overflow-hidden"}`}
+                  >
+                    <div className="admin-view-card-header px-5 py-4 flex items-center justify-between shrink-0 border-b border-slate-100 bg-gradient-to-r from-slate-50/90 to-white">
+                      <span className="font-semibold text-slate-800 truncate text-sm tracking-tight flex items-center gap-2">
+                        <span className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-600 pointer-events-none" title="Arrastrar para reordenar">
+                          <GripVertical size={16} />
+                        </span>
+                        {w.title || w.type.toUpperCase()}
+                      </span>
+                      <div className="flex items-center gap-0.5">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              className="p-2 rounded-xl hover:bg-slate-100/80 text-slate-400 hover:text-slate-600 transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                              title="Tamaño"
+                            >
+                              <Maximize2 size={14} />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuLabel>Tamaño</DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            {([1, 2, 4] as const).map((s) => (
+                              <DropdownMenuItem
+                                key={s}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleResizeWidget(w.id, s);
+                                }}
+                              >
+                                {s} columna{s > 1 ? "s" : ""}
+                                {currentSpan === s ? " ✓" : ""}
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                        {w.type === "table" && w.rows?.length ? (
+                          <button
+                            type="button"
+                            className="p-2 rounded-xl hover:bg-slate-100/80 text-slate-400 hover:text-slate-600 transition-colors"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleExportTableWidget(w);
+                            }}
+                            title="Exportar CSV"
+                          >
+                            <Download size={14} />
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="p-2 rounded-xl hover:bg-slate-100/80 text-slate-400 hover:text-slate-600 transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openRenameDialog(w);
+                          }}
+                          title="Renombrar"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    <div
+                      className={`admin-view-card-body flex-1 flex flex-col min-h-0 p-5 relative bg-white ${
+                        w.type === "filter" ? "min-h-[100px]" : w.type === "kpi" ? "min-h-[160px]" : w.type === "table" ? "min-h-[420px]" : "min-h-[320px]"
+                      } ${w.type === "kpi" ? "overflow-visible" : ""}`}
+                    >
+                      {w.isLoading && (
+                        <div className="absolute inset-0 bg-white/90 z-10 flex items-center justify-center rounded-b-2xl">
+                          <Loader2 className="w-8 h-8 animate-spin text-slate-600" />
+                        </div>
+                      )}
+                      {(() => {
+                        if (
+                          !w.config &&
+                          w.type !== "table" &&
+                          w.type !== "filter" &&
+                          w.type !== "image" &&
+                          w.type !== "text"
+                        ) {
+                          return (
+                            <div className="flex-1 flex items-center justify-center text-sm text-slate-500">
+                              Sin datos.
+                            </div>
+                          );
+                        }
+                        if (w.type === "filter") {
+                          const fConfig = w.filterConfig;
+                          const isListMode = filterDisplayModes[w.id] === "list";
+                          return (
+                            <div className="w-full flex flex-col gap-2 justify-center py-2">
+                              <div className="flex items-center justify-between">
+                                <label className="text-sm font-medium text-slate-700">
+                                  {fConfig?.label || "Filtro"}
+                                </label>
+                                {fConfig?.inputType === "select" && (
+                                  <button
+                                    type="button"
+                                    className="p-1 hover:bg-slate-100 rounded text-slate-500"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setFilterDisplayModes((prev) => ({
+                                        ...prev,
+                                        [w.id]: isListMode ? "select" : "list",
+                                      }));
+                                      handleFilterChange(w.id, "");
+                                    }}
+                                    title={isListMode ? "Lista" : "Select"}
+                                  >
+                                    {isListMode ? <List size={14} /> : <CheckSquare size={14} />}
+                                  </button>
+                                )}
+                              </div>
+                              {fConfig?.operator === "MONTH" ? (
+                                isListMode ? (
+                                  <div className="grid grid-cols-2 gap-1">
+                                    {[
+                                      { v: "1", l: "Ene" },
+                                      { v: "2", l: "Feb" },
+                                      { v: "3", l: "Mar" },
+                                      { v: "4", l: "Abr" },
+                                      { v: "5", l: "May" },
+                                      { v: "6", l: "Jun" },
+                                      { v: "7", l: "Jul" },
+                                      { v: "8", l: "Ago" },
+                                      { v: "9", l: "Sep" },
+                                      { v: "10", l: "Oct" },
+                                      { v: "11", l: "Nov" },
+                                      { v: "12", l: "Dic" },
+                                    ].map((opt) => {
+                                      const currentVal = filterValues[w.id];
+                                      const isChecked = Array.isArray(currentVal)
+                                        ? currentVal.includes(opt.v)
+                                        : currentVal === opt.v;
+                                      return (
+                                        <label
+                                          key={opt.v}
+                                          className="flex items-center gap-2 text-sm cursor-pointer hover:bg-slate-50 p-1.5 rounded"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            className="rounded border-slate-300 text-slate-600"
+                                            checked={isChecked}
+                                            onChange={(e) => {
+                                              const checked = e.target.checked;
+                                              let newVal = Array.isArray(currentVal) ? [...currentVal] : currentVal ? [currentVal] : [];
+                                              if (checked) newVal.push(opt.v);
+                                              else newVal = newVal.filter((v) => v !== opt.v);
+                                              handleFilterChange(w.id, newVal);
+                                            }}
+                                          />
+                                          <span>{opt.l}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <select
+                                    className="w-full text-sm border border-slate-200 rounded-lg h-9 px-3 bg-white"
+                                    value={Array.isArray(filterValues[w.id]) ? "" : filterValues[w.id] || ""}
+                                    onChange={(e) => handleFilterChange(w.id, e.target.value)}
+                                  >
+                                    <option value="">Todos</option>
+                                    {[1,2,3,4,5,6,7,8,9,10,11,12].map((m) => (
+                                      <option key={m} value={String(m)}>
+                                        {["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][m - 1]}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )
+                              ) : fConfig?.inputType === "select" ? (
+                                isListMode ? (
+                                  <div className="space-y-1 max-h-40 overflow-auto">
+                                    {(w.facetValues?.[fConfig.field] || []).map((opt: any, i: number) => {
+                                      const valStr = String(opt);
+                                      const currentVal = filterValues[w.id];
+                                      const isChecked = Array.isArray(currentVal) ? currentVal.includes(valStr) : currentVal === valStr;
+                                      return (
+                                        <label key={i} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-slate-50 p-1.5 rounded">
+                                          <input
+                                            type="checkbox"
+                                            className="rounded border-slate-300 text-slate-600"
+                                            checked={isChecked}
+                                            onChange={(e) => {
+                                              const checked = e.target.checked;
+                                              let newVal = Array.isArray(currentVal) ? [...currentVal] : currentVal ? [currentVal] : [];
+                                              if (checked) newVal.push(valStr);
+                                              else newVal = newVal.filter((v) => v !== valStr);
+                                              handleFilterChange(w.id, newVal);
+                                            }}
+                                          />
+                                          <span className="truncate">{valStr}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <select
+                                    className="w-full text-sm border border-slate-200 rounded-lg h-9 px-3 bg-white"
+                                    value={Array.isArray(filterValues[w.id]) ? "" : filterValues[w.id] || ""}
+                                    onChange={(e) => handleFilterChange(w.id, e.target.value)}
+                                  >
+                                    <option value="">Todos</option>
+                                    {(w.facetValues?.[fConfig.field] || []).map((opt: any, i: number) => (
+                                      <option key={i} value={String(opt)}>{String(opt)}</option>
+                                    ))}
+                                  </select>
+                                )
+                              ) : fConfig?.inputType === "date" ? (
+                                <input
+                                  type="date"
+                                  className="w-full text-sm border border-slate-200 rounded-lg h-9 px-3"
+                                  value={filterValues[w.id] || ""}
+                                  onChange={(e) => handleFilterChange(w.id, e.target.value)}
+                                />
+                              ) : (
+                                <input
+                                  type={fConfig?.inputType === "number" ? "number" : "text"}
+                                  className="w-full text-sm border border-slate-200 rounded-lg h-9 px-3"
+                                  placeholder="Valor..."
+                                  value={filterValues[w.id] ?? ""}
+                                  onChange={(e) => handleFilterChange(w.id, e.target.value)}
+                                />
+                              )}
+                            </div>
+                          );
+                        }
+                        const chartOpts = (t: "bar" | "line" | "pie" | "doughnut" | "horizontalBar") =>
+                          buildChartOptions(t, w.chartStyle, w.labelDisplayMode);
+                        if (["bar", "combo"].includes(w.type)) {
+                          return (
+                            <div className="w-full flex-1 min-h-[280px] relative">
+                              <Bar
+                                data={w.config as any}
+                                options={{
+                                  ...chartOpts("bar"),
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  plugins: {
+                                    ...(chartOpts("bar").plugins as object),
+                                    datalabels: {
+                                      ...(chartOpts("bar").plugins as any).datalabels,
+                                      anchor: "end",
+                                      align: "end",
+                                    },
+                                  },
+                                  scales: {
+                                    x: {
+                                      display: w.chartStyle?.axisXVisible ?? true,
+                                      reverse: w.chartStyle?.axisXReverse ?? false,
+                                      grid: { display: false },
+                                      ticks: { font: { size: (w.chartStyle?.fontSize ?? 11) + 1 } },
+                                    },
+                                    y: {
+                                      display: w.chartStyle?.axisYVisible ?? true,
+                                      reverse: w.chartStyle?.axisYReverse ?? false,
+                                      grid: { color: "#e2e8f0" },
+                                      ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                    },
+                                  },
+                                  ...({
+                                    barPercentage: 0.8,
+                                    borderRadius: (w.chartStyle?.barBorderRadius ?? 4) as number,
+                                  } as Record<string, unknown>),
+                                }}
+                              />
+                            </div>
+                          );
+                        }
+                        if (w.type === "horizontalBar") {
+                          return (
+                            <div className="w-full flex-1 min-h-[280px] relative">
+                              <Bar
+                                data={w.config as any}
+                                options={{
+                                  ...chartOpts("horizontalBar"),
+                                  indexAxis: "y",
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  plugins: {
+                                    ...(chartOpts("horizontalBar").plugins as object),
+                                    datalabels: {
+                                      ...(chartOpts("horizontalBar").plugins as any).datalabels,
+                                      anchor: "end",
+                                      align: "end",
+                                    },
+                                  },
+                                  scales: {
+                                    x: {
+                                      display: w.chartStyle?.axisXVisible ?? true,
+                                      reverse: w.chartStyle?.axisXReverse ?? false,
+                                      grid: { color: "#e2e8f0" },
+                                      ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                    },
+                                    y: {
+                                      display: w.chartStyle?.axisYVisible ?? true,
+                                      reverse: w.chartStyle?.axisYReverse ?? false,
+                                      grid: { display: false },
+                                      ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                    },
+                                  },
+                                  ...({
+                                    barPercentage: 0.8,
+                                    borderRadius: (w.chartStyle?.barBorderRadius ?? 4) as number,
+                                  } as Record<string, unknown>),
+                                }}
+                              />
+                            </div>
+                          );
+                        }
+                        if (w.type === "line") {
+                          return (
+                            <div className="w-full flex-1 min-h-[280px] relative">
+                              <Line
+                                data={w.config as any}
+                                options={{
+                                  ...chartOpts("line"),
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  elements: {
+                                    line: { borderWidth: w.chartStyle?.lineBorderWidth ?? 2 },
+                                    point: { radius: w.chartStyle?.pointRadius ?? 4 },
+                                  },
+                                  plugins: {
+                                    ...(chartOpts("line").plugins as object),
+                                    datalabels: {
+                                      ...(chartOpts("line").plugins as any).datalabels,
+                                      backgroundColor: "rgba(255,255,255,0.8)",
+                                      borderRadius: 4,
+                                      padding: 4,
+                                    },
+                                  },
+                                }}
+                              />
+                            </div>
+                          );
+                        }
+                        if (w.type === "pie") {
+                          return (
+                            <div className="w-full flex-1 min-h-[280px] relative">
+                              <Pie
+                                data={w.config as any}
+                                options={{
+                                  ...chartOpts("pie"),
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  plugins: {
+                                    ...(chartOpts("pie").plugins as object),
+                                    datalabels: {
+                                      ...(chartOpts("pie").plugins as any).datalabels,
+                                      color: "#fff",
+                                    },
+                                  },
+                                }}
+                              />
+                            </div>
+                          );
+                        }
+                        if (w.type === "doughnut") {
+                          return (
+                            <div className="w-full flex-1 min-h-[280px] relative">
+                              <Doughnut
+                                data={w.config as any}
+                                options={{
+                                  ...chartOpts("doughnut"),
+                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
+                                  plugins: {
+                                    ...(chartOpts("doughnut").plugins as object),
+                                    datalabels: {
+                                      ...(chartOpts("doughnut").plugins as any).datalabels,
+                                      color: "#fff",
+                                    },
+                                  },
+                                }}
+                              />
+                            </div>
+                          );
+                        }
+                        if (w.type === "kpi") {
+                          const value = w.config?.datasets?.[0]?.data?.[0] ?? 0;
+                          const { display, full } = formatKpiDisplay(Number(value));
+                          const useCompact = full.length > 10;
+                          return (
+                            <div className="w-full flex-1 flex flex-col items-center justify-center min-w-0 overflow-visible px-2">
+                              <div
+                                className="font-bold text-slate-800 tracking-tight tabular-nums text-center overflow-visible"
+                                style={{ fontSize: useCompact ? "clamp(1.25rem, 3vw, 2.5rem)" : "clamp(1rem, 2.5vw, 3rem)" }}
+                                title={full}
+                              >
+                                {useCompact ? display : full}
+                              </div>
+                              {useCompact && (
+                                <div className="text-xs text-slate-400 mt-1 tabular-nums" title={full}>
+                                  {full}
+                                </div>
+                              )}
+                              <div className="text-sm text-slate-500 mt-1.5 font-medium">
+                                {w.config?.datasets?.[0]?.label || "Total"}
+                              </div>
+                            </div>
+                          );
+                        }
+                        if (w.type === "table") {
+                          const cols = w.columns || [];
+                          const rows = w.rows || [];
+                          return (
+                            <div className="w-full flex-1 min-h-0 overflow-auto -m-1 p-1">
+                              {rows.length === 0 ? (
+                                <div className="text-sm text-slate-500 py-4">Sin datos.</div>
+                              ) : (
+                                <table className="w-full text-sm min-w-full">
+                                  <thead>
+                                    <tr className="border-b border-slate-200 bg-slate-50/80">
+                                      {cols.map((c) => (
+                                        <th key={c.name} className="text-left px-3 py-2 font-semibold text-slate-700">
+                                          {c.name}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {rows.slice(0, 100).map((r: any, idx: number) => (
+                                      <tr key={idx} className="border-b border-slate-100">
+                                        {cols.map((c) => (
+                                          <td key={c.name} className="px-3 py-2 text-slate-700">
+                                            {String(r?.[c.name] ?? "")}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                              {rows.length > 100 && (
+                                <div className="text-xs text-slate-500 mt-2">Mostrando 100 filas.</div>
+                              )}
+                            </div>
+                          );
+                        }
+                        if (w.type === "text") {
+                          return (
+                            <div className="w-full flex-1 p-2 overflow-auto prose prose-sm max-w-none">
+                              <div dangerouslySetInnerHTML={{ __html: w.content || "" }} />
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  </Card>
+                </div>
+                      );
+                    })}
+                  </div>
+                  );
+                })()}
+                </>
+              );
+            })()}
+          </>
+        ) : (
+          /* Vista clásica: canvas con pan/zoom y posicionamiento libre */
           <div
-            className="absolute inset-0 pointer-events-none bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] rounded-2xl"
-            style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              transformOrigin: "top left",
-            }}
-          />
-          <div
-            className="relative"
-            style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              transformOrigin: "top left",
-            }}
+            ref={canvasRef}
+            onWheel={onCanvasWheel}
+            onPointerDown={onCanvasPointerDown}
+            onPointerMove={onCanvasPointerMove}
+            onPointerUp={onCanvasPointerUp}
+            onPointerLeave={onCanvasPointerUp}
+            className="bg-white/60 rounded-2xl p-6 min-h-[700px] h-full border relative overflow-hidden"
           >
-            {widgets.map((w) => {
+            <div
+              className="absolute inset-0 pointer-events-none bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] rounded-2xl"
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: "top left",
+              }}
+            />
+            <div
+              className="relative"
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: "top left",
+              }}
+            >
+            {(function () {
+              const sorted = [...widgets].sort(
+                (a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0)
+              );
+              return sorted;
+            })().map((w) => {
               const isFilterList =
                 w.type === "filter" && filterDisplayModes[w.id] === "list";
               const isImage = w.type === "image";
 
-              // For image widgets, render without Card wrapper
               if (isImage) {
                 return (
                   <div
                     key={w.id}
                     data-id={w.id}
+                    data-role="widget"
                     className="absolute flex items-center justify-center overflow-hidden"
                     style={{
                       left: w.x,
@@ -2146,6 +3644,7 @@ export function DashboardViewer({
                 <Card
                   key={w.id}
                   data-id={w.id}
+                  data-role="widget"
                   className="absolute rounded-2xl shadow-sm border overflow-hidden"
                   style={{
                     left: w.x,
@@ -2153,7 +3652,7 @@ export function DashboardViewer({
                     width: w.w,
                     height: isFilterList ? "auto" : w.h,
                     minHeight: w.h,
-                    zIndex: isFilterList ? 50 : undefined,
+                    zIndex: isFilterList ? 50 : (w.zIndex ?? 0),
                   }}
                   onPointerDown={(e) => {
                     // Permitir drag si no es un control interactivo
@@ -2170,39 +3669,18 @@ export function DashboardViewer({
                     <span className="font-medium text-gray-700 truncate">
                       {w.title || w.type.toUpperCase()}
                     </span>
-                    <div className="flex items-center gap-1">
-                      <button
-                        className="h-6 w-6 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openRenameDialog(w);
-                        }}
-                        title="Renombrar"
-                      >
-                        <Pencil size={12} />
-                      </button>
-                      <button
-                        className="h-7 px-2 rounded-full hover:bg-gray-100 text-xs text-gray-700"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          loadETLDataIntoWidget(w.id);
-                        }}
-                      >
-                        Recargar
-                      </button>
-                      <button
-                        className="h-6 w-6 rounded-full hover:bg-red-50 flex items-center justify-center text-red-500"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveWidget(w.id);
-                        }}
-                        title="Quitar"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
+                    <button
+                      className="h-6 w-6 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openRenameDialog(w);
+                      }}
+                      title="Renombrar"
+                    >
+                      <Pencil size={12} />
+                    </button>
                   </div>
-                  <div className="w-full h-[calc(100%-36px)] bg-white flex flex-col p-2 relative">
+                  <div className="w-full flex-1 min-h-0 bg-white flex flex-col p-2 relative">
                     {w.isLoading && (
                       <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center">
                         <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
@@ -2218,7 +3696,7 @@ export function DashboardViewer({
                       ) {
                         return (
                           <div className="text-xs text-gray-500">
-                            Sin datos. Usa Recargar para cargar.
+                            Sin datos.
                           </div>
                         );
                       }
@@ -2441,144 +3919,150 @@ export function DashboardViewer({
                           </div>
                         );
                       }
+                      const chartOpts = (t: "bar" | "line" | "pie" | "doughnut" | "horizontalBar") =>
+                        buildChartOptions(t, w.chartStyle, w.labelDisplayMode);
                       if (["bar", "combo"].includes(w.type)) {
                         return (
-                          <Bar
-                            data={w.config as any}
-                            options={{
-                              responsive: true,
-                              maintainAspectRatio: false,
-                              plugins: {
-                                legend: { display: true },
-                                datalabels: {
-                                  display: true,
-                                  color: "#374151",
-                                  font: { weight: "bold" },
-                                  formatter: (value) =>
-                                    Number(value).toLocaleString(),
+                          <div className="w-full flex-1 min-h-[120px] relative">
+                            <Bar
+                              data={w.config as any}
+                              options={{
+                                ...chartOpts("bar"),
+                                plugins: {
+                                  ...(chartOpts("bar").plugins as object),
+                                  datalabels: {
+                                    ...(chartOpts("bar").plugins as any).datalabels,
+                                    anchor: "end",
+                                    align: "end",
+                                  },
                                 },
-                              },
-                            }}
-                          />
+                                scales: {
+                                  x: {
+                                    display: w.chartStyle?.axisXVisible ?? true,
+                                    reverse: w.chartStyle?.axisXReverse ?? false,
+                                    grid: { display: false },
+                                    ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                  },
+                                  y: {
+                                    display: w.chartStyle?.axisYVisible ?? true,
+                                    reverse: w.chartStyle?.axisYReverse ?? false,
+                                    grid: { color: "#eee" },
+                                    ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                  },
+                                },
+                                ...({
+                                  barPercentage: 0.8,
+                                  borderRadius: (w.chartStyle?.barBorderRadius ?? 4) as number,
+                                } as Record<string, unknown>),
+                              }}
+                            />
+                          </div>
                         );
                       }
                       if (w.type === "horizontalBar") {
                         return (
-                          <Bar
-                            data={w.config as any}
-                            options={{
-                              indexAxis: "y",
-                              responsive: true,
-                              maintainAspectRatio: false,
-                              plugins: {
-                                legend: { display: true },
-                                datalabels: {
-                                  display: true,
-                                  color: "#374151",
-                                  font: { weight: "bold" },
-                                  formatter: (value) =>
-                                    Number(value).toLocaleString(),
+                          <div className="w-full flex-1 min-h-[120px] relative">
+                            <Bar
+                              data={w.config as any}
+                              options={{
+                                ...chartOpts("horizontalBar"),
+                                indexAxis: "y",
+                                plugins: {
+                                  ...(chartOpts("horizontalBar").plugins as object),
+                                  datalabels: {
+                                    ...(chartOpts("horizontalBar").plugins as any).datalabels,
+                                    anchor: "end",
+                                    align: "end",
+                                  },
                                 },
-                              },
-                            }}
-                          />
+                                scales: {
+                                  x: {
+                                    display: w.chartStyle?.axisXVisible ?? true,
+                                    reverse: w.chartStyle?.axisXReverse ?? false,
+                                    grid: { color: "#eee" },
+                                    ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                  },
+                                  y: {
+                                    display: w.chartStyle?.axisYVisible ?? true,
+                                    reverse: w.chartStyle?.axisYReverse ?? false,
+                                    grid: { display: false },
+                                    ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } },
+                                  },
+                                },
+                                ...({
+                                  barPercentage: 0.8,
+                                  borderRadius: (w.chartStyle?.barBorderRadius ?? 4) as number,
+                                } as Record<string, unknown>),
+                              }}
+                            />
+                          </div>
                         );
                       }
                       if (w.type === "line") {
                         return (
-                          <Line
-                            data={w.config as any}
-                            options={{
-                              responsive: true,
-                              maintainAspectRatio: false,
-                              plugins: {
-                                legend: { display: true },
-                                datalabels: {
-                                  display: true,
-                                  color: "#374151",
-                                  font: { weight: "bold" },
-                                  formatter: (value) =>
-                                    Number(value).toLocaleString(),
+                          <div className="w-full flex-1 min-h-[120px] relative">
+                            <Line
+                              data={w.config as any}
+                              options={{
+                                ...chartOpts("line"),
+                                elements: {
+                                  line: {
+                                    borderWidth: w.chartStyle?.lineBorderWidth ?? 2,
+                                  },
+                                  point: {
+                                    radius: w.chartStyle?.pointRadius ?? 3,
+                                  },
                                 },
-                              },
-                            }}
-                          />
+                                plugins: {
+                                  ...(chartOpts("line").plugins as object),
+                                  datalabels: {
+                                    ...(chartOpts("line").plugins as any).datalabels,
+                                    backgroundColor: "rgba(255,255,255,0.7)",
+                                    borderRadius: 4,
+                                    padding: 4,
+                                  },
+                                },
+                              }}
+                            />
+                          </div>
                         );
                       }
                       if (w.type === "pie") {
                         return (
-                          <Pie
-                            data={w.config as any}
-                            options={{
-                              responsive: true,
-                              maintainAspectRatio: false,
-                              plugins: {
-                                legend: { display: true },
-                                datalabels: {
-                                  display: true,
-                                  color: "#ffffff",
-                                  font: { weight: "bold" },
-                                  formatter: (value, ctx) => {
-                                    // Default to percent for Pie/Doughnut unless explicitly set to 'value'
-                                    const mode =
-                                      w.labelDisplayMode || "percent";
-                                    if (mode === "value") {
-                                      return Number(value).toLocaleString();
-                                    }
-                                    const dataset = ctx.chart.data.datasets[0];
-                                    const total = dataset.data.reduce(
-                                      (a: any, b: any) => Number(a) + Number(b),
-                                      0
-                                    );
-                                    const percentage =
-                                      (
-                                        (Number(value) / Number(total)) *
-                                        100
-                                      ).toFixed(1) + "%";
-                                    return percentage;
+                          <div className="w-full flex-1 min-h-[120px] relative">
+                            <Pie
+                              data={w.config as any}
+                              options={{
+                                ...chartOpts("pie"),
+                                plugins: {
+                                  ...(chartOpts("pie").plugins as object),
+                                  datalabels: {
+                                    ...(chartOpts("pie").plugins as any).datalabels,
+                                    color: "#ffffff",
                                   },
                                 },
-                              },
-                            }}
-                          />
+                              }}
+                            />
+                          </div>
                         );
                       }
                       if (w.type === "doughnut") {
                         return (
-                          <Doughnut
-                            data={w.config as any}
-                            options={{
-                              responsive: true,
-                              maintainAspectRatio: false,
-                              plugins: {
-                                legend: { display: true },
-                                datalabels: {
-                                  display: true,
-                                  color: "#ffffff",
-                                  font: { weight: "bold" },
-                                  formatter: (value, ctx) => {
-                                    // Default to percent for Pie/Doughnut unless explicitly set to 'value'
-                                    const mode =
-                                      w.labelDisplayMode || "percent";
-                                    if (mode === "value") {
-                                      return Number(value).toLocaleString();
-                                    }
-                                    const dataset = ctx.chart.data.datasets[0];
-                                    const total = dataset.data.reduce(
-                                      (a: any, b: any) => Number(a) + Number(b),
-                                      0
-                                    );
-                                    const percentage =
-                                      (
-                                        (Number(value) / Number(total)) *
-                                        100
-                                      ).toFixed(1) + "%";
-                                    return percentage;
+                          <div className="w-full flex-1 min-h-[120px] relative">
+                            <Doughnut
+                              data={w.config as any}
+                              options={{
+                                ...chartOpts("doughnut"),
+                                plugins: {
+                                  ...(chartOpts("doughnut").plugins as object),
+                                  datalabels: {
+                                    ...(chartOpts("doughnut").plugins as any).datalabels,
+                                    color: "#ffffff",
                                   },
                                 },
-                              },
-                            }}
-                          />
+                              }}
+                            />
+                          </div>
                         );
                       }
                       if (w.type === "text") {
@@ -2611,11 +4095,18 @@ export function DashboardViewer({
                       }
                       if (w.type === "kpi") {
                         const value = w.config?.datasets?.[0]?.data?.[0] ?? 0;
+                        const { display, full } = formatKpiDisplay(Number(value));
+                        const useCompact = full.length > 10;
                         return (
-                          <div className="w-full h-full flex flex-col items-center justify-center">
-                            <div className="text-4xl font-bold text-gray-800">
-                              {Number(value).toLocaleString()}
+                          <div className="w-full h-full flex flex-col items-center justify-center overflow-visible px-2">
+                            <div
+                              className="font-bold text-gray-800 tabular-nums text-center overflow-visible"
+                              style={{ fontSize: useCompact ? "clamp(1rem, 2.5vw, 2rem)" : "clamp(0.875rem, 2vw, 2.25rem)" }}
+                              title={full}
+                            >
+                              {useCompact ? display : full}
                             </div>
+                            {useCompact && <div className="text-[10px] text-gray-400 mt-0.5" title={full}>{full}</div>}
                             <div className="text-xs text-gray-500 mt-1">
                               {w.config?.datasets?.[0]?.label || "Total"}
                             </div>
@@ -2674,7 +4165,9 @@ export function DashboardViewer({
             })}
           </div>
         </div>
+        )}
       </section>
+      )}
 
       <Dialog
         open={!!widgetToRename}
@@ -2702,6 +4195,29 @@ export function DashboardViewer({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </>
+  );
+
+  if (useClientTheme) {
+    return (
+      <div
+        ref={rootRef}
+        data-theme="client"
+        style={themeVars}
+        className="client-view-root flex flex-col h-full w-full"
+      >
+        {rootContent}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={rootRef}
+      data-view={isAdminVariant ? "admin" : undefined}
+      className={`flex flex-col h-full w-full ${isAdminVariant ? "admin-dashboard-view gap-5" : "gap-0"}`}
+    >
+      {rootContent}
     </div>
   );
 }

@@ -1,4 +1,3 @@
-// En AdminLayout.js
 import AdminHeader from "@/components/admin/AdminHeader";
 
 export default function AdminLayout({
@@ -9,9 +8,9 @@ export default function AdminLayout({
   return (
     <>
       <AdminHeader />
-      <main className="min-h-screen flex flex-col items-center bg-[#F4F6FA]">
-        <div className="flex-1 w-full flex flex-col items-center">
-          <div className="flex-1 flex flex-col gap-10 w-full max-w-[1400px]">
+      <main className="min-h-screen flex flex-col items-center bg-[#fafafa]">
+        <div className="flex-1 w-full flex flex-col items-center px-4 sm:px-6">
+          <div className="flex-1 flex flex-col gap-5 w-full max-w-[1680px] py-5">
             {children}
           </div>
         </div>

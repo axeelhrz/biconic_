@@ -20,12 +20,23 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   PanelLeftOpen,
   PanelLeftClose,
   PanelRightOpen,
   PanelRightClose,
   Loader2,
+  MoreVertical,
+  GripVertical,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -54,6 +65,23 @@ import {
   SaveVersionButton,
   HistoryDialog,
 } from "@/components/dashboard/DashboardVersioning";
+import {
+  type DashboardTheme,
+  DEFAULT_DASHBOARD_THEME,
+  mergeTheme,
+} from "@/types/dashboard";
+
+/** Paletas de color para el dashboard: acento, gráficos, bordes */
+const PALETTE_PRESETS = [
+  { id: "teal", name: "Teal", accentColor: "#2dd4bf" },
+  { id: "blue", name: "Azul", accentColor: "#3b82f6" },
+  { id: "violet", name: "Violeta", accentColor: "#8b5cf6" },
+  { id: "emerald", name: "Esmeralda", accentColor: "#10b981" },
+  { id: "amber", name: "Ámbar", accentColor: "#f59e0b" },
+  { id: "rose", name: "Rosa", accentColor: "#f43f5e" },
+  { id: "cyan", name: "Cian", accentColor: "#06b6d4" },
+  { id: "indigo", name: "Índigo", accentColor: "#6366f1" },
+] as const;
 
 // 2. Registrar el plugin globalmente para Chart.js
 ChartJS.register(
@@ -152,6 +180,16 @@ type Widget = {
   y: number;
   w: number;
   h: number;
+  /** Orden en el grid (estilo Power BI). Si no existe, se usa el índice del array. */
+  gridOrder?: number;
+  /** Columnas que ocupa en el grid (1, 2 o 4). Vista cliente: 4 columnas; KPI=1, resto 2 o 4. */
+  gridSpan?: 1 | 2 | 4;
+  /** Altura mínima de la tarjeta en px (moldeable en vista cliente). */
+  minHeight?: number;
+  /** KPI: etiqueta secundaria (ej. "Ticket promedio"). */
+  kpiSecondaryLabel?: string;
+  /** KPI: valor secundario (ej. "$ 3.202"). */
+  kpiSecondaryValue?: string;
   config?: ChartConfig;
   content?: string;
   filterConfig?: FilterWidgetConfig;
@@ -227,10 +265,12 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [clientId, setClientId] = useState<string | null>(null);
 
-  // State for collapsible panels
-  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  // Paneles como drawers: cerrados por defecto para que el grid ocupe toda la pantalla
+  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(false);
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
   const [isChangeEtlModalOpen, setIsChangeEtlModalOpen] = useState(false);
+  // Tema de la vista cliente (colores editables)
+  const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>({ ...DEFAULT_DASHBOARD_THEME });
 
   const selected = useMemo(
     () => widgets.find((w) => w.id === selectedId) || null,
@@ -328,9 +368,23 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
           clientId: (data as any)?.client_id ?? null,
         });
         if (!cancelled) {
-          const loadedWidgets = (data.layout as any) || [];
+          const rawLayout = (data as any)?.layout;
           const loadedGlobalFilters = (data.global_filters_config as any) || [];
-          setWidgets(Array.isArray(loadedWidgets) ? loadedWidgets : []);
+          let loadedWidgets: any[] = [];
+          let loadedTheme: DashboardTheme = { ...DEFAULT_DASHBOARD_THEME };
+          if (Array.isArray(rawLayout)) {
+            loadedWidgets = rawLayout;
+          } else if (rawLayout && typeof rawLayout === "object" && Array.isArray(rawLayout.widgets)) {
+            loadedWidgets = rawLayout.widgets;
+            loadedTheme = mergeTheme(rawLayout.theme);
+          }
+          const normalized = loadedWidgets.map((w: any, i: number) => ({
+            ...w,
+            gridOrder: w.gridOrder ?? i,
+            gridSpan: w.gridSpan ?? (w.type === "table" ? 2 : 1),
+          }));
+          setWidgets(normalized);
+          setDashboardTheme(loadedTheme);
           setGlobalFilters(
             Array.isArray(loadedGlobalFilters) ? loadedGlobalFilters : []
           );
@@ -884,8 +938,13 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
         );
 
         const supabase = createClient();
+        // Guardar tema en layout para la vista cliente (colores editables)
+        const layoutToSave = {
+          widgets: cleanWidgets,
+          theme: dashboardTheme,
+        };
         const updatePayload: any = {
-          layout: cleanWidgets as any,
+          layout: layoutToSave as any,
           global_filters_config: globalFilters as any,
         };
 
@@ -914,7 +973,7 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
         setIsSaving(false);
       }
     },
-    [widgets, globalFilters, dashboardId, clientId]
+    [widgets, globalFilters, dashboardId, clientId, dashboardTheme]
   );
   // Mantener referencia de widgets para usar en efectos sin depender del array
   const widgetsRef = useRef<Widget[]>([]);
@@ -1177,15 +1236,13 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
       e.dataTransfer.dropEffect = "copy";
     }
   };
-  const onCanvasDrop = (e: React.DragEvent) => {
+  const onGridDrop = (e: React.DragEvent) => {
     const payload = e.dataTransfer.getData(DND_MIME);
     if (!payload) return;
     e.preventDefault();
-    const { left, top } = canvasRef.current!.getBoundingClientRect();
-    const x = (e.clientX - left - pan.x) / zoom;
-    const y = (e.clientY - top - pan.y) / zoom;
     const { type } = JSON.parse(payload);
     const id = `${type}-${Date.now()}`;
+    const gridSpan: 1 | 2 | 4 = type === "kpi" ? 1 : type === "table" ? 2 : 2;
     const { w, h } =
       type === "table"
         ? { w: 520, h: 260 }
@@ -1196,25 +1253,41 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
         : type === "text"
         ? { w: 300, h: 150 }
         : { w: 520, h: 260 };
-    const newWidget: Widget = {
-      id,
-      type,
-      title: type.toUpperCase(),
-      x: snap(x - w / 2),
-      y: snap(y - 24),
-      w: snap(w),
-      h: snap(h),
-      labelDisplayMode:
-        type === "pie" || type === "doughnut" ? "percent" : undefined,
-      aggregationConfig: { enabled: false, metrics: [] },
-    };
-    setWidgets((prev) => [...prev, newWidget]);
+    setWidgets((prev) => {
+      const order = prev.length;
+      const newWidget: Widget = {
+        id,
+        type,
+        title: type.toUpperCase(),
+        x: 0,
+        y: 0,
+        w: snap(w),
+        h: snap(h),
+        gridOrder: order,
+        gridSpan,
+        labelDisplayMode:
+          type === "pie" || type === "doughnut" ? "percent" : undefined,
+        aggregationConfig: { enabled: false, metrics: [] },
+      };
+      return [...prev, newWidget];
+    });
     setSelectedId(id);
     if (etlData) {
-      setTimeout(() => {
-        loadETLDataIntoWidget(id);
-      }, 100);
+      setTimeout(() => loadETLDataIntoWidget(id), 100);
     }
+  };
+
+  const moveWidgetOrder = (widgetId: string, direction: "up" | "down") => {
+    setWidgets((prev) => {
+      const idx = prev.findIndex((w) => w.id === widgetId);
+      if (idx < 0) return prev;
+      if (direction === "up" && idx === 0) return prev;
+      if (direction === "down" && idx === prev.length - 1) return prev;
+      const next = [...prev];
+      const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+      [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+      return next.map((w, i) => ({ ...w, gridOrder: i }));
+    });
   };
   const startDragWidget = (id: string, e: React.PointerEvent) => {
     // Si Ctrl está presionado, no iniciamos drag del widget; permitimos pan del lienzo
@@ -1501,28 +1574,36 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
   }, [filtersOpen, widgets, fetchDistinctOptions]);
 
   return (
-    <div className="grid grid-cols-12 gap-4 transition-all duration-300 ease-in-out">
+    <div className="admin-dashboard-editor flex flex-col h-full min-h-0 relative">
+      {/* Backdrop: cierra paneles al hacer clic fuera */}
+      {(isLeftPanelOpen || isRightPanelOpen) && (
+        <button
+          type="button"
+          aria-label="Cerrar paneles"
+          className="absolute inset-0 bg-black/20 z-30 transition-opacity duration-300"
+          onClick={() => {
+            if (isLeftPanelOpen) setIsLeftPanelOpen(false);
+            if (isRightPanelOpen) setIsRightPanelOpen(false);
+          }}
+        />
+      )}
+      {/* Drawer izquierdo: paleta, guardar, filtros */}
       <aside
-        className={`${isLeftPanelOpen ? "col-span-3 xl:col-span-2" : "hidden"}`}
+        className={`admin-editor-drawer admin-editor-drawer-left absolute left-0 top-0 bottom-0 z-40 w-[300px] max-w-[90vw] bg-white border-r border-neutral-200/80 shadow-xl transition-transform duration-300 ease-out flex flex-col ${
+          isLeftPanelOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
       >
-        <div className="bg-white rounded-2xl border p-4 sticky top-24">
-          <h3 className="text-emerald-600 text-xl font-semibold">Dashboard</h3>
-          <p className="text-sm text-gray-500 mb-4">Crea tu dashboard</p>
-          <div className="flex flex-col items-center gap-2 mb-4">
-            <Button onClick={() => handleSaveDashboard()} disabled={isSaving}>
-              {isSaving ? "Guardando..." : "Guardar Dashboard"}
+        <div className="admin-editor-sidebar flex-1 overflow-y-auto p-5">
+          <h3 className="text-neutral-800 text-lg font-semibold tracking-tight">Editor</h3>
+          <p className="text-sm text-neutral-500 mt-0.5 mb-5">Arma tu dashboard con widgets</p>
+          <div className="flex flex-col gap-2 mb-5">
+            <Button onClick={() => handleSaveDashboard()} disabled={isSaving} className="w-full rounded-lg">
+              {isSaving ? "Guardando..." : "Guardar"}
             </Button>
-
             <SaveVersionButton dashboardId={dashboardId} />
-
-            <HistoryDialog
-              dashboardId={dashboardId}
-              onRestore={() => window.location.reload()}
-            />
-            <Button variant="outline" asChild>
-              <Link href={`/admin/dashboard/${dashboardId}/view`}>
-                Vista Previa
-              </Link>
+            <HistoryDialog dashboardId={dashboardId} onRestore={() => window.location.reload()} />
+            <Button variant="outline" asChild className="w-full rounded-lg">
+              <Link href={`/admin/dashboard/${dashboardId}/view`}>Vista previa</Link>
             </Button>
             <Button
               variant="outline"
@@ -1569,30 +1650,30 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
               Compartir
             </Button>
           </div>
-          <div className="space-y-5">
+          <div className="space-y-6">
             <div>
-              <h4 className="text-emerald-600 font-medium mb-2">Diseño</h4>
-              <div className="space-y-2">
+              <h4 className="text-neutral-700 font-semibold text-sm mb-3">Widgets</h4>
+              <div className="space-y-1.5">
                 {PALETTE.map((p) => (
                   <button
                     key={p.type}
                     draggable
                     onDragStart={(e) => onPaletteDragStart(e, p.type)}
-                    className="w-full border rounded-full px-4 py-2 bg-white text-left hover:bg-gray-50 flex items-center gap-2 cursor-grab active:cursor-grabbing"
+                    className="admin-editor-palette-item w-full border border-neutral-200 rounded-lg px-3 py-2.5 bg-white text-left hover:bg-neutral-50 hover:border-neutral-300 flex items-center gap-3 cursor-grab active:cursor-grabbing text-sm text-neutral-700 transition-colors"
                   >
-                    <span className="h-6 w-6 rounded-full bg-emerald-100" />
-                    <span className="text-sm text-gray-700">{p.label}</span>
+                    <span className="h-8 w-8 rounded-lg bg-neutral-100 flex-shrink-0" />
+                    <span>{p.label}</span>
                   </button>
                 ))}
               </div>
             </div>
             <div>
               <div className="flex items-center justify-between mb-2">
-                <h4 className="text-emerald-600 font-medium">Datos</h4>
+                <h4 className="text-neutral-700 font-semibold text-sm">Datos</h4>
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-6 text-[10px] px-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                  className="rounded-lg text-xs h-8 border-neutral-200 text-neutral-600 hover:bg-neutral-50"
                   onClick={() => setIsChangeEtlModalOpen(true)}
                 >
                   Cambiar
@@ -1621,10 +1702,9 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
                 </div>
               )}
             </div>
-            {/* Panel de filtros globales */}
             <div>
-              <h4 className="text-emerald-600 font-medium mb-2">
-                Filtros Globales
+              <h4 className="text-neutral-700 font-semibold text-sm mb-2">
+                Filtros globales
               </h4>
               <div className="space-y-2">
                 <Dialog
@@ -2054,27 +2134,231 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
                 </div>
               </div>
             </div>
+            {/* Tema / Colores (vista cliente): editables por el cliente */}
+            <div>
+              <h4 className="text-neutral-700 font-semibold text-sm mb-2">
+                Tema / Colores (vista cliente)
+              </h4>
+              <p className="text-xs text-neutral-500 mb-3">
+                Colores que verá el cliente en la vista del dashboard.
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <Label className="text-xs text-neutral-600 mb-2 block">Paleta de colores</Label>
+                  <p className="text-xs text-neutral-500 mb-2">
+                    Afecta gráficos, bordes y acentos.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {PALETTE_PRESETS.map((preset) => {
+                      const current = dashboardTheme.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor;
+                      const isActive = current?.toLowerCase() === preset.accentColor.toLowerCase();
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className={`h-8 min-w-[2rem] rounded-lg border-2 transition-all ${
+                            isActive
+                              ? "border-neutral-800 ring-2 ring-neutral-400 ring-offset-2"
+                              : "border-neutral-200 hover:border-neutral-400"
+                          }`}
+                          style={{ backgroundColor: preset.accentColor }}
+                          onClick={() =>
+                            setDashboardTheme((t) => ({ ...t, accentColor: preset.accentColor }))
+                          }
+                          title={preset.name}
+                          aria-label={`Paleta ${preset.name}`}
+                        />
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    O elige un color personalizado abajo.
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-xs text-neutral-600">Color de acento (gráficos, bordes)</Label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="color"
+                      className="h-9 w-12 rounded border border-neutral-200 cursor-pointer"
+                      value={dashboardTheme.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor}
+                      onChange={(e) =>
+                        setDashboardTheme((t) => ({ ...t, accentColor: e.target.value }))
+                      }
+                    />
+                    <Input
+                      className="flex-1 h-9 text-xs font-mono"
+                      value={dashboardTheme.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor}
+                      onChange={(e) =>
+                        setDashboardTheme((t) => ({ ...t, accentColor: e.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs text-neutral-600">Fondo del dashboard</Label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="color"
+                      className="h-9 w-12 rounded border border-neutral-200 cursor-pointer"
+                      value={dashboardTheme.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor}
+                      onChange={(e) =>
+                        setDashboardTheme((t) => ({ ...t, backgroundColor: e.target.value }))
+                      }
+                    />
+                    <Input
+                      className="flex-1 h-9 text-xs font-mono"
+                      value={dashboardTheme.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor}
+                      onChange={(e) =>
+                        setDashboardTheme((t) => ({ ...t, backgroundColor: e.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs text-neutral-600">Fondo de tarjetas</Label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="color"
+                      className="h-9 w-12 rounded border border-neutral-200 cursor-pointer"
+                      value={dashboardTheme.cardBackgroundColor ?? DEFAULT_DASHBOARD_THEME.cardBackgroundColor}
+                      onChange={(e) =>
+                        setDashboardTheme((t) => ({ ...t, cardBackgroundColor: e.target.value }))
+                      }
+                    />
+                    <Input
+                      className="flex-1 h-9 text-xs font-mono"
+                      value={dashboardTheme.cardBackgroundColor ?? DEFAULT_DASHBOARD_THEME.cardBackgroundColor}
+                      onChange={(e) =>
+                        setDashboardTheme((t) => ({ ...t, cardBackgroundColor: e.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs text-neutral-600">Tipografía (familia)</Label>
+                  <Input
+                    className="mt-1 h-9 text-xs font-mono"
+                    placeholder="Ej. 'DM Sans', system-ui"
+                    value={dashboardTheme.fontFamily ?? DEFAULT_DASHBOARD_THEME.fontFamily ?? ""}
+                    onChange={(e) =>
+                      setDashboardTheme((t) => ({ ...t, fontFamily: e.target.value || undefined }))
+                    }
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-xs text-neutral-600">Título dashboard (rem)</Label>
+                    <Input
+                      type="number"
+                      step={0.1}
+                      min={1}
+                      max={2.5}
+                      className="mt-1 h-9 text-xs"
+                      value={dashboardTheme.headerFontSize ?? DEFAULT_DASHBOARD_THEME.headerFontSize ?? 1.5}
+                      onChange={(e) =>
+                        setDashboardTheme((t) => ({ ...t, headerFontSize: parseFloat(e.target.value) || undefined }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-neutral-600">Valor KPI (rem)</Label>
+                    <Input
+                      type="number"
+                      step={0.1}
+                      min={1}
+                      max={3}
+                      className="mt-1 h-9 text-xs"
+                      value={dashboardTheme.kpiValueFontSize ?? DEFAULT_DASHBOARD_THEME.kpiValueFontSize ?? 1.75}
+                      onChange={(e) =>
+                        setDashboardTheme((t) => ({ ...t, kpiValueFontSize: parseFloat(e.target.value) || undefined }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="border-t border-neutral-200 pt-3 mt-1">
+                  <h4 className="text-xs font-semibold text-neutral-600 mb-2">Logo de fondo (watermark)</h4>
+                  <div className="space-y-2">
+                    <div>
+                      <Label className="text-xs text-neutral-600">URL del logo</Label>
+                      <Input
+                        className="mt-1 h-9 text-xs"
+                        placeholder="https://... o /images/logo.png"
+                        value={dashboardTheme.logoUrl ?? ""}
+                        onChange={(e) =>
+                          setDashboardTheme((t) => ({ ...t, logoUrl: e.target.value || undefined }))
+                        }
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs text-neutral-600">Tamaño (%)</Label>
+                        <Input
+                          type="number"
+                          min={5}
+                          max={100}
+                          className="mt-1 h-9 text-xs"
+                          value={dashboardTheme.logoSize ?? DEFAULT_DASHBOARD_THEME.logoSize ?? 24}
+                          onChange={(e) =>
+                            setDashboardTheme((t) => ({ ...t, logoSize: parseInt(e.target.value, 10) || undefined }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs text-neutral-600">Opacidad (0-1)</Label>
+                        <Input
+                          type="number"
+                          step={0.01}
+                          min={0}
+                          max={1}
+                          className="mt-1 h-9 text-xs"
+                          value={dashboardTheme.logoOpacity ?? DEFAULT_DASHBOARD_THEME.logoOpacity ?? 0.06}
+                          onChange={(e) =>
+                            setDashboardTheme((t) => ({ ...t, logoOpacity: parseFloat(e.target.value) || undefined }))
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-neutral-600">Posición</Label>
+                      <select
+                        className="mt-1 w-full h-9 rounded-md border border-neutral-200 bg-white px-3 text-xs"
+                        value={dashboardTheme.logoPosition ?? DEFAULT_DASHBOARD_THEME.logoPosition ?? "center"}
+                        onChange={(e) =>
+                          setDashboardTheme((t) => ({ ...t, logoPosition: e.target.value as DashboardTheme["logoPosition"] }))
+                        }
+                      >
+                        <option value="center">Centro</option>
+                        <option value="top-left">Arriba izquierda</option>
+                        <option value="top-right">Arriba derecha</option>
+                        <option value="bottom-left">Abajo izquierda</option>
+                        <option value="bottom-right">Abajo derecha</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-xs"
+                  onClick={() => setDashboardTheme({ ...DEFAULT_DASHBOARD_THEME })}
+                >
+                  Restaurar tema por defecto
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </aside>
 
-      <section
-        className={`${
-          !isLeftPanelOpen && !isRightPanelOpen
-            ? "col-span-12"
-            : !isLeftPanelOpen
-            ? "col-span-9 xl:col-span-9"
-            : !isRightPanelOpen
-            ? "col-span-9 xl:col-span-10"
-            : "col-span-6 xl:col-span-7"
-        } relative transition-all duration-300 ease-in-out`}
-      >
+      {/* Área principal: grid de métricas a pantalla completa */}
+      <section className="flex-1 w-full min-h-0 relative flex flex-col">
         {/* Toggle Buttons Floating inside the canvas section */}
         <div className="absolute top-4 left-4 z-50 flex gap-2">
           <Button
             variant="secondary"
             size="icon"
-            className="h-8 w-8 rounded-full shadow-md bg-white hover:bg-gray-100 border"
+            className="h-9 w-9 rounded-lg shadow-sm bg-white hover:bg-neutral-50 border border-neutral-200 text-neutral-600 hover:text-neutral-800"
             onClick={() => setIsLeftPanelOpen(!isLeftPanelOpen)}
             title={
               isLeftPanelOpen
@@ -2093,7 +2377,7 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
           <Button
             variant="secondary"
             size="icon"
-            className="h-8 w-8 rounded-full shadow-md bg-white hover:bg-gray-100 border"
+            className="h-9 w-9 rounded-lg shadow-sm bg-white hover:bg-neutral-50 border border-neutral-200 text-neutral-600 hover:text-neutral-800"
             onClick={() => setIsRightPanelOpen(!isRightPanelOpen)}
             title={
               isRightPanelOpen
@@ -2111,114 +2395,114 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
         <div
           ref={canvasRef}
           onDragOver={onCanvasDragOver}
-          onDrop={onCanvasDrop}
-          onWheel={onCanvasWheel}
-          onPointerDown={onCanvasPointerDown}
-          onPointerMove={onCanvasPointerMove}
-          onPointerUp={onCanvasPointerUp}
-          onPointerLeave={onCanvasPointerUp}
-          className="bg-white/60 rounded-2xl p-6 min-h-[700px] border relative overflow-hidden"
+          onDrop={onGridDrop}
+          className="admin-editor-canvas admin-editor-grid-area flex-1 min-h-0 bg-neutral-50/80 rounded-xl p-6 border border-neutral-200/80 overflow-auto"
         >
-          <div
-            className="absolute inset-0 pointer-events-none bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] rounded-2xl"
-            style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              transformOrigin: "top left",
-            }}
-          />
-          <div
-            className="relative"
-            style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              transformOrigin: "top left",
-            }}
-          >
-            {widgets.map((w) => {
+          <p className="text-sm text-neutral-500 mb-4">
+            Arrastra un widget desde el panel izquierdo y suéltalo aquí. Usa Subir/Bajar para cambiar el orden.
+          </p>
+          <div className="grid grid-cols-2 gap-4 items-stretch">
+            {([...widgets]
+              .sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999))
+              .map((w) => {
               const isImage = w.type === "image";
               const isText = w.type === "text";
               // Un widget es "de datos" si NO es imagen Y NO es texto
               const isDataWidget = !isImage && !isText;
 
+              const rawSpan = w.gridSpan ?? (w.type === "table" ? 2 : w.type === "kpi" ? 1 : 2);
+              const span = Math.min(2, rawSpan);
+              const orderIndex = widgets.findIndex((x) => x.id === w.id);
               return (
                 <Card
                   key={w.id}
-                  className={`absolute rounded-2xl overflow-hidden select-none ${
+                  className={`rounded-xl overflow-hidden select-none flex flex-col min-h-[200px] ${
                     isImage
                       ? "bg-transparent shadow-none border-none"
-                      : "bg-white shadow-sm border"
-                  } ${selectedId === w.id ? "ring-2 ring-emerald-400" : ""}`}
-                  style={{ left: w.x, top: w.y, width: w.w, height: w.h }}
+                      : "bg-white shadow-sm border border-neutral-200"
+                  } ${selectedId === w.id ? "ring-2 ring-neutral-400 ring-offset-2" : ""}`}
+                  style={{ gridColumn: `span ${span}` }}
                   onPointerDown={() => setSelectedId(w.id)}
                 >
                   <>
                     <div
-                      // ... (rest of standard card header)
-                      className={`px-3 py-2 text-sm flex items-center justify-between cursor-grab active:cursor-grabbing ${
+                      className={`admin-editor-widget-header shrink-0 px-3 py-2 flex items-center justify-between gap-2 border-b border-neutral-100 ${
                         isImage
                           ? "absolute top-0 left-0 right-0 z-20 bg-black/50 text-white opacity-0 hover:opacity-100 transition-opacity"
-                          : "bg-white/70"
+                          : "bg-neutral-50/95"
                       }`}
-                      onPointerDown={(e) => startDragWidget(w.id, e)}
                     >
-                      <span className="font-medium text-gray-700 truncate">
-                        {w.title || w.type.toUpperCase()}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        {isDataWidget && (
-                          <button
-                            className="h-7 px-2 rounded-full hover:bg-gray-100 text-xs text-gray-700"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              loadETLDataIntoWidget(w.id);
-                            }}
-                          >
-                            Recargar
-                          </button>
-                        )}
-                        {/* Toggle exclusión de filtros globales */}
-                        {isDataWidget && (
-                          <button
-                            className={`h-7 px-2 rounded-full text-xs ${
-                              w.excludeGlobalFilters
-                                ? "bg-orange-50 text-orange-700 hover:bg-orange-100"
-                                : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                            }`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setWidgetById(w.id, {
-                                excludeGlobalFilters: !w.excludeGlobalFilters,
-                              });
-                            }}
-                            title={
-                              w.excludeGlobalFilters
-                                ? "Este widget está excluido de filtros globales"
-                                : "Este widget recibe filtros globales"
-                            }
-                          >
-                            {w.excludeGlobalFilters ? "Sin Global" : "Global"}
-                          </button>
-                        )}
+                      <div className="flex items-center gap-1 min-w-0 flex-1">
                         <button
-                          className="h-7 w-7 rounded-full hover:bg-gray-100 flex items-center justify-center"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteWidget(w.id);
-                          }}
+                          type="button"
+                          className="p-1 rounded hover:bg-neutral-200/80 text-neutral-500 disabled:opacity-30 disabled:pointer-events-none"
+                          onClick={(e) => { e.stopPropagation(); moveWidgetOrder(w.id, "up"); }}
+                          title="Subir"
+                          disabled={orderIndex <= 0}
                         >
-                          ×
+                          <ChevronUp className="h-4 w-4" />
                         </button>
+                        <button
+                          type="button"
+                          className="p-1 rounded hover:bg-neutral-200/80 text-neutral-500 disabled:opacity-30 disabled:pointer-events-none"
+                          onClick={(e) => { e.stopPropagation(); moveWidgetOrder(w.id, "down"); }}
+                          title="Bajar"
+                          disabled={orderIndex >= widgets.length - 1}
+                        >
+                          <ChevronDown className="h-4 w-4" />
+                        </button>
+                        <span className="font-medium text-neutral-800 truncate text-sm ml-1">
+                          {w.title || w.type.toUpperCase()}
+                        </span>
                       </div>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="p-1.5 rounded-lg hover:bg-neutral-200/80 text-neutral-500 hover:text-neutral-700 flex-shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label="Opciones del widget"
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48 rounded-lg" onClick={(e) => e.stopPropagation()}>
+                          {isDataWidget && (
+                            <>
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); loadETLDataIntoWidget(w.id); }}>
+                                Recargar datos
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setWidgetById(w.id, { excludeGlobalFilters: !w.excludeGlobalFilters });
+                                }}
+                              >
+                                {w.excludeGlobalFilters ? "Usar filtros globales" : "Excluir filtros globales"}
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                            </>
+                          )}
+                          <DropdownMenuItem
+                            className="text-red-600 focus:text-red-600"
+                            onClick={(e) => { e.stopPropagation(); handleDeleteWidget(w.id); }}
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Eliminar
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                     <div
-                      className={`w-full flex flex-col gap-2 relative ${
+                      className={`w-full flex flex-col gap-2 relative flex-1 min-h-0 overflow-hidden ${
                         isImage
-                          ? "h-full bg-transparent p-0"
-                          : "h-[calc(100%-36px)] bg-white p-2"
+                          ? "bg-transparent p-0"
+                          : "bg-white p-3"
                       }`}
                     >
                       {w.isLoading && (
-                        <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center rounded-b-2xl">
-                          <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+                        <div className="absolute inset-0 bg-white/90 z-10 flex items-center justify-center rounded-b-xl">
+                          <Loader2 className="w-8 h-8 animate-spin text-neutral-600" />
                         </div>
                       )}
                       {/* Orden y límite */}
@@ -3073,126 +3357,23 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
                       </div>
                     </div>
                   </>
-                  {selectedId === w.id &&
-                    ["se", "e", "s", "sw", "w", "ne", "n", "nw"].map(
-                      (handle) => (
-                        <div
-                          key={handle}
-                          onPointerDown={(e) => {
-                            // Si Ctrl está presionado, no iniciar resize; dejar pan del lienzo
-                            if (
-                              isCtrlPressedRef.current ||
-                              e.ctrlKey ||
-                              e.button === 1
-                            ) {
-                              return;
-                            }
-                            e.stopPropagation();
-                            if (!canvasRef.current) return;
-                            const rect =
-                              canvasRef.current.getBoundingClientRect();
-                            resizeState.current = {
-                              id: w.id,
-                              startX: (e.clientX - rect.left - pan.x) / zoom,
-                              startY: (e.clientY - rect.top - pan.y) / zoom,
-                              origW: w.w,
-                              origH: w.h,
-                              origX: w.x,
-                              origY: w.y,
-                              handle: handle as any,
-                            };
-                            (e.target as Element).setPointerCapture?.(
-                              e.pointerId
-                            );
-                          }}
-                          className={`absolute bg-emerald-500 border-2 border-white shadow rounded-full`}
-                          style={{
-                            cursor: `${handle}-resize`,
-                            ...(handle === "se" ||
-                            handle === "sw" ||
-                            handle === "ne" ||
-                            handle === "nw"
-                              ? { width: "16px", height: "16px" }
-                              : { width: "12px", height: "12px" }),
-                            ...(handle.includes("n")
-                              ? { top: "-8px" }
-                              : handle.includes("s")
-                              ? { bottom: "-8px" }
-                              : { top: "50%", transform: "translateY(-50%)" }),
-                            ...(handle.includes("w")
-                              ? { left: "-8px" }
-                              : handle.includes("e")
-                              ? { right: "-8px" }
-                              : { left: "50%", transform: "translateX(-50%)" }),
-                            ...(handle.length === 2
-                              ? {
-                                  transform: `translate(${
-                                    handle.includes("w") ? "-50%" : "50%"
-                                  }, ${handle.includes("n") ? "-50%" : "50%"})`,
-                                }
-                              : {}),
-                          }}
-                        />
-                      )
-                    )}
                 </Card>
               );
-            })}
-          </div>
-          {/* Controles de Zoom */}
-          <div className="absolute bottom-4 right-4 z-30 flex flex-col gap-2">
-            <div className="bg-white/90 backdrop-blur rounded-md border shadow flex items-center overflow-hidden">
-              <button
-                className="px-2 h-8 text-sm hover:bg-gray-100"
-                onClick={() => {
-                  const rect = canvasRef.current?.getBoundingClientRect();
-                  if (rect)
-                    setZoomAt(zoom * 0.9, rect.width / 2, rect.height / 2);
-                }}
-                title="Zoom out"
-              >
-                −
-              </button>
-              <span className="px-2 text-xs w-14 text-center select-none">
-                {Math.round(zoom * 100)}%
-              </span>
-              <button
-                className="px-2 h-8 text-sm hover:bg-gray-100"
-                onClick={() => {
-                  const rect = canvasRef.current?.getBoundingClientRect();
-                  if (rect)
-                    setZoomAt(zoom * 1.1, rect.width / 2, rect.height / 2);
-                }}
-                title="Zoom in"
-              >
-                +
-              </button>
-              <button
-                className="px-2 h-8 text-xs hover:bg-gray-100"
-                onClick={() => {
-                  setZoom(1);
-                  setPan({ x: 0, y: 0 });
-                }}
-                title="Reset"
-              >
-                100%
-              </button>
-            </div>
-            <div className="text-[10px] text-gray-500 text-right pr-1 select-none">
-              Ctrl + arrastrar para mover | Ctrl/Cmd + rueda/+/−
-            </div>
+            }) )}
           </div>
         </div>
       </section>
 
+
+      {/* Drawer derecho: propiedades del widget */}
       <aside
-        className={`${
-          isRightPanelOpen ? "col-span-3 xl:col-span-3" : "hidden"
+        className={`admin-editor-drawer admin-editor-drawer-right absolute right-0 top-0 bottom-0 z-40 w-[340px] max-w-[90vw] bg-white border-l border-neutral-200/80 shadow-xl transition-transform duration-300 ease-out flex flex-col ${
+          isRightPanelOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        <div className="bg-white rounded-2xl border p-4 sticky top-24 space-y-6">
-          <h3 className="text-emerald-600 text-lg font-semibold">
-            Propiedades del Widget
+        <div className="admin-editor-props flex-1 overflow-y-auto p-5 space-y-5">
+          <h3 className="text-neutral-800 text-base font-semibold tracking-tight">
+            Propiedades
           </h3>
           {selected ? (
             <div className="space-y-4">
@@ -3204,31 +3385,61 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
                   onChange={(e) => updateSelected({ title: e.target.value })}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label htmlFor="ancho">Ancho</Label>
-                  <Input
-                    id="ancho"
-                    type="number"
-                    value={selected.w}
-                    onChange={(e) =>
-                      updateSelected({ w: parseInt(e.target.value || "0") })
-                    }
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="alto">Alto</Label>
-                  <Input
-                    id="alto"
-                    type="number"
-                    value={selected.h}
-                    onChange={(e) =>
-                      updateSelected({ h: parseInt(e.target.value || "0") })
-                    }
-                  />
-                </div>
+              <div>
+                <Label htmlFor="columnas">Columnas en el grid (vista cliente)</Label>
+                <select
+                  id="columnas"
+                  className="w-full h-9 rounded-md border border-neutral-200 bg-white px-3 text-sm"
+                  value={Math.min(4, Math.max(1, selected.gridSpan ?? (selected.type === "kpi" ? 1 : selected.type === "table" ? 2 : 2)))}
+                  onChange={(e) =>
+                    updateSelected({ gridSpan: parseInt(e.target.value, 10) as 1 | 2 | 4 })
+                  }
+                >
+                  <option value={1}>1 columna</option>
+                  <option value={2}>2 columnas</option>
+                  <option value={4}>4 columnas (ancho completo)</option>
+                </select>
+                <p className="text-xs text-neutral-500 mt-1">Vista cliente: grid de 4 columnas; tamaños moldeables.</p>
               </div>
-
+              <div>
+                <Label htmlFor="minHeight">Altura mínima (px)</Label>
+                <Input
+                  id="minHeight"
+                  type="number"
+                  min={0}
+                  placeholder="Ej. 200"
+                  className="h-9"
+                  value={selected.minHeight ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value ? parseInt(e.target.value, 10) : undefined;
+                    updateSelected({ minHeight: v && v > 0 ? v : undefined });
+                  }}
+                />
+                <p className="text-xs text-neutral-500 mt-1">Opcional. Altura mínima de la tarjeta en la vista cliente.</p>
+              </div>
+              {selected.type === "kpi" && (
+                <div className="space-y-3 border-t pt-4">
+                  <h4 className="font-medium text-sm text-gray-700">KPI — línea secundaria (vista cliente)</h4>
+                  <div>
+                    <Label htmlFor="kpi-secondary-label">Etiqueta secundaria</Label>
+                    <Input
+                      id="kpi-secondary-label"
+                      placeholder="Ej. Ticket promedio"
+                      value={selected.kpiSecondaryLabel ?? ""}
+                      onChange={(e) => updateSelected({ kpiSecondaryLabel: e.target.value || undefined })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="kpi-secondary-value">Valor secundario</Label>
+                    <Input
+                      id="kpi-secondary-value"
+                      placeholder="Ej. $ 3.202"
+                      value={selected.kpiSecondaryValue ?? ""}
+                      onChange={(e) => updateSelected({ kpiSecondaryValue: e.target.value || undefined })}
+                    />
+                  </div>
+                </div>
+              )}
               {selected.type === "filter" && (
                 <div className="space-y-4 border-t pt-4">
                   <h4 className="font-medium text-sm text-gray-700">

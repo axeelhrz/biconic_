@@ -1,0 +1,223 @@
+/* Editor Admin — super moderno, estético, sin ruido */
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap');
+
+.admin-dashboard-editor-page {
+  --admin-font: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --admin-bg: #fafafa;
+  --admin-surface: #ffffff;
+  --admin-border: rgba(0, 0, 0, 0.06);
+  --admin-border-strong: rgba(0, 0, 0, 0.08);
+  --admin-text: #171717;
+  --admin-text-muted: #737373;
+  --admin-radius: 14px;
+  --admin-radius-sm: 10px;
+  font-family: var(--admin-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Header de la página: limpio, sin ruido */
+.admin-dashboard-editor-page .admin-editor-page-header {
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius);
+  padding: 1rem 1.5rem;
+  box-shadow: none;
+}
+
+.admin-dashboard-editor-page .admin-editor-page-header nav {
+  font-size: 0.8125rem;
+  color: var(--admin-text-muted);
+  letter-spacing: 0.01em;
+}
+
+.admin-dashboard-editor-page .admin-editor-page-header nav a:hover {
+  color: var(--admin-text);
+}
+
+.admin-dashboard-editor-page .admin-editor-page-header .admin-editor-page-title {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--admin-text);
+}
+
+/* Contenedor del editor */
+.admin-dashboard-editor-page .admin-editor-wrap {
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+/* Editor root */
+.admin-dashboard-editor {
+  font-family: var(--admin-font);
+}
+
+/* Drawers: paneles superpuestos — modernos, sombra suave */
+.admin-dashboard-editor .admin-editor-drawer {
+  isolation: isolate;
+  border-radius: 0 var(--admin-radius) var(--admin-radius) 0;
+  box-shadow: 0 0 0 1px var(--admin-border), 0 24px 48px -12px rgba(0, 0, 0, 0.12);
+}
+
+.admin-dashboard-editor .admin-editor-drawer-right {
+  border-radius: var(--admin-radius) 0 0 var(--admin-radius);
+  border-left: 1px solid var(--admin-border);
+  border-right: none;
+}
+
+.admin-dashboard-editor .admin-editor-drawer-left {
+  border-right: 1px solid var(--admin-border);
+}
+
+.admin-dashboard-editor .admin-editor-drawer-left,
+.admin-dashboard-editor .admin-editor-drawer-right {
+  will-change: transform;
+}
+
+/* Sidebar: secciones limpias */
+.admin-dashboard-editor .admin-editor-sidebar {
+  font-size: 0.875rem;
+}
+
+.admin-dashboard-editor .admin-editor-sidebar h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--admin-text);
+}
+
+.admin-dashboard-editor .admin-editor-sidebar h4 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--admin-text-muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+
+.admin-dashboard-editor .admin-editor-palette-item {
+  border-radius: var(--admin-radius-sm);
+  border: 1px solid var(--admin-border);
+  padding: 0.625rem 0.875rem;
+  font-size: 0.8125rem;
+  color: var(--admin-text);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.admin-dashboard-editor .admin-editor-palette-item:hover {
+  border-color: var(--admin-border-strong);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.admin-dashboard-editor .admin-editor-palette-item:active {
+  opacity: 0.95;
+}
+
+/* Canvas */
+.admin-dashboard-editor .admin-editor-canvas {
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: var(--admin-radius-sm);
+  border: 1px solid var(--admin-border);
+  transition: background-color 0.2s ease;
+}
+
+.admin-dashboard-editor .admin-editor-canvas:focus-within {
+  outline: none;
+}
+
+/* Widget en canvas: tarjetas modernas */
+.admin-dashboard-editor .admin-editor-widget-header {
+  background: var(--admin-surface);
+  border-bottom: 1px solid var(--admin-border);
+  padding: 0.75rem 1rem;
+  font-weight: 500;
+  font-size: 0.8125rem;
+  color: var(--admin-text);
+  letter-spacing: 0.01em;
+  transition: background 0.15s ease;
+}
+
+.admin-dashboard-editor .admin-editor-widget-header:hover {
+  background: rgba(0, 0, 0, 0.01);
+}
+
+.admin-dashboard-editor .admin-editor-widget-header:active {
+  cursor: grabbing;
+}
+
+/* Cards de widget en el grid */
+.admin-dashboard-editor .admin-editor-grid-area [data-id] {
+  border-radius: var(--admin-radius-sm);
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.admin-dashboard-editor .admin-editor-grid-area [data-id]:hover {
+  border-color: var(--admin-border-strong);
+  box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.08);
+}
+
+/* Asas de redimensionado */
+.admin-dashboard-editor .admin-editor-resize-handle {
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  z-index: 5;
+  border-radius: 2px;
+}
+
+.admin-dashboard-editor .admin-editor-resize-handle:active {
+  border-color: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* Panel propiedades */
+.admin-dashboard-editor .admin-editor-props {
+  font-size: 0.875rem;
+}
+
+.admin-dashboard-editor .admin-editor-props label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--admin-text);
+  letter-spacing: 0.01em;
+}
+
+.admin-dashboard-editor .admin-editor-props input,
+.admin-dashboard-editor .admin-editor-props select {
+  border-radius: var(--admin-radius-sm);
+  border: 1px solid var(--admin-border);
+  font-size: 0.8125rem;
+  transition: border-color 0.15s ease;
+}
+
+.admin-dashboard-editor .admin-editor-props input:focus,
+.admin-dashboard-editor .admin-editor-props select:focus {
+  border-color: rgba(0, 0, 0, 0.2);
+  outline: none;
+}
+
+.admin-dashboard-editor .admin-editor-drawer .admin-editor-sidebar,
+.admin-dashboard-editor .admin-editor-drawer .admin-editor-props {
+  overscroll-behavior: contain;
+}
+
+/* Scrollbars discretos */
+.admin-dashboard-editor .admin-editor-sidebar::-webkit-scrollbar,
+.admin-dashboard-editor .admin-editor-props::-webkit-scrollbar {
+  width: 6px;
+}
+
+.admin-dashboard-editor .admin-editor-sidebar::-webkit-scrollbar-track,
+.admin-dashboard-editor .admin-editor-props::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.admin-dashboard-editor .admin-editor-sidebar::-webkit-scrollbar-thumb,
+.admin-dashboard-editor .admin-editor-props::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 3px;
+}

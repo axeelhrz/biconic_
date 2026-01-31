@@ -1,6 +1,7 @@
 // @/app/.../[dashboard-id]/page.tsx
 
 import DashboardViewer from "@/components/dashboard/DashboardViewer";
+import "./client-dashboard-view.css";
 
 // 1. Defino el tipo de Props exactamente como lo pides,
 //    con 'params' siendo una Promise.
