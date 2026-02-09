@@ -25,6 +25,7 @@ import { StudioEmptyState, STUDIO_INTENTS, type StudioIntent } from "./StudioEmp
 import { MetricBlock, type MetricBlockState } from "./MetricBlock";
 import type { ChartConfig } from "./MetricBlock";
 import { AddMetricConfigForm, type AddMetricFormConfig } from "./AddMetricConfigForm";
+import type { Json } from "@/lib/supabase/database.types";
 
 // Tipos compatibles con el layout guardado en DB (mismo formato que AdminDashboardEditor)
 type AggregationMetric = {
@@ -145,7 +146,7 @@ export function AdminDashboardStudio({
         if (error) throw error;
         if (!data || cancelled) return;
         const rawLayout = (data as { layout?: { widgets?: unknown[]; theme?: DashboardTheme; pages?: StudioPage[]; activePageId?: string } }).layout;
-        const loadedGlobalFilters = (data as { global_filters_config?: GlobalFilter[] }).global_filters_config || [];
+        const loadedGlobalFilters = (data as unknown as { global_filters_config?: GlobalFilter[] }).global_filters_config || [];
         let loadedWidgets: StudioWidget[] = [];
         let loadedTheme: DashboardTheme = { ...DEFAULT_DASHBOARD_THEME };
         let loadedPages: StudioPage[] = [{ id: "page-1", name: "Página 1" }];
@@ -191,8 +192,8 @@ export function AdminDashboardStudio({
       const { error } = await supabase
         .from("dashboard")
         .update({
-          layout: { widgets: cleanWidgets, theme: dashboardTheme, pages, activePageId },
-          global_filters_config: globalFilters,
+          layout: { widgets: cleanWidgets, theme: dashboardTheme, pages, activePageId } as Json,
+          global_filters_config: globalFilters as Json,
         })
         .eq("id", dashboardId);
       if (error) throw error;
