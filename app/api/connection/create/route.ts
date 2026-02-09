@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { encryptConnectionPassword } from "@/lib/connection-secret";
 
 export async function POST(req: NextRequest) {
   try {
-    // Autorizar primero
     const supabase = await createClient();
     const {
       data: { user: currentUser },
@@ -27,64 +27,74 @@ export async function POST(req: NextRequest) {
       port,
     } = body || {};
 
-    // Validaciones básicas
-    if (
-      !type ||
-      !connectionName ||
-      !host ||
-      !database ||
-      !dbUser ||
-      !password
-    ) {
+    if (!type || !connectionName || !host || !database || !dbUser) {
       return NextResponse.json(
-        { ok: false, error: "Parámetros incompletos" },
+        { ok: false, error: "Faltan tipo, nombre, host, base de datos o usuario." },
         { status: 400 }
       );
     }
 
     const normalizedType = String(type).toLowerCase();
-    if (!["mysql", "postgres", "postgresql"].includes(normalizedType)) {
+    if (!["mysql", "postgres", "postgresql", "firebird"].includes(normalizedType)) {
       return NextResponse.json(
-        { ok: false, error: "Tipo de base de datos no soportado" },
+        { ok: false, error: "Tipo de conexión no soportado." },
         { status: 400 }
       );
     }
 
-    let portNum: number | undefined = undefined;
+    let portNum: number;
     if (port !== undefined && port !== null && port !== "") {
       const n = Number(port);
       if (!Number.isFinite(n) || n < 1 || n > 65535) {
-        return NextResponse.json(
-          { ok: false, error: "Puerto inválido" },
-          { status: 400 }
-        );
+        return NextResponse.json({ ok: false, error: "Puerto inválido" }, { status: 400 });
       }
       portNum = n;
+    } else {
+      portNum = normalizedType === "firebird" ? 15421 : 5432;
     }
 
-    // Modo demo/mock: no persistimos aún, solo devolvemos un objeto simulado
-    const now = new Date().toISOString();
-    const id = (globalThis as any).crypto?.randomUUID
-      ? (globalThis as any).crypto.randomUUID()
-      : `mock_${Math.random().toString(36).slice(2)}`;
+    const activeClientId = await getActiveClientId(supabase, currentUser.id);
+    const passwordPlain = typeof password === "string" ? password : "";
+    let db_password_encrypted: string | null = null;
+    if (passwordPlain) {
+      try {
+        db_password_encrypted = encryptConnectionPassword(passwordPlain);
+      } catch (e: any) {
+        return NextResponse.json(
+          { ok: false, error: e?.message || "No se pudo guardar la contraseña. Configurá ENCRYPTION_KEY en .env." },
+          { status: 500 }
+        );
+      }
+    }
 
-    const mock = {
-      id,
-      name: connectionName,
-      database_host: host,
-      database_name: database,
-      database_user: dbUser,
-      // Por seguridad no retornamos la contraseña
-      user_id: currentUser.id,
-      port: portNum,
-      created_at: now,
-      type: normalizedType,
-    };
+    const { data: newConn, error } = await supabase
+      .from("connections")
+      .insert({
+        name: connectionName.trim(),
+        user_id: currentUser.id,
+        client_id: activeClientId,
+        type: normalizedType,
+        db_host: host.trim(),
+        db_name: database.trim(),
+        db_user: dbUser.trim(),
+        db_port: portNum,
+        db_password_secret_id: null,
+        db_password_encrypted,
+      })
+      .select("id, name, type")
+      .single();
+
+    if (error) {
+      return NextResponse.json(
+        { ok: false, error: error.message },
+        { status: 400 }
+      );
+    }
 
     return NextResponse.json({
       ok: true,
-      data: mock,
-      message: "Conexión creada (modo demo)",
+      data: { id: newConn.id, name: newConn.name, type: newConn.type },
+      message: "Conexión creada correctamente.",
     });
   } catch (err: any) {
     return NextResponse.json(
@@ -92,4 +102,20 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+async function getActiveClientId(supabase: Awaited<ReturnType<typeof createClient>>, userId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from("client_members")
+    .select("client_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (data?.client_id) return data.client_id;
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("app_role")
+    .eq("id", userId)
+    .single();
+  if (profile?.app_role === "APP_ADMIN") return null;
+  throw new Error("No se pudo encontrar un cliente asociado a tu cuenta.");
 }

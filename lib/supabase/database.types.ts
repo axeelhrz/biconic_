@@ -2383,6 +2383,7 @@ export type Database = {
           created_at: string
           db_host: string | null
           db_name: string | null
+          db_password_encrypted: string | null
           db_password_secret_id: string | null
           db_port: number | null
           db_user: string | null
@@ -2399,6 +2400,7 @@ export type Database = {
           created_at?: string
           db_host?: string | null
           db_name?: string | null
+          db_password_encrypted?: string | null
           db_password_secret_id?: string | null
           db_port?: number | null
           db_user?: string | null
@@ -2415,6 +2417,7 @@ export type Database = {
           created_at?: string
           db_host?: string | null
           db_name?: string | null
+          db_password_encrypted?: string | null
           db_password_secret_id?: string | null
           db_port?: number | null
           db_user?: string | null

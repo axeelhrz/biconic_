@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
+import { decryptConnectionPassword } from "@/lib/connection-secret";
 
 type FilterCondition = {
   column: string;
@@ -24,7 +25,7 @@ type FilterCondition = {
 
 type QueryBody = {
   connectionId?: string | number;
-  type?: "mysql" | "postgres" | "postgresql" | "excel";
+  type?: "mysql" | "postgres" | "postgresql" | "excel" | "firebird";
   host?: string;
   database?: string;
   user?: string;
@@ -77,6 +78,46 @@ function buildWhereClausePg(conds: FilterCondition[]) {
         // binary ops
         params.push(c.value ?? null);
         return `${col} ${c.operator} $${params.length}`;
+      }
+    }
+  });
+  const clause = parts.length ? `WHERE ${parts.join(" AND ")}` : "";
+  return { clause, params };
+}
+
+function buildWhereClauseFirebird(conds: FilterCondition[]) {
+  const params: any[] = [];
+  const parts = conds.map((c) => {
+    const col = `"${(c.column || "").replace(/"/g, '""')}"`;
+    switch (c.operator) {
+      case "is null":
+        return `${col} IS NULL`;
+      case "is not null":
+        return `${col} IS NOT NULL`;
+      case "contains":
+        params.push(`%${c.value ?? ""}%`);
+        return `${col} CONTAINING ?`;
+      case "startsWith":
+        params.push(`${c.value ?? ""}%`);
+        return `${col} LIKE ?`;
+      case "endsWith":
+        params.push(`%${c.value ?? ""}`);
+        return `${col} LIKE ?`;
+      case "in": {
+        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const qs = list.map(() => "?");
+        params.push(...list);
+        return `${col} IN (${qs.join(", ")})`;
+      }
+      case "not in": {
+        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const qs = list.map(() => "?");
+        params.push(...list);
+        return `${col} NOT IN (${qs.join(", ")})`;
+      }
+      default: {
+        params.push(c.value ?? null);
+        return `${col} ${c.operator} ?`;
       }
     }
   });
@@ -174,9 +215,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const { data: conn, error: connError } = await supabase
         .from("connections")
         .select(
-          "id, user_id, type, db_host, db_name, db_user, db_port, original_file_name"
+          "id, user_id, type, db_host, db_name, db_user, db_port, original_file_name, db_password_encrypted"
         )
-        .eq("id", String(connectionId))
         .eq("id", String(connectionId))
         .maybeSingle();
       if (connError || !conn)
@@ -188,13 +228,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       database = (conn as any)?.db_name ?? database;
       user = (conn as any)?.db_user ?? user;
       port = (conn as any)?.db_port ?? port;
-
+      if (!password && (conn as any)?.db_password_encrypted) {
+        try {
+          password = decryptConnectionPassword((conn as any).db_password_encrypted);
+        } catch {}
+      }
+      if (!password && (conn as any)?.type === "firebird") {
+        password = process.env.FLEXXUS_PASSWORD ?? undefined;
+      }
       // Detectar si es una conexión Excel por el campo type
       if (
         (conn as any)?.type === "excel_file" ||
         (conn as any)?.type === "excel"
       ) {
         type = "excel";
+      }
+      if ((conn as any)?.type === "firebird") {
+        type = "firebird";
       }
     }
     // Manejar consultas Excel consultando data_warehouse.{physical_table_name}
@@ -340,6 +390,64 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       }
       await connection.end();
       return NextResponse.json({ ok: true, rows, total });
+    }
+
+    if (type === "firebird") {
+      if (!password)
+        return NextResponse.json(
+          { ok: false, error: "Se requiere contraseña para Firebird. Guardala al crear la conexión." },
+          { status: 400 }
+        );
+      const Firebird = require("node-firebird");
+      const tablePart = table.includes(".")
+        ? table.split(".", 2).map((s) => `"${s.replace(/"/g, '""')}"`).join(".")
+        : `"${tableName.replace(/"/g, '""')}"`;
+      const cols =
+        columns && columns.length
+          ? columns.map((c) => `"${(c || "").replace(/"/g, '""')}"`).join(", ")
+          : "*";
+      const { clause, params } = buildWhereClauseFirebird(conditions || []);
+      const baseSql = `SELECT ${cols} FROM ${tablePart} ${clause}`;
+      const sql = `${baseSql} FETCH FIRST ? ROWS ONLY OFFSET ? ROWS`;
+      const allParams = [...params, limit, offset];
+      return await new Promise<NextResponse>((resolve, reject) => {
+        const opts = {
+          host,
+          port: port ? Number(port) : 15421,
+          database,
+          user,
+          password: password || "",
+          lowercase_keys: false,
+        };
+        Firebird.attach(opts, (errAttach: Error | null, db: any) => {
+          if (errAttach) {
+            resolve(NextResponse.json({ ok: false, error: errAttach.message }, { status: 400 }));
+            return;
+          }
+          db.query(sql, allParams, (errQ: Error | null, rows: any[]) => {
+            const detach = () => {
+              if (db?.detach) db.detach(() => {});
+            };
+            if (errQ) {
+              detach();
+              resolve(NextResponse.json({ ok: false, error: errQ.message }, { status: 400 }));
+              return;
+            }
+            let total: number | undefined = undefined;
+            if (count) {
+              const countSql = `SELECT COUNT(*) AS c FROM ${tablePart} ${clause}`;
+              db.query(countSql, params, (errC: Error | null, cntRows: any[]) => {
+                if (!errC && cntRows?.[0]) total = Number((cntRows[0] as any).C ?? (cntRows[0] as any).c);
+                detach();
+                resolve(NextResponse.json({ ok: true, rows: rows || [], total }));
+              });
+            } else {
+              detach();
+              resolve(NextResponse.json({ ok: true, rows: rows || [], total }));
+            }
+          });
+        });
+      });
     }
 
     // Autodetect when type not provided: use port hints to reduce timeouts

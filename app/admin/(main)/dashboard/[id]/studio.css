@@ -1,0 +1,843 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   STUDIO — Rediseño total. Tema oscuro premium, intuitivo, competitivo.
+   Tipografía: Plus Jakarta Sans. Tarjetas grandes, orden claro.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap");
+
+.studio-page {
+  background: var(--studio-bg);
+  min-height: 100%;
+}
+
+.studio-page,
+.admin-dashboard-studio {
+  /* Paleta oscura con acento cian */
+  --studio-bg: #08080b;
+  --studio-bg-elevated: #0e0e12;
+  --studio-surface: #141419;
+  --studio-surface-hover: #1a1a20;
+  --studio-fg: #f4f4f5;
+  --studio-fg-muted: #a1a1aa;
+  --studio-muted: #71717a;
+  --studio-border: rgba(255, 255, 255, 0.06);
+  --studio-border-strong: rgba(255, 255, 255, 0.1);
+  --studio-accent: #22d3ee;
+  --studio-accent-dim: rgba(34, 211, 238, 0.15);
+  --studio-accent-glow: rgba(34, 211, 238, 0.25);
+  --studio-success: #34d399;
+  --studio-warning: #fbbf24;
+  --studio-danger: #f87171;
+  /* Radios y sombras — tarjetas más redondeadas */
+  --studio-radius: 20px;
+  --studio-radius-sm: 14px;
+  --studio-radius-lg: 24px;
+  --studio-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --studio-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.45);
+  /* Tipografía */
+  --studio-font: "Plus Jakarta Sans", system-ui, sans-serif;
+  --studio-text-hero: clamp(1.875rem, 4.5vw, 2.75rem);
+  --studio-text-title: 1.25rem;
+  --studio-text-card: 1.0625rem;
+  --studio-text-body: 0.9375rem;
+  --studio-text-small: 0.8125rem;
+  --studio-text-caption: 0.75rem;
+  font-family: var(--studio-font);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.02em;
+}
+
+/* ─── Barra de apariencia (arriba del todo) ─────────────────────────────── */
+.studio-appearance-bar .studio-appearance-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--studio-fg-muted);
+  display: block;
+}
+.studio-appearance-bar .studio-appearance-input,
+.studio-appearance-bar input[type="text"],
+.studio-appearance-bar input[type="number"] {
+  width: 100%;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-radius: var(--studio-radius-sm);
+  border: 1px solid var(--studio-border);
+  background: var(--studio-surface);
+  color: var(--studio-fg);
+  font-size: 0.8125rem;
+}
+.studio-appearance-bar .studio-appearance-input:focus,
+.studio-appearance-bar input:focus {
+  outline: none;
+  border-color: var(--studio-accent);
+  box-shadow: 0 0 0 2px var(--studio-accent-dim);
+}
+
+/* ─── Pestañas de páginas ───────────────────────────────────────────────── */
+.studio-page-tabs {
+  min-height: 48px;
+}
+.studio-page-tab {
+  margin-bottom: -1px;
+}
+.studio-page-tab[data-active="true"] {
+  background: var(--studio-bg);
+  border-color: var(--studio-border);
+  border-bottom-color: var(--studio-bg);
+}
+.studio-page-tab .studio-page-tab-btn {
+  cursor: pointer;
+}
+
+/* ─── Header ───────────────────────────────────────────────────────────── */
+.studio-header {
+  background: var(--studio-bg-elevated);
+  border-bottom: 1px solid var(--studio-border);
+  min-height: 64px;
+  padding: 0 1.5rem;
+}
+
+.studio-header .studio-header-title {
+  font-size: var(--studio-text-title);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--studio-fg);
+  line-height: 1.25;
+}
+.studio-header .studio-header-title * {
+  color: inherit;
+}
+.studio-header .studio-header-title .text-gray-900,
+.studio-header .studio-header-title .text-purple-600 {
+  color: var(--studio-fg) !important;
+}
+.studio-header .studio-header-title span[class*="purple"] {
+  color: var(--studio-accent) !important;
+}
+.studio-header input,
+.studio-header .border-gray-200 {
+  border-color: var(--studio-border) !important;
+  background: var(--studio-surface) !important;
+  color: var(--studio-fg) !important;
+}
+
+.studio-header nav a {
+  color: var(--studio-muted);
+  transition: color 0.15s ease;
+}
+.studio-header nav a:hover {
+  color: var(--studio-accent);
+}
+
+.studio-status-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.studio-status-badge[data-status="borrador"] {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--studio-warning);
+}
+.studio-status-badge[data-status="activo"] {
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--studio-success);
+}
+.studio-status-badge[data-status="en_ejecucion"] {
+  background: var(--studio-accent-dim);
+  color: var(--studio-accent);
+  box-shadow: 0 0 12px var(--studio-accent-glow);
+}
+
+.studio-mode-selector {
+  background: var(--studio-surface);
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius-sm);
+  padding: 3px;
+}
+.studio-mode-selector button {
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+.studio-mode-selector button[aria-selected="true"] {
+  background: var(--studio-accent-dim);
+  color: var(--studio-accent);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.2);
+}
+
+/* ─── Empty state (hero) ───────────────────────────────────────────────── */
+.studio-empty {
+  background: radial-gradient(ellipse 85% 55% at 50% -5%, var(--studio-accent-dim) 0%, transparent 55%);
+  padding: 3rem 1.5rem 4rem;
+}
+
+.studio-empty-headline {
+  font-size: var(--studio-text-hero);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 1.12;
+  color: var(--studio-fg);
+  text-shadow: 0 0 48px var(--studio-accent-glow);
+  margin-bottom: 0.75rem;
+}
+
+.studio-empty-sub {
+  color: var(--studio-fg-muted);
+  font-size: var(--studio-text-body);
+  max-width: 480px;
+  line-height: 1.5;
+  margin-bottom: 3rem;
+}
+
+/* Intent cards — más grandes, más aire */
+.studio-intents {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem;
+  max-width: 720px;
+  margin: 0 auto;
+  text-align: left;
+}
+@media (max-width: 640px) {
+  .studio-intents {
+    grid-template-columns: 1fr;
+  }
+}
+
+.studio-intent-card {
+  background: var(--studio-surface);
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius);
+  padding: 1.5rem 1.5rem;
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+  min-height: 120px;
+  display: flex;
+  align-items: flex-start;
+  gap: 1.25rem;
+}
+.studio-intent-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--studio-accent) 0%, transparent 50%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.studio-intent-card:hover {
+  background: var(--studio-surface-hover);
+  border-color: var(--studio-border-strong);
+  transform: translateY(-3px);
+  box-shadow: var(--studio-shadow);
+}
+.studio-intent-card:hover::before {
+  opacity: 1;
+}
+.studio-intent-card .studio-intent-icon {
+  width: 3.25rem;
+  height: 3.25rem;
+  min-width: 3.25rem;
+  min-height: 3.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--studio-accent-dim);
+  color: var(--studio-accent);
+  border-radius: var(--studio-radius-sm);
+  transition: all 0.2s ease;
+}
+.studio-intent-card:hover .studio-intent-icon {
+  background: rgba(34, 211, 238, 0.25);
+  box-shadow: 0 0 24px var(--studio-accent-glow);
+}
+.studio-intent-card .studio-intent-label {
+  font-size: var(--studio-text-card);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--studio-fg);
+  line-height: 1.3;
+}
+.studio-intent-card .studio-intent-desc {
+  font-size: var(--studio-text-small);
+  color: var(--studio-fg-muted);
+  margin-top: 0.25rem;
+  line-height: 1.4;
+}
+
+/* ─── Metric blocks — grid responsive y tarjetas configurables ──────────── */
+.studio-blocks {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  animation: studio-blocks-in 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+  width: 100%;
+}
+@media (min-width: 640px) {
+  .studio-blocks {
+    gap: 1.25rem;
+  }
+}
+@media (min-width: 768px) {
+  .studio-blocks {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+  }
+}
+@media (min-width: 1280px) {
+  .studio-blocks {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5rem;
+  }
+}
+
+.studio-block-cell {
+  display: flex;
+  min-width: 0;
+}
+.studio-block-cell .metric-block {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--studio-card-bg, var(--studio-surface));
+  border: var(--studio-card-border-width, 1px) solid var(--studio-card-border-color, var(--studio-border));
+  border-radius: var(--studio-card-radius, var(--studio-radius));
+  transition: all 0.22s ease;
+  overflow: hidden;
+}
+.studio-add-metric-cell {
+  grid-column: span 1;
+}
+@media (min-width: 768px) {
+  .studio-add-metric-cell {
+    grid-column: span 1;
+  }
+}
+@media (min-width: 1280px) {
+  .studio-add-metric-cell {
+    grid-column: span 1;
+  }
+}
+
+.metric-block {
+  /* tema aplicado vía .studio-block-cell .metric-block; aquí solo fallbacks */
+  display: flex;
+  flex-direction: column;
+}
+.studio-block-cell .metric-block:hover {
+  border-color: var(--studio-border-strong);
+  box-shadow: var(--studio-shadow);
+}
+.studio-block-cell .metric-block[data-selected="true"] {
+  border-color: var(--studio-accent);
+  box-shadow: 0 0 0 2px var(--studio-accent), 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.metric-block-header {
+  border-bottom: 1px solid var(--studio-border);
+  background: rgba(0, 0, 0, 0.25);
+  padding: 1rem 1.25rem;
+}
+.metric-block-header .metric-block-title {
+  font-size: var(--studio-text-card);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--studio-fg);
+  line-height: 1.3;
+}
+.metric-block-body {
+  padding: 1.25rem 1.25rem;
+  min-height: 200px;
+  flex: 1;
+}
+
+.metric-state-badge {
+  font-size: var(--studio-text-caption);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 8px;
+  padding: 5px 10px;
+}
+.metric-state-badge[data-state="estable"] {
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--studio-success);
+}
+.metric-state-badge[data-state="alerta"] {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--studio-warning);
+}
+.metric-state-badge[data-state="cambio"] {
+  background: var(--studio-accent-dim);
+  color: var(--studio-accent);
+}
+
+.studio-viz-placeholder {
+  background: var(--studio-bg-elevated);
+  border: 1px dashed var(--studio-border-strong);
+  border-radius: var(--studio-radius-sm);
+  color: var(--studio-muted);
+  transition: all 0.2s ease;
+}
+.studio-viz-placeholder:hover {
+  border-color: var(--studio-accent);
+  color: var(--studio-accent);
+  background: var(--studio-accent-dim);
+}
+
+/* Add metric card — mismo tamaño visual que las métricas ────────────────── */
+.studio-add-metric-card {
+  background: var(--studio-surface);
+  border: 2px dashed var(--studio-border-strong);
+  border-radius: var(--studio-card-radius, var(--studio-radius));
+  color: var(--studio-muted);
+  transition: all 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  gap: 0.75rem;
+}
+.studio-add-metric-card:hover {
+  border-color: var(--studio-accent);
+  color: var(--studio-accent);
+  background: var(--studio-accent-dim);
+  box-shadow: 0 0 28px var(--studio-accent-glow);
+}
+.studio-add-metric-card .studio-add-metric-icon {
+  width: 4rem;
+  height: 4rem;
+  min-width: 4rem;
+  min-height: 4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--studio-bg-elevated);
+  color: var(--studio-muted);
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+.studio-add-metric-card:hover .studio-add-metric-icon {
+  background: var(--studio-accent);
+  color: var(--studio-bg);
+  transform: scale(1.08);
+}
+.studio-add-metric-card .studio-add-metric-text {
+  font-size: var(--studio-text-card);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--studio-fg);
+}
+.studio-add-metric-card .studio-add-metric-hint {
+  font-size: var(--studio-text-small);
+  color: var(--studio-fg-muted);
+}
+
+/* Running banner ───────────────────────────────────────────────────────── */
+.studio-running-banner {
+  background: var(--studio-accent-dim);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  border-radius: var(--studio-radius-sm);
+  color: var(--studio-accent);
+  animation: studio-pulse 1.5s ease-in-out infinite;
+}
+@keyframes studio-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+
+/* Área principal: altura mínima para que se vea todo (empty state, intents) */
+.studio-main {
+  min-height: 480px;
+}
+.admin-dashboard-studio .studio-main {
+  flex: 1 1 auto;
+}
+
+/* Canvas ───────────────────────────────────────────────────────────────── */
+.studio-canvas {
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 1.5rem 1.5rem 2rem;
+  min-height: 420px;
+}
+
+@keyframes studio-blocks-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Config panel ─────────────────────────────────────────────────────────── */
+.metric-config-panel,
+.studio-config-panel {
+  background: var(--studio-bg-elevated);
+  border-left: 1px solid var(--studio-border);
+}
+
+.metric-config-panel header {
+  border-bottom: 1px solid var(--studio-border);
+  background: var(--studio-surface);
+}
+
+.metric-config-panel select,
+.metric-config-panel input {
+  background: var(--studio-surface) !important;
+  border-color: var(--studio-border) !important;
+  color: var(--studio-fg) !important;
+}
+.metric-config-panel select:focus,
+.metric-config-panel input:focus {
+  border-color: var(--studio-accent) !important;
+  box-shadow: 0 0 0 2px var(--studio-accent-dim) !important;
+}
+.metric-config-panel label {
+  color: var(--studio-fg-muted) !important;
+}
+
+/* Menú de tres puntos del header — se renderiza en portal, estilos explícitos para que sea visible */
+.studio-header-menu-content {
+  background: #141419 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: #f4f4f5 !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+}
+.studio-header-menu-content a,
+.studio-header-menu-content [data-radix-collection-item],
+.studio-header-menu-content [role="menuitem"] {
+  color: #f4f4f5 !important;
+}
+.studio-header-menu-content a:hover,
+.studio-header-menu-content a:focus-visible,
+.studio-header-menu-content [data-radix-collection-item]:hover,
+.studio-header-menu-content [data-radix-collection-item]:focus,
+.studio-header-menu-content [role="menuitem"]:hover,
+.studio-header-menu-content [role="menuitem"]:focus {
+  background: rgba(34, 211, 238, 0.15) !important;
+  color: #22d3ee !important;
+  outline: none !important;
+}
+.studio-header-menu-content [data-disabled] {
+  opacity: 0.5;
+}
+.studio-header-menu-content [role="separator"] {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Formulario de configuración dentro del modal (paso 2) — tema oscuro completo */
+.studio-modal-content .add-metric-config-form {
+  color: #f4f4f5;
+}
+.studio-modal-content .add-metric-config-form .add-metric-label,
+.studio-modal-content .add-metric-config-form label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #a1a1aa !important;
+  display: block;
+}
+.studio-modal-content .add-metric-config-form .add-metric-input,
+.studio-modal-content .add-metric-config-form .add-metric-select,
+.studio-modal-content .add-metric-config-form input[type="text"],
+.studio-modal-content .add-metric-config-form input[type="number"],
+.studio-modal-content .add-metric-config-form input[type="color"],
+.studio-modal-content .add-metric-config-form select {
+  width: 100%;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-radius: var(--studio-radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  background: #141419 !important;
+  color: #f4f4f5 !important;
+  font-size: 0.875rem;
+}
+.studio-modal-content .add-metric-config-form input[type="color"] {
+  width: auto;
+  min-width: 2.75rem;
+  padding: 2px;
+  cursor: pointer;
+}
+.studio-modal-content .add-metric-config-form .add-metric-input::placeholder,
+.studio-modal-content .add-metric-config-form input::placeholder {
+  color: #71717a !important;
+}
+.studio-modal-content .add-metric-config-form .add-metric-input:focus,
+.studio-modal-content .add-metric-config-form .add-metric-select:focus,
+.studio-modal-content .add-metric-config-form input:focus,
+.studio-modal-content .add-metric-config-form select:focus {
+  outline: none !important;
+  border-color: #22d3ee !important;
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.15) !important;
+}
+.studio-modal-content .add-metric-config-form select.add-metric-select,
+.studio-modal-content .add-metric-config-form select {
+  cursor: pointer;
+  appearance: auto;
+}
+.studio-modal-content .add-metric-config-form select option {
+  background: #141419;
+  color: #f4f4f5;
+}
+/* Botones del formulario (Volver, + Añadir, etc.) — excluir checkbox y Crear métrica */
+.studio-modal-content .add-metric-config-form button[type="button"]:not(.studio-form-submit):not([role="checkbox"]) {
+  color: #a1a1aa !important;
+  background: transparent !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+.studio-modal-content .add-metric-config-form button[type="button"]:not(.studio-form-submit):not([role="checkbox"]):hover {
+  color: #f4f4f5 !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+/* Botón principal "Crear métrica" */
+.studio-modal-content .add-metric-config-form button.studio-form-submit {
+  background: #22d3ee !important;
+  color: #08080b !important;
+  border: none !important;
+}
+.studio-modal-content .add-metric-config-form button.studio-form-submit:hover {
+  opacity: 0.9;
+}
+/* Checkbox (Radix) */
+.studio-modal-content .add-metric-config-form button[role="checkbox"] {
+  background: #141419 !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  color: #f4f4f5 !important;
+}
+.studio-modal-content .add-metric-config-form button[role="checkbox"][data-state="checked"] {
+  background: #22d3ee !important;
+  border-color: #22d3ee !important;
+  color: #08080b !important;
+}
+.studio-modal-content .add-metric-config-form button[role="checkbox"][data-state="checked"] svg {
+  color: #08080b !important;
+}
+/* AdminFieldSelector: Select (Listbox) y texto "X filas disponibles" */
+.studio-modal-content .add-metric-config-form .relative button {
+  background: #141419 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #f4f4f5 !important;
+}
+.studio-modal-content .add-metric-config-form .relative button span {
+  color: inherit !important;
+}
+.studio-modal-content .add-metric-config-form .text-gray-500,
+.studio-modal-content .add-metric-config-form .text-gray-400 {
+  color: #a1a1aa !important;
+}
+/* Dropdown del Select (Listbox.Options) cuando se abre */
+.studio-modal-content .add-metric-config-form [role="listbox"] {
+  background: #1a1a20 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: #f4f4f5 !important;
+}
+.studio-modal-content .add-metric-config-form [role="listbox"] [role="option"] {
+  color: #f4f4f5 !important;
+}
+.studio-modal-content .add-metric-config-form [role="listbox"] [role="option"]:hover,
+.studio-modal-content .add-metric-config-form [role="listbox"] [role="option"][data-headlessui-state="active"] {
+  background: rgba(34, 211, 238, 0.15) !important;
+}
+/* Bordes y fondos de bloques (métricas, filtros) */
+.studio-modal-content .add-metric-config-form .rounded-lg.border {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  background: rgba(14, 14, 18, 0.8) !important;
+}
+.studio-modal-content .add-metric-config-form .border-b {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+.studio-modal-content .add-metric-config-form .border-t {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* ═══ Modal "Añadir métrica" ───────────────────────────────────────────── */
+[data-slot="dialog-portal"] [data-slot="dialog-overlay"] {
+  background: rgba(0, 0, 0, 0.75) !important;
+  backdrop-filter: blur(12px);
+  z-index: 100;
+}
+
+/* Contenedor del modal: centrado en pantalla y por encima del overlay */
+.studio-modal-content {
+  /* Variables del studio para que el modal y el formulario las hereden (portal fuera del árbol del studio) */
+  --studio-bg: #08080b;
+  --studio-bg-elevated: #0e0e12;
+  --studio-surface: #141419;
+  --studio-surface-hover: #1a1a20;
+  --studio-fg: #f4f4f5;
+  --studio-fg-muted: #a1a1aa;
+  --studio-muted: #71717a;
+  --studio-border: rgba(255, 255, 255, 0.08);
+  --studio-border-strong: rgba(255, 255, 255, 0.12);
+  --studio-accent: #22d3ee;
+  --studio-accent-dim: rgba(34, 211, 238, 0.15);
+  --studio-radius-sm: 14px;
+  --studio-radius-lg: 24px;
+  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+  color: #f4f4f5;
+  position: fixed !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  z-index: 101 !important;
+  background: #1a1a20 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: var(--studio-radius-lg) !important;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
+  padding: 0 !important;
+  max-width: min(90vw, 560px) !important;
+  width: 100% !important;
+  overflow: hidden;
+}
+
+/* Espacio para el botón cerrar (no solapado con el título) */
+.studio-modal-content .studio-modal-inner {
+  padding: 1.75rem 1.75rem 0 1.75rem;
+  padding-right: 3.5rem; /* espacio para el X */
+}
+
+/* Título y descripción — forzar color claro para que se vea sobre fondo oscuro */
+.studio-modal-content [data-slot="dialog-title"] {
+  color: #f4f4f5 !important;
+  font-size: 1.375rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.03em !important;
+  line-height: 1.25 !important;
+  margin: 0 !important;
+  display: block !important;
+}
+
+.studio-modal-content [data-slot="dialog-description"] {
+  color: #a1a1aa !important;
+  font-size: 0.9375rem !important;
+  line-height: 1.5 !important;
+  margin-top: 0.5rem !important;
+  margin-bottom: 0 !important;
+  display: block !important;
+}
+
+/* Grid de intenciones dentro del modal */
+.studio-modal-content .studio-modal-intents {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0;
+}
+@media (min-width: 400px) {
+  .studio-modal-content .studio-modal-intents {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Tarjetas de intención dentro del modal */
+.studio-modal-content .studio-modal-intent-card {
+  background: #222228 !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: var(--studio-radius-sm);
+  padding: 1rem 1.25rem;
+  min-height: 88px;
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  text-align: left;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+.studio-modal-content .studio-modal-intent-card:hover {
+  background: #2a2a32 !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.studio-modal-content .studio-modal-intent-card .studio-intent-icon {
+  width: 2.75rem;
+  height: 2.75rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(34, 211, 238, 0.2) !important;
+  color: #22d3ee !important;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+.studio-modal-content .studio-modal-intent-card:hover .studio-intent-icon {
+  background: rgba(34, 211, 238, 0.3) !important;
+}
+.studio-modal-content .studio-modal-intent-card .studio-intent-label {
+  font-size: 0.9375rem !important;
+  font-weight: 600 !important;
+  color: #f4f4f5 !important;
+  line-height: 1.3 !important;
+}
+.studio-modal-content .studio-modal-intent-card .studio-intent-desc {
+  font-size: 0.8125rem !important;
+  color: #a1a1aa !important;
+  margin-top: 0.2rem !important;
+  line-height: 1.35 !important;
+}
+
+/* Sección CTA (Crear métrica vacía) */
+.studio-modal-cta {
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+  padding: 1.25rem 1.75rem 1.75rem !important;
+  margin-top: 1.5rem !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+}
+.studio-modal-cta p {
+  font-size: 0.8125rem !important;
+  color: #a1a1aa !important;
+  margin: 0 0 0.75rem 0 !important;
+  line-height: 1.45 !important;
+}
+.studio-modal-cta button {
+  width: 100% !important;
+  height: 2.75rem !important;
+  border-radius: var(--studio-radius-sm) !important;
+  font-size: 0.9375rem !important;
+  font-weight: 600 !important;
+  background: rgba(34, 211, 238, 0.2) !important;
+  color: #22d3ee !important;
+  border: 1px solid rgba(34, 211, 238, 0.4) !important;
+  transition: all 0.2s ease !important;
+  cursor: pointer !important;
+}
+.studio-modal-cta button:hover {
+  background: rgba(34, 211, 238, 0.3) !important;
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.25) !important;
+}
+
+/* Botón cerrar del modal */
+.studio-modal-content [data-slot="dialog-close"] {
+  position: absolute !important;
+  top: 1rem !important;
+  right: 1rem !important;
+  width: 2rem !important;
+  height: 2rem !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 10px !important;
+  color: #71717a !important;
+  background: transparent !important;
+  transition: color 0.15s, background 0.15s !important;
+}
+.studio-modal-content [data-slot="dialog-close"]:hover {
+  color: #f4f4f5 !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}

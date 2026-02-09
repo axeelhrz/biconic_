@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { v4 as uuidv4 } from "uuid";
 import { Client as PgClient } from "pg";
 import postgres from "postgres"; // Used only for DDL and inserts with postgres.js
@@ -450,11 +451,16 @@ async function executeEtlPipeline(
         if (!dbUrl) throw new Error("SUPABASE_DB_URL no disponible.");
         client = new PgClient({ connectionString: dbUrl });
       } else if (conn.type === "postgres" || conn.type === "postgresql") {
+        const password =
+          (conn as any).db_password_encrypted
+            ? decryptConnectionPassword((conn as any).db_password_encrypted)
+            : undefined;
         client = new PgClient({
           host: conn.db_host || undefined,
           user: conn.db_user || undefined,
           database: conn.db_name || undefined,
           port: conn.db_port ?? 5432,
+          password: password || undefined,
         });
       } else {
         throw new Error(`Tipo de conexión no soportado: ${conn.type}.`);

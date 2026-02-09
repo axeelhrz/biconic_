@@ -3,7 +3,7 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap');
 
 .admin-view-page:has([data-theme="client"]) {
-  background: #111318;
+  background: transparent;
 }
 .admin-view-page:has([data-theme="client"]) .admin-view-page__main {
   padding: 0;
@@ -20,9 +20,13 @@
   --client-accent-soft: rgba(45, 212, 191, 0.12);
   --client-border: color-mix(in srgb, var(--client-accent) 22%, transparent);
   --client-bg: #111318;
+  --client-bg-image: none;
   --client-bg-soft: #161a21;
   --client-card: rgba(255, 255, 255, 0.03);
   --client-card-hover: rgba(255, 255, 255, 0.05);
+  --client-card-border-color: rgba(255, 255, 255, 0.08);
+  --client-card-border-width: 1px;
+  --client-card-radius: 20px;
   --client-text: rgba(255, 255, 255, 0.95);
   --client-text-muted: rgba(255, 255, 255, 0.5);
   --client-filters-bg: #fafafa;
@@ -33,6 +37,9 @@
   --client-kpi-value-font-size: 1.25rem;
   font-family: var(--client-font);
   background: var(--client-bg);
+  background-image: var(--client-bg-image);
+  background-size: cover;
+  background-position: center;
   color: var(--client-text);
   min-height: 100%;
   -webkit-font-smoothing: antialiased;
@@ -256,8 +263,8 @@
 
 [data-theme="client"] .client-view-widget {
   background: var(--client-card);
-  border-radius: var(--client-radius);
-  border: 1px solid var(--client-border);
+  border-radius: var(--client-card-radius, var(--client-radius));
+  border: var(--client-card-border-width, 1px) solid var(--client-card-border-color, var(--client-border));
   overflow: hidden;
   display: flex;
   flex-direction: column;

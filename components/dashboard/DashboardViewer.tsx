@@ -2053,6 +2053,9 @@ export function DashboardViewer({
     ? {
         ["--client-accent" as string]: dashboardTheme.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor,
         ["--client-bg" as string]: bgColor,
+        ["--client-bg-image" as string]: dashboardTheme.backgroundImageUrl
+          ? `url(${dashboardTheme.backgroundImageUrl})`
+          : "none",
         ["--client-card" as string]: isLightBg
           ? "rgba(255,255,255,0.95)"
           : (() => {
@@ -2064,6 +2067,12 @@ export function DashboardViewer({
               }
               return card;
             })(),
+        ["--client-card-border-color" as string]:
+          dashboardTheme.cardBorderColor ?? DEFAULT_DASHBOARD_THEME.cardBorderColor ?? "rgba(255,255,255,0.08)",
+        ["--client-card-border-width" as string]:
+          `${dashboardTheme.cardBorderWidth ?? DEFAULT_DASHBOARD_THEME.cardBorderWidth ?? 1}px`,
+        ["--client-card-radius" as string]:
+          `${dashboardTheme.cardBorderRadius ?? DEFAULT_DASHBOARD_THEME.cardBorderRadius ?? 20}px`,
         ["--client-text" as string]: isLightBg
           ? "#1a1a1a"
           : (dashboardTheme.textColor ?? DEFAULT_DASHBOARD_THEME.textColor),

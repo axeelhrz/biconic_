@@ -33,6 +33,14 @@ export type DashboardTheme = {
   logoOpacity?: number;
   /** Posición del logo: center | top-left | top-right | bottom-left | bottom-right */
   logoPosition?: "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  /** Imagen de fondo del dashboard (URL) */
+  backgroundImageUrl?: string;
+  /** Color del borde de las tarjetas */
+  cardBorderColor?: string;
+  /** Grosor del borde de las tarjetas (px) */
+  cardBorderWidth?: number;
+  /** Radio del borde de las tarjetas (px) */
+  cardBorderRadius?: number;
 }
 
 export const DEFAULT_DASHBOARD_THEME: DashboardTheme = {
@@ -51,6 +59,10 @@ export const DEFAULT_DASHBOARD_THEME: DashboardTheme = {
   logoSize: 24,
   logoOpacity: 0.06,
   logoPosition: "center",
+  backgroundImageUrl: "",
+  cardBorderColor: "rgba(255,255,255,0.08)",
+  cardBorderWidth: 1,
+  cardBorderRadius: 20,
 };
 
 export function mergeTheme(partial?: DashboardTheme | null): DashboardTheme {

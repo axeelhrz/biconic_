@@ -117,6 +117,7 @@ export default function ConnectionForm({
     // No reseteamos `isUploading` a `false` porque `isProcessing` tomará el control
   };
 
+  const isFirebird = connectionType === "firebird";
   useEffect(() => {
     setIsExcelMode(connectionType === "excel");
     if (connectionType !== "excel") {
@@ -175,6 +176,7 @@ export default function ConnectionForm({
               <option value="">Seleccione</option>
               <option value="mysql">MySQL</option>
               <option value="postgres">PostgreSQL</option>
+              <option value="firebird">Firebird (Flexxus)</option>
               <option value="excel">Archivo Excel/CSV</option>
             </select>
             <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
@@ -291,7 +293,7 @@ export default function ConnectionForm({
                 <Input
                   type="text"
                   id="host"
-                  placeholder="Ingrese"
+                  placeholder={isFirebird ? "Ej. mngservicios.flexxus.com.ar" : "Ingrese"}
                   className="w-full h-10 px-[15px] bg-white border border-[#D9DCE3] rounded-full text-[16px] font-light text-[#555555] placeholder:font-light placeholder:text-[#555555] focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
                   {...register("host", { required: "Ingrese el host" })}
                 />
@@ -311,7 +313,7 @@ export default function ConnectionForm({
                 <Input
                   type="number"
                   id="port"
-                  placeholder="3306/5432"
+                  placeholder={isFirebird ? "15421" : "3306/5432"}
                   className="w-full h-10 px-[15px] bg-white border border-[#D9DCE3] rounded-full text-[16px] font-light text-[#555555] placeholder:font-light placeholder:text-[#555555] focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
                   {...register("port", {
                     valueAsNumber: true,
@@ -333,12 +335,12 @@ export default function ConnectionForm({
                   htmlFor="database"
                   className="block text-[14px] font-medium text-[#66687E] mb-[6px]"
                 >
-                  Base de Datos
+                  {isFirebird ? "Path / Nombre de base" : "Base de Datos"}
                 </label>
                 <Input
                   type="text"
                   id="database"
-                  placeholder="Ingrese"
+                  placeholder={isFirebird ? "Ej. fbcdistribuciones" : "Ingrese"}
                   className="w-full h-10 px-[15px] bg-white border border-[#D9DCE3] rounded-full text-[16px] font-light text-[#555555] placeholder:font-light placeholder:text-[#555555] focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
                   {...register("database", {
                     required: "Ingrese la base de datos",

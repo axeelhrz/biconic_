@@ -50,13 +50,80 @@ export default function AdminNewConnectionDialog({
     [isProcessing, isFinished, onOpenChange]
   );
 
-  const handleSubmit = async (values: any) => {
-    toast.warning("Funcionalidad no implementada para bases de datos aún.");
+  const handleSubmit = async (values: {
+    type: string;
+    connectionName: string;
+    host: string;
+    database: string;
+    user: string;
+    password: string;
+    port?: number;
+  }) => {
+    if (!values.type || !values.connectionName || !values.host || !values.database || !values.user) {
+      toast.error("Completá todos los campos obligatorios.");
+      return;
+    }
+    const normalizedType = String(values.type).toLowerCase();
+    if (!["postgres", "postgresql", "mysql", "firebird"].includes(normalizedType)) {
+      toast.error("Tipo de conexión no soportado.");
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      const res = await fetch("/api/connection/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: values.type,
+          connectionName: values.connectionName,
+          host: values.host.trim(),
+          database: values.database.trim(),
+          user: values.user.trim(),
+          password: values.password || "",
+          port: values.port != null && values.port !== "" ? Number(values.port) : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error al crear la conexión.");
+      toast.success("Conexión creada correctamente.");
+      onCreated?.();
+      onOpenChange(false);
+    } catch (err: any) {
+      toast.error(err?.message || "Error al crear la conexión.");
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleTest = async (values: any) => {
-    toast.warning("Funcionalidad no implementada para bases de datos aún.");
-    return false;
+    if (!values.host || !values.database || !values.user) {
+      toast.error("Completá host, base de datos y usuario.");
+      return false;
+    }
+    try {
+      const res = await fetch("/api/connection/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: values.type,
+          host: values.host,
+          database: values.database,
+          user: values.user,
+          password: values.password,
+          port: values.port,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        toast.success("Conexión exitosa.");
+        return true;
+      }
+      toast.error(data.error || "Error al conectar.");
+      return false;
+    } catch (err: any) {
+      toast.error(err?.message || "Error al probar la conexión.");
+      return false;
+    }
   };
 
   const getActiveClientId = async (
