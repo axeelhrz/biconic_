@@ -396,12 +396,34 @@ export function MetricConfigPanel({
                                   </div>
                                 </>
                               ) : (
-                                <Input
-                                  value={m.formula ?? ""}
-                                  onChange={(e) => updateMetric(i, { formula: e.target.value, field: "" })}
-                                  placeholder="Ej. (metric_0 - metric_1) / NULLIF(metric_0, 0)"
-                                  className="h-8 text-xs font-mono"
-                                />
+                                <div className="space-y-1.5">
+                                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Operaciones: metric_0, metric_1… con + - * /</Label>
+                                  <div className="flex flex-wrap gap-1">
+                                    {[
+                                      { label: "A ÷ B", expr: "metric_0 / NULLIF(metric_1, 0)" },
+                                      { label: "% A/B", expr: "100.0 * metric_0 / NULLIF(metric_1, 0)" },
+                                      { label: "Margen", expr: "(metric_0 - metric_1) / NULLIF(metric_0, 0)" },
+                                      { label: "A - B", expr: "metric_0 - metric_1" },
+                                      { label: "A + B", expr: "metric_0 + metric_1" },
+                                      { label: "A × B", expr: "metric_0 * metric_1" },
+                                    ].map(({ label, expr }) => (
+                                      <button
+                                        key={label}
+                                        type="button"
+                                        onClick={() => updateMetric(i, { formula: expr, field: "" })}
+                                        className="px-2 py-1 rounded text-[11px] border border-[var(--studio-border)] bg-[var(--studio-surface)] hover:bg-[var(--studio-surface-hover)]"
+                                      >
+                                        {label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <Input
+                                    value={m.formula ?? ""}
+                                    onChange={(e) => updateMetric(i, { formula: e.target.value, field: "" })}
+                                    placeholder="O escribí: (metric_0 - metric_1) / NULLIF(metric_0, 0)"
+                                    className="h-8 text-xs font-mono"
+                                  />
+                                </div>
                               )}
                               <Input
                                 value={m.alias}

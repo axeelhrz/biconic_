@@ -80,7 +80,7 @@ export default function AdminNewConnectionDialog({
           database: values.database.trim(),
           user: values.user.trim(),
           password: values.password || "",
-          port: values.port != null && values.port !== "" ? Number(values.port) : undefined,
+          port: values.port != null ? Number(values.port) : undefined,
         }),
       });
       const data = await res.json();
