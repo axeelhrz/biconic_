@@ -112,13 +112,17 @@ export default function AdminEtlGrid({
         {Array.from({ length: 4 }).map((_, i) => (
           <div
             key={i}
-            className="animate-pulse overflow-hidden rounded-[15px] bg-white shadow-[0px_4px_24px_rgba(109,141,173,0.15)]"
+            className="animate-pulse overflow-hidden rounded-[15px] border"
+            style={{
+              background: "var(--platform-surface)",
+              borderColor: "var(--platform-border)",
+            }}
           >
-            <div className="h-[193px] w-full bg-gray-200" />
+            <div className="h-[193px] w-full" style={{ background: "var(--platform-surface-hover)" }} />
             <div className="space-y-3 p-5">
-              <div className="h-4 w-1/2 bg-gray-200" />
-              <div className="h-3 w-1/3 bg-gray-200" />
-              <div className="h-3 w-full bg-gray-200" />
+              <div className="h-4 w-1/2 rounded" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="h-3 w-1/3 rounded" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="h-3 w-full rounded" style={{ background: "var(--platform-surface-hover)" }} />
             </div>
           </div>
         ))}
@@ -128,7 +132,14 @@ export default function AdminEtlGrid({
 
   if (error) {
     return (
-      <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      <div
+        className="rounded-xl border p-4 text-sm"
+        style={{
+          borderColor: "var(--platform-danger)",
+          background: "rgba(248,113,113,0.1)",
+          color: "var(--platform-danger)",
+        }}
+      >
         {error}
       </div>
     );
@@ -152,7 +163,14 @@ export default function AdminEtlGrid({
 
   if (etls.length === 0) {
     return (
-      <div className="rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
+      <div
+        className="rounded-xl border p-6 text-center text-sm"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+          color: "var(--platform-fg-muted)",
+        }}
+      >
         No hay etls en la plataforma.
       </div>
     );
@@ -164,7 +182,14 @@ export default function AdminEtlGrid({
         <EtlCard key={etl.id} etl={etl} basePath="/admin/etl" />
       ))}
       {filtered.length === 0 && (
-        <div className="col-span-full rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
+        <div
+          className="col-span-full rounded-xl border p-6 text-center text-sm"
+          style={{
+            borderColor: "var(--platform-border)",
+            background: "var(--platform-surface)",
+            color: "var(--platform-fg-muted)",
+          }}
+        >
           No hay resultados para los filtros aplicados.
         </div>
       )}

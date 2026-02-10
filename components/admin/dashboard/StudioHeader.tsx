@@ -18,7 +18,9 @@ export type StudioMode = "explorar" | "disenar" | "presentar";
 type StudioHeaderProps = {
   dashboardId: string;
   title: string;
+  etlId?: string | null;
   etlName?: string | null;
+  onEtlChange?: () => void;
   status: DashboardStatus;
   lastUpdateLabel?: string;
   mode: StudioMode;
@@ -44,7 +46,9 @@ const STATUS_LABELS: Record<DashboardStatus, string> = {
 export function StudioHeader({
   dashboardId,
   title,
+  etlId,
   etlName,
+  onEtlChange,
   status,
   lastUpdateLabel,
   mode,
@@ -57,7 +61,6 @@ export function StudioHeader({
   return (
     <header className="studio-header flex flex-shrink-0 items-center">
       <div className="mx-auto flex h-full w-full max-w-[1400px] items-center justify-between gap-6 px-6">
-        {/* Orden: volver | título + estado | última actualización */}
         <div className="flex min-w-0 flex-1 items-center gap-6">
           <Link
             href="/admin/dashboard"
@@ -70,7 +73,13 @@ export function StudioHeader({
           <div className="h-5 w-px shrink-0 bg-[var(--studio-border)]" aria-hidden />
           <div className="flex min-w-0 flex-1 items-center gap-4">
             <div className="studio-header-title min-w-0 truncate">
-              <DashboardHeaderDetails dashboardId={dashboardId} title={title} etlName={etlName} />
+              <DashboardHeaderDetails
+                dashboardId={dashboardId}
+                title={title}
+                etlId={etlId}
+                etlName={etlName}
+                onEtlChange={onEtlChange}
+              />
             </div>
             <span
               className="studio-status-badge flex-shrink-0 rounded-full px-3 py-1.5 text-[var(--studio-text-caption)]"

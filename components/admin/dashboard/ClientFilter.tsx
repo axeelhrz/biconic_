@@ -74,7 +74,12 @@ export function ClientFilter({ onSelect }: ClientFilterProps) {
     <div className="relative" ref={containerRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex h-[42px] items-center justify-between gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus:border-blue-500 focus:outline-none w-[200px]"
+        className="flex h-[42px] items-center justify-between gap-2 rounded-full border px-4 py-2 text-sm focus:outline-none focus:ring-2 w-[200px]"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+          color: "var(--platform-fg-muted)",
+        }}
       >
         <span className="truncate">
           {selectedClient ? selectedClient.name : "Filtrar por Cliente"}
@@ -84,7 +89,7 @@ export function ClientFilter({ onSelect }: ClientFilterProps) {
             <div
               role="button"
               onClick={handleClear}
-              className="rounded-full p-0.5 hover:bg-gray-200"
+              className="rounded-full p-0.5 opacity-70 hover:opacity-100"
             >
               <X className="h-3 w-3" />
             </div>
@@ -94,12 +99,23 @@ export function ClientFilter({ onSelect }: ClientFilterProps) {
       </button>
 
       {isOpen && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-[280px] rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
+        <div
+          className="absolute left-0 top-full z-50 mt-2 w-[280px] rounded-lg border p-2 shadow-xl"
+          style={{
+            borderColor: "var(--platform-border)",
+            background: "var(--platform-surface)",
+          }}
+        >
           <div className="relative mb-2">
-            <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
             <input
               autoFocus
-              className="w-full rounded-md border border-gray-200 py-1.5 pl-8 pr-2 text-sm outline-none focus:border-blue-500"
+              className="w-full rounded-md border py-1.5 pl-8 pr-2 text-sm outline-none focus:ring-2"
+              style={{
+                borderColor: "var(--platform-border)",
+                background: "var(--platform-bg)",
+                color: "var(--platform-fg)",
+              }}
               placeholder="Buscar cliente..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -109,10 +125,10 @@ export function ClientFilter({ onSelect }: ClientFilterProps) {
           <div className="max-h-[200px] overflow-y-auto">
             {loading ? (
               <div className="flex justify-center p-4">
-                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--platform-fg-muted)" }} />
               </div>
             ) : clients.length === 0 ? (
-              <div className="p-2 text-center text-xs text-gray-400">
+              <div className="p-2 text-center text-xs" style={{ color: "var(--platform-fg-muted)" }}>
                 No se encontraron resultados
               </div>
             ) : (
@@ -122,9 +138,13 @@ export function ClientFilter({ onSelect }: ClientFilterProps) {
                     key={client.id}
                     onClick={() => handleSelect(client)}
                     className={cn(
-                      "flex cursor-pointer items-center justify-between rounded px-2 py-1.5 text-sm hover:bg-gray-100",
-                      selectedClient?.id === client.id && "bg-blue-50 text-blue-600"
+                      "flex cursor-pointer items-center justify-between rounded px-2 py-1.5 text-sm hover:opacity-90",
+                      selectedClient?.id === client.id && "font-medium"
                     )}
+                    style={{
+                      background: selectedClient?.id === client.id ? "var(--platform-accent-dim)" : "transparent",
+                      color: selectedClient?.id === client.id ? "var(--platform-accent)" : "var(--platform-fg)",
+                    }}
                   >
                     <span className="truncate">{client.name}</span>
                     {selectedClient?.id === client.id && (

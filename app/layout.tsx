@@ -43,9 +43,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${geistSans.className} ${poppins.className} ${exo2.className} antialiased bg-[#F4F6FA]`}
-      >
+      <body className="antialiased min-h-screen">
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

@@ -29,7 +29,11 @@ export async function searchClients(query: string) {
   }));
 }
 
-export async function createDashboardAdmin(clientId: string, title: string = "Nuevo Dashboard") {
+export async function createDashboardAdmin(
+  clientId: string,
+  title: string = "Nuevo Dashboard",
+  etlId?: string | null
+) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -39,15 +43,17 @@ export async function createDashboardAdmin(clientId: string, title: string = "Nu
     return { ok: false, error: "Unauthorized" };
   }
 
-  // Create Dashboard
+  const insertPayload: Record<string, unknown> = {
+    client_id: clientId,
+    user_id: user.id,
+    title: title,
+    layout: { widgets: [], zoom: 1, grid: 20 },
+  };
+  if (etlId) insertPayload.etl_id = etlId;
+
   const { data, error } = await supabase
     .from("dashboard")
-    .insert({
-      client_id: clientId,
-      user_id: user.id,
-      title: title,
-      layout: { widgets: [], zoom: 1, grid: 20 }, // Default layout
-    })
+    .insert(insertPayload)
     .select("id")
     .single();
 
@@ -88,7 +94,7 @@ export async function searchEtls(query: string) {
 
 import { verifyDashboardEditAccess } from "@/lib/admin/dashboard-security";
 
-export async function updateDashboardEtl(dashboardId: string, etlId: string) {
+export async function updateDashboardEtl(dashboardId: string, etlId: string | null) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -98,7 +104,6 @@ export async function updateDashboardEtl(dashboardId: string, etlId: string) {
     return { ok: false, error: "Unauthorized" };
   }
 
-  // Verify access
   const canEdit = await verifyDashboardEditAccess(dashboardId, user.id);
   if (!canEdit) return { ok: false, error: "Forbidden: You don't have permission to edit this dashboard" };
 

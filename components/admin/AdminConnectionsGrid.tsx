@@ -208,24 +208,28 @@ export default function AdminConnectionsGrid({
         {Array.from({ length: 4 }).map((_, i) => (
           <div
             key={i}
-            className="box-border flex w-full max-w-[310px] animate-pulse flex-col gap-5 rounded-[25px] border border-gray-200 bg-white p-5"
+            className="box-border flex w-full max-w-[310px] animate-pulse flex-col gap-5 rounded-[25px] border p-5"
+            style={{
+              background: "var(--platform-surface)",
+              borderColor: "var(--platform-border)",
+            }}
           >
             <div className="flex items-center gap-[15px]">
-              <div className="h-10 w-10 flex-shrink-0 rounded-full bg-gray-200" />
+              <div className="h-10 w-10 flex-shrink-0 rounded-full" style={{ background: "var(--platform-surface-hover)" }} />
               <div className="w-full space-y-2">
-                <div className="h-4 w-3/4 rounded bg-gray-200" />
-                <div className="h-3 w-1/2 rounded bg-gray-200" />
+                <div className="h-4 w-3/4 rounded" style={{ background: "var(--platform-surface-hover)" }} />
+                <div className="h-3 w-1/2 rounded" style={{ background: "var(--platform-surface-hover)" }} />
               </div>
             </div>
-            <div className="h-4 w-1/4 rounded-full bg-gray-200" />
+            <div className="h-4 w-1/4 rounded-full" style={{ background: "var(--platform-surface-hover)" }} />
             <div className="space-y-4">
-              <div className="h-8 w-full rounded bg-gray-200" />
-              <div className="h-8 w-full rounded bg-gray-200" />
-              <div className="h-8 w-full rounded bg-gray-200" />
+              <div className="h-8 w-full rounded" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="h-8 w-full rounded" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="h-8 w-full rounded" style={{ background: "var(--platform-surface-hover)" }} />
             </div>
             <div className="mt-2 flex items-center gap-2.5">
-              <div className="h-8 flex-grow rounded-full bg-gray-200" />
-              <div className="h-6 w-6 rounded bg-gray-200" />
+              <div className="h-8 flex-grow rounded-full" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="h-6 w-6 rounded" style={{ background: "var(--platform-surface-hover)" }} />
             </div>
           </div>
         ))}
@@ -235,7 +239,14 @@ export default function AdminConnectionsGrid({
 
   if (error) {
     return (
-      <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      <div
+        className="rounded-xl border p-4 text-sm"
+        style={{
+          borderColor: "var(--platform-danger)",
+          background: "rgba(248,113,113,0.1)",
+          color: "var(--platform-danger)",
+        }}
+      >
         Error: {error}
       </div>
     );
@@ -253,7 +264,14 @@ export default function AdminConnectionsGrid({
 
   if (connections.length === 0) {
     return (
-      <div className="rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
+      <div
+        className="rounded-xl border p-6 text-center text-sm"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+          color: "var(--platform-fg-muted)",
+        }}
+      >
         No se encontraron conexiones (Array vacío). Revisa la consola.
       </div>
     );
@@ -270,7 +288,14 @@ export default function AdminConnectionsGrid({
         />
       ))}
       {filteredConnections.length === 0 && (
-        <div className="col-span-full rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
+        <div
+          className="col-span-full rounded-xl border p-6 text-center text-sm"
+          style={{
+            borderColor: "var(--platform-border)",
+            background: "var(--platform-surface)",
+            color: "var(--platform-fg-muted)",
+          }}
+        >
           No se encontraron conexiones que coincidan con tu búsqueda.
         </div>
       )}

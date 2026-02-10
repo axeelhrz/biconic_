@@ -123,7 +123,7 @@ export function AdminDashboardStudio({
   const [activePageId, setActivePageId] = useState<string | null>("page-1");
   const loadedOnce = useRef(false);
 
-  const { data: etlData, loading: etlLoading, error: etlError } = useAdminDashboardEtlData(dashboardId);
+  const { data: etlData, loading: etlLoading, error: etlError, refetch: refetchEtlData } = useAdminDashboardEtlData(dashboardId);
 
   const status: DashboardStatus = isRunning ? "en_ejecucion" : isDirty ? "borrador" : "activo";
   const lastUpdateLabel = lastSavedAt
@@ -513,7 +513,9 @@ export function AdminDashboardStudio({
       <StudioHeader
         dashboardId={dashboardId}
         title={title}
+        etlId={etlData?.etl?.id ?? null}
         etlName={etlName}
+        onEtlChange={refetchEtlData}
         status={status}
         lastUpdateLabel={lastUpdateLabel}
         mode={mode}

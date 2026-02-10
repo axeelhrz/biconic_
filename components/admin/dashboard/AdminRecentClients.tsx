@@ -114,38 +114,48 @@ export default function AdminRecentClients() {
 
   return (
     <div className="flex w-full flex-col gap-4">
-      {/* Header row */}
       <div className="flex w-full items-center justify-between">
-        <h2 className="text-[20px] font-semibold leading-7 text-black">
+        <h2 className="text-[20px] font-semibold leading-7" style={{ color: "var(--platform-fg)" }}>
           Clientes recientes
         </h2>
         <Link
           href="/admin/clients"
-          className="text-[13px] font-medium text-[#047183] hover:underline"
+          className="text-[13px] font-medium hover:underline"
+          style={{ color: "var(--platform-accent)" }}
         >
           Ver todo ↗
         </Link>
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div
+          className="rounded-xl border p-3 text-sm"
+          style={{
+            borderColor: "var(--platform-danger)",
+            background: "rgba(248,113,113,0.1)",
+            color: "var(--platform-danger)",
+          }}
+        >
           {error}
         </div>
       )}
 
-      {/* Grid matching 1270px width approx with gaps */}
       <div className="flex flex-wrap justify-between gap-5">
         {loading
           ? Array.from({ length: 3 }).map((_, i) => (
               <div
                 key={i}
-                className="h-[402.96px] w-[402px] animate-pulse overflow-hidden rounded-[15.29px] bg-white shadow-[0px_3.959px_23.756px_rgba(109,141,173,0.15)]"
+                className="h-[402.96px] w-[402px] animate-pulse overflow-hidden rounded-[15.29px] border"
+                style={{
+                  background: "var(--platform-surface)",
+                  borderColor: "var(--platform-border)",
+                }}
               >
-                <div className="h-[190.83px] w-full bg-gray-200" />
+                <div className="h-[190.83px] w-full" style={{ background: "var(--platform-surface-hover)" }} />
                 <div className="space-y-3 p-5">
-                  <div className="h-5 w-2/3 bg-gray-200" />
-                  <div className="h-4 w-1/3 bg-gray-200" />
-                  <div className="h-10 w-full bg-gray-200" />
+                  <div className="h-5 w-2/3 rounded" style={{ background: "var(--platform-surface-hover)" }} />
+                  <div className="h-4 w-1/3 rounded" style={{ background: "var(--platform-surface-hover)" }} />
+                  <div className="h-10 w-full rounded" style={{ background: "var(--platform-surface-hover)" }} />
                 </div>
               </div>
             ))

@@ -62,25 +62,24 @@ export default function AdminUserTable({ search, filter }: Props) {
   // Mantener la tabla pegada al diseño pero responsiva
   return (
     <div className="flex w-full flex-col gap-5">
-      {/* Subheader: título + exportar */}
       <div className="flex w-full items-center justify-between">
-        <h2 className="font-exo2 text-[20px] font-semibold text-[#00030A]">
-          Clientes
+        <h2 className="text-[20px] font-semibold" style={{ color: "var(--platform-fg)" }}>
+          Usuarios
         </h2>
         <Button
           variant="outline"
-          className="h-[34px] rounded-full border-[#0F5F4C] text-[#0F5F4C]"
+          className="h-[34px] rounded-full"
+          style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
           onClick={() => exportCSV(rows)}
         >
           Exportar
         </Button>
       </div>
 
-      {/* Tabla */}
       <div className="w-full overflow-x-auto">
         <table className="min-w-[800px] w-full table-fixed">
-          <thead>
-            <tr className="text-left text-[12px] font-semibold text-[#54565B]">
+          <thead style={{ background: "var(--platform-bg-elevated)" }}>
+            <tr className="text-left text-[12px] font-semibold" style={{ color: "var(--platform-fg-muted)" }}>
               <Th className="w-[240px]">Usuario</Th>
               <Th className="w-[240px]">Correo</Th>
               <Th className="w-[160px]">Activo desde</Th>
@@ -96,7 +95,8 @@ export default function AdminUserTable({ search, filter }: Props) {
               <tr>
                 <td
                   colSpan={7}
-                  className="px-4 py-8 text-center text-sm text-gray-500"
+                  className="px-4 py-8 text-center text-sm"
+                  style={{ color: "var(--platform-fg-muted)" }}
                 >
                   No hay usuarios para mostrar.
                 </td>
@@ -106,11 +106,15 @@ export default function AdminUserTable({ search, filter }: Props) {
               rows.map((u) => (
                 <tr
                   key={u.id}
-                  className="border-b border-[#D9DCE3] text-sm text-[#282828]"
+                  className="border-b text-sm"
+                  style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                 >
-                  <Td>
+                  <Td style={{ borderColor: "var(--platform-border)" }}>
                     <div className="flex items-center gap-2">
-                      <div className="relative h-[35px] w-[35px] overflow-hidden rounded-full bg-gray-100">
+                      <div
+                        className="relative h-[35px] w-[35px] overflow-hidden rounded-full"
+                        style={{ background: "var(--platform-surface-hover)" }}
+                      >
                         {/* next/image requires whitelisted domains; gravatar is allowed in next.config.ts per repo notes */}
                         {u.avatarUrl ? (
                           <Image
@@ -124,33 +128,35 @@ export default function AdminUserTable({ search, filter }: Props) {
                       <span className="truncate">{u.name}</span>
                     </div>
                   </Td>
-                  <Td>
-                    <span className="truncate text-[#636363]">{u.email}</span>
+                  <Td style={{ borderColor: "var(--platform-border)" }}>
+                    <span className="truncate" style={{ color: "var(--platform-fg-muted)" }}>{u.email}</span>
                   </Td>
-                  <Td>
-                    <span className="text-[#636363]">
+                  <Td style={{ borderColor: "var(--platform-border)" }}>
+                    <span style={{ color: "var(--platform-fg-muted)" }}>
                       {formatDate(u.activeSince)}
                     </span>
                   </Td>
-                  <Td>
+                  <Td style={{ borderColor: "var(--platform-border)" }}>
                     <div className="flex flex-wrap gap-1">
                       {u.companies && u.companies.length > 0 ? (
                         u.companies.map((c, i) => (
                           <CompanyBadge key={c.id} company={c} />
                         ))
                       ) : (
-                        <span className="text-gray-400 italic text-xs">Sin empresa</span>
+                        <span className="italic text-xs" style={{ color: "var(--platform-fg-muted)" }}>Sin empresa</span>
                       )}
                     </div>
                   </Td>
-                  <Td>
+                  <Td style={{ borderColor: "var(--platform-border)" }}>
                     <button
                       className={cn(
-                        "rounded-full px-3 py-1 text-[14px] font-medium transition-colors",
-                        u.status === "activo"
-                          ? "bg-[#E7FFE4] text-[#282828] hover:bg-[#d9f9d6]"
-                          : "bg-gray-200 text-[#282828] hover:bg-gray-300"
+                        "rounded-full px-3 py-1 text-[14px] font-medium transition-colors hover:opacity-90",
+                        u.status === "activo" && "bg-[var(--platform-success-dim)]",
+                        u.status !== "activo" && "bg-[var(--platform-surface-hover)]"
                       )}
+                      style={{
+                        color: u.status === "activo" ? "var(--platform-success)" : "var(--platform-fg-muted)",
+                      }}
                       onClick={async () => {
                         const next =
                           u.status === "activo" ? "inactivo" : "activo";
@@ -178,9 +184,15 @@ export default function AdminUserTable({ search, filter }: Props) {
                       {u.status === "activo" ? "Activo" : "Inactivo"}
                     </button>
                   </Td>
-                  <Td>
+                  <Td style={{ borderColor: "var(--platform-border)" }}>
                     <select
                       value={u.app_role || ""}
+                      className="rounded-full px-3 py-1 text-[12px] font-medium focus:outline-none"
+                      style={{
+                        background: "var(--platform-surface-hover)",
+                        color: "var(--platform-fg)",
+                        border: "1px solid var(--platform-border)",
+                      }}
                       onChange={async (e) => {
                         const nextRole = e.target.value as AppRole;
                         const prevRole = u.app_role;
@@ -207,14 +219,13 @@ export default function AdminUserTable({ search, filter }: Props) {
                           toast.success("Rol actualizado");
                         }
                       }}
-                      className="rounded-full bg-[#E6E6E7] px-3 py-1 text-[12px] font-medium text-[#282828] focus:outline-none"
                     >
                       <option value="VIEWER">Viewer</option>
                       <option value="CREATOR">Creator</option>
                       <option value="APP_ADMIN">App Admin</option>
                     </select>
                   </Td>
-                  <Td>
+                  <Td style={{ borderColor: "var(--platform-border)" }}>
                     <div className="flex items-center gap-2">
                       <Dialog
                         open={!!selected && selected.id === u.id}
@@ -225,14 +236,20 @@ export default function AdminUserTable({ search, filter }: Props) {
                             <Eye className="h-5 w-5" />
                           </IconButton>
                         </DialogTrigger>
-                        <DialogContent>
+                        <DialogContent
+                          className="border"
+                          style={{
+                            background: "var(--platform-surface)",
+                            borderColor: "var(--platform-border)",
+                          }}
+                        >
                           <DialogHeader>
-                            <DialogTitle>Detalles de usuario</DialogTitle>
-                            <DialogDescription>
+                            <DialogTitle style={{ color: "var(--platform-fg)" }}>Detalles de usuario</DialogTitle>
+                            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
                               {u.name} — {u.email}
                             </DialogDescription>
                           </DialogHeader>
-                          <div className="mt-2 text-sm text-gray-700">
+                          <div className="mt-2 text-sm" style={{ color: "var(--platform-fg-muted)" }}>
                             <p>
                               <strong>Rol:</strong> {u.app_role || "Sin rol"}
                             </p>
@@ -256,7 +273,11 @@ export default function AdminUserTable({ search, filter }: Props) {
                             </p>
                           </div>
                           <DialogFooter>
-                            <Button onClick={() => setSelected(null)}>
+                            <Button
+                              onClick={() => setSelected(null)}
+                              style={{ background: "var(--platform-accent)", color: "#08080b" }}
+                              className="hover:opacity-90"
+                            >
                               Cerrar
                             </Button>
                           </DialogFooter>
@@ -341,7 +362,8 @@ function IconButton({
     <button
       aria-label={label}
       onClick={onClick}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#00030A] hover:bg-gray-100"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:opacity-80"
+      style={{ color: "var(--platform-fg)" }}
     >
       {children}
     </button>
@@ -467,10 +489,13 @@ function SkeletonRows() {
   return (
     <>
       {Array.from({ length: 5 }).map((_, i) => (
-        <tr key={i} className="border-b border-[#D9DCE3]">
+        <tr key={i} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
           {Array.from({ length: 7 }).map((__, j) => (
-            <td key={j} className="px-4 py-3">
-              <div className="h-4 w-full max-w-[200px] animate-pulse rounded bg-gray-200" />
+            <td key={j} className="px-4 py-3" style={{ borderColor: "var(--platform-border)" }}>
+              <div
+                className="h-4 w-full max-w-[200px] animate-pulse rounded"
+                style={{ background: "var(--platform-surface-hover)" }}
+              />
             </td>
           ))}
         </tr>
@@ -506,22 +531,26 @@ function CompanyBadge({ company }: { company: CompanyAccess }) {
     <>
       <button
         onClick={() => setShowDashboards(true)}
-        className={cn(
-          "inline-flex items-center rounded-full px-3 py-1 text-[12px] font-medium transition-colors hover:opacity-80",
-          isAdmin
-            ? "bg-[#E7FFE4] text-[#1D7C4D]" // Verde para admin
-            : "bg-[#E6E6E7] text-[#282828]" // Gris para otros
-        )}
+        className="inline-flex items-center rounded-full px-3 py-1 text-[12px] font-medium transition-colors hover:opacity-80"
+        style={{
+          background: isAdmin ? "var(--platform-success-dim)" : "var(--platform-surface-hover)",
+          color: isAdmin ? "var(--platform-success)" : "var(--platform-fg)",
+        }}
       >
         {company.name}
       </button>
 
-      {/* Lista de Dashboards */}
       <Dialog open={showDashboards} onOpenChange={setShowDashboards}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent
+          className="sm:max-w-[425px] border"
+          style={{
+            background: "var(--platform-surface)",
+            borderColor: "var(--platform-border)",
+          }}
+        >
           <DialogHeader>
-            <DialogTitle>Dashboards de {company.name}</DialogTitle>
-            <DialogDescription>
+            <DialogTitle style={{ color: "var(--platform-fg)" }}>Dashboards de {company.name}</DialogTitle>
+            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
               Lista de dashboards a los que tiene acceso en esta empresa.
             </DialogDescription>
           </DialogHeader>
@@ -531,43 +560,71 @@ function CompanyBadge({ company }: { company: CompanyAccess }) {
                 {dashboards.map((d) => (
                   <li
                     key={d.id}
-                    className="flex items-center justify-between rounded-md border p-2 text-sm text-gray-700"
+                    className="flex items-center justify-between rounded-md border p-2 text-sm"
+                    style={{
+                      borderColor: "var(--platform-border)",
+                      color: "var(--platform-fg)",
+                    }}
                   >
                     <span>{d.title}</span>
-                    <button 
-                        onClick={() => setDashboardToRevoke({id: d.id, title: d.title})}
-                        className="text-gray-400 hover:text-red-500 transition-colors"
-                        title="Revocar acceso"
+                    <button
+                      onClick={() => setDashboardToRevoke({ id: d.id, title: d.title })}
+                      className="transition-colors hover:opacity-80"
+                      style={{ color: "var(--platform-fg-muted)" }}
+                      title="Revocar acceso"
                     >
-                        <Trash2 className="h-4 w-4" />
+                      <Trash2 className="h-4 w-4" />
                     </button>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-center text-sm text-gray-500">
+              <p className="text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
                 No hay dashboards disponibles.
               </p>
             )}
           </div>
           <DialogFooter>
-            <Button onClick={() => setShowDashboards(false)}>Cerrar</Button>
+            <Button
+              onClick={() => setShowDashboards(false)}
+              style={{ background: "var(--platform-accent)", color: "#08080b" }}
+              className="hover:opacity-90"
+            >
+              Cerrar
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Confirmación explícita (simulando Alert Dialog) */}
       <Dialog open={!!dashboardToRevoke} onOpenChange={(open) => !open && setDashboardToRevoke(null)}>
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent
+          className="sm:max-w-[400px] border"
+          style={{
+            background: "var(--platform-surface)",
+            borderColor: "var(--platform-border)",
+          }}
+        >
           <DialogHeader>
-            <DialogTitle>Revocar permisos</DialogTitle>
-            <DialogDescription>
+            <DialogTitle style={{ color: "var(--platform-fg)" }}>Revocar permisos</DialogTitle>
+            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
               ¿Estás seguro de quitar el acceso al dashboard <strong>{dashboardToRevoke?.title}</strong>? Esta acción no se puede deshacer.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">
-             <Button variant="outline" onClick={() => setDashboardToRevoke(null)}>Cancelar</Button>
-             <Button variant="destructive" onClick={onConfirmRevoke}>Revocar acceso</Button>
+            <Button
+              variant="outline"
+              onClick={() => setDashboardToRevoke(null)}
+              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={onConfirmRevoke}
+              className="hover:opacity-90"
+            >
+              Revocar acceso
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

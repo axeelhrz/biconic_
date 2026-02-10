@@ -155,23 +155,31 @@ export default function AdminClientTable() {
 
 
   return (
-    <div className="flex w-full max-w-[1390px] flex-col gap-5 rounded-[30px] border border-[#ECECEC] bg-[#FDFDFD] px-10 py-8">
-      {/* Subheader */}
+    <div
+      className="flex w-full max-w-[1390px] flex-col gap-5 rounded-[30px] border px-10 py-8"
+      style={{
+        background: "var(--platform-bg-elevated)",
+        borderColor: "var(--platform-border)",
+      }}
+    >
       <div className="flex items-center justify-between">
-        <h2 className="font-exo2 text-[20px] font-semibold text-[#00030A]">
+        <h2 className="text-[20px] font-semibold" style={{ color: "var(--platform-fg)" }}>
           Clientes
         </h2>
         <Button
           variant="outline"
-          className="h-[34px] rounded-full border-[#0F5F4C] text-[#0F5F4C]"
+          className="h-[34px] rounded-full"
+          style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
           onClick={() => exportCSV(rows)}
         >
           Exportar
         </Button>
       </div>
 
-      {/* Table header */}
-      <div className="flex items-center justify-between gap-4 border-b border-[#D9DCE3] px-[15px] py-[3px] text-[12px] font-semibold text-[#54565B]">
+      <div
+        className="flex items-center justify-between gap-4 border-b px-[15px] py-[3px] text-[12px] font-semibold"
+        style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+      >
         <div className="w-5"></div>
         <div className="w-[240px]">Cliente</div>
         <div className="w-[120px]">Plan</div>
@@ -182,11 +190,10 @@ export default function AdminClientTable() {
         <div className="w-[100px] text-center">Acciones</div>
       </div>
 
-      {/* Table rows */}
-      <div className="divide-y divide-[#D9DCE3]">
+      <div className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
         {loading && <SkeletonRows />}
         {!loading && rows.length === 0 && (
-          <div className="px-4 py-8 text-center text-sm text-gray-500">
+          <div className="px-4 py-8 text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
             No hay clientes para mostrar.
           </div>
         )}
@@ -194,74 +201,86 @@ export default function AdminClientTable() {
           rows.map((r) => (
             <div
               key={r.id}
-              className="flex items-center justify-between gap-4 px-[15px] py-2.5 text-sm text-[#282828]"
+              className="flex items-center justify-between gap-4 px-[15px] py-2.5 text-sm"
+              style={{ color: "var(--platform-fg)" }}
             >
-              <div className="h-5 w-5 rounded-md border border-[#8A8B8E]" />
+              <div className="h-5 w-5 rounded-md border" style={{ borderColor: "var(--platform-border)" }} />
 
-              {/* Cliente */}
               <div className="flex w-[240px] items-center gap-2">
-                <div className="flex h-[35px] w-[35px] items-center justify-center rounded-full bg-[#E6E6E7] text-[12px] font-bold text-[#047183]">
+                <div
+                  className="flex h-[35px] w-[35px] items-center justify-center rounded-full text-[12px] font-bold"
+                  style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
+                >
                   {initials(r.name)}
                 </div>
                 <div className="flex min-w-0 flex-col">
-                  <span className="truncate text-[14px] text-[#282828]">
+                  <span className="truncate text-[14px]" style={{ color: "var(--platform-fg)" }}>
                     {r.name}
                   </span>
-                  <span className="text-[12px] text-[#54565B]">
+                  <span className="text-[12px]" style={{ color: "var(--platform-fg-muted)" }}>
                     {r.location}
                   </span>
                 </div>
               </div>
 
-              {/* Plan */}
               <div className="w-[120px]">
-                <span className="inline-flex items-center rounded-full bg-[#F9EBFF] px-3 py-1 text-[12px] font-medium text-[#282828]">
+                <span
+                  className="inline-flex items-center rounded-full px-3 py-1 text-[12px] font-medium"
+                  style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
+                >
                   {r.plan ?? "—"}
                 </span>
               </div>
 
-              {/* Estado */}
               <div className="w-[120px]">
                 <span
                   className={cn(
                     "inline-flex items-center rounded-full px-3 py-1 text-[14px] font-medium",
-                    r.status?.toLowerCase() === "activo"
-                      ? "bg-[#E7FFE4] text-[#282828]"
-                      : r.status?.toLowerCase() === "desactivado"
-                      ? "bg-[#FFEAEB] text-[#282828]"
-                      : "bg-[#E6E6E7] text-[#282828]"
+                    r.status?.toLowerCase() === "activo" && "bg-[var(--platform-success-dim)]",
+                    r.status?.toLowerCase() === "desactivado" && "bg-[var(--platform-danger)]/20"
                   )}
+                  style={{
+                    color:
+                      r.status?.toLowerCase() === "activo"
+                        ? "var(--platform-success)"
+                        : r.status?.toLowerCase() === "desactivado"
+                        ? "var(--platform-danger)"
+                        : "var(--platform-fg-muted)",
+                    ...(r.status?.toLowerCase() !== "activo" && r.status?.toLowerCase() !== "desactivado"
+                      ? { background: "var(--platform-surface-hover)" }
+                      : {}),
+                  }}
                 >
                   {r.status ?? "—"}
                 </span>
               </div>
 
-              {/* Proyectos */}
-              <div className="flex w-[120px] items-center gap-1 text-[#07BBD9]">
-                <FolderOpen className="h-5 w-5 text-gray-400" />
+              <div className="flex w-[120px] items-center gap-1" style={{ color: "var(--platform-accent)" }}>
+                <FolderOpen className="h-5 w-5" />
                 <span className="text-[14px]">{r.dashboards}</span>
               </div>
 
-              {/* Usuarios */}
-              <div className="flex w-[120px] items-center gap-1 text-[#07BBD9]">
+              <div className="flex w-[120px] items-center gap-1" style={{ color: "var(--platform-accent)" }}>
                 <Users className="h-5 w-5" />
                 <button className="text-[14px] underline" title="Ver usuarios">
                   {r.members}
                 </button>
               </div>
 
-              {/* Industria */}
               <div className="w-[120px]">
-                <span className="inline-flex items-center rounded-full bg-[#E6E6E7] px-3 py-1 text-[12px] font-medium text-[#282828]">
+                <span
+                  className="inline-flex items-center rounded-full px-3 py-1 text-[12px] font-medium"
+                  style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}
+                >
                   {r.industry ?? "—"}
                 </span>
               </div>
 
-              {/* Acciones */}
               <div className="flex w-[100px] items-center justify-center">
                 <Link
                   href={`/admin/clients/${r.id}`}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#00030A] hover:bg-gray-100"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:opacity-80"
+                  style={{ color: "var(--platform-fg)" }}
                   aria-label="Ver"
                 >
                   <Eye className="h-5 w-5" />
@@ -269,7 +288,8 @@ export default function AdminClientTable() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 text-[#00030A] hover:bg-gray-100"
+                  className="h-8 w-8 hover:opacity-80"
+                  style={{ color: "var(--platform-fg)" }}
                   onClick={() => handleEditSubscription(r.subscription ?? null, r.id)}
                   title={r.subscription ? "Editar Suscripción" : "Asignar Suscripción"}
                 >
@@ -280,11 +300,14 @@ export default function AdminClientTable() {
           ))}
       </div>
 
-      {/* Pagination */}
-      <div className="flex items-center justify-center gap-4 bg-white py-2.5">
+      <div
+        className="flex items-center justify-center gap-4 py-2.5"
+        style={{ background: "var(--platform-surface)" }}
+      >
         <Button
           variant="ghost"
-          className="h-[30px] rounded-xl text-[#33353B]"
+          className="h-[30px] rounded-xl"
+          style={{ color: "var(--platform-fg-muted)" }}
           onClick={() => setPage((p) => Math.max(1, p - 1))}
           disabled={page <= 1}
         >
@@ -301,12 +324,11 @@ export default function AdminClientTable() {
             <button
               key={n}
               onClick={() => setPage(n)}
-              className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-xl text-[14px] font-semibold",
-                n === page
-                  ? "bg-[#282828] text-white"
-                  : "bg-white text-[#00030A]"
-              )}
+              className="flex h-8 w-8 items-center justify-center rounded-xl text-[14px] font-semibold"
+              style={{
+                background: n === page ? "var(--platform-accent)" : "var(--platform-surface-hover)",
+                color: n === page ? "#08080b" : "var(--platform-fg)",
+              }}
             >
               {n}
             </button>
@@ -314,7 +336,8 @@ export default function AdminClientTable() {
         </div>
         <Button
           variant="ghost"
-          className="h-[30px] rounded-xl text-[#0F5F4C]"
+          className="h-[30px] rounded-xl"
+          style={{ color: "var(--platform-accent)" }}
           onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
           disabled={page >= totalPages}
         >
@@ -347,12 +370,12 @@ function FilterPill({
   return (
     <button
       onClick={onClick}
-      className={cn(
-        "h-[34px] rounded-full px-3 text-[13px] font-medium",
-        active
-          ? "bg-[#00030A] text-[#E6E6E7]"
-          : "border border-[#0F5F4C] text-[#0F5F4C]"
-      )}
+      className="h-[34px] rounded-full px-3 text-[13px] font-medium"
+      style={{
+        background: active ? "var(--platform-accent)" : "transparent",
+        color: active ? "#08080b" : "var(--platform-accent)",
+        border: `1px solid var(--platform-accent)`,
+      }}
     >
       {label}
     </button>
@@ -377,7 +400,8 @@ function SkeletonRows() {
           {Array.from({ length: 8 }).map((__, j) => (
             <div
               key={j}
-              className="h-4 w-full max-w-[200px] animate-pulse rounded bg-gray-200"
+              className="h-4 w-full max-w-[200px] animate-pulse rounded"
+              style={{ background: "var(--platform-surface-hover)" }}
             />
           ))}
         </div>

@@ -77,71 +77,88 @@ export default function AdminClientCard({
 
   return (
     <Link href={`/admin/clients/${id}`}>
-      <div className="flex w-[402px] flex-col overflow-hidden rounded-[15.29px] bg-white shadow-[0px_3.959px_23.756px_rgba(109,141,173,0.15)] hover:shadow-[0px_6px_28px_rgba(109,141,173,0.18)] transition-shadow">
-        {/* Image */}
+      <div
+        className="flex w-[402px] flex-col overflow-hidden rounded-[15.29px] border transition-shadow hover:border-[var(--platform-accent)]"
+        style={{
+          background: "var(--platform-surface)",
+          borderColor: "var(--platform-border)",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
+        }}
+      >
         <div className="relative h-[190.83px] w-full">
           <Image src={imageUrl} alt={companyName} fill className="object-cover" />
         </div>
 
-        {/* Content */}
         <div className="flex flex-col gap-[15px] p-[19.8px]">
-          <h3 className="text-[17.8px] font-semibold leading-[22px] text-[#23834E]">
+          <h3 className="text-[17.8px] font-semibold leading-[22px]" style={{ color: "var(--platform-accent)" }}>
             {companyName}
           </h3>
-          {/* Company subtitle in design is hidden; keep subtle line for layout */}
-          <p className="hidden text-[11.9px] leading-4 text-[#54565B]">
+          <p className="hidden text-[11.9px] leading-4" style={{ color: "var(--platform-fg-muted)" }}>
             {companyName}
           </p>
 
-          {/* Chips */}
           <div className="flex items-start gap-[10px]">
             {status && (
-              <span className="inline-flex h-6 items-center justify-center rounded-full bg-[#E7FFE4] px-3 py-1 text-[14px] font-medium text-[#282828]">
+              <span
+                className="inline-flex h-6 items-center justify-center rounded-full px-3 py-1 text-[14px] font-medium"
+                style={{ background: "var(--platform-success-dim)", color: "var(--platform-success)" }}
+              >
                 {status}
               </span>
             )}
             {tag && (
-              <span className="inline-flex h-6 items-center justify-center rounded-full bg-[#F9EBFF] px-3 py-1 text-[14px] font-medium text-[#282828]">
+              <span
+                className="inline-flex h-6 items-center justify-center rounded-full px-3 py-1 text-[14px] font-medium"
+                style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
+              >
                 {tag}
               </span>
             )}
           </div>
 
-          {/* Metrics chips */}
           <div className="flex w-full items-start gap-[10px]">
-            <div className="flex flex-1 flex-col items-center rounded-[20.84px] bg-[#F9F9F9] px-[55.57px] py-[5px]">
-              <div className="flex items-center gap-[3.21px] text-[#014D58]">
+            <div
+              className="flex flex-1 flex-col items-center rounded-[20.84px] px-[55.57px] py-[5px]"
+              style={{ background: "var(--platform-bg-elevated)" }}
+            >
+              <div className="flex items-center gap-[3.21px]" style={{ color: "var(--platform-accent)" }}>
                 <DashboardIcon className="h-[10.69px] w-[10.69px]" />
-                <span className="text-[11px] font-medium leading-[17px]">
-                  Dashboards
-                </span>
+                <span className="text-[11px] font-medium leading-[17px]">Dashboards</span>
               </div>
-              <div className="text-[12.82px] font-medium leading-[17px] text-black">
+              <div className="text-[12.82px] font-medium leading-[17px]" style={{ color: "var(--platform-fg)" }}>
                 {dashboardsCount}
               </div>
             </div>
-            <div className="flex flex-1 flex-col items-center rounded-[20.84px] bg-[#F9F9F9] px-[55.57px] py-[5px]">
-              <div className="flex items-center gap-[3.21px] text-[#014D58]">
-                <EtlIcon className="h-[13px] w-[11px] rotate-180 text-[#0F5F4C]" />
-                <span className="text-[11px] font-medium leading-[17px]">
-                  ETL
-                </span>
+            <div
+              className="flex flex-1 flex-col items-center rounded-[20.84px] px-[55.57px] py-[5px]"
+              style={{ background: "var(--platform-bg-elevated)" }}
+            >
+              <div className="flex items-center gap-[3.21px]" style={{ color: "var(--platform-accent)" }}>
+                <EtlIcon className="h-[13px] w-[11px] rotate-180" />
+                <span className="text-[11px] font-medium leading-[17px]">ETL</span>
               </div>
-              <div className="text-[12.82px] font-medium leading-[17px] text-black">
+              <div className="text-[12.82px] font-medium leading-[17px]" style={{ color: "var(--platform-fg)" }}>
                 {etlsCount}
               </div>
             </div>
           </div>
 
-          <hr className="my-1 h-[0.86px] w-full border-0 bg-[#C4C4C4]" />
+          <hr className="my-1 h-[0.86px] w-full border-0" style={{ background: "var(--platform-border)" }} />
 
-          {/* People */}
-          <div className="flex items-center gap-2 text-[#54565B]">
-            {/* Placeholder stacked avatars; can be wired later */}
+          <div className="flex items-center gap-2" style={{ color: "var(--platform-fg-muted)" }}>
             <div className="flex -space-x-2">
-              <div className="h-6 w-6 rounded-full border-2 border-white bg-gray-300" />
-              <div className="h-6 w-6 rounded-full border-2 border-white bg-gray-300" />
-              <div className="h-6 w-6 rounded-full border-2 border-white bg-gray-300" />
+              <div
+                className="h-6 w-6 rounded-full border-2"
+                style={{ borderColor: "var(--platform-surface)", background: "var(--platform-surface-hover)" }}
+              />
+              <div
+                className="h-6 w-6 rounded-full border-2"
+                style={{ borderColor: "var(--platform-surface)", background: "var(--platform-surface-hover)" }}
+              />
+              <div
+                className="h-6 w-6 rounded-full border-2"
+                style={{ borderColor: "var(--platform-surface)", background: "var(--platform-surface-hover)" }}
+              />
             </div>
             <span className="text-[12px] leading-4">{membersCount} personas</span>
           </div>

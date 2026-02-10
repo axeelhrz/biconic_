@@ -96,11 +96,12 @@ export default function EtlCard({
     createdAt,
   } = etl;
 
-  // Clases condicionales para el badge de estado
   const statusClasses =
-    status === "Conectado"
-      ? "bg-[#DCFCE7] text-[#016730]"
-      : "bg-gray-200 text-gray-700";
+    status === "Conectado" || status === "Publicado"
+      ? "bg-[var(--platform-success-dim)] text-[var(--platform-success)]"
+      : status === "Borrador"
+      ? "bg-[var(--platform-warning)]/20 text-[var(--platform-warning)]"
+      : "bg-[var(--platform-surface-hover)] text-[var(--platform-fg-muted)]";
 
   const handleDelete = async () => {
     setIsDeleting(true);
@@ -121,57 +122,63 @@ export default function EtlCard({
   };
 
   return (
-    <div className="flex h-[335px] w-full max-w-[424px] flex-col justify-between rounded-[20px] border border-[#E4E4E4] bg-[#FDFDFD] p-5 font-sans">
-      {/* Sección Superior: Estado, Título, Descripción y Fechas */}
+    <div
+      className="flex h-[335px] w-full max-w-[424px] flex-col justify-between rounded-[20px] border p-5 font-sans transition-shadow hover:border-[var(--platform-accent)]"
+      style={{
+        background: "var(--platform-surface)",
+        borderColor: "var(--platform-border)",
+        boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
+      }}
+    >
       <div className="flex flex-col items-start gap-4">
-        {/* Badge de Estado */}
         <span
           className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-medium ${statusClasses}`}
         >
           {status}
         </span>
 
-        {/* Título y Descripción */}
         <div className="flex flex-col">
-          <h3 className="text-base font-medium text-black">{title}</h3>
-          <p className="text-sm font-normal text-[#717182]">{description}</p>
+          <h3 className="text-base font-medium" style={{ color: "var(--platform-fg)" }}>{title}</h3>
+          <p className="text-sm font-normal" style={{ color: "var(--platform-fg-muted)" }}>{description}</p>
           {etl.owner && (
-            <p className="mt-1 text-xs font-medium text-[#717182]">
+            <p className="mt-1 text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
               Dueño: {etl.owner.fullName || "Desconocido"}
             </p>
           )}
         </div>
 
-        {/* Fechas de Ejecución */}
         <div className="flex flex-col gap-2.5 self-stretch">
           <div>
-            <p className="text-sm font-normal text-[#717182]">
+            <p className="text-sm font-normal" style={{ color: "var(--platform-fg-muted)" }}>
               Última ejecución
             </p>
-            <p className="text-sm font-medium text-black">{lastExecution}</p>
+            <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{lastExecution}</p>
           </div>
           <div>
-            <p className="text-sm font-normal text-[#717182]">
+            <p className="text-sm font-normal" style={{ color: "var(--platform-fg-muted)" }}>
               Próxima ejecución
             </p>
-            <p className="text-sm font-medium text-black">{nextExecution}</p>
+            <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{nextExecution}</p>
           </div>
           <div>
-            <p className="text-sm font-normal text-[#717182]">Creado</p>
-            <p className="text-sm font-medium text-black">{createdAt}</p>
+            <p className="text-sm font-normal" style={{ color: "var(--platform-fg-muted)" }}>Creado</p>
+            <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{createdAt}</p>
           </div>
         </div>
       </div>
 
-      {/* Sección Inferior: Botones de Acción */}
       <div className="flex items-center justify-end gap-2.5">
-        <button className="flex h-[34px] items-center justify-center gap-2 rounded-full bg-[#19A180] px-3 text-sm font-medium text-white hover:bg-opacity-90">
+        <button
+          className="flex h-[34px] items-center justify-center gap-2 rounded-full px-3 text-sm font-medium text-[#08080b] hover:opacity-90"
+          style={{ background: "var(--platform-accent)" }}
+        >
           <PlusIcon className="h-4 w-4" />
           <span>Ejecutar</span>
         </button>
 
         <button
-          className="flex h-[34px] items-center justify-center gap-2 rounded-full border border-black px-3 text-sm font-medium text-black hover:bg-gray-100"
+          className="flex h-[34px] items-center justify-center gap-2 rounded-full border px-3 text-sm font-medium hover:opacity-90"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
           onClick={() => setShareModalOpen(true)}
           title="Compartir"
         >
@@ -179,7 +186,8 @@ export default function EtlCard({
         </button>
 
         <button
-          className="flex h-[34px] items-center justify-center rounded-full border border-black px-4 text-sm font-medium text-black hover:bg-gray-100"
+          className="flex h-[34px] items-center justify-center rounded-full border px-4 text-sm font-medium hover:opacity-90"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
           onClick={() => router.push(`${basePath}/${etl.id}`)}
         >
           Editar
@@ -187,7 +195,8 @@ export default function EtlCard({
 
         <button
           aria-label="Eliminar"
-          className="text-black transition-colors hover:text-red-600"
+          className="transition-colors hover:opacity-80"
+          style={{ color: "var(--platform-fg-muted)" }}
           onClick={() => setDeleteModalOpen(true)}
         >
           <TrashIcon className="h-5 w-5" />

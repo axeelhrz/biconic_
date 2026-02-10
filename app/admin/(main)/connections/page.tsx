@@ -46,30 +46,35 @@ export default function AdminConnectionsPage() {
       {/* Header de la sección */}
       <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="font-poppins text-[32px] font-semibold leading-[48px] text-[#00030A]">
+          <h1 className="text-[32px] font-semibold leading-[48px]" style={{ color: "var(--platform-fg)" }}>
             Conexiones (Admin)
           </h1>
-          <p className="font-inter text-base font-normal leading-6 text-[#54565B]">
+          <p className="text-base font-normal leading-6" style={{ color: "var(--platform-fg-muted)" }}>
             Vista global de todas las conexiones de la plataforma.
           </p>
         </div>
 
-        {/* Barra de búsqueda y botón */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
             <input
               type="text"
               placeholder="Buscar..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-[42px] w-full rounded-full border border-gray-200 bg-white pl-10 pr-4 text-sm text-gray-600 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 sm:w-[280px]"
+              className="h-[42px] w-full rounded-full border pl-10 pr-4 text-sm focus:outline-none focus:ring-2 sm:w-[280px]"
+              style={{
+                background: "var(--platform-surface)",
+                borderColor: "var(--platform-border)",
+                color: "var(--platform-fg)",
+              }}
             />
           </div>
 
           <button
             onClick={() => setIsCreateOpen(true)}
-            className="flex h-[42px] w-[42px] items-center justify-center rounded-full bg-black text-white hover:bg-gray-800 transition-colors"
+            className="flex h-[42px] w-[42px] items-center justify-center rounded-full text-[#08080b] font-medium transition-opacity hover:opacity-90"
+            style={{ background: "var(--platform-accent)" }}
           >
             <Plus className="h-5 w-5" />
           </button>

@@ -38,25 +38,19 @@ export default function AdminUserSectionFilterBar({
 
   return (
     <div className="flex w-full items-center justify-between gap-5">
-      {/* --- Barra de Búsqueda --- */}
       <div className="flex items-center gap-4">
         {filterOptions.map((option) => {
           const isActive = activeFilter === option.id;
-
-          const baseClasses =
-            "flex h-[30px] cursor-pointer items-center justify-center rounded-full px-4 py-2 text-[13px] font-medium leading-4 transition-all duration-200";
-          const activeClasses =
-            "bg-[#474747] text-white shadow-[5px_5px_15px_rgba(155,166,228,0.25)]";
-          const inactiveClasses =
-            "border border-[#232323] text-[#232323] hover:bg-gray-100";
-
           return (
             <button
               key={option.id}
               onClick={() => handleFilterClick(option.id)}
-              className={`${baseClasses} ${
-                isActive ? activeClasses : inactiveClasses
-              }`}
+              className="flex h-[30px] cursor-pointer items-center justify-center rounded-full px-4 py-2 text-[13px] font-medium leading-4 transition-all duration-200"
+              style={{
+                background: isActive ? "var(--platform-accent)" : "transparent",
+                color: isActive ? "#08080b" : "var(--platform-fg-muted)",
+                border: `1px solid ${isActive ? "var(--platform-accent)" : "var(--platform-border)"}`,
+              }}
             >
               {option.label}
             </button>
@@ -64,16 +58,26 @@ export default function AdminUserSectionFilterBar({
         })}
       </div>
 
-      <div className="flex h-[34px] flex-1 items-center gap-2.5 rounded-xl border border-[#D9DCE3] bg-white pr-4">
-        <div className="flex h-full items-center self-stretch border-r border-r-[#D9DCE3] px-3">
-          <SearchIcon className="h-4 w-4 text-[#9C9EA9]" />
+      <div
+        className="flex h-[34px] flex-1 items-center gap-2.5 rounded-xl border pr-4"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+        }}
+      >
+        <div
+          className="flex h-full items-center self-stretch border-r px-3"
+          style={{ borderColor: "var(--platform-border)" }}
+        >
+          <SearchIcon className="h-4 w-4" style={{ color: "var(--platform-fg-muted)" }} />
         </div>
         <input
           type="text"
           placeholder="Buscar"
           value={searchQuery}
           onChange={handleSearchInputChange}
-          className="w-full bg-transparent text-sm font-normal text-[#555555] placeholder:text-gray-400 focus:outline-none"
+          className="w-full bg-transparent text-sm font-normal focus:outline-none"
+          style={{ color: "var(--platform-fg)" }}
         />
       </div>
     </div>

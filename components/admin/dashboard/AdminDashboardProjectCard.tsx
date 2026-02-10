@@ -51,21 +51,24 @@ export default function AdminDashboardProjectCard({
   const { id, title, imageUrl, status, description, company, peopleCount } =
     dashboard;
 
-  // Clases condicionales para el badge de estado
   const statusClasses =
     status === "Publicado"
-      ? "bg-[#DCFCE7] text-[#016730]"
+      ? "bg-[var(--platform-success-dim)] text-[var(--platform-success)]"
       : status === "Borrador"
-      ? "bg-[#FFEDA3] text-[#CBA200]"
-      : "bg-gray-200 text-gray-700"; // fallback
+      ? "bg-[var(--platform-warning)]/20 text-[var(--platform-warning)]"
+      : "bg-[var(--platform-surface-hover)] text-[var(--platform-fg-muted)]";
 
   return (
     <Link
       href={`/admin/dashboard/${id}`}
       aria-label={`Abrir dashboard ${title}`}
-      className="flex w-full flex-col overflow-hidden rounded-[15px] bg-white shadow-[0px_4px_24px_rgba(109,141,173,0.15)] hover:shadow-[0px_6px_28px_rgba(109,141,173,0.18)] transition-shadow"
+      className="flex w-full flex-col overflow-hidden rounded-[15px] border transition-shadow hover:border-[var(--platform-accent)]"
+      style={{
+        background: "var(--platform-surface)",
+        borderColor: "var(--platform-border)",
+        boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
+      }}
     >
-      {/* Imagen de Vista Previa */}
       <div className="relative h-[193px] w-full">
         <Image
           src={imageUrl}
@@ -75,40 +78,27 @@ export default function AdminDashboardProjectCard({
         />
       </div>
 
-      {/* Contenido de la Tarjeta */}
       <div className="flex flex-col gap-2.5 p-5">
-        <h3 className="text-lg font-semibold text-black">{title}</h3>
-
-        {/* Empresa */}
-        <p className="text-xs text-[#54565B]">{company}</p>
-
-        {/* Badge de Estado */}
+        <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>{title}</h3>
+        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{company}</p>
         <span
           className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-medium ${statusClasses}`}
         >
           {status}
         </span>
-
-        <p className="h-8 text-xs font-normal text-[#54565B]">{description}</p>
-
-        {/* Divisor */}
-        <hr className="my-1 border-t border-gray-200" />
-
-        {/* Pie de la Tarjeta */}
+        <p className="h-8 text-xs font-normal" style={{ color: "var(--platform-fg-muted)" }}>{description}</p>
+        <hr className="my-1 border-t" style={{ borderColor: "var(--platform-border)" }} />
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-[#54565B]">
+          <div className="flex items-center gap-1.5" style={{ color: "var(--platform-fg-muted)" }}>
             <UsersIcon className="h-4 w-4" />
-            <span className="text-[10px] font-normal">
-              {peopleCount} personas
-            </span>
+            <span className="text-[10px] font-normal">{peopleCount} personas</span>
           </div>
           <button
-            className="text-[#54565B] hover:text-black"
+            className="opacity-70 hover:opacity-100"
+            style={{ color: "var(--platform-fg-muted)" }}
             onClick={(e) => {
-              // Evita navegar cuando se hace click en el botón de opciones
               e.preventDefault();
               e.stopPropagation();
-              // TODO: abrir menú contextual
             }}
           >
             <EllipsisHorizontalIcon className="h-5 w-5" />

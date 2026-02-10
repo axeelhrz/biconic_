@@ -1,30 +1,54 @@
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ═══ Tema Biconic: negro + azulado + verdoso (como el Studio y el logo) ═══ */
+:root {
+  /* Paleta oscura */
+  --platform-bg: #08080b;
+  --platform-bg-elevated: #0e0e12;
+  --platform-surface: #141419;
+  --platform-surface-hover: #1a1a20;
+  --platform-fg: #f4f4f5;
+  --platform-fg-muted: #a1a1aa;
+  --platform-muted: #71717a;
+  --platform-border: rgba(255, 255, 255, 0.06);
+  --platform-border-strong: rgba(255, 255, 255, 0.1);
+  /* Acentos: cian (azulado) y verde (logo Biconic) */
+  --platform-accent: #22d3ee;
+  --platform-accent-dim: rgba(34, 211, 238, 0.15);
+  --platform-success: #34d399;
+  --platform-success-dim: rgba(52, 211, 153, 0.15);
+  --platform-warning: #fbbf24;
+  --platform-danger: #f87171;
+  --platform-font: "Plus Jakarta Sans", system-ui, sans-serif;
+}
+
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
-    --destructive: 0 84.2% 60.2%;
+    --background: 240 6% 4%;
+    --foreground: 240 5% 96%;
+    --card: 240 6% 6%;
+    --card-foreground: 240 5% 96%;
+    --popover: 240 6% 7%;
+    --popover-foreground: 240 5% 96%;
+    --primary: 187 85% 53%;
+    --primary-foreground: 240 6% 4%;
+    --secondary: 240 5% 15%;
+    --secondary-foreground: 240 5% 96%;
+    --muted: 240 4% 18%;
+    --muted-foreground: 240 4% 64%;
+    --accent: 187 85% 53%;
+    --accent-foreground: 240 6% 4%;
+    --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
+    --border: 240 4% 18%;
+    --input: 240 4% 18%;
+    --ring: 187 85% 53%;
+    --chart-1: 187 85% 53%;
+    --chart-2: 160 84% 39%;
     --chart-3: 197 37% 24%;
     --chart-4: 43 74% 66%;
     --chart-5: 27 87% 67%;
@@ -33,7 +57,7 @@
 }
 
 @theme inline {
-  --color-neutral-200: #f6f6f6;
+  --color-neutral-200: #27272a;
 }
 
 @layer base {
@@ -41,7 +65,11 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    background: var(--platform-bg);
+    color: var(--platform-fg);
+    font-family: var(--platform-font);
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.02em;
   }
 }
 
@@ -111,6 +139,26 @@
     transparent,
     rgba(255, 255, 255, 0.3)
   );
+}
+
+/* Contenido de la plataforma: hereda tema oscuro */
+.biconic-platform-content h1,
+.biconic-platform-content h2,
+.biconic-platform-content h3 {
+  color: var(--platform-fg);
+}
+.biconic-platform-content p {
+  color: var(--platform-fg-muted);
+}
+.biconic-platform-content input[type="text"],
+.biconic-platform-content input[type="search"],
+.biconic-platform-content select {
+  background: var(--platform-surface) !important;
+  border-color: var(--platform-border) !important;
+  color: var(--platform-fg) !important;
+}
+.biconic-platform-content input::placeholder {
+  color: var(--platform-muted);
 }
 
 /* Login */

@@ -106,15 +106,21 @@ export default function DashboardHeader() {
   const isLoading = isUserLoading || isRoleLoading;
 
   return (
-    <header className="box-border flex items-center justify-between w-full max-w-[1390px] h-14 px-16 py-2.5 mx-auto my-4 bg-[#FDFDFD] border border-[#ECECEC] rounded-full">
-      {/* Logo */}
+    <header
+      className="box-border flex items-center justify-between w-full max-w-[1390px] h-14 px-16 py-2.5 mx-auto my-4 rounded-full border transition-colors"
+      style={{
+        background: "var(--platform-bg-elevated)",
+        borderColor: "var(--platform-border)",
+      }}
+    >
+      {/* Logo Biconic: verde + cian */}
       <Link
         href="/"
-        className="flex items-center gap-3 text-2xl font-bold italic text-[#00030A] no-underline"
+        className="flex items-center gap-3 text-2xl font-bold italic no-underline"
+        style={{ color: "var(--platform-fg)" }}
       >
-        <div className="relative w-[42px] h-5 bg-gradient-to-r from-[#23E3B4] via-[#40EF8E] to-[#02B8D1] rounded-[10px]">
-          {/* Círculo blanco que estaba en el pseudo-elemento ::after */}
-          <div className="absolute top-1/2 left-5 w-3.5 h-3.5 bg-[#FDFDFD] rounded-full -translate-y-1/2"></div>
+        <div className="relative w-[42px] h-5 bg-gradient-to-r from-[#23E3B4] via-[#40EF8E] to-[#22d3ee] rounded-[10px]">
+          <div className="absolute top-1/2 left-5 w-3.5 h-3.5 rounded-full -translate-y-1/2 bg-[#08080b]"></div>
         </div>
         <span>biconic</span>
       </Link>
@@ -123,15 +129,12 @@ export default function DashboardHeader() {
       <nav className="flex items-center gap-5">
         {navLinks.map((link) => {
           const isActive = pathname.startsWith(link.href);
-
-          // Clases base para todos los links
           const baseClasses =
             "px-4 py-2 text-sm font-normal rounded-full transition-colors duration-300";
-
-          // Clases condicionales para el link activo vs inactivo
           const activeClasses =
-            "text-white bg-gradient-to-b from-[#191B24] via-[#242D34] to-[#225659]";
-          const inactiveClasses = "text-[#00030A]";
+            "text-[#08080b] font-medium bg-[var(--platform-accent)] hover:opacity-90";
+          const inactiveClasses =
+            "text-[var(--platform-fg-muted)] hover:text-[var(--platform-accent)] hover:bg-[var(--platform-accent-dim)]";
 
           return (
             <Link
@@ -147,23 +150,28 @@ export default function DashboardHeader() {
         })}
       </nav>
 
-      {/* Perfil de Usuario */}
+      {/* Perfil */}
       <div className="flex items-center gap-2.5">
         {isLoading ? (
-          // Estado de carga para una mejor UX
           <div className="animate-pulse flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-gray-200 rounded-full"></div>
+            <div
+              className="w-8 h-8 rounded-full"
+              style={{ background: "var(--platform-surface-hover)" }}
+            />
             <div className="flex flex-col gap-1.5">
-              <div className="w-24 h-4 bg-gray-200 rounded"></div>
-              <div className="w-16 h-3 bg-gray-200 rounded"></div>
+              <div
+                className="w-24 h-4 rounded"
+                style={{ background: "var(--platform-surface-hover)" }}
+              />
+              <div
+                className="w-16 h-3 rounded"
+                style={{ background: "var(--platform-surface-hover)" }}
+              />
             </div>
           </div>
         ) : userName ? (
           <>
-            <Link
-              href="/profile"
-              className="flex items-center gap-2.5 no-underline"
-            >
+            <Link href="/profile" className="flex items-center gap-2.5 no-underline">
               <Image
                 className="rounded-full object-cover"
                 src={avatarUrl || "/switch.svg"}
@@ -172,11 +180,16 @@ export default function DashboardHeader() {
                 height={32}
               />
               <div className="flex flex-col">
-                <span className="text-base font-medium leading-5 text-[#00030A]">
+                <span
+                  className="text-base font-medium leading-5"
+                  style={{ color: "var(--platform-fg)" }}
+                >
                   {userName}
                 </span>
-                {/* 4. USAR EL ROL DEL HOOK */}
-                <span className="text-sm font-medium leading-4 text-[#54565B]">
+                <span
+                  className="text-sm font-medium leading-4"
+                  style={{ color: "var(--platform-fg-muted)" }}
+                >
                   {userRole ?? "Usuario"}
                 </span>
               </div>
@@ -195,12 +208,18 @@ export default function DashboardHeader() {
               height={32}
             />
             <div className="flex flex-col">
-              <span className="text-base font-medium leading-5 text-[#00030A]">
-                <Link href="/auth/login" className="underline">
+              <span
+                className="text-base font-medium leading-5"
+                style={{ color: "var(--platform-fg)" }}
+              >
+                <Link href="/auth/login" className="underline hover:text-[var(--platform-accent)]">
                   Iniciar sesión
                 </Link>
               </span>
-              <span className="text-sm font-medium leading-4 text-[#54565B]">
+              <span
+                className="text-sm font-medium leading-4"
+                style={{ color: "var(--platform-fg-muted)" }}
+              >
                 Invitado
               </span>
             </div>

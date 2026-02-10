@@ -49,20 +49,25 @@ export default function DashboardCard({
   const { id, title, imageUrl, status, description, views, owner } = dashboard;
   const [shareModalOpen, setShareModalOpen] = useState(false);
 
-  // Clases condicionales para el badge de estado
+  // Badge de estado: verde/amarillo con tema oscuro
   const statusClasses =
     status === "Publicado"
-      ? "bg-[#DCFCE7] text-[#016730]"
+      ? "bg-[var(--platform-success-dim)] text-[var(--platform-success)]"
       : status === "Borrador"
-      ? "bg-[#FFEDA3] text-[#CBA200]"
-      : "bg-gray-200 text-gray-700"; // fallback
+      ? "bg-[var(--platform-warning)]/20 text-[var(--platform-warning)]"
+      : "bg-[var(--platform-surface-hover)] text-[var(--platform-fg-muted)]";
 
   return (
     <>
       <Link
         href={href ?? `/dashboard/${id}`}
         aria-label={`Abrir dashboard ${title}`}
-        className="flex w-full flex-col overflow-hidden rounded-[15px] bg-white shadow-[0px_4px_24px_rgba(109,141,173,0.15)] hover:shadow-[0px_6px_28px_rgba(109,141,173,0.18)] transition-shadow"
+        className="flex w-full flex-col overflow-hidden rounded-[15px] border transition-shadow hover:border-[var(--platform-accent)]"
+        style={{
+          background: "var(--platform-surface)",
+          borderColor: "var(--platform-border)",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
+        }}
       >
         {/* Imagen de Vista Previa */}
         <div className="relative h-[193px] w-full">
@@ -76,7 +81,7 @@ export default function DashboardCard({
 
         {/* Contenido de la Tarjeta */}
         <div className="flex flex-col gap-2.5 p-5">
-          <h3 className="text-lg font-semibold text-black">{title}</h3>
+          <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>{title}</h3>
 
           {/* Badge de Estado */}
           <span
@@ -85,20 +90,20 @@ export default function DashboardCard({
             {status}
           </span>
 
-          <p className="h-8 text-xs font-normal text-[#54565B]">{description}</p>
+          <p className="h-8 text-xs font-normal" style={{ color: "var(--platform-fg-muted)" }}>{description}</p>
 
           {owner && owner.fullName && (
-            <p className="mt-1 text-xs font-medium text-blue-600">
+            <p className="mt-1 text-xs font-medium" style={{ color: "var(--platform-accent)" }}>
               Propietario: {owner.fullName}
             </p>
           )}
 
           {/* Divisor */}
-          <hr className="my-1 border-t border-gray-200" />
+          <hr className="my-1 border-t" style={{ borderColor: "var(--platform-border)" }} />
 
           {/* Pie de la Tarjeta */}
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-[#54565B]">
+            <div className="flex items-center gap-1.5" style={{ color: "var(--platform-fg-muted)" }}>
               <EyeIcon className="h-4 w-4" />
               <span className="text-[10px] font-normal">{views}</span>
             </div>
@@ -107,7 +112,8 @@ export default function DashboardCard({
                 {/* Botón Eliminar - Solo si se pasa onDelete */}
                 {onDelete && (
                     <button
-                        className="text-[#54565B] hover:text-red-600 transition-colors"
+                        className="transition-colors hover:opacity-80"
+                        style={{ color: "var(--platform-fg-muted)" }}
                         onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();

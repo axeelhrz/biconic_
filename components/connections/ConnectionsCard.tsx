@@ -102,11 +102,10 @@ export interface Connection {
   };
 }
 
-// --- Componente auxiliar para los campos de información ---
 const InfoField = ({ label, value }: { label: string; value: string }) => (
   <div className="flex w-full flex-col items-start self-stretch">
-    <p className="font-poppins text-sm font-medium text-[#717182]">{label}</p>
-    <p className="font-poppins text-sm font-medium text-black">{value}</p>
+    <p className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>{label}</p>
+    <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{value}</p>
   </div>
 );
 
@@ -128,84 +127,76 @@ export default function ConnectionsCard({
   const supabase = createClient();
 
 
-  // Clases condicionales para el badge de estado
-  const statusConfig = {
-    Conectado: {
-      bg: "bg-[#DCFCE7]",
-      text: "text-[#016730]",
-    },
-    Desconectado: {
-      bg: "bg-gray-200",
-      text: "text-gray-700",
-    },
-    Error: {
-      bg: "bg-red-200",
-      text: "text-red-800",
-    },
-    Procesando: {
-        bg: "bg-amber-100",
-        text: "text-amber-800",
-    },
+  const statusConfig: Record<Connection["status"], { bg: string; text: string }> = {
+    Conectado: { bg: "var(--platform-success-dim)", text: "var(--platform-success)" },
+    Desconectado: { bg: "var(--platform-surface-hover)", text: "var(--platform-fg-muted)" },
+    Error: { bg: "rgba(248,113,113,0.15)", text: "var(--platform-danger)" },
+    Procesando: { bg: "var(--platform-warning)/20", text: "var(--platform-warning)" },
   };
 
   const currentStatus = statusConfig[status] || statusConfig.Desconectado;
   const isProcessing = status === "Procesando" && !!dataTableId;
 
   return (
-    // Contenedor principal de la tarjeta (Frame 96)
-    <div className="box-border flex h-auto w-full max-w-[310px] flex-col items-start gap-5 rounded-[25px] border border-[#E4E4E4] bg-[#FDFDFD] p-5">
+    <div
+      className="box-border flex h-auto w-full max-w-[310px] flex-col items-start gap-5 rounded-[25px] border p-5 transition-shadow hover:border-[var(--platform-accent)]"
+      style={{
+        background: "var(--platform-surface)",
+        borderColor: "var(--platform-border)",
+        boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
+      }}
+    >
       <div className="flex w-full flex-row items-start gap-[15px] self-stretch">
-        {/* Círculo del icono */}
-        <div className="flex h-[40px] w-[40px] flex-shrink-0 items-center justify-center rounded-full bg-[#E5E5E7]">
-          <DatabaseIcon />
+        <div
+          className="flex h-[40px] w-[40px] flex-shrink-0 items-center justify-center rounded-full"
+          style={{ background: "var(--platform-bg-elevated)" }}
+        >
+          <DatabaseIcon className="[&_path]:stroke-[var(--platform-fg-muted)]" />
         </div>
-        {/* Título y subtítulo */}
         <div className="flex flex-col items-start">
-          <h3 className="font-poppins text-base font-medium text-black">
+          <h3 className="text-base font-medium" style={{ color: "var(--platform-fg)" }}>
             {title}
           </h3>
-          <p className="font-poppins text-sm font-medium text-[#717182]">
+          <p className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
             {type}
           </p>
         </div>
       </div>
 
       <div className="flex w-full flex-col gap-2">
-           {/* Creador (User) */}
-           <div className="flex items-center gap-2 text-xs text-gray-500">
-                <User className="h-3.5 w-3.5" />
-                <span className="font-medium">Creador:</span>
-                <span className="truncate">
-                    {connection.creator?.fullName || "Desconocido"}
-                </span>
-            </div>
+        <div className="flex items-center gap-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+          <User className="h-3.5 w-3.5" />
+          <span className="font-medium">Creador:</span>
+          <span className="truncate">{connection.creator?.fullName || "Desconocido"}</span>
+        </div>
 
-            {/* Cliente (Owner) */}
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-                <Building2 className="h-3.5 w-3.5" />
-                <span className="font-medium">Cliente:</span>
-                {connection.client ? (
-                    <button 
-                        onClick={() => setAssignClientOpen(true)}
-                        className="truncate hover:text-blue-600 hover:underline text-left"
-                    >
-                        {connection.client.companyName}
-                    </button>
-                ) : (
-                    <button
-                        onClick={() => setAssignClientOpen(true)}
-                        className="flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-200"
-                    >
-                        <Plus className="h-3 w-3" />
-                        Asignar
-                    </button>
-                )}
-            </div>
+        <div className="flex items-center gap-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+          <Building2 className="h-3.5 w-3.5" />
+          <span className="font-medium">Cliente:</span>
+          {connection.client ? (
+            <button
+              onClick={() => setAssignClientOpen(true)}
+              className="truncate text-left hover:underline"
+              style={{ color: "var(--platform-accent)" }}
+            >
+              {connection.client.companyName}
+            </button>
+          ) : (
+            <button
+              onClick={() => setAssignClientOpen(true)}
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium hover:opacity-90"
+              style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
+            >
+              <Plus className="h-3 w-3" />
+              Asignar
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Badge de estado */}
       <span
-        className={`flex items-center justify-center rounded-[10px] px-1.5 py-0.5 font-poppins text-[10px] font-medium ${currentStatus.bg} ${currentStatus.text}`}
+        className="flex items-center justify-center rounded-[10px] px-1.5 py-0.5 text-[10px] font-medium"
+        style={{ background: currentStatus.bg, color: currentStatus.text }}
       >
         {status}
       </span>
@@ -229,21 +220,25 @@ export default function ConnectionsCard({
         </div>
       )}
 
-      {/* Sección de acciones (botones) */}
       <div className="mt-auto flex w-full flex-row items-center gap-2.5 self-stretch pt-2">
-      <button
+        <button
           type="button"
           aria-label="Compartir conexión"
-          className="flex-shrink-0 p-1 text-black transition-opacity hover:opacity-70"
+          className="flex-shrink-0 p-1 transition-opacity hover:opacity-70 disabled:opacity-30"
+          style={{ color: "var(--platform-fg-muted)" }}
           onClick={() => setShareModalOpen(true)}
           disabled={isProcessing}
         >
-          <ShareIcon className={`h-5 w-5 ${isProcessing ? 'opacity-30' : ''}`} />
+          <ShareIcon className="h-5 w-5" />
         </button>
         <button
           type="button"
           disabled={isProcessing}
-          className={`box-border flex h-[34px] flex-grow flex-row flex-wrap content-center items-center justify-center gap-2 rounded-full border border-[#00030A] px-3 py-[7px] font-poppins text-[13px] font-medium text-[#00030A] transition-colors hover:bg-gray-100 ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
+          className={`box-border flex h-[34px] flex-grow flex-row flex-wrap content-center items-center justify-center gap-2 rounded-full border px-3 py-[7px] text-[13px] font-medium transition-colors ${isProcessing ? "cursor-not-allowed opacity-50" : "hover:opacity-90"}`}
+          style={{
+            borderColor: "var(--platform-border)",
+            color: "var(--platform-fg)",
+          }}
           onClick={() => onConfigure?.(connection.id)}
         >
           Configurar
@@ -252,10 +247,11 @@ export default function ConnectionsCard({
           type="button"
           aria-label="Eliminar conexión"
           disabled={isProcessing}
-          className="flex-shrink-0 p-1 text-black transition-opacity hover:opacity-70"
+          className="flex-shrink-0 p-1 transition-opacity hover:opacity-70 disabled:opacity-30"
+          style={{ color: "var(--platform-fg-muted)" }}
           onClick={() => onDelete?.(connection.id, connection.title)}
         >
-          <TrashIcon className={`h-5 w-5 ${isProcessing ? 'opacity-30' : ''}`} />
+          <TrashIcon className="h-5 w-5" />
         </button>
       </div>
       <ShareConnectionModal

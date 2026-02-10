@@ -19,23 +19,21 @@ const AdminUserSectionHeader: React.FC<AdminUserSectionHeaderProps> = ({
 }) => {
   return (
     <div className="flex w-full items-center justify-between">
-      {/* Sección de Título y Subtítulo */}
       <div className="flex flex-col gap-1">
-        <h1 className="font-exo2 text-[28px] font-semibold leading-none text-[#00030A]">
+        <h1 className="text-[28px] font-semibold leading-none" style={{ color: "var(--platform-fg)" }}>
           {title}
         </h1>
-        <p className="text-sm font-normal leading-4 text-[#717182]">
+        <p className="text-sm font-normal leading-4" style={{ color: "var(--platform-fg-muted)" }}>
           {subtitle}
         </p>
       </div>
 
-      {/* Botón de Acción Principal */}
       <button
         onClick={onButtonClick}
-        className="flex h-10 items-center justify-center gap-2 rounded-full bg-[#0F5F4C] py-2 pl-5 pr-4 text-white transition-opacity hover:opacity-90"
+        className="flex h-10 items-center justify-center gap-2 rounded-full py-2 pl-5 pr-4 font-medium transition-opacity hover:opacity-90"
+        style={{ background: "var(--platform-accent)", color: "#08080b" }}
       >
-        <span className="text-[15px] font-medium leading-5">{buttonText}</span>
-        {/* Aquí podrías agregar un ícono si fuera necesario */}
+        <span className="text-[15px] leading-5">{buttonText}</span>
       </button>
     </div>
   );

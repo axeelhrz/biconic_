@@ -120,7 +120,14 @@ export default function MonitorsTable({
 
   if (loading) {
     return (
-      <div className="w-full rounded-md border border-gray-200 bg-white p-8 text-center text-gray-500">
+      <div
+        className="w-full rounded-md border p-8 text-center"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+          color: "var(--platform-fg-muted)",
+        }}
+      >
         Cargando monitores...
       </div>
     );
@@ -128,45 +135,62 @@ export default function MonitorsTable({
 
   if (error) {
     return (
-      <div className="w-full rounded-md border border-red-200 bg-red-50 p-4 text-red-700">
+      <div
+        className="w-full rounded-md border p-4"
+        style={{
+          borderColor: "var(--platform-danger)",
+          background: "rgba(248,113,113,0.1)",
+          color: "var(--platform-danger)",
+        }}
+      >
         Error: {error}
       </div>
     );
   }
 
   return (
-    <div className="w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+    <div
+      className="w-full overflow-hidden rounded-xl border shadow-sm"
+      style={{
+        borderColor: "var(--platform-border)",
+        background: "var(--platform-surface)",
+      }}
+    >
       <Table>
-        <TableHeader className="bg-gray-50">
-          <TableRow>
-            <TableHead className="w-[140px]">Estado</TableHead>
-            <TableHead>ETL</TableHead>
-            <TableHead>Tabla Destino</TableHead>
-            <TableHead>Inicio</TableHead>
-            <TableHead className="text-right">Registros</TableHead>
-            <TableHead className="w-[30%]">Mensaje</TableHead>
+        <TableHeader style={{ background: "var(--platform-bg-elevated)" }}>
+          <TableRow style={{ borderColor: "var(--platform-border)" }}>
+            <TableHead className="w-[140px]" style={{ color: "var(--platform-fg-muted)" }}>Estado</TableHead>
+            <TableHead style={{ color: "var(--platform-fg-muted)" }}>ETL</TableHead>
+            <TableHead style={{ color: "var(--platform-fg-muted)" }}>Tabla Destino</TableHead>
+            <TableHead style={{ color: "var(--platform-fg-muted)" }}>Inicio</TableHead>
+            <TableHead className="text-right" style={{ color: "var(--platform-fg-muted)" }}>Registros</TableHead>
+            <TableHead className="w-[30%]" style={{ color: "var(--platform-fg-muted)" }}>Mensaje</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {filteredLogs.length === 0 ? (
-            <TableRow>
-              <TableCell colSpan={6} className="h-24 text-center text-gray-500">
+            <TableRow style={{ borderColor: "var(--platform-border)" }}>
+              <TableCell colSpan={6} className="h-24 text-center" style={{ color: "var(--platform-fg-muted)" }}>
                 No se encontraron registros.
               </TableCell>
             </TableRow>
           ) : (
             filteredLogs.map((log) => (
-              <TableRow key={log.id} className="hover:bg-gray-50/50">
-                <TableCell>
+              <TableRow
+                key={log.id}
+                className="hover:opacity-90"
+                style={{ borderColor: "var(--platform-border)" }}
+              >
+                <TableCell style={{ borderColor: "var(--platform-border)" }}>
                   <StatusBadge status={log.status} />
                 </TableCell>
-                <TableCell className="font-medium text-gray-900">
+                <TableCell className="font-medium" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}>
                   {log.etl_name}
                 </TableCell>
-                <TableCell className="text-gray-600">
-                    {log.destination_table_name}
+                <TableCell style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                  {log.destination_table_name}
                 </TableCell>
-                <TableCell className="text-gray-600">
+                <TableCell style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
                   {new Date(log.started_at).toLocaleString("es-ES", {
                     day: "2-digit",
                     month: "short",
@@ -175,12 +199,12 @@ export default function MonitorsTable({
                     minute: "2-digit",
                   })}
                 </TableCell>
-                <TableCell className="text-right font-mono text-gray-700">
+                <TableCell className="text-right font-mono" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}>
                   {log.rows_processed !== null
                     ? log.rows_processed.toLocaleString()
                     : "-"}
                 </TableCell>
-                <TableCell className="text-gray-500 text-sm truncate max-w-[200px]" title={log.error_message || ""}>
+                <TableCell className="text-sm truncate max-w-[200px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }} title={log.error_message || ""}>
                   {log.error_message || "-"}
                 </TableCell>
               </TableRow>
@@ -195,7 +219,13 @@ export default function MonitorsTable({
 function StatusBadge({ status }: { status: string }) {
   if (status === "completed") {
     return (
-      <Badge className="bg-green-100 text-green-700 hover:bg-green-200 border-green-200 gap-1 pl-1.5 shadow-none">
+      <Badge
+        className="gap-1 pl-1.5 shadow-none border-0"
+        style={{
+          background: "var(--platform-success-dim)",
+          color: "var(--platform-success)",
+        }}
+      >
         <CheckCircle2 className="w-3.5 h-3.5" />
         Completado
       </Badge>
@@ -203,14 +233,26 @@ function StatusBadge({ status }: { status: string }) {
   }
   if (status === "failed") {
     return (
-      <Badge className="bg-red-100 text-red-700 hover:bg-red-200 border-red-200 gap-1 pl-1.5 shadow-none">
+      <Badge
+        className="gap-1 pl-1.5 shadow-none border-0"
+        style={{
+          background: "rgba(248,113,113,0.15)",
+          color: "var(--platform-danger)",
+        }}
+      >
         <AlertCircle className="w-3.5 h-3.5" />
         Fallido
       </Badge>
     );
   }
   return (
-    <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-200 border-blue-200 gap-1 pl-1.5 shadow-none">
+    <Badge
+      className="gap-1 pl-1.5 shadow-none border-0"
+      style={{
+        background: "var(--platform-accent-dim)",
+        color: "var(--platform-accent)",
+      }}
+    >
       <CircleDashed className="w-3.5 h-3.5 animate-spin" />
       En progreso
     </Badge>

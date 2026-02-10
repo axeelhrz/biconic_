@@ -236,10 +236,15 @@ export function AddMetricConfigForm({
           </div>
         )}
 
-        {!["filter", "image", "text"].includes(form.type) && etlData && (
+        {!["filter", "image", "text"].includes(form.type) && (
           <>
+            {!etlData && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                Asociá un ETL al dashboard (en el encabezado) para cargar campos y usar dimensiones, fórmulas y filtros.
+              </div>
+            )}
             <div className="flex items-center justify-between pt-2">
-              <Label className="add-metric-label">Agregación</Label>
+              <Label className="add-metric-label">Agregación de datos</Label>
               <Checkbox checked={!!agg.enabled} onCheckedChange={(c) => updateAgg({ enabled: !!c })} />
             </div>
             {agg.enabled && (

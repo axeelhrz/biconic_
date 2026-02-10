@@ -63,7 +63,13 @@ export default function AdminDashboardSection({
   ];
 
   return (
-    <div className="flex flex-col box-border w-full max-w-[1390px] px-10 py-8 mx-auto bg-[#FDFDFD] border border-[#ECECEC] rounded-[30px] gap-4">
+    <div
+        className="flex flex-col box-border w-full max-w-[1390px] px-10 py-8 mx-auto rounded-[30px] gap-4 border"
+        style={{
+          background: "var(--platform-bg-elevated)",
+          borderColor: "var(--platform-border)",
+        }}
+      >
       <AdminDashboardSectionHeader
         title="Panel general"
         subtitle="Crea, edita y gestiona los proyectos de tus clientes."
