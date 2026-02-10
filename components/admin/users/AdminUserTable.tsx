@@ -327,25 +327,28 @@ export default function AdminUserTable({ search, filter }: Props) {
 
 function Th({
   className,
+  style,
   children,
 }: {
   className?: string;
+  style?: React.CSSProperties;
   children: React.ReactNode;
 }) {
   return (
-    <th className={cn("whitespace-nowrap px-4 py-2", className)}>{children}</th>
+    <th className={cn("whitespace-nowrap px-4 py-2", className)} style={style}>{children}</th>
   );
 }
 
 function Td({
   className,
+  style,
   children,
-}: {
-  className?: string;
-  children: React.ReactNode;
-}) {
+  ...props
+}: React.TdHTMLAttributes<HTMLTableCellElement>) {
   return (
-    <td className={cn("whitespace-nowrap px-4 py-3", className)}>{children}</td>
+    <td className={cn("whitespace-nowrap px-4 py-3", className)} style={style} {...props}>
+      {children}
+    </td>
   );
 }
 
