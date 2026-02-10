@@ -1,6 +1,9 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import type { Database } from "@/lib/supabase/database.types";
+
+type DashboardInsert = Database["public"]["Tables"]["dashboard"]["Insert"];
 
 export async function searchClients(query: string) {
   const supabase = await createClient();
@@ -43,13 +46,13 @@ export async function createDashboardAdmin(
     return { ok: false, error: "Unauthorized" };
   }
 
-  const insertPayload: Record<string, unknown> = {
+  const insertPayload: DashboardInsert = {
     client_id: clientId,
     user_id: user.id,
     title: title,
     layout: { widgets: [], zoom: 1, grid: 20 },
+    ...(etlId ? { etl_id: etlId } : {}),
   };
-  if (etlId) insertPayload.etl_id = etlId;
 
   const { data, error } = await supabase
     .from("dashboard")
