@@ -79,7 +79,9 @@ export async function POST(req: NextRequest) {
         db_user: dbUser.trim(),
         db_port: portNum,
         db_password_secret_id: null,
-        db_password_encrypted,
+        db_password_encrypted: db_password_encrypted ?? null,
+        original_file_name: null,
+        storage_object_path: null,
       })
       .select("id, name, type")
       .single();

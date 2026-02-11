@@ -1,12 +1,15 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Dialog, DialogContent, DialogTitle, DialogHeader, DialogDescription } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import ConnectionForm from "@/components/connections/ConnectionForm";
 import { createClient } from "@/lib/supabase/client";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import ShareConnectionModal from "@/components/connection/ShareConnectionModal";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { cn } from "@/lib/utils";
 
 type AdminNewConnectionDialogProps = {
   open: boolean;
@@ -23,10 +26,16 @@ export default function AdminNewConnectionDialog({
   const [isFinished, setIsFinished] = useState(false);
   const [currentImportId, setCurrentImportId] = useState<string | null>(null);
   
-  // State for the second step (Permissions)
+  // State for the second step (Permissions - Excel)
   const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(null);
   const [createdClientId, setCreatedClientId] = useState<string | null>(null);
   const [showPermissions, setShowPermissions] = useState(false);
+  // State for DB connection: step 2 = select tables for JOIN/datos
+  const [showTableSelection, setShowTableSelection] = useState(false);
+  const [connectionNameCreated, setConnectionNameCreated] = useState<string>("");
+  const [tablesFromMetadata, setTablesFromMetadata] = useState<{ schema: string; name: string }[]>([]);
+  const [loadingTables, setLoadingTables] = useState(false);
+  const [selectedTableKeys, setSelectedTableKeys] = useState<Set<string>>(new Set());
 
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
@@ -43,6 +52,10 @@ export default function AdminNewConnectionDialog({
           setCreatedConnectionId(null);
           setCreatedClientId(null);
           setShowPermissions(false);
+          setShowTableSelection(false);
+          setTablesFromMetadata([]);
+          setSelectedTableKeys(new Set());
+          setConnectionNameCreated("");
         }, 300);
       }
       onOpenChange(isOpen);
@@ -85,9 +98,11 @@ export default function AdminNewConnectionDialog({
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Error al crear la conexión.");
-      toast.success("Conexión creada correctamente.");
+      toast.success("Conexión creada correctamente. Seleccioná las tablas para JOIN y datos.");
+      setCreatedConnectionId(data.data.id);
+      setConnectionNameCreated(values.connectionName);
+      setShowTableSelection(true);
       onCreated?.();
-      onOpenChange(false);
     } catch (err: any) {
       toast.error(err?.message || "Error al crear la conexión.");
     } finally {
@@ -252,6 +267,107 @@ export default function AdminNewConnectionDialog({
     toast.success("Conexión creada correctamente. Ahora puedes configurar los permisos.");
     onCreated?.(); 
   }, [isFinished, onCreated]);
+
+  // Fetch tables when step 2 (table selection) is shown for DB connection
+  useEffect(() => {
+    if (!showTableSelection || !createdConnectionId) return;
+    setLoadingTables(true);
+    fetch("/api/connection/metadata", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionId: createdConnectionId }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok && Array.isArray(data.metadata?.tables)) {
+          const tables = data.metadata.tables as { schema: string; name: string }[];
+          setTablesFromMetadata(tables);
+          setSelectedTableKeys(new Set(tables.map((t) => `${t.schema}.${t.name}`)));
+        } else {
+          setTablesFromMetadata([]);
+          toast.error(data.error || "No se pudieron cargar las tablas.");
+        }
+      })
+      .catch(() => {
+        setTablesFromMetadata([]);
+        toast.error("Error al cargar las tablas de la conexión.");
+      })
+      .finally(() => setLoadingTables(false));
+  }, [showTableSelection, createdConnectionId]);
+
+  const toggleTable = (key: string) => {
+    setSelectedTableKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const selectAllTables = () => setSelectedTableKeys(new Set(tablesFromMetadata.map((t) => `${t.schema}.${t.name}`)));
+  const deselectAllTables = () => setSelectedTableKeys(new Set());
+  const handleTableSelectionDone = () => {
+    setShowTableSelection(false);
+    handleOpenChange(false);
+  };
+
+  // Step 2 for DB: list of tables to use for JOIN and data
+  if (showTableSelection && createdConnectionId) {
+    return (
+      <Dialog open={open} onOpenChange={(isOpen) => !isOpen && handleTableSelectionDone()}>
+        <DialogContent className="sm:max-w-[560px] max-h-[85vh] flex flex-col gap-4" showCloseButton>
+          <DialogHeader>
+            <DialogTitle>Tablas para JOIN y datos</DialogTitle>
+            <DialogDescription>
+              Seleccioná las tablas de &quot;{connectionNameCreated}&quot; que vas a usar para hacer JOIN y extraer datos.
+            </DialogDescription>
+          </DialogHeader>
+          {loadingTables ? (
+            <p className="text-sm text-muted-foreground">Cargando tablas…</p>
+          ) : tablesFromMetadata.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No se encontraron tablas o el tipo de conexión no soporta listado aún.</p>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={selectAllTables}>
+                  Seleccionar todas
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={deselectAllTables}>
+                  Quitar todas
+                </Button>
+              </div>
+              <div className="border rounded-md overflow-auto max-h-[320px] p-2 space-y-1">
+                {tablesFromMetadata.map((t) => {
+                  const key = `${t.schema}.${t.name}`;
+                  const qualified = `${t.schema}.${t.name}`;
+                  return (
+                    <label
+                      key={key}
+                      className={cn(
+                        "flex items-center gap-2 py-2 px-2 rounded-md cursor-pointer hover:bg-muted/60",
+                        selectedTableKeys.has(key) && "bg-muted/80"
+                      )}
+                    >
+                      <Checkbox
+                        checked={selectedTableKeys.has(key)}
+                        onCheckedChange={() => toggleTable(key)}
+                      />
+                      <span className="text-sm font-medium">{qualified}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {selectedTableKeys.size} de {tablesFromMetadata.length} tablas seleccionadas. Estas tablas estarán disponibles para JOIN y como fuente de datos en el ETL.
+              </p>
+            </>
+          )}
+          <div className="flex justify-end">
+            <Button onClick={handleTableSelectionDone}>Listo</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   // If permissions mode is active, we render a modified version of the share modal CONTENT
   // OR we simply render the ShareConnectionModal on top? 
