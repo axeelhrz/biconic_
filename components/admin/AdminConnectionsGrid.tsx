@@ -55,7 +55,8 @@ export default function AdminConnectionsGrid({
           .from("connections")
           .select(
             "id, name, type, db_host, db_name, updated_at, original_file_name, client_id, user_id"
-          );
+          )
+          .order("created_at", { ascending: false });
 
         if (error) {
           console.error("[AdminGrid] ❌ Error en query connections:", error);
@@ -126,6 +127,7 @@ export default function AdminConnectionsGrid({
             case "mysql": return "MySQL";
             case "postgres":
             case "postgresql": return "PostgreSQL";
+            case "firebird": return "Firebird";
             case "excel_file":
             case "excel": return "Excel";
             default: return t || "Desconocido";

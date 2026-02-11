@@ -102,7 +102,7 @@ export default function AdminNewConnectionDialog({
       setCreatedConnectionId(data.data.id);
       setConnectionNameCreated(values.connectionName);
       setShowTableSelection(true);
-      onCreated?.();
+      // onCreated se llama al hacer clic en "Listo" para que la tabla se refresque entonces
     } catch (err: any) {
       toast.error(err?.message || "Error al crear la conexión.");
     } finally {
@@ -307,6 +307,7 @@ export default function AdminNewConnectionDialog({
   const deselectAllTables = () => setSelectedTableKeys(new Set());
   const handleTableSelectionDone = () => {
     setShowTableSelection(false);
+    onCreated?.(); // Refrescar lista de conexiones para que aparezca la nueva al principio
     handleOpenChange(false);
   };
 
