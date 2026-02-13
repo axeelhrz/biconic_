@@ -274,6 +274,7 @@ export function AddMetricConfigForm({
                   value={agg.dimension || ""}
                   onChange={(v) => updateAgg({ dimension: v })}
                   etlData={etlData}
+                  dataSourceId={form.dataSourceId}
                   fieldType="all"
                   placeholder="Campo..."
                 />
@@ -282,6 +283,7 @@ export function AddMetricConfigForm({
                   value={agg.dimension2 || ""}
                   onChange={(v) => updateAgg({ dimension2: v || undefined })}
                   etlData={etlData}
+                  dataSourceId={form.dataSourceId}
                   fieldType="all"
                   placeholder="Ninguna..."
                 />
@@ -302,7 +304,7 @@ export function AddMetricConfigForm({
                   </select>
                 </div>
                 {(agg.cumulative === "ytd" || agg.comparePeriod) && (
-                  <AdminFieldSelector label="Columna de fecha (YTD / comparación)" value={agg.dateDimension || ""} onChange={(v) => updateAgg({ dateDimension: v || undefined })} etlData={etlData} fieldType="all" placeholder="Campo fecha..." />
+                  <AdminFieldSelector label="Columna de fecha (YTD / comparación)" value={agg.dateDimension || ""} onChange={(v) => updateAgg({ dateDimension: v || undefined })} etlData={etlData} dataSourceId={form.dataSourceId} fieldType="all" placeholder="Campo fecha..." />
                 )}
                 <div>
                   <div className="flex items-center justify-between mb-2">
@@ -324,7 +326,7 @@ export function AddMetricConfigForm({
                         </div>
                         {m.func !== "FORMULA" ? (
                           <>
-                            <AdminFieldSelector label="" value={m.field} onChange={(v) => updateMetric(i, { field: v })} etlData={etlData} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." className="mb-0" />
+                            <AdminFieldSelector label="" value={m.field} onChange={(v) => updateMetric(i, { field: v })} etlData={etlData} dataSourceId={form.dataSourceId} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." className="mb-0" />
                             <div className="space-y-1 text-[11px]">
                               <span className="text-[var(--studio-fg-muted)]">Solo cuando:</span>
                               <div className="grid grid-cols-3 gap-1">

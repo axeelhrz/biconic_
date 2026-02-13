@@ -62,6 +62,8 @@ export type MetricConfigWidget = {
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
   excludeGlobalFilters?: boolean;
+  /** ID de la fuente de datos cuando el dashboard tiene múltiples ETLs */
+  dataSourceId?: string | null;
 };
 
 const CHART_TYPES: { value: string; label: string }[] = [
@@ -111,7 +113,11 @@ export function MetricConfigPanel({
   const agg = widget.aggregationConfig || { enabled: false, metrics: [] };
   const filters = agg.filters || [];
   const metrics = agg.metrics || [];
-  const fields = etlData?.fields?.all || [];
+  const sources = etlData?.dataSources;
+  const selectedSource = sources?.find(
+    (s) => s.id === (widget.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id)
+  );
+  const fields = selectedSource?.fields?.all ?? etlData?.fields?.all ?? [];
 
   const updateAgg = (patch: Partial<AggregationConfigEdit>) => {
     onUpdate({
@@ -280,6 +286,7 @@ export function MetricConfigPanel({
                         value={agg.dimension || ""}
                         onChange={(v) => updateAgg({ dimension: v })}
                         etlData={etlData}
+                        dataSourceId={widget.dataSourceId}
                         fieldType="all"
                         placeholder="Campo..."
                       />
@@ -288,6 +295,7 @@ export function MetricConfigPanel({
                         value={agg.dimension2 || ""}
                         onChange={(v) => updateAgg({ dimension2: v || undefined })}
                         etlData={etlData}
+                        dataSourceId={widget.dataSourceId}
                         fieldType="all"
                         placeholder="Ninguna..."
                       />
@@ -309,6 +317,7 @@ export function MetricConfigPanel({
                           value={agg.dateDimension || ""}
                           onChange={(v) => updateAgg({ dateDimension: v || undefined })}
                           etlData={etlData}
+                          dataSourceId={widget.dataSourceId}
                           fieldType="all"
                           placeholder="Campo fecha..."
                         />
@@ -356,6 +365,7 @@ export function MetricConfigPanel({
                                     value={m.field}
                                     onChange={(v) => updateMetric(i, { field: v })}
                                     etlData={etlData}
+                                    dataSourceId={widget.dataSourceId}
                                     fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"}
                                     placeholder="Campo..."
                                     className="mb-0"
