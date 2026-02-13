@@ -366,9 +366,10 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
       );
 
       const supabase = createClient();
-      const etlId = etlData?.etl?.id;
+      // Usar la fuente del widget (dataSourceId/etlId) si está definida; si no, la fuente principal del dashboard
+      const etlId = widget.source?.etlId ?? etlData?.etl?.id;
       if (!etlId) {
-        toast.error("No hay un ETL asociado a este dashboard");
+        toast.error("No hay un ETL asociado a este dashboard o al widget");
         setWidgets((prev) =>
           prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w))
         );

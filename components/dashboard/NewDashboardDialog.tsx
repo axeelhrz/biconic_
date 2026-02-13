@@ -14,13 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectOption } from "@/components/ui/Select";
-import { useForm, Controller } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { toast } from "sonner";
+import { Check } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface NewDashboardFormData {
   name: string;
-  etl_id: string;
 }
 
 interface ETL {
@@ -38,20 +38,25 @@ export default function NewDashboardDialog({ children }: NewDashboardDialogProps
   const [etls, setEtls] = useState<ETL[]>([]);
   const [loading, setLoading] = useState(false);
   const [etlsLoading, setEtlsLoading] = useState(false);
+  const [selectedEtlIds, setSelectedEtlIds] = useState<string[]>([]);
   const router = useRouter();
 
   const {
     register,
     handleSubmit,
     reset,
-    control,
     formState: { errors },
   } = useForm<NewDashboardFormData>({
     defaultValues: {
       name: "",
-      etl_id: "",
     },
   });
+
+  const toggleEtl = (etlId: string) => {
+    setSelectedEtlIds((prev) =>
+      prev.includes(etlId) ? prev.filter((id) => id !== etlId) : [...prev, etlId]
+    );
+  };
 
   // Fetch ETLs when dialog opens
   useEffect(() => {
@@ -96,14 +101,13 @@ export default function NewDashboardDialog({ children }: NewDashboardDialogProps
   const onSubmit = async (data: NewDashboardFormData) => {
     try {
       setLoading(true);
-      
-      // Validate that we have an ETL selected
-      if (!data.etl_id || data.etl_id.trim() === "") {
-        toast.error("Debes seleccionar un ETL");
+
+      if (selectedEtlIds.length === 0) {
+        toast.error("Debes seleccionar al menos un ETL");
         setLoading(false);
         return;
       }
-      
+
       const response = await fetch("/api/dashboard", {
         method: "POST",
         headers: {
@@ -111,7 +115,7 @@ export default function NewDashboardDialog({ children }: NewDashboardDialogProps
         },
         body: JSON.stringify({
           name: data.name,
-          etl_id: data.etl_id,
+          etl_ids: selectedEtlIds,
         }),
       });
 
@@ -137,14 +141,9 @@ export default function NewDashboardDialog({ children }: NewDashboardDialogProps
     setOpen(newOpen);
     if (!newOpen) {
       reset();
+      setSelectedEtlIds([]);
     }
   };
-
-  // Convert ETLs to select options
-  const etlOptions: SelectOption[] = etls.map((etl) => ({
-    value: etl.id,
-    label: etl.title || etl.name || `ETL ${etl.id}`,
-  }));
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -182,46 +181,44 @@ export default function NewDashboardDialog({ children }: NewDashboardDialogProps
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="etl_id" className="text-sm font-medium text-gray-700">
-              ETL Asociado *
+            <label className="text-sm font-medium text-gray-700">
+              ETLs asociados (métricas y datos) *
             </label>
             {etlsLoading ? (
-              <div className="h-10 w-full rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center">
+              <div className="min-h-[120px] w-full rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center">
                 <span className="text-sm text-gray-500">Cargando ETLs...</span>
               </div>
-            ) : etlOptions.length === 0 ? (
-              <div className="h-10 w-full rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center">
+            ) : etls.length === 0 ? (
+              <div className="min-h-[120px] w-full rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center">
                 <span className="text-sm text-gray-500">No hay ETLs disponibles</span>
               </div>
             ) : (
-              <Controller
-                name="etl_id"
-                control={control}
-                rules={{ 
-                  required: "Debes seleccionar un ETL",
-                  validate: (value) => {
-                    if (!value || value.trim() === "") {
-                      return "Debes seleccionar un ETL";
-                    }
-                    return true;
-                  }
-                }}
-                render={({ field }) => (
-                  <Select
-                    value={field.value || ""}
-                    onChange={(value: string) => {
-                      field.onChange(value);
-                    }}
-                    options={etlOptions}
-                    placeholder="Selecciona un ETL"
-                    className={errors.etl_id ? "border-red-500" : ""}
-                    name={field.name}
-                  />
-                )}
-              />
+              <div className="max-h-[200px] overflow-y-auto rounded-lg border border-gray-200 p-2 space-y-1">
+                {etls.map((etl) => {
+                  const selected = selectedEtlIds.includes(etl.id);
+                  return (
+                    <div
+                      key={etl.id}
+                      onClick={() => toggleEtl(etl.id)}
+                      className={cn(
+                        "flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors",
+                        selected && "bg-emerald-50 font-medium text-emerald-800"
+                      )}
+                    >
+                      <span>{etl.title || etl.name || `ETL ${etl.id}`}</span>
+                      {selected && <Check className="h-4 w-4 text-emerald-600" />}
+                    </div>
+                  );
+                })}
+              </div>
             )}
-            {errors.etl_id && (
-              <p className="text-sm text-red-500">{errors.etl_id.message}</p>
+            {selectedEtlIds.length > 0 && (
+              <p className="text-xs text-gray-500">
+                {selectedEtlIds.length} fuente(s) seleccionada(s). Métricas y datos se nutrirán de estos ETLs.
+              </p>
+            )}
+            {selectedEtlIds.length === 0 && !etlsLoading && etls.length > 0 && (
+              <p className="text-sm text-amber-600">Selecciona al menos un ETL</p>
             )}
           </div>
 
@@ -236,7 +233,7 @@ export default function NewDashboardDialog({ children }: NewDashboardDialogProps
             </Button>
             <Button
               type="submit"
-              disabled={loading || etlsLoading || etlOptions.length === 0}
+              disabled={loading || etlsLoading || etls.length === 0 || selectedEtlIds.length === 0}
               className="bg-emerald-500 hover:bg-emerald-600"
             >
               {loading ? "Creando..." : "Crear Dashboard"}

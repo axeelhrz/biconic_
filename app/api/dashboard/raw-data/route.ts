@@ -81,7 +81,8 @@ export async function POST(req: NextRequest) {
     if (!session)
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    if (!body.tableName || !body.tableName.startsWith("etl_output.")) {
+    const allowedPrefixes = ["etl_output.", "public."];
+    if (!body.tableName || !allowedPrefixes.some((p) => body.tableName.startsWith(p))) {
       throw new Error("Nombre de tabla inválido o no permitido.");
     }
 

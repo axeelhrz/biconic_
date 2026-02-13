@@ -87,7 +87,8 @@ export async function POST(req: NextRequest) {
       filtersCount: body.filters?.length || 0,
     });
 
-    if (!body.tableName || !body.tableName.startsWith("etl_output.")) {
+    const allowedPrefixes = ["etl_output.", "public."];
+    if (!body.tableName || !allowedPrefixes.some((p) => body.tableName.startsWith(p))) {
       console.error(
         "[distinct-values API] Invalid table name:",
         body.tableName
