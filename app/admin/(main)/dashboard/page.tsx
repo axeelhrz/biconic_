@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import AdminDashboardGrid from "@/components/admin/AdminDashboardGrid";
 import { Search, Plus } from "lucide-react";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { CreateDashboardDialog } from "./CreateDashboardDialog";
 import { ClientFilter } from "@/components/admin/dashboard/ClientFilter";
 
-export default function AdminDashboardPage() {
+function AdminDashboardContent() {
   const searchParams = useSearchParams();
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"todos" | "publicados" | "borradores">(
@@ -108,5 +108,31 @@ export default function AdminDashboardPage() {
         basePath="/admin/dashboard"
       />
     </div>
+  );
+}
+
+export default function AdminDashboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex w-full flex-col gap-8 p-8">
+          <div className="h-10 w-48 animate-pulse rounded bg-[var(--platform-surface-hover)]" />
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="h-[200px] animate-pulse rounded-xl border"
+                style={{
+                  background: "var(--platform-surface)",
+                  borderColor: "var(--platform-border)",
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      }
+    >
+      <AdminDashboardContent />
+    </Suspense>
   );
 }
