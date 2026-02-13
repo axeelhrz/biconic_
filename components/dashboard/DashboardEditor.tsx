@@ -1638,12 +1638,16 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
               )}
               {etlData && (
                 <div className="space-y-2">
-                  <div className="text-xs text-green-600">
-                    ✓ ETL: {etlData.etl.title || etlData.etl.name}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {etlData.etlData.rowCount} filas
-                  </div>
+                  {etlData.etl && (
+                    <div className="text-xs text-green-600">
+                      ✓ ETL: {etlData.etl.title || etlData.etl.name}
+                    </div>
+                  )}
+                  {etlData.etlData != null && (
+                    <div className="text-xs text-gray-500">
+                      {etlData.etlData.rowCount} filas
+                    </div>
+                  )}
                   <div className="text-xs text-gray-500">
                     {etlData.fields.all.length} campos disponibles
                   </div>
@@ -3579,7 +3583,7 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                             field: value,
                           },
                           // Asegurar que el widget tenga la fuente de datos configurada para que fetchDistinctOptions funcione
-                          source: etlData
+                          source: etlData?.etl
                             ? {
                                 table: etlData.etl.name,
                                 etlId: etlData.etl.id,
@@ -3821,7 +3825,7 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                   <div className="font-medium text-sm text-gray-700">
                     Datos del ETL
                   </div>
-                  {etlData && (
+                  {etlData?.etl && (
                     <div className="p-2 rounded-lg bg-green-50 text-xs text-green-700">
                       ✓ Conectado a {etlData.etl.name}
                     </div>
