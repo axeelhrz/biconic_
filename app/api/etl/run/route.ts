@@ -463,7 +463,8 @@ async function executeEtlPipeline(
             ? body!.filter.columns.map((c) => `"${(c || "").replace(/"/g, '""')}"`).join(", ")
             : "*";
         const { clause, params } = buildWhereClauseFirebird(body!.filter?.conditions || []);
-        const baseSql = `SELECT ${cols} FROM ${tablePart} ${clause}`;
+        // Firebird 2.x/3.x: usar FIRST/SKIP (OFFSET/FETCH no está en 2.x y puede dar error -104)
+        const baseSelect = `SELECT ${cols} FROM ${tablePart} ${clause}`;
         const Firebird = require("node-firebird");
         const opts = {
           host: conn.db_host || "localhost",
@@ -483,9 +484,10 @@ async function executeEtlPipeline(
             });
           });
           for (;;) {
-            const sql = offset === 0
-              ? `${baseSql} FETCH FIRST ${pageSize} ROWS ONLY`
-              : `${baseSql} OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY`;
+            const sql =
+              offset === 0
+                ? `SELECT FIRST ${pageSize} ${cols} FROM ${tablePart} ${clause}`
+                : `SELECT FIRST ${pageSize} SKIP ${offset} ${cols} FROM ${tablePart} ${clause}`;
             const rows = await new Promise<any[]>((resolve, reject) => {
               db.query(sql, params, (err: Error | null, r: any[]) => {
                 if (err) reject(err);
