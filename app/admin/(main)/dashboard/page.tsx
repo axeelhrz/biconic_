@@ -79,7 +79,7 @@ function AdminDashboardContent() {
                 className="rounded-full px-4 py-1.5 text-sm font-medium transition-colors"
                 style={{
                   background: filter === f ? "var(--platform-accent)" : "transparent",
-                  color: filter === f ? "#08080b" : "var(--platform-fg-muted)",
+                  color: filter === f ? "var(--platform-accent-fg)" : "var(--platform-fg-muted)",
                 }}
               >
                 {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -90,8 +90,8 @@ function AdminDashboardContent() {
           {/* Botón Crear */}
           <Button
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 rounded-full px-6 text-[#08080b] font-medium hover:opacity-90"
-            style={{ background: "var(--platform-accent)" }}
+            className="flex items-center gap-2 rounded-full px-6 font-medium hover:opacity-90"
+            style={{ color: "var(--platform-accent-fg)", background: "var(--platform-accent)" }}
           >
             <Plus className="h-5 w-5" />
             <span className="hidden xl:inline">Crear Dashboard</span>

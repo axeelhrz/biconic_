@@ -4,54 +4,68 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ═══ Tema Biconic: negro + azulado + verdoso (como el Studio y el logo) ═══ */
+/* ═══ Paleta Biconic: #23E3B4, #40EF8E, #08CDEF, #02B8D1, #ECECEC, degradado, #00030A ═══ */
 :root {
-  /* Paleta oscura */
-  --platform-bg: #08080b;
-  --platform-bg-elevated: #0e0e12;
-  --platform-surface: #141419;
-  --platform-surface-hover: #1a1a20;
-  --platform-fg: #f4f4f5;
-  --platform-fg-muted: #a1a1aa;
-  --platform-muted: #71717a;
-  --platform-border: rgba(255, 255, 255, 0.06);
-  --platform-border-strong: rgba(255, 255, 255, 0.1);
-  /* Acentos: cian (azulado) y verde (logo Biconic) */
-  --platform-accent: #22d3ee;
-  --platform-accent-dim: rgba(34, 211, 238, 0.15);
-  --platform-success: #34d399;
-  --platform-success-dim: rgba(52, 211, 153, 0.15);
+  /* Colores de la paleta */
+  --biconic-mint: #23E3B4;
+  --biconic-green: #40EF8E;
+  --biconic-cyan: #08CDEF;
+  --biconic-teal: #02B8D1;
+  --biconic-light: #ECECEC;
+  --biconic-dark: #00030A;
+
+  /* Fondo y superficies (base #00030A) */
+  --platform-bg: #00030A;
+  --platform-bg-elevated: #050a12;
+  --platform-surface: #0a0f18;
+  --platform-surface-hover: #0f1620;
+  /* Texto: gris claro de la paleta */
+  --platform-fg: #ECECEC;
+  --platform-fg-muted: #a0b0b8;
+  --platform-muted: #6b7c85;
+  --platform-border: rgba(236, 236, 236, 0.08);
+  --platform-border-strong: rgba(236, 236, 236, 0.14);
+  /* Botones y acento: verdoso (#23E3B4, #40EF8E). Texto sobre acento: oscuro para contraste */
+  --platform-accent: #23E3B4;
+  --platform-accent-dim: rgba(35, 227, 180, 0.18);
+  --platform-accent-fg: #00030A;
+  --platform-success: #40EF8E;
+  --platform-success-dim: rgba(64, 239, 142, 0.18);
   --platform-warning: #fbbf24;
   --platform-danger: #f87171;
   --platform-font: "Plus Jakarta Sans", system-ui, sans-serif;
+
+  /* Degradado de la paleta */
+  --platform-gradient: linear-gradient(135deg, #23E3B4 0%, #40EF8E 35%, #08CDEF 65%, #02B8D1 100%);
+  --platform-gradient-vertical: linear-gradient(180deg, #23E3B4 0%, #08CDEF 50%, #02B8D1 100%);
 }
 
 @layer base {
   :root {
-    --background: 240 6% 4%;
-    --foreground: 240 5% 96%;
-    --card: 240 6% 6%;
-    --card-foreground: 240 5% 96%;
-    --popover: 240 6% 7%;
-    --popover-foreground: 240 5% 96%;
-    --primary: 187 85% 53%;
-    --primary-foreground: 240 6% 4%;
-    --secondary: 240 5% 15%;
-    --secondary-foreground: 240 5% 96%;
-    --muted: 240 4% 18%;
-    --muted-foreground: 240 4% 64%;
-    --accent: 187 85% 53%;
-    --accent-foreground: 240 6% 4%;
+    --background: 222 47% 2%;
+    --foreground: 210 14% 93%;
+    --card: 222 30% 4%;
+    --card-foreground: 210 14% 93%;
+    --popover: 222 30% 5%;
+    --popover-foreground: 210 14% 93%;
+    --primary: 165 76% 55%;
+    --primary-foreground: 222 47% 2%;
+    --secondary: 222 20% 10%;
+    --secondary-foreground: 210 14% 93%;
+    --muted: 222 15% 14%;
+    --muted-foreground: 210 10% 55%;
+    --accent: 165 76% 55%;
+    --accent-foreground: 222 47% 2%;
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 4% 18%;
-    --input: 240 4% 18%;
-    --ring: 187 85% 53%;
-    --chart-1: 187 85% 53%;
-    --chart-2: 160 84% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
+    --border: 210 14% 18%;
+    --input: 210 14% 18%;
+    --ring: 165 76% 55%;
+    --chart-1: 165 76% 55%;
+    --chart-2: 142 84% 59%;
+    --chart-3: 191 90% 48%;
+    --chart-4: 188 98% 41%;
+    --chart-5: 43 74% 66%;
     --radius: 0.5rem;
   }
 }
@@ -75,24 +89,20 @@
 
 .custom-gradient {
   background-image: linear-gradient(
-    13.84deg,
-    #24767e 3.11%,
-    #245a5c 21.12%,
-    #243c3d 36.23%,
-    #1d2329 52.79%,
-    #15161c 70.42%
+    135deg,
+    #00030A 0%,
+    #050a14 25%,
+    #0a1220 50%,
+    #081820 75%,
+    #020d12 100%
   );
 }
 
 .custom-gradient-text {
-  background-image: linear-gradient(
-    90.59deg,
-    #26e3b1 -8.88%,
-    #32e99e 12.81%,
-    #29d9a7 40.22%,
-    #10c0c6 70.01%,
-    #0dc7e7 100.04%
-  );
+  background-image: var(--platform-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .glass-card {

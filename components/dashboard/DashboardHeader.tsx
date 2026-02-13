@@ -119,8 +119,8 @@ export default function DashboardHeader() {
         className="flex items-center gap-3 text-2xl font-bold italic no-underline"
         style={{ color: "var(--platform-fg)" }}
       >
-        <div className="relative w-[42px] h-5 bg-gradient-to-r from-[#23E3B4] via-[#40EF8E] to-[#22d3ee] rounded-[10px]">
-          <div className="absolute top-1/2 left-5 w-3.5 h-3.5 rounded-full -translate-y-1/2 bg-[#08080b]"></div>
+        <div className="relative w-[42px] h-5 bg-gradient-to-r from-[#23E3B4] via-[#40EF8E] to-[#08CDEF] rounded-[10px]">
+          <div className="absolute top-1/2 left-5 w-3.5 h-3.5 rounded-full -translate-y-1/2 bg-[#00030A]"></div>
         </div>
         <span>biconic</span>
       </Link>
@@ -132,7 +132,7 @@ export default function DashboardHeader() {
           const baseClasses =
             "px-4 py-2 text-sm font-normal rounded-full transition-colors duration-300";
           const activeClasses =
-            "text-[#08080b] font-medium bg-[var(--platform-accent)] hover:opacity-90";
+            "text-[var(--platform-accent-fg)] font-medium bg-[var(--platform-accent)] hover:opacity-90";
           const inactiveClasses =
             "text-[var(--platform-fg-muted)] hover:text-[var(--platform-accent)] hover:bg-[var(--platform-accent-dim)]";
 

@@ -137,7 +137,8 @@ export function CreateEtlDialog({ open, onOpenChange }: CreateEtlDialogProps) {
           <Button
             onClick={handleCreate}
             disabled={!selectedClientId || creating}
-            className="bg-[#0F5F4C] hover:bg-[#0b4638]"
+            className="hover:opacity-90"
+            style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
           >
             {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Crear y Continuar

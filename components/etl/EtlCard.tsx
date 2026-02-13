@@ -174,8 +174,8 @@ export default function EtlCard({
       <div className="flex items-center justify-end gap-2.5">
         <button
           type="button"
-          className="flex h-[34px] items-center justify-center gap-2 rounded-full px-3 text-sm font-medium text-[#08080b] hover:opacity-90"
-          style={{ background: "var(--platform-accent)" }}
+          className="flex h-[34px] items-center justify-center gap-2 rounded-full px-3 text-sm font-medium hover:opacity-90"
+          style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
           onClick={() => router.push(`${basePath}/${etl.id}?run=1`)}
         >
           <PlusIcon className="h-4 w-4" />
