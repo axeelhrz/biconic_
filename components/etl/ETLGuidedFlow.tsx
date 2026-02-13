@@ -217,7 +217,7 @@ export default function ETLGuidedFlow({ etlId, connections, initialStep = "orige
                 <option value="">Seleccionar conexión…</option>
                 {connections.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.title || c.name || `Conexión ${c.id}`}
+                    {c.title || `Conexión ${c.id}`}
                   </option>
                 ))}
               </select>
