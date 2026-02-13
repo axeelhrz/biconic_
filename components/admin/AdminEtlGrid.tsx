@@ -87,7 +87,7 @@ export default function AdminEtlGrid({
       const res = await Promise.race([adminPromise, timeoutPromise]);
       if (res.ok && res.data) {
         const rows = (res.data ?? []) as SupabaseEtlRow[];
-        const owners = res.owners ?? {};
+        const owners: Record<string, string | null> = res.owners ?? {};
         const mapped: Etl[] = rows.map((row) => {
           const status: Etl["status"] =
             row.status === "Publicado" || row.status === "Borrador"
