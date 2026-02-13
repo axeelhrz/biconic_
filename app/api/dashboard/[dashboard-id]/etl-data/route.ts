@@ -105,18 +105,14 @@ async function resolveEtlToTableAndFields(
 
   const schema = latestRun.destination_schema || "etl_output";
   const tableName = latestRun.destination_table_name;
-  const { count } = await supabase
-    .schema(schema as "public" | "etl_output")
+  const schemaClient = supabase.schema(schema as "public" | "etl_output") as any;
+  const { count } = await schemaClient
     .from(tableName)
     .select("*", { count: "exact", head: true });
   const rowCount = count ?? 0;
   let sampleData: any[] = [];
   if (rowCount > 0) {
-    const { data } = await supabase
-      .schema(schema as "public" | "etl_output")
-      .from(tableName)
-      .select("*")
-      .limit(1);
+    const { data } = await schemaClient.from(tableName).select("*").limit(1);
     sampleData = data || [];
   }
   return {
