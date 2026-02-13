@@ -168,9 +168,7 @@ export default function ETLGuidedFlow({ etlId, connections, initialStep = "orige
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
   const connectionName =
-    connections.find((c) => String(c.id) === String(connectionId))?.title ||
-    connections.find((c) => String(c.id) === String(connectionId))?.name ||
-    "";
+    connections.find((c) => String(c.id) === String(connectionId))?.title ?? "";
 
   return (
     <div className="flex flex-col h-full rounded-2xl overflow-hidden" style={{ background: "var(--platform-surface)", border: "1px solid var(--platform-border)" }}>
