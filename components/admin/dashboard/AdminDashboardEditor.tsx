@@ -1690,12 +1690,16 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
               )}
               {etlData && (
                 <div className="space-y-2">
-                  <div className="text-xs text-green-600">
-                    ✓ ETL: {etlData.etl.title || etlData.etl.name}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {etlData.etlData.rowCount} filas
-                  </div>
+                  {etlData.etl && (
+                    <div className="text-xs text-green-600">
+                      ✓ ETL: {etlData.etl.title || etlData.etl.name}
+                    </div>
+                  )}
+                  {etlData.etlData != null && (
+                    <div className="text-xs text-gray-500">
+                      {etlData.etlData.rowCount} filas
+                    </div>
+                  )}
                   <div className="text-xs text-gray-500">
                     {etlData.fields.all.length} campos disponibles
                   </div>
@@ -3485,7 +3489,7 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
                             field: value,
                           },
                           // Asegurar que el widget tenga la fuente de datos configurada para que fetchDistinctOptions funcione
-                          source: etlData
+                          source: etlData?.etl
                             ? {
                                 table: etlData.etl.name,
                                 etlId: etlData.etl.id,
@@ -3737,7 +3741,7 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
                     </div>
                   )}
 
-                  {!etlError && etlData && (
+                  {!etlError && etlData?.etl && (
                     <div className="p-2 rounded-lg bg-green-50 text-xs text-green-700 border border-green-100 flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-green-500" />
                       <span
