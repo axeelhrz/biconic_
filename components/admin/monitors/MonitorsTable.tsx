@@ -16,7 +16,7 @@ import { AlertCircle, CheckCircle2, CircleDashed } from "lucide-react";
 type LogEntry = {
   id: string;
   etl_id: string | null;
-  status: "started" | "completed" | "failed";
+  status: "started" | "running" | "completed" | "failed";
   started_at: string;
   completed_at: string | null;
   rows_processed: number | null;
