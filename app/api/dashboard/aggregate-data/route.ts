@@ -94,7 +94,30 @@ const normalizeStr = (str: string) =>
 
 export async function POST(req: NextRequest) {
   try {
-    const body: AggregationRequest = await req.json();
+    let body: AggregationRequest;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Cuerpo de la petición inválido (JSON esperado)" },
+        { status: 400 }
+      );
+    }
+
+    if (!body || typeof body !== "object") {
+      return NextResponse.json(
+        { error: "Cuerpo de la petición inválido" },
+        { status: 400 }
+      );
+    }
+
+    if (!Array.isArray(body.metrics) || body.metrics.length === 0) {
+      return NextResponse.json(
+        { error: "Se requiere al menos una métrica (metrics)" },
+        { status: 400 }
+      );
+    }
+
     const cookieStore = await cookies();
 
     const supabase = createServerClient<Database>(
@@ -124,11 +147,23 @@ export async function POST(req: NextRequest) {
 
     // Permitir etl_output.* y public.* (legacy etl_data_warehouse u otras tablas)
     const allowedPrefixes = ["etl_output.", "public."];
-    if (!body.tableName || !allowedPrefixes.some((p) => body.tableName.startsWith(p))) {
-      throw new Error("Nombre de tabla inválido o no permitido. Use esquema etl_output o public.");
+    if (!body.tableName || typeof body.tableName !== "string" || !allowedPrefixes.some((p) => body.tableName.startsWith(p))) {
+      return NextResponse.json(
+        { error: "Nombre de tabla inválido o no permitido. Use esquema etl_output o public." },
+        { status: 400 }
+      );
     }
 
-    const [schema, table] = body.tableName.split(".");
+    // Soporte para nombres de tabla con punto: solo dividir en el primer "."
+    const dotIdx = body.tableName.indexOf(".");
+    const schema = body.tableName.substring(0, dotIdx);
+    const table = body.tableName.substring(dotIdx + 1);
+    if (!table) {
+      return NextResponse.json(
+        { error: "Formato de tabla inválido (debe ser esquema.nombre_tabla)" },
+        { status: 400 }
+      );
+    }
 
     // Helper: condición WHEN para métrica (solo la parte "campo op valor")
     const buildWhenClause = (cond: MetricCondition): string => {
@@ -210,6 +245,12 @@ export async function POST(req: NextRequest) {
     const selectClause = [dimensionSelectClause, metricClauses]
       .filter(Boolean)
       .join(", ");
+    if (!selectClause.trim()) {
+      return NextResponse.json(
+        { error: "La consulta debe incluir al menos una dimensión o una métrica base (no solo fórmulas)." },
+        { status: 400 }
+      );
+    }
     let query = `SELECT ${selectClause} FROM "${schema}"."${table}"`;
 
     // 3. Filtros
@@ -296,7 +337,9 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Order By (dimensión o métrica por alias interno)
-    if (body.orderBy) {
+    if (body.orderBy?.field) {
+      const dir = (body.orderBy.direction || "DESC").toString().toUpperCase();
+      const safeDir = dir === "ASC" ? "ASC" : "DESC";
       let orderByField = `"${body.orderBy.field.replace(/"/g, '""')}"`;
       const requestedSortNormalized = normalizeStr(body.orderBy.field);
       const dimMatch = dimList.find((d) => normalizeStr(d) === requestedSortNormalized);
@@ -313,7 +356,7 @@ export async function POST(req: NextRequest) {
         if (matchedMetric)
           orderByField = `"${(matchedMetric as any).internalAlias}"`;
       }
-      query += ` ORDER BY ${orderByField} ${body.orderBy.direction.toUpperCase()}`;
+      query += ` ORDER BY ${orderByField} ${safeDir}`;
     }
 
     if (body.limit) {
@@ -363,7 +406,14 @@ export async function POST(req: NextRequest) {
       sql_query: query,
     });
 
-    if (error) throw new Error(error.message);
+    if (error) {
+      const msg = error.message || String(error);
+      console.error("[aggregate-data] execute_sql error:", msg, "Query:", query.slice(0, 200));
+      return NextResponse.json(
+        { error: "Error al ejecutar la agregación: " + msg },
+        { status: 500 }
+      );
+    }
 
     let results = data || [];
 
@@ -440,7 +490,11 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(mappedResults);
   } catch (err: any) {
-    console.error("Error en API:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    const message = err?.message ?? String(err);
+    console.error("[aggregate-data] Error:", message, err);
+    return NextResponse.json(
+      { error: "Error en agregación: " + message },
+      { status: 500 }
+    );
   }
 }
