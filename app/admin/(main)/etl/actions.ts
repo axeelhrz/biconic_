@@ -125,7 +125,7 @@ export async function deleteEtlAdmin(etlId: string) {
   const adminClient = createServiceRoleClient();
   const { data: etl } = await adminClient
     .from("etl")
-    .select("content, output_table, layout")
+    .select("output_table, layout")
     .eq("id", etlId)
     .single();
 
@@ -133,9 +133,9 @@ export async function deleteEtlAdmin(etlId: string) {
   if (etl?.output_table) {
     targetTableName = etl.output_table;
   } else {
-    const layout = (etl as any)?.layout;
+    const layout = etl?.layout as { widgets?: { type?: string; end?: { target?: { table?: string } } }[] } | null | undefined;
     const widgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
-    const endNode = widgets.find((w: any) => w.type === "end");
+    const endNode = widgets.find((w) => w.type === "end");
     targetTableName = endNode?.end?.target?.table;
   }
 
