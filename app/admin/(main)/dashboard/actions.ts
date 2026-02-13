@@ -35,7 +35,7 @@ export async function searchClients(query: string) {
 export async function createDashboardAdmin(
   clientId: string,
   title: string = "Nuevo Dashboard",
-  etlId?: string | null
+  etlIdOrIds?: string | string[] | null
 ) {
   const supabase = await createClient();
   const {
@@ -46,12 +46,19 @@ export async function createDashboardAdmin(
     return { ok: false, error: "Unauthorized" };
   }
 
+  const etlIds = Array.isArray(etlIdOrIds)
+    ? etlIdOrIds
+    : etlIdOrIds
+    ? [etlIdOrIds]
+    : [];
+  const firstEtlId = etlIds[0] ?? null;
+
   const insertPayload: DashboardInsert = {
     client_id: clientId,
     user_id: user.id,
     title: title,
     layout: { widgets: [], zoom: 1, grid: 20 },
-    ...(etlId ? { etl_id: etlId } : {}),
+    ...(firstEtlId ? { etl_id: firstEtlId } : {}),
   };
 
   const { data, error } = await supabase
@@ -63,6 +70,18 @@ export async function createDashboardAdmin(
   if (error) {
     console.error("Error creating Dashboard:", error);
     return { ok: false, error: error.message };
+  }
+
+  if (etlIds.length > 0) {
+    const { error: srcError } = await supabase.from("dashboard_data_sources").insert(
+      etlIds.map((etl_id, i) => ({
+        dashboard_id: data.id,
+        etl_id,
+        alias: i === 0 ? "Principal" : `Fuente ${i + 1}`,
+        sort_order: i,
+      }))
+    );
+    if (srcError) console.error("Error adding dashboard_data_sources:", srcError);
   }
 
   return { ok: true, dashboardId: data.id };
@@ -120,6 +139,113 @@ export async function updateDashboardEtl(dashboardId: string, etlId: string | nu
     return { ok: false, error: error.message };
   }
 
+  return { ok: true };
+}
+
+/** Listar fuentes de datos (ETLs) del dashboard */
+export async function getDashboardDataSources(dashboardId: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Unauthorized" };
+
+  const canEdit = await verifyDashboardEditAccess(dashboardId, user.id);
+  if (!canEdit) return { ok: false, error: "Forbidden" };
+
+  const { data, error } = await supabase
+    .from("dashboard_data_sources")
+    .select("id, etl_id, alias, sort_order")
+    .eq("dashboard_id", dashboardId)
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    console.error("Error fetching dashboard data sources:", error);
+    return { ok: false, error: error.message };
+  }
+  return { ok: true, sources: data ?? [] };
+}
+
+/** Añadir una fuente de datos (ETL) al dashboard */
+export async function addDashboardDataSource(
+  dashboardId: string,
+  etlId: string,
+  alias: string = "Nueva fuente"
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Unauthorized" };
+
+  const canEdit = await verifyDashboardEditAccess(dashboardId, user.id);
+  if (!canEdit) return { ok: false, error: "Forbidden" };
+
+  const { data: existing } = await supabase
+    .from("dashboard_data_sources")
+    .select("sort_order")
+    .eq("dashboard_id", dashboardId)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const sort_order = (existing as any)?.sort_order ?? -1;
+
+  const { error } = await supabase.from("dashboard_data_sources").insert({
+    dashboard_id: dashboardId,
+    etl_id: etlId,
+    alias: alias.trim() || "Fuente",
+    sort_order: sort_order + 1,
+  });
+
+  if (error) {
+    console.error("Error adding dashboard data source:", error);
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
+}
+
+/** Quitar una fuente de datos del dashboard */
+export async function removeDashboardDataSource(dashboardId: string, sourceId: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Unauthorized" };
+
+  const canEdit = await verifyDashboardEditAccess(dashboardId, user.id);
+  if (!canEdit) return { ok: false, error: "Forbidden" };
+
+  const { error } = await supabase
+    .from("dashboard_data_sources")
+    .delete()
+    .eq("id", sourceId)
+    .eq("dashboard_id", dashboardId);
+
+  if (error) {
+    console.error("Error removing dashboard data source:", error);
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
+}
+
+/** Actualizar alias de una fuente */
+export async function updateDashboardDataSourceAlias(
+  dashboardId: string,
+  sourceId: string,
+  alias: string
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Unauthorized" };
+
+  const canEdit = await verifyDashboardEditAccess(dashboardId, user.id);
+  if (!canEdit) return { ok: false, error: "Forbidden" };
+
+  const { error } = await supabase
+    .from("dashboard_data_sources")
+    .update({ alias: alias.trim() || "Fuente" })
+    .eq("id", sourceId)
+    .eq("dashboard_id", dashboardId);
+
+  if (error) {
+    console.error("Error updating dashboard data source alias:", error);
+    return { ok: false, error: error.message };
+  }
   return { ok: true };
 }
 

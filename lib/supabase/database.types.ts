@@ -2520,6 +2520,48 @@ export type Database = {
           },
         ]
       }
+      dashboard_data_sources: {
+        Row: {
+          id: string
+          dashboard_id: string
+          etl_id: string
+          alias: string
+          sort_order: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          dashboard_id: string
+          etl_id: string
+          alias?: string
+          sort_order?: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          dashboard_id?: string
+          etl_id?: string
+          alias?: string
+          sort_order?: number
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dashboard_data_sources_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dashboard_data_sources_etl_id_fkey"
+            columns: ["etl_id"]
+            isOneToOne: false
+            referencedRelation: "etl"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dashboard_has_client_permissions: {
         Row: {
           client_member_id: string | null

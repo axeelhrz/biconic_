@@ -35,11 +35,11 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
   const [etlQuery, setEtlQuery] = useState("");
   const [etls, setEtls] = useState<{ id: string; title: string }[]>([]);
   const [loadingEtls, setLoadingEtls] = useState(false);
-  const [selectedEtlId, setSelectedEtlId] = useState<string | null>(null);
+  const [selectedEtlIds, setSelectedEtlIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
-    if (open && initialEtlId) setSelectedEtlId(initialEtlId);
+    if (open && initialEtlId) setSelectedEtlIds((prev) => (prev.includes(initialEtlId) ? prev : [...prev, initialEtlId]));
   }, [open, initialEtlId]);
 
   useEffect(() => {
@@ -64,6 +64,12 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
     return () => clearTimeout(timer);
   }, [etlQuery, open]);
 
+  const toggleEtl = (etlId: string) => {
+    setSelectedEtlIds((prev) =>
+      prev.includes(etlId) ? prev.filter((id) => id !== etlId) : [...prev, etlId]
+    );
+  };
+
   const handleCreate = async () => {
     if (!selectedClientId) return;
     try {
@@ -71,7 +77,7 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
       const res = await createDashboardAdmin(
         selectedClientId,
         "Nuevo Dashboard",
-        selectedEtlId || undefined
+        selectedEtlIds.length > 0 ? selectedEtlIds : undefined
       );
       if (!res.ok) {
         toast.error(res.error || "Error al crear Dashboard");
@@ -156,7 +162,9 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
             </div>
           </div>
           <div className="flex flex-col gap-2">
-            <Label style={{ color: "var(--platform-fg-muted)" }}>ETL (origen de datos del dashboard)</Label>
+            <Label style={{ color: "var(--platform-fg-muted)" }}>
+              Fuentes de datos (ETLs) — podés elegir varias: ventas, clientes, productos, etc.
+            </Label>
             <Input
               placeholder="Buscar ETL..."
               value={etlQuery}
@@ -180,46 +188,38 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
                 </div>
               ) : etls.length === 0 ? (
                 <p className="text-center text-sm p-2" style={{ color: "var(--platform-fg-muted)" }}>
-                  Buscá un ETL o dejá vacío para asociar después
+                  Buscá ETLs o dejá vacío para asociar después
                 </p>
               ) : (
                 <div className="flex flex-col gap-1">
-                  <div
-                    onClick={() => setSelectedEtlId(null)}
-                    className={cn(
-                      "flex cursor-pointer items-center justify-between rounded px-3 py-2 text-sm transition-colors",
-                      !selectedEtlId && "font-medium"
-                    )}
-                    style={{
-                      background: !selectedEtlId ? "var(--platform-accent-dim)" : "transparent",
-                      color: !selectedEtlId ? "var(--platform-accent)" : "var(--platform-fg-muted)",
-                    }}
-                  >
-                    <span>Ninguno (asociar después)</span>
-                    {!selectedEtlId && <Check className="h-4 w-4" />}
-                  </div>
-                  {etls.map((etl) => (
-                    <div
-                      key={etl.id}
-                      onClick={() => setSelectedEtlId(etl.id)}
-                      className={cn(
-                        "flex cursor-pointer items-center justify-between rounded px-3 py-2 text-sm transition-colors",
-                        selectedEtlId === etl.id && "font-medium"
-                      )}
-                      style={{
-                        background: selectedEtlId === etl.id ? "var(--platform-accent-dim)" : "transparent",
-                        color: selectedEtlId === etl.id ? "var(--platform-accent)" : "var(--platform-fg)",
-                      }}
-                    >
-                      <span>{etl.title || "Sin título"}</span>
-                      {selectedEtlId === etl.id && (
-                        <Check className="h-4 w-4" />
-                      )}
-                    </div>
-                  ))}
+                  {etls.map((etl) => {
+                    const selected = selectedEtlIds.includes(etl.id);
+                    return (
+                      <div
+                        key={etl.id}
+                        onClick={() => toggleEtl(etl.id)}
+                        className={cn(
+                          "flex cursor-pointer items-center justify-between rounded px-3 py-2 text-sm transition-colors",
+                          selected && "font-medium"
+                        )}
+                        style={{
+                          background: selected ? "var(--platform-accent-dim)" : "transparent",
+                          color: selected ? "var(--platform-accent)" : "var(--platform-fg)",
+                        }}
+                      >
+                        <span>{etl.title || "Sin título"}</span>
+                        {selected && <Check className="h-4 w-4" />}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
+            {selectedEtlIds.length > 0 && (
+              <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                {selectedEtlIds.length} fuente(s) seleccionada(s). En el editor podés elegir qué fuente usa cada widget.
+              </p>
+            )}
           </div>
         </div>
 

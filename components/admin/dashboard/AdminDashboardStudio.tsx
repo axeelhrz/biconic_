@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
-import { Plus } from "lucide-react";
+import { Plus, Check } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,6 +14,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { useAdminDashboardEtlData } from "@/hooks/admin/useAdminDashboardEtlData";
+import { searchEtls, addDashboardDataSource, removeDashboardDataSource } from "@/app/admin/(main)/dashboard/actions";
 import {
   type DashboardTheme,
   DEFAULT_DASHBOARD_THEME,
@@ -77,6 +79,8 @@ type StudioWidget = {
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
+  /** ID de la fuente de datos (dashboard_data_sources) cuando el dashboard tiene múltiples ETLs */
+  dataSourceId?: string | null;
   [key: string]: unknown;
 };
 
@@ -118,6 +122,12 @@ export function AdminDashboardStudio({
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [addMetricOpen, setAddMetricOpen] = useState(false);
   const [addMetricStep, setAddMetricStep] = useState<"intent" | "config">("intent");
+  const [addSourceOpen, setAddSourceOpen] = useState(false);
+  const [addSourceQuery, setAddSourceQuery] = useState("");
+  const [addSourceEtls, setAddSourceEtls] = useState<{ id: string; title: string }[]>([]);
+  const [addSourceLoading, setAddSourceLoading] = useState(false);
+  const [addSourceSaving, setAddSourceSaving] = useState(false);
+  const [addSourceSelected, setAddSourceSelected] = useState<string | null>(null);
   const [addMetricInitialIntent, setAddMetricInitialIntent] = useState<StudioIntent | "blank" | null>(null);
   const [pages, setPages] = useState<StudioPage[]>([{ id: "page-1", name: "Página 1" }]);
   const [activePageId, setActivePageId] = useState<string | null>("page-1");
@@ -207,28 +217,37 @@ export function AdminDashboardStudio({
     }
   }, [widgets, globalFilters, dashboardTheme, dashboardId, pages, activePageId]);
 
-  const getTableName = useCallback(async (): Promise<string | null> => {
-    const etlId = etlData?.etl?.id;
-    if (!etlId) return null;
-    const supabase = createClient();
-    const { data } = await supabase
-      .from("etl_runs_log")
-      .select("destination_schema, destination_table_name")
-      .eq("etl_id", etlId)
-      .eq("status", "completed")
-      .order("completed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (!data?.destination_table_name) return null;
-    const schema = (data as { destination_schema?: string }).destination_schema || "etl_output";
-    return `${schema}.${(data as { destination_table_name: string }).destination_table_name}`;
-  }, [etlData?.etl?.id]);
+  const getTableName = useCallback(
+    async (widget?: StudioWidget | null): Promise<string | null> => {
+      const sources = etlData?.dataSources;
+      if (sources?.length) {
+        const sourceId = widget?.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id;
+        const src = sources.find((s) => s.id === sourceId) ?? sources[0];
+        if (src) return `${src.schema}.${src.tableName}`;
+      }
+      const etlId = etlData?.etl?.id;
+      if (!etlId) return null;
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("etl_runs_log")
+        .select("destination_schema, destination_table_name")
+        .eq("etl_id", etlId)
+        .eq("status", "completed")
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!data?.destination_table_name) return null;
+      const schema = (data as { destination_schema?: string }).destination_schema || "etl_output";
+      return `${schema}.${(data as { destination_table_name: string }).destination_table_name}`;
+    },
+    [etlData?.etl?.id, etlData?.dataSources, etlData?.primarySourceId]
+  );
 
   const loadMetricData = useCallback(
     async (widgetId: string) => {
       const widget = widgets.find((w) => w.id === widgetId);
       if (!widget || !etlData) return;
-      const tableName = await getTableName();
+      const tableName = await getTableName(widget);
       if (!tableName) {
         toast.warning("No hay ejecución completada del ETL");
         return;
@@ -344,6 +363,49 @@ export function AdminDashboardStudio({
     [widgets, etlData, globalFilters, getTableName]
   );
 
+  useEffect(() => {
+    if (!addSourceOpen) return;
+    const t = setTimeout(() => {
+      setAddSourceLoading(true);
+      searchEtls(addSourceQuery)
+        .then(setAddSourceEtls)
+        .finally(() => setAddSourceLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [addSourceOpen, addSourceQuery]);
+
+  const handleAddDataSource = useCallback(async () => {
+    if (!addSourceSelected) return;
+    setAddSourceSaving(true);
+    try {
+      const etl = addSourceEtls.find((e) => e.id === addSourceSelected);
+      const res = await addDashboardDataSource(dashboardId, addSourceSelected, etl?.title ?? "Nueva fuente");
+      if (!res.ok) {
+        toast.error(res.error ?? "Error al añadir fuente");
+        return;
+      }
+      toast.success("Fuente añadida");
+      setAddSourceOpen(false);
+      setAddSourceSelected(null);
+      refetchEtlData();
+    } finally {
+      setAddSourceSaving(false);
+    }
+  }, [dashboardId, addSourceSelected, addSourceEtls, refetchEtlData]);
+
+  const handleRemoveDataSource = useCallback(
+    async (sourceId: string) => {
+      const res = await removeDashboardDataSource(dashboardId, sourceId);
+      if (!res.ok) {
+        toast.error(res.error ?? "Error al quitar fuente");
+        return;
+      }
+      toast.success("Fuente quitada");
+      refetchEtlData();
+    },
+    [dashboardId, refetchEtlData]
+  );
+
   const widgetsForCurrentPage = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
   const runAllMetrics = useCallback(async () => {
     const toRun = activePageId ? widgets.filter((w) => (w.pageId ?? "page-1") === activePageId) : widgets;
@@ -359,22 +421,28 @@ export function AdminDashboardStudio({
 
   const getInitialFormConfig = useCallback(
     (intentOrBlank: StudioIntent | "blank"): AddMetricFormConfig => {
-      const fields = etlData?.fields?.all || [];
+      const sources = etlData?.dataSources;
+      const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
+      const fields = sources?.length
+        ? (sources.find((s) => s.id === primaryId) ?? sources[0])?.fields?.all ?? etlData?.fields?.all ?? []
+        : etlData?.fields?.all ?? [];
       const dimension = fields[0] || "id";
       const metricField = fields.find((_, i) => i > 0) || dimension;
+      const baseAgg = {
+        enabled: true,
+        dimension,
+        metrics: [{ id: `m-${Date.now()}`, field: metricField, func: "COUNT", alias: "total" }],
+        orderBy: { field: dimension, direction: "DESC" },
+        limit: 10,
+      };
       if (intentOrBlank === "blank") {
         return {
           title: "Nueva métrica",
           type: "bar",
           gridSpan: 2,
           color: "#22d3ee",
-          aggregationConfig: {
-            enabled: true,
-            dimension,
-            metrics: [{ id: `m-${Date.now()}`, field: metricField, func: "COUNT", alias: "total" }],
-            orderBy: { field: dimension, direction: "DESC" },
-            limit: 10,
-          },
+          aggregationConfig: baseAgg,
+          dataSourceId: primaryId,
         };
       }
       const { type: chartType, title: semanticTitle } = INTENT_TO_TYPE_AND_TITLE[intentOrBlank];
@@ -383,13 +451,8 @@ export function AdminDashboardStudio({
         type: chartType,
         gridSpan: chartType === "kpi" ? 1 : 2,
         color: "#22d3ee",
-        aggregationConfig: {
-          enabled: true,
-          dimension,
-          metrics: [{ id: `m-${Date.now()}`, field: metricField, func: "COUNT", alias: "total" }],
-          orderBy: { field: dimension, direction: "DESC" },
-          limit: 10,
-        },
+        aggregationConfig: baseAgg,
+        dataSourceId: primaryId,
       };
     },
     [etlData]
@@ -417,6 +480,7 @@ export function AdminDashboardStudio({
         labelDisplayMode: config.labelDisplayMode,
         kpiSecondaryLabel: config.kpiSecondaryLabel,
         kpiSecondaryValue: config.kpiSecondaryValue,
+        dataSourceId: config.dataSourceId ?? null,
       };
       setWidgets((prev) => [...prev, newWidget]);
       setSelectedId(null);
@@ -525,6 +589,91 @@ export function AdminDashboardStudio({
         onSave={handleSave}
         onRun={runAllMetrics}
       />
+      {etlData?.dataSources && etlData.dataSources.length > 0 && (
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]">
+          <span className="text-xs font-medium text-[var(--studio-fg-muted)]">Fuentes de datos:</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {etlData.dataSources.map((s) => (
+              <span
+                key={s.id}
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
+              >
+                {s.alias} ({s.etlName})
+                <button
+                  type="button"
+                  onClick={() => handleRemoveDataSource(s.id)}
+                  className="ml-0.5 rounded p-0.5 hover:bg-[var(--studio-accent)]/20"
+                  aria-label={`Quitar ${s.alias}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <button
+              type="button"
+              onClick={() => setAddSourceOpen(true)}
+              className="text-xs font-medium text-[var(--studio-accent)] hover:underline"
+            >
+              + Añadir fuente
+            </button>
+          </div>
+        </div>
+      )}
+      <Dialog open={addSourceOpen} onOpenChange={setAddSourceOpen}>
+        <DialogContent className="sm:max-w-md border border-[var(--studio-border)]">
+          <DialogHeader>
+            <DialogTitle className="text-[var(--studio-fg)]">Añadir fuente de datos</DialogTitle>
+            <DialogDescription className="text-[var(--studio-fg-muted)]">
+              Elegí un ETL para usarlo como fuente adicional en este dashboard (ej. ventas, clientes, productos).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 space-y-2">
+            <Input
+              placeholder="Buscar ETL..."
+              value={addSourceQuery}
+              onChange={(e) => setAddSourceQuery(e.target.value)}
+              className="border border-[var(--studio-border)] bg-transparent"
+            />
+            <div className="max-h-[200px] overflow-y-auto rounded border border-[var(--studio-border)] p-2">
+              {addSourceLoading ? (
+                <div className="py-4 text-center text-sm text-[var(--studio-fg-muted)]">Buscando...</div>
+              ) : addSourceEtls.length === 0 ? (
+                <div className="py-4 text-center text-sm text-[var(--studio-fg-muted)]">No se encontraron ETLs</div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {addSourceEtls
+                    .filter((e) => !etlData?.dataSources?.some((s) => s.etlId === e.id))
+                    .map((etl) => (
+                      <button
+                        key={etl.id}
+                        type="button"
+                        onClick={() => setAddSourceSelected(etl.id)}
+                        className={cn(
+                          "flex items-center justify-between rounded px-3 py-2 text-left text-sm",
+                          addSourceSelected === etl.id && "bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
+                        )}
+                      >
+                        {etl.title}
+                        {addSourceSelected === etl.id && <Check className="h-4 w-4" />}
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setAddSourceOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleAddDataSource}
+              disabled={!addSourceSelected || addSourceSaving}
+            >
+              {addSourceSaving ? "Añadiendo..." : "Añadir"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <StudioPageTabs
         pages={pages}
         activePageId={activePageId}

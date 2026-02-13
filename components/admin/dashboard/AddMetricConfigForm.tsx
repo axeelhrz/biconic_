@@ -54,6 +54,8 @@ export type AddMetricFormConfig = {
   kpiSecondaryValue?: string;
   aggregationConfig: AggregationConfigEdit;
   excludeGlobalFilters?: boolean;
+  /** ID de la fuente de datos cuando el dashboard tiene múltiples ETLs */
+  dataSourceId?: string | null;
 };
 
 const CHART_TYPES: { value: string; label: string }[] = [
@@ -96,7 +98,9 @@ export function AddMetricConfigForm({
   const agg = form.aggregationConfig;
   const metrics = agg.metrics || [];
   const filters = agg.filters || [];
-  const fields = etlData?.fields?.all || [];
+  const sources = etlData?.dataSources;
+  const selectedSource = sources?.find((s) => s.id === (form.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id));
+  const fields = selectedSource?.fields?.all ?? etlData?.fields?.all ?? [];
 
   const updateForm = (patch: Partial<AddMetricFormConfig>) => {
     setForm((prev) => ({ ...prev, ...patch }));
@@ -183,6 +187,22 @@ export function AddMetricConfigForm({
             ))}
           </select>
         </div>
+        {sources && sources.length > 1 && (
+          <div>
+            <Label className="add-metric-label">Fuente de datos</Label>
+            <select
+              value={form.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id ?? ""}
+              onChange={(e) => updateForm({ dataSourceId: e.target.value || null })}
+              className="add-metric-select mt-1"
+            >
+              {sources.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.alias} ({s.etlName})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <Label className="add-metric-label">Columnas en grid</Label>
           <select

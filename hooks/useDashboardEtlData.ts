@@ -3,28 +3,48 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 
+export interface DashboardDataSource {
+  id: string;
+  etlId: string;
+  alias: string;
+  etlName: string;
+  schema: string;
+  tableName: string;
+  rowCount: number;
+  fields: {
+    all: string[];
+    numeric: string[];
+    string: string[];
+    date: string[];
+  };
+}
+
 export interface ETLDataResponse {
   dashboard: {
     id: string;
-    etl_id: string;
+    etl_id?: string | null;
     etl?: {
       id: string;
       title: string;
       name: string;
-    };
+    } | null;
   };
+  /** Múltiples fuentes de datos (ETLs) asociadas al dashboard (ventas, clientes, productos, etc.) */
+  dataSources?: DashboardDataSource[];
+  /** ID de la fuente principal (primera) para compatibilidad */
+  primarySourceId?: string | null;
   etl: {
     id: string;
     title: string;
     name: string;
-  };
+  } | null;
   etlData: {
     id: number;
     name: string;
     created_at: string;
     dataArray: any[];
     rowCount: number;
-  };
+  } | null;
   fields: {
     all: string[];
     numeric: string[];
