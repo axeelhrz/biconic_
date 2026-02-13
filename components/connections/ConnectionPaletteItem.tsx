@@ -35,47 +35,36 @@ export default function ConnectionPaletteItem({
     <button
       draggable
       onDragStart={onDragStart}
-      className="flex flex-col justify-center items-start p-[8px_15px] gap-[10px] w-[230px] h-[54px] bg-white border border-[#DDDDE2] rounded-[30px] cursor-grab active:cursor-grabbing hover:bg-gray-50"
+      className="w-full flex items-center gap-3 p-3 rounded-xl border cursor-grab active:cursor-grabbing transition-colors hover:opacity-90"
+      style={{
+        background: "var(--platform-surface-hover)",
+        borderColor: "var(--platform-border)",
+        color: "var(--platform-fg)",
+      }}
       title="Arrastrar al lienzo"
     >
-      <div className="flex items-center gap-2 w-[200px] h-[38px]">
-        <div className="flex justify-center items-center p-[6px] w-9 h-[38px] bg-[#B2F0FA] rounded-[20px]">
-          <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
-              fill="#0692AA"
-            />
-            <polyline points="14,2 14,8 20,8" fill="#0692AA" />
-            <line
-              x1="16"
-              y1="13"
-              x2="8"
-              y2="13"
-              stroke="#0692AA"
-              strokeWidth="2"
-            />
-            <line
-              x1="16"
-              y1="17"
-              x2="8"
-              y2="17"
-              stroke="#0692AA"
-              strokeWidth="2"
-            />
-          </svg>
+      <span
+        className="h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0"
+        style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
+      >
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14,2 14,8 20,8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+        </svg>
+      </span>
+      <div className="min-w-0 flex-1 text-left">
+        <div className="text-sm font-medium truncate" style={{ color: "var(--platform-fg)" }}>
+          {connection.name || `Conexión ${connection.id}`}
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[#00030A] text-sm truncate">
-            {connection.name || `Conexión ${connection.id}`}
-          </div>
-          <div className="text-xs text-gray-500 truncate">
-            {connection.type === "excel_file" || connection.type === "excel"
-              ? connection.original_file_name || "archivo"
-              : connection.db_host || "host desconocido"}
-            {connection.type === "excel_file" || connection.type === "excel"
-              ? ""
-              : ` · ${connection.db_name || "db"}`}
-          </div>
+        <div className="text-xs truncate" style={{ color: "var(--platform-fg-muted)" }}>
+          {connection.type === "excel_file" || connection.type === "excel"
+            ? connection.original_file_name || "archivo"
+            : connection.db_host || "host"}
+          {connection.type === "excel_file" || connection.type === "excel"
+            ? ""
+            : ` · ${connection.db_name || "db"}`}
         </div>
       </div>
     </button>

@@ -1,23 +1,26 @@
 
 "use client";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useCallback } from "react";
 import AdminEtlGrid from "@/components/admin/AdminEtlGrid";
-import { Search, Plus } from "lucide-react";
+import { Search, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CreateEtlDialog } from "./CreateEtlDialog";
 
 export default function AdminEtlPage() {
-  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"todos" | "publicados" | "borradores">(
     "todos"
   );
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const handleNewEtl = () => {
     setShowCreateModal(true);
   };
+
+  const handleRefresh = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+  }, []);
 
   return (
     <div className="flex w-full flex-col gap-8 p-8">
@@ -71,6 +74,16 @@ export default function AdminEtlPage() {
           </div>
 
           <Button
+            variant="outline"
+            onClick={handleRefresh}
+            className="flex items-center gap-2 rounded-full px-4"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+            title="Refrescar lista"
+          >
+            <RefreshCw className="h-4 w-4" />
+            <span className="hidden sm:inline">Refrescar</span>
+          </Button>
+          <Button
             onClick={handleNewEtl}
             className="flex items-center gap-2 rounded-full px-6 text-[#08080b] font-medium hover:opacity-90"
             style={{ background: "var(--platform-accent)" }}
@@ -82,7 +95,7 @@ export default function AdminEtlPage() {
       </div>
 
       {/* Grid de ETLs */}
-      <AdminEtlGrid searchQuery={searchQuery} filter={filter} />
+      <AdminEtlGrid key={refreshKey} searchQuery={searchQuery} filter={filter} />
     </div>
   );
 }

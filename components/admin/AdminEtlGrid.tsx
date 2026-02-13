@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import EtlCard, { Etl } from "@/components/etl/EtlCard";
 import { createClient } from "@/lib/supabase/client";
+import { getEtlsAdmin } from "@/app/admin/(main)/etl/actions";
 
 // Optional shape to help with mapping Supabase rows to the Etl UI type
 type SupabaseEtlRow = {
@@ -33,78 +34,119 @@ export default function AdminEtlGrid({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
+  const loadFromClient = useCallback(async (): Promise<Etl[]> => {
     const supabase = createClient();
+    const { data, error } = await supabase
+      .from("etl")
+      .select("*")
+      .order("id", { ascending: false });
+    if (error) throw error;
+    const rows = (data as SupabaseEtlRow[] | null) ?? [];
+    const ownerIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
+    let ownerById: Record<string, string | null> = {};
+    if (ownerIds.length > 0) {
+      const { data: owners } = await supabase
+        .from("profiles")
+        .select("id, full_name")
+        .in("id", ownerIds);
+      ownerById = Object.fromEntries((owners ?? []).map((o: any) => [o.id, o.full_name ?? null]));
+    }
+    return rows.map((row) => {
+      const status: Etl["status"] =
+        row.status === "Publicado" || row.status === "Borrador"
+          ? row.status
+          : row.published
+          ? "Publicado"
+          : "Borrador";
+      return {
+        id: String(row.id),
+        title: row.title ?? row.name ?? "Sin título",
+        imageUrl: row.image_url ?? row.thumbnail_url ?? "/Image.svg",
+        status,
+        description: row.description ?? "",
+        views: typeof row.views === "number" ? row.views : 0,
+        lastExecution: (row as any).lastExecution ?? null,
+        nextExecution: (row as any).nextExecution ?? null,
+        createdAt: (row as any).createdAt ?? null,
+        clientId: row.client_id ?? "",
+        ownerId: row.user_id,
+        owner: row.user_id ? { fullName: ownerById[row.user_id] ?? null } : undefined,
+      } satisfies Etl;
+    });
+  }, []);
 
-    async function load() {
+  const loadEtls = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const timeoutMs = 8000;
+      const adminPromise = getEtlsAdmin();
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), timeoutMs)
+      );
+      const res = await Promise.race([adminPromise, timeoutPromise]);
+      if (res.ok && res.data) {
+        const rows = (res.data ?? []) as SupabaseEtlRow[];
+        const owners = res.owners ?? {};
+        const mapped: Etl[] = rows.map((row) => {
+          const status: Etl["status"] =
+            row.status === "Publicado" || row.status === "Borrador"
+              ? row.status
+              : row.published
+              ? "Publicado"
+              : "Borrador";
+          return {
+            id: String(row.id),
+            title: row.title ?? row.name ?? "Sin título",
+            imageUrl: row.image_url ?? row.thumbnail_url ?? "/Image.svg",
+            status,
+            description: row.description ?? "",
+            views: typeof row.views === "number" ? row.views : 0,
+            lastExecution: (row as any).lastExecution ?? null,
+            nextExecution: (row as any).nextExecution ?? null,
+            createdAt: (row as any).createdAt ?? null,
+            clientId: row.client_id ?? "",
+            ownerId: row.user_id,
+            owner: row.user_id ? { fullName: owners[row.user_id] ?? null } : undefined,
+          } satisfies Etl;
+        });
+        setEtls(mapped);
+        return;
+      }
+      const mapped = await loadFromClient();
+      setEtls(mapped);
+    } catch {
       try {
-        setLoading(true);
-
-        // Fetch ALL Etls (Admin View)
-        const { data, error } = await supabase.from("etl").select("*");
-
-        if (error) throw error;
-
-        const rows = (data as SupabaseEtlRow[] | null) ?? [];
-
-        // Fetch owners
-        const ownerIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
-        let ownerById = new Map<string, { full_name: string | null }>();
-
-        if (ownerIds.length > 0) {
-            const { data: owners } = await supabase
-            .from("profiles")
-            .select("id, full_name")
-            .in("id", ownerIds);
-            
-            ownerById = new Map((owners ?? []).map((o) => [o.id, o]));
-        }
-
-        const mapped: Etl[] =
-          rows.map((row) => {
-            const status: Etl["status"] =
-              row.status === "Publicado" || row.status === "Borrador"
-                ? row.status
-                : row.published
-                ? "Publicado"
-                : "Borrador";
-
-             const ownerProfile = row.user_id ? ownerById.get(row.user_id) : undefined;
-
-            return {
-              id: String(row.id),
-              title: row.title ?? row.name ?? "Sin título",
-              imageUrl: row.image_url ?? row.thumbnail_url ?? "/Image.svg",
-              status,
-              description: row.description ?? "",
-              views: typeof row.views === "number" ? row.views : 0,
-              lastExecution: (row as any).lastExecution ?? null,
-              nextExecution: (row as any).nextExecution ?? null,
-              createdAt: (row as any).createdAt ?? null,
-              clientId: row.client_id ?? "",
-              ownerId: row.user_id,
-              owner: row.user_id ? { fullName: ownerById.get(row.user_id)?.full_name ?? null } : undefined,
-            } satisfies Etl;
-          });
-
-        if (!isMounted) return;
+        const mapped = await loadFromClient();
         setEtls(mapped);
         setError(null);
       } catch (err: any) {
-        if (!isMounted) return;
-        setError(err?.message ?? "Error cargando Etls");
+        setError(err?.message ?? "Error cargando ETLs");
         setEtls([]);
-      } finally {
-        if (isMounted) setLoading(false);
       }
+    } finally {
+      setLoading(false);
     }
+  }, [loadFromClient]);
 
-    load();
-    return () => {
-      isMounted = false;
+  useEffect(() => {
+    loadEtls();
+  }, [loadEtls]);
+
+  // Refrescar lista solo cuando la pestaña vuelve a ser visible (p. ej. después de crear un ETL)
+  useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(() => loadEtls(), 300);
     };
-  }, []);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      if (timeout) clearTimeout(timeout);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [loadEtls]);
 
   if (loading) {
     return (
@@ -179,7 +221,13 @@ export default function AdminEtlGrid({
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {(filtered.length > 0 ? filtered : []).map((etl) => (
-        <EtlCard key={etl.id} etl={etl} basePath="/admin/etl" />
+        <EtlCard
+          key={etl.id}
+          etl={etl}
+          basePath="/admin/etl"
+          onDeleted={loadEtls}
+          useAdminDelete
+        />
       ))}
       {filtered.length === 0 && (
         <div

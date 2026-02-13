@@ -2380,6 +2380,7 @@ export type Database = {
       connections: {
         Row: {
           client_id: string | null
+          connection_tables: string[] | null
           created_at: string
           db_host: string | null
           db_name: string | null
@@ -2397,6 +2398,7 @@ export type Database = {
         }
         Insert: {
           client_id?: string | null
+          connection_tables?: string[] | null
           created_at?: string
           db_host?: string | null
           db_name?: string | null
@@ -2414,6 +2416,7 @@ export type Database = {
         }
         Update: {
           client_id?: string | null
+          connection_tables?: string[] | null
           created_at?: string
           db_host?: string | null
           db_name?: string | null

@@ -20,9 +20,11 @@ import { cn } from "@/lib/utils";
 interface CreateDashboardDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Si viene desde ETL "Crear dashboard con estos datos", pre-seleccionar este ETL */
+  initialEtlId?: string | null;
 }
 
-export function CreateDashboardDialog({ open, onOpenChange }: CreateDashboardDialogProps) {
+export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: CreateDashboardDialogProps) {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [clients, setClients] = useState<{ id: string; name: string | null }[]>(
@@ -35,6 +37,10 @@ export function CreateDashboardDialog({ open, onOpenChange }: CreateDashboardDia
   const [loadingEtls, setLoadingEtls] = useState(false);
   const [selectedEtlId, setSelectedEtlId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    if (open && initialEtlId) setSelectedEtlId(initialEtlId);
+  }, [open, initialEtlId]);
 
   useEffect(() => {
     const timer = setTimeout(() => {

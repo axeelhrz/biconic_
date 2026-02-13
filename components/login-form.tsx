@@ -45,8 +45,19 @@ export function LoginForm({
 
       router.push("/dashboard");
     } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Ocurrió un error inesperado.";
+      const isNetworkError =
+        typeof message === "string" &&
+        (message.toLowerCase().includes("failed to fetch") ||
+          message.toLowerCase().includes("network") ||
+          message.toLowerCase().includes("err_failed"));
       setError(
-        error instanceof Error ? error.message : "Ocurrió un error inesperado."
+        isNetworkError
+          ? "No se pudo conectar con el servidor. Comprueba tu conexión y que el proyecto Supabase esté activo (no pausado)."
+          : message
       );
     } finally {
       setIsLoading(false);

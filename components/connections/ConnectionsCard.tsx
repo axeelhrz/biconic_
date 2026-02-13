@@ -2,7 +2,8 @@
 import ShareConnectionModal from "../connection/ShareConnectionModal";
 import ImportStatus from "./importStatus";
 import AdminClientSelectionModal from "@/components/admin/dashboard/AdminClientSelectionModal";
-import { User, Building2, Plus } from "lucide-react";
+import ConnectionTablesDialog from "./ConnectionTablesDialog";
+import { User, Building2, Plus, Table2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -124,7 +125,9 @@ export default function ConnectionsCard({
   const { title, type, status, host, databaseName, lastSync, dataTableId } = connection;
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [assignClientOpen, setAssignClientOpen] = useState(false);
+  const [tablesDialogOpen, setTablesDialogOpen] = useState(false);
   const supabase = createClient();
+  const isFirebird = type === "Firebird";
 
 
   const statusConfig: Record<Connection["status"], { bg: string; text: string }> = {
@@ -231,6 +234,19 @@ export default function ConnectionsCard({
         >
           <ShareIcon className="h-5 w-5" />
         </button>
+        {isFirebird && (
+          <button
+            type="button"
+            aria-label="Configurar tablas para ETL"
+            disabled={isProcessing}
+            className="flex-shrink-0 p-1 transition-opacity hover:opacity-70 disabled:opacity-30"
+            style={{ color: "var(--platform-fg-muted)" }}
+            onClick={() => setTablesDialogOpen(true)}
+            title="Tablas para ETL"
+          >
+            <Table2 className="h-5 w-5" />
+          </button>
+        )}
         <button
           type="button"
           disabled={isProcessing}
@@ -254,6 +270,14 @@ export default function ConnectionsCard({
           <TrashIcon className="h-5 w-5" />
         </button>
       </div>
+      <ConnectionTablesDialog
+        open={tablesDialogOpen}
+        onOpenChange={setTablesDialogOpen}
+        connectionId={connection.id}
+        connectionTitle={connection.title}
+        connectionType={type}
+        onSaved={() => window.location.reload()}
+      />
       <ShareConnectionModal
         connectionId={connection.id}
         clientId={connection.clientId}

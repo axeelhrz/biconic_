@@ -35,6 +35,22 @@ ChartJS.register(
   Title
 );
 
+const METADATA_FETCH_TIMEOUT_MS = 35000; // 35s para dar tiempo a Firebird (servidor usa 30s)
+async function fetchMetadataWithTimeout(connectionId: string | number, tableName?: string): Promise<Response> {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), METADATA_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch("/api/connection/metadata", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(tableName ? { connectionId, tableName } : { connectionId }),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(to);
+  }
+}
+
 export type WidgetType =
   | "bar"
   | "line"
@@ -448,17 +464,18 @@ export function ETLEditor({
   const DesignPaletteSection = () => (
     <div className="space-y-5 w-full">
       <div>
-        <h4 className="text-emerald-600 font-medium mb-2">Transformaciones</h4>
+        <h4 className="font-medium mb-2 text-sm" style={{ color: "var(--platform-fg-muted)" }}>Transformaciones</h4>
         <div className="space-y-2">
           {PALETTE.map((p) => (
             <button
               key={p.type}
               draggable
               onDragStart={(e) => onPaletteDragStart(e, p.type)}
-              className="w-full border rounded-full px-4 py-2 bg-white text-left hover:bg-gray-50 flex items-center gap-2 cursor-grab active:cursor-grabbing"
+              className="w-full rounded-xl px-3 py-2 text-left flex items-center gap-2 cursor-grab active:cursor-grabbing border transition-colors hover:opacity-90"
+              style={{ background: "var(--platform-surface-hover)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
             >
-              <span className="h-6 w-6 rounded-full bg-emerald-100" />
-              <span className="text-sm text-gray-700">{p.label}</span>
+              <span className="h-7 w-7 rounded-lg flex-shrink-0" style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }} />
+              <span className="text-sm">{p.label}</span>
             </button>
           ))}
         </div>
@@ -778,6 +795,8 @@ export function ETLEditor({
   // Loading state for filter's upstream metadata (shown in right panel)
   const [filterMetaLoading, setFilterMetaLoading] = useState(false);
   const [filterMetaError, setFilterMetaError] = useState<string | null>(null);
+  /** Qualified table name (ej. PUBLIC.VENTAS) para el que estamos cargando columnas (Firebird bajo demanda). */
+  const [loadingColumnsFor, setLoadingColumnsFor] = useState<string | null>(null);
 
   useEffect(() => {
     let abort = false;
@@ -791,11 +810,7 @@ export function ETLEditor({
       }
       try {
         setMetaLoading(true);
-        const res = await fetch("/api/connection/metadata", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ connectionId: selected.connectionId }),
-        });
+        const res = await fetchMetadataWithTimeout(selected.connectionId);
         const data = await res.json();
         if (!res.ok || !data.ok) {
           throw new Error(data?.error || "No se pudo obtener metadata");
@@ -804,7 +819,10 @@ export function ETLEditor({
           setConnMeta(data.metadata);
         }
       } catch (e: any) {
-        if (!abort) setMetaError(e?.message || "Error obteniendo metadata");
+        if (!abort) {
+          const msg = e?.name === "AbortError" ? "La conexión tardó demasiado. La base puede no ser accesible desde el servidor." : (e?.message || "Error obteniendo metadata");
+          setMetaError(msg);
+        }
       } finally {
         if (!abort) setMetaLoading(false);
       }
@@ -917,20 +935,16 @@ export function ETLEditor({
     const fetchAndStore = async (connWidget: Widget) => {
       try {
         if (!connWidget.connectionId) return;
-        const res = await fetch("/api/connection/metadata", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ connectionId: connWidget.connectionId }),
-        });
+        const res = await fetchMetadataWithTimeout(connWidget.connectionId);
         const data = await res.json();
         if (!res.ok || !data.ok)
           throw new Error(data?.error || "No se pudo obtener metadata");
         if (!abort)
           setMetaByNode((m) => ({ ...m, [connWidget.id]: data.metadata }));
-      } catch (e) {
+      } catch (e: any) {
         if (!abort)
           setFilterMetaError(
-            (e as any)?.message || "Error obteniendo metadata"
+            e?.name === "AbortError" ? "La conexión tardó demasiado." : (e?.message || "Error obteniendo metadata")
           );
       }
     };
@@ -966,20 +980,16 @@ export function ETLEditor({
             const key = `conn:${conn.id}`;
             if (!metaByNode[key]) {
               try {
-                const res = await fetch("/api/connection/metadata", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ connectionId: conn.id }),
-                });
+                const res = await fetchMetadataWithTimeout(conn.id);
                 const data = await res.json();
                 if (!res.ok || !data.ok)
                   throw new Error(data?.error || "No se pudo obtener metadata");
                 if (!abort)
                   setMetaByNode((m) => ({ ...m, [key]: data.metadata }));
-              } catch (e) {
+              } catch (e: any) {
                 if (!abort)
                   setFilterMetaError(
-                    (e as any)?.message || "Error obteniendo metadata"
+                    e?.name === "AbortError" ? "La conexión tardó demasiado." : (e?.message || "Error obteniendo metadata")
                   );
               }
             }
@@ -994,6 +1004,112 @@ export function ETLEditor({
       abort = true;
     };
   }, [selected?.id, selected?.type, edges, widgets, metaByNode, connections]);
+
+  // Cargar columnas de una tabla bajo demanda (Firebird: las tablas vienen con columns vacío)
+  const loadColumnsForTable = useCallback(
+    async (
+      connectionId: string | number,
+      qualifiedName: string,
+      target: "connMeta" | string
+    ) => {
+      if (!qualifiedName) return;
+      setLoadingColumnsFor(qualifiedName);
+      try {
+        const res = await fetchMetadataWithTimeout(connectionId, qualifiedName);
+        const data = await res.json();
+        if (!res.ok || !data.ok || !data.metadata?.tables?.length) {
+          return;
+        }
+        const tableWithCols = data.metadata.tables[0];
+        const mergeColumnsIntoMeta = (prev: DbMetadata | null): DbMetadata | null => {
+          if (!prev?.tables) return prev;
+          return {
+            ...prev,
+            tables: prev.tables.map((t) => {
+              const q = `${t.schema}.${t.name}`;
+              if (q !== qualifiedName) return t;
+              return { ...t, columns: tableWithCols.columns || [] };
+            }),
+          };
+        };
+        if (target === "connMeta") {
+          setConnMeta((prev) => mergeColumnsIntoMeta(prev) ?? prev);
+        } else {
+          setMetaByNode((prev) => {
+            const current = prev[target];
+            const next = mergeColumnsIntoMeta(current ?? null);
+            if (!next) return prev;
+            return { ...prev, [target]: next };
+          });
+        }
+      } finally {
+        setLoadingColumnsFor(null);
+      }
+    },
+    []
+  );
+
+  // Al elegir una tabla en el filtro (conexión upstream), si esa tabla no tiene columnas cargadas, pedirlas
+  useEffect(() => {
+    if (
+      selected?.type !== "filter" ||
+      !selected.filter?.table ||
+      loadingColumnsFor != null
+    )
+      return;
+    const srcEdge = edges.find((e) => e.to === selected.id);
+    const srcNode = srcEdge && widgets.find((w) => w.id === srcEdge.from);
+    if (srcNode?.type !== "connection" || !srcNode.connectionId) return;
+    const meta = metaByNode[srcNode.id];
+    if (!meta?.tables) return;
+    const tbl = meta.tables.find(
+      (t) => `${t.schema}.${t.name}` === selected.filter?.table
+    );
+    if (tbl?.columns?.length) return;
+    loadColumnsForTable(
+      srcNode.connectionId,
+      selected.filter.table,
+      srcNode.id
+    );
+  }, [
+    selected?.id,
+    selected?.type,
+    selected?.filter?.table,
+    edges,
+    widgets,
+    metaByNode,
+    loadingColumnsFor,
+    loadColumnsForTable,
+  ]);
+
+  // Al configurar JOIN, si la tabla principal o secundarias no tienen columnas, pedirlas
+  useEffect(() => {
+    if (selected?.type !== "join" || !selected.join || loadingColumnsFor) return;
+    const getMetaKey = (connId: string | number): string => {
+      const w = widgets.find((x) => x.type === "connection" && x.connectionId != null && String(x.connectionId) === String(connId));
+      return w ? w.id : `conn:${connId}`;
+    };
+    const ensure = (connId: string | number | undefined, tableName: string | undefined) => {
+      if (!connId || !tableName) return;
+      const key = getMetaKey(connId);
+      const meta = metaByNode[key];
+      const tbl = meta?.tables?.find((t) => `${t.schema}.${t.name}` === tableName);
+      if (tbl?.columns?.length) return;
+      loadColumnsForTable(connId, tableName, key);
+    };
+    ensure(selected.join.primaryConnectionId, selected.join.primaryTable);
+    (selected.join.joins || []).forEach((j) => ensure(j.secondaryConnectionId, j.secondaryTable));
+  }, [
+    selected?.id,
+    selected?.type,
+    selected?.join?.primaryTable,
+    selected?.join?.primaryConnectionId,
+    selected?.join?.joins,
+    widgets,
+    metaByNode,
+    loadingColumnsFor,
+    loadColumnsForTable,
+  ]);
 
   // Helpers to connect nodes: clicking handle on a node starts a connection; clicking target attaches
   const cancelConnect = () => {
@@ -1157,33 +1273,36 @@ export function ETLEditor({
 
 
   return (
-    <div className="flex flex-row items-start gap-[15px] w-full h-[909px]">
-      {/* Left palette */}
+    <div className="flex flex-row items-start gap-0 w-full h-full">
+      {/* Left palette: tema plataforma */}
       <aside
-        className={`flex flex-col items-center bg-[#FDFDFD] border-r border-[#F6F6F6] transition-all duration-300 relative ${
+        className={`flex flex-col items-center transition-all duration-300 relative border-r ${
           showLeftPanel
-            ? "w-[270px] p-[25px_20px] opacity-100 overflow-y-auto"
+            ? "w-[270px] p-5 opacity-100 overflow-y-auto"
             : "w-0 p-0 opacity-0 overflow-hidden"
         }`}
-        style={{ height: "100%", transition: "width 0.3s ease, padding 0.3s ease" }}
+        style={{
+          height: "100%",
+          transition: "width 0.3s ease, padding 0.3s ease",
+          background: "var(--platform-surface)",
+          borderColor: "var(--platform-border)",
+        }}
       >
-        <div className={`flex flex-col items-center gap-[15px] w-[230px] ${showLeftPanel ? "block" : "hidden"}`}>
+        <div className={`flex flex-col items-stretch gap-4 w-full max-w-[230px] ${showLeftPanel ? "block" : "hidden"}`}>
           {customLeftPanel ? (
             <>
               {customLeftPanel}
-              <div className="w-full h-px bg-gray-100 my-3" />
+              <div className="w-full h-px my-2" style={{ background: "var(--platform-border)" }} />
               <DesignPaletteSection />
             </>
           ) : (
             <>
-              <h3 className="text-emerald-600 text-xl font-semibold">
-                Dashboard
-              </h3>
-              <p className="text-sm text-gray-500 mb-4">Crea tu dashboard</p>
+              <h3 className="text-lg font-semibold" style={{ color: "var(--platform-accent)" }}>Dashboard</h3>
+              <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Crea tu dashboard</p>
               <DesignPaletteSection />
-              <div className="space-y-5 w-full">
+              <div className="space-y-4 w-full">
                 <div>
-                  <h4 className="text-emerald-600 font-medium mb-2">Datos</h4>
+                  <h4 className="font-medium mb-2 text-sm" style={{ color: "var(--platform-fg-muted)" }}>Datos</h4>
                   <div className="space-y-2">
                     {connections.map((conn) => (
                       <div
@@ -1200,32 +1319,25 @@ export function ETLEditor({
                           );
                           e.dataTransfer.effectAllowed = "copy";
                         }}
-                        className="w-full border rounded-full px-4 py-2 bg-white text-left hover:bg-gray-50 flex items-center gap-2 cursor-grab active:cursor-grabbing"
+                        className="w-full rounded-xl px-3 py-2 text-left flex items-center gap-2 cursor-grab active:cursor-grabbing border transition-colors hover:opacity-90"
+                        style={{ background: "var(--platform-surface-hover)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                       >
-                        <span className="h-6 w-6 min-w-6 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 text-xs font-bold">
-                          DB
-                        </span>
-                        <span className="text-sm text-gray-700 truncate" title={conn.name || "Sin nombre"}>
-                          {conn.name || "Sin nombre"}
-                        </span>
+                        <span className="h-7 w-7 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0" style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}>DB</span>
+                        <span className="text-sm truncate" title={conn.name || "Sin nombre"}>{conn.name || "Sin nombre"}</span>
                       </div>
                     ))}
                     {connections.length === 0 && (
-                      <div className="text-xs text-gray-400">
-                        No hay conexiones disponibles
-                      </div>
+                      <div className="text-xs" style={{ color: "var(--platform-muted)" }}>No hay conexiones disponibles</div>
                     )}
                   </div>
                 </div>
                 <div>
-                  <h4 className="text-emerald-600 font-medium mb-2">
-                    Plantillas
-                  </h4>
-                  <div className="text-xs text-gray-400">5</div>
+                  <h4 className="font-medium mb-2 text-sm" style={{ color: "var(--platform-fg-muted)" }}>Plantillas</h4>
+                  <div className="text-xs" style={{ color: "var(--platform-muted)" }}>5</div>
                 </div>
                 <div>
-                  <h4 className="text-emerald-600 font-medium mb-2">Estilo</h4>
-                  <div className="text-xs text-gray-400">5</div>
+                  <h4 className="font-medium mb-2 text-sm" style={{ color: "var(--platform-fg-muted)" }}>Estilo</h4>
+                  <div className="text-xs" style={{ color: "var(--platform-muted)" }}>5</div>
                 </div>
               </div>
             </>
@@ -1234,11 +1346,12 @@ export function ETLEditor({
       </aside>
 
       {/* Toggle Left Button */}
-      <div className={`relative z-10 flex items-center h-full -ml-[12px] ${!showLeftPanel ? "ml-0" : ""}`}>
+      <div className={`relative z-10 flex items-center h-full -ml-px ${!showLeftPanel ? "ml-0" : ""}`}>
         <Button
           variant="outline"
           size="icon"
-          className="h-8 w-6 rounded-r-md border-l-0 shadow-sm bg-white hover:bg-gray-50 z-20"
+          className="h-8 w-6 rounded-r-lg border-l-0 z-20 rounded-l-none"
+          style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
           onClick={() => setShowLeftPanel(!showLeftPanel)}
           title={showLeftPanel ? "Ocultar panel lateral" : "Mostrar panel lateral"}
         >
@@ -1259,12 +1372,14 @@ export function ETLEditor({
               onPointerMove={onCanvasPointerMove}
               onPointerUp={onCanvasPointerUp}
               onPointerLeave={onCanvasPointerUp}
-              className="flex flex-col justify-center items-start p-[30px_25px] gap-[10px] w-full h-full bg-[#FDFDFD] relative overflow-hidden"
+              className="flex flex-col justify-center items-start p-6 gap-2 w-full h-full relative overflow-hidden rounded-xl"
               style={{
                 outline: "none",
                 cursor: isCtrlPressed ? "grab" : "default",
+                background: "var(--platform-bg)",
                 backgroundImage:
-                  "url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNiIgaGVpZ2h0PSI2IiB2aWV3Qm94PSIwIDAgNiA2IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8Y2lyY2xlIGN4PSIzIiBjeT0iMyIgcj0iMSIgZmlsbD0iI0Q5RDlEOSIvPgo8L3N2Zz4K')",
+                  "url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSI4IiBjeT0iOCIgcj0iMSIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjA4KSIvPjwvc3ZnPg==')",
+                backgroundSize: "16px 16px",
               }}
               role="application"
               aria-label="Lienzo de diseño de ETL"
@@ -1298,7 +1413,7 @@ export function ETLEditor({
               }}
             >
               <div
-                className="absolute inset-0 pointer-events-none bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] rounded-2xl"
+                className="absolute inset-0 pointer-events-none rounded-xl"
                 style={{
                   transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                   transformOrigin: "top left",
@@ -1379,26 +1494,35 @@ export function ETLEditor({
                 {widgets.map((w) => (
                   <Card
                     key={w.id}
-                    className={`absolute rounded-2xl shadow-sm border overflow-hidden select-none focus:outline-none focus:ring-2 focus:ring-emerald-300 ${
+                    className={`absolute rounded-xl border overflow-hidden select-none focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)] ${
                       selectedId === w.id
-                        ? "ring-2 ring-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.15)]"
+                        ? "ring-2 ring-[var(--platform-accent)]"
                         : ""
                     }`}
-                    style={{ left: w.x, top: w.y, width: w.w, height: w.h }}
+                    style={{
+                      left: w.x,
+                      top: w.y,
+                      width: w.w,
+                      height: w.h,
+                      background: "var(--platform-surface)",
+                      borderColor: "var(--platform-border)",
+                    }}
                     onPointerDown={() => setSelectedId(w.id)}
                     role="group"
                     aria-label={`Widget ${w.title}`}
                     tabIndex={0}
                   >
                     <div
-                      className="px-3 py-2 text-sm flex items-center justify-between bg-white/70 cursor-grab active:cursor-grabbing"
+                      className="px-3 py-2 text-sm flex items-center justify-between cursor-grab active:cursor-grabbing border-b"
+                      style={{ background: "var(--platform-surface-hover)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                       onPointerDown={(e) => startDragWidget(w.id, e)}
                     >
-                      <span className="font-medium text-gray-700 truncate">
+                      <span className="font-medium truncate">
                         {w.title || w.type.toUpperCase()}
                       </span>
                       <button
-                        className="h-7 w-7 rounded-full hover:bg-gray-100 flex items-center justify-center"
+                        className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors hover:opacity-80"
+                        style={{ color: "var(--platform-fg-muted)" }}
                         onClick={(e) => {
                           e.stopPropagation();
                           setWidgets((prev) =>
@@ -1418,19 +1542,19 @@ export function ETLEditor({
                         ×
                       </button>
                     </div>
-                    <div className="w-full h-[calc(100%-36px)] bg-white flex items-center justify-center p-2 relative">
-                      {/* Connection handles: out on the right, in on the left */}
-                      {/* Intuitive handles with labels */}
+                    <div className="w-full h-[calc(100%-36px)] flex items-center justify-center p-2 relative" style={{ background: "var(--platform-bg)" }}>
+                      {/* Connection handles: Salida (derecha), Entrada (izquierda) */}
                       <div className="absolute -right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1">
-                        <div className="text-[10px] text-gray-600 bg-white border rounded px-1 py-0.5 shadow">
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)", border: "1px solid var(--platform-border)" }}>
                           Salida
-                        </div>
+                        </span>
                         <button
-                          className={`h-5 w-5 rounded-full border-2 border-white shadow hover:scale-110 transition ${
+                          className={`h-5 w-5 rounded-full border-2 shadow hover:scale-110 transition ${
                             connectingFromId === w.id
-                              ? "bg-emerald-700"
-                              : "bg-emerald-500"
+                              ? "opacity-100"
+                              : "opacity-90"
                           }`}
+                          style={{ background: "var(--platform-accent)", borderColor: "var(--platform-surface)" }}
                           title="Iniciar conexión (Salida)"
                           onPointerDown={(e) => {
                             e.stopPropagation();
@@ -1440,7 +1564,7 @@ export function ETLEditor({
                       </div>
                       <div className="absolute -left-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1">
                         <button
-                          className={`h-5 w-5 rounded-full border-2 border-white shadow hover:scale-110 transition ${
+                          className={`h-5 w-5 rounded-full border-2 shadow hover:scale-110 transition ${
                             (connectingFromId &&
                               ((w.type === "filter" &&
                                 widgets.find((x) => x.id === connectingFromId)
@@ -1482,18 +1606,19 @@ export function ETLEditor({
                             (w.type === "end" &&
                               widgets.find((x) => x.id === connectingFromId)
                                 ?.type === "clean")
-                              ? "bg-blue-600"
-                              : "bg-blue-500"
+                              ? "opacity-100"
+                              : "opacity-90"
                           }`}
+                          style={{ background: "var(--platform-success)", borderColor: "var(--platform-surface)" }}
                           title="Finalizar conexión (Entrada)"
                           onPointerDown={(e) => {
                             e.stopPropagation();
                             finishConnect(w.id);
                           }}
                         />
-                        <div className="text-[10px] text-gray-600 bg-white border rounded px-1 py-0.5 shadow">
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)", border: "1px solid var(--platform-border)" }}>
                           Entrada
-                        </div>
+                        </span>
                       </div>
                       {w.type === "bar" && w.config ? (
                         <Bar
@@ -1543,37 +1668,37 @@ export function ETLEditor({
                           518
                         </div>
                       ) : w.type === "table" ? (
-                        <div className="text-sm text-gray-500">
+                        <div className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
                           Tabla (placeholder)
                         </div>
                       ) : w.type === "connection" ? (
-                        <div className="w-full h-full overflow-auto text-left">
-                          <div className="text-xs text-gray-500 mb-2">
+                        <div className="w-full h-full overflow-auto text-left px-2">
+                          <div className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>
                             Vista previa de conexión
                           </div>
                           {selectedId === w.id && metaLoading ? (
-                            <div className="text-sm text-gray-600">
-                              Cargando metadata...
+                            <div className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+                              Cargando metadata…
                             </div>
                           ) : selectedId === w.id && metaError ? (
-                            <div className="text-sm text-red-600">
+                            <div className="text-sm" style={{ color: "var(--platform-danger)" }}>
                               {metaError}
                             </div>
                           ) : selectedId === w.id && connMeta ? (
                             <div className="space-y-2">
                               {connMeta.dbVersion && (
-                                <div className="text-sm text-gray-700">
+                                <div className="text-sm" style={{ color: "var(--platform-fg)" }}>
                                   Versión DB: {connMeta.dbVersion}
                                 </div>
                               )}
-                              <div className="text-sm text-gray-700">
+                              <div className="text-sm" style={{ color: "var(--platform-fg)" }}>
                                 Schemas:{" "}
                                 {connMeta.schemas?.slice(0, 6).join(", ")}
                                 {connMeta.schemas && connMeta.schemas.length > 6
                                   ? " …"
                                   : ""}
                               </div>
-                              <div className="text-sm text-gray-700">
+                              <div className="text-sm" style={{ color: "var(--platform-fg)" }}>
                                 Tablas:{" "}
                                 {connMeta.tables
                                   ?.slice(0, 10)
@@ -1585,17 +1710,17 @@ export function ETLEditor({
                               </div>
                             </div>
                           ) : (
-                            <div className="text-sm text-gray-400">
-                              Arrastra desde Conexiones para ver metadata
+                            <div className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+                              Seleccioná este nodo para ver tablas
                             </div>
                           )}
                         </div>
                       ) : w.type === "filter" ? (
-                        <div className="w-full h-full overflow-auto text-left">
-                          <div className="text-xs text-gray-500 mb-2">
-                            Nodo de Filtro
+                        <div className="w-full h-full overflow-auto text-left px-2">
+                          <div className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>
+                            Filtro
                           </div>
-                          <div className="text-sm text-gray-700">
+                          <div className="text-sm" style={{ color: "var(--platform-fg)" }}>
                             {w.filter?.table ? (
                               <>
                                 Tabla: {w.filter.table}
@@ -1605,8 +1730,8 @@ export function ETLEditor({
                                 Condiciones: {w.filter.conditions?.length || 0}
                               </>
                             ) : (
-                              <span>
-                                Seleccione una tabla y defina condiciones
+                              <span style={{ color: "var(--platform-fg-muted)" }}>
+                                Tabla y condiciones en el panel derecho
                               </span>
                             )}
                           </div>
@@ -2001,7 +2126,8 @@ export function ETLEditor({
               <div className="absolute right-4 bottom-24 flex flex-col gap-2">
                 <button
                   onClick={zoomOut}
-                  className="h-10 w-10 rounded-full bg-white border shadow flex items-center justify-center"
+                  className="h-10 w-10 rounded-full border flex items-center justify-center transition-colors hover:opacity-90"
+                  style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                   aria-label="Alejar"
                   title="Alejar"
                 >
@@ -2009,7 +2135,8 @@ export function ETLEditor({
                 </button>
                 <button
                   onClick={zoomIn}
-                  className="h-10 w-10 rounded-full bg-white border shadow flex items-center justify-center"
+                  className="h-10 w-10 rounded-full border flex items-center justify-center transition-colors hover:opacity-90"
+                  style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                   aria-label="Acercar"
                   title="Acercar"
                 >
@@ -2017,44 +2144,47 @@ export function ETLEditor({
                 </button>
               </div>
 
-              {/* Bottom status bar */}
+              {/* Barra de estado (tema plataforma) */}
               <div className="absolute left-1/2 -translate-x-1/2 bottom-4">
-                <div className="rounded-full bg-black text-white/90 px-3 py-2 flex items-center gap-3 shadow-lg">
+                <div className="rounded-2xl px-4 py-2.5 flex items-center gap-3 border" style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}>
                   <span className="inline-flex items-center gap-2 text-sm">
-                    <span className="h-2 w-2 rounded-full bg-emerald-400" />{" "}
+                    <span className="h-2 w-2 rounded-full bg-[var(--platform-success)]" />{" "}
                     Guardado hace 3 min
                   </span>
-                  <span className="opacity-50">|</span>
+                  <span className="opacity-50" style={{ color: "var(--platform-fg-muted)" }}>|</span>
                   <Button
                     size="sm"
                     variant="secondary"
                     onClick={onSave}
                     disabled={saving}
-                    className="rounded-full h-8 px-4 bg-white/50 hover:bg-white/70"
+                    className="rounded-full h-8 px-4 border-0"
+                    style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg)" }}
                     aria-label="Programar ETL"
                   >
                     {saving ? "Programando..." : "Programar"}
                   </Button>
                   {connectingFromId && (
                     <>
-                      <span className="opacity-50">|</span>
-                      <span className="text-sm">
-                        Conectando... pulsa "Entrada" en el destino
+                      <span className="opacity-50" style={{ color: "var(--platform-fg-muted)" }}>|</span>
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+                        Conectando... pulsa &quot;Entrada&quot; en el destino
                       </span>
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={cancelConnect}
-                        className="rounded-full h-8 px-3 bg-white text-black"
+                        className="rounded-full h-8 px-3"
+                        style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg)", borderColor: "var(--platform-border)" }}
                       >
                         Cancelar
                       </Button>
                     </>
                   )}
-                  <span className="opacity-50">|</span>
+                  <span className="opacity-50" style={{ color: "var(--platform-fg-muted)" }}>|</span>
                   <Button
                     size="sm"
-                    className="rounded-full bg-emerald-500 hover:bg-emerald-600 h-8 px-4"
+                    className="rounded-full h-8 px-4 border-0"
+                    style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
                     aria-label="Ejecutar ETL"
                   >
                     Ejecutar
@@ -2063,27 +2193,27 @@ export function ETLEditor({
               </div>
               {widgets.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="text-sm text-gray-500 bg-white/80 border rounded-full px-4 py-2 shadow">
-                    Arrastra una conexión o un componente al lienzo para
-                    comenzar.
+                  <div className="text-sm rounded-xl px-5 py-3 border max-w-sm text-center" style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                    1. Arrastrá una <strong style={{ color: "var(--platform-fg)" }}>conexión</strong> al lienzo → 2. Conectá un <strong style={{ color: "var(--platform-fg)" }}>Filtro</strong> → 3. Agregá <strong style={{ color: "var(--platform-fg)" }}>Fin</strong> y uní los nodos con Salida → Entrada.
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Bottom panel */}
+          {/* Bottom panel: tema plataforma */}
           {customBottomPanel && (
-            <div className={`w-full transition-all duration-300 overflow-hidden border-t bg-[#FDFDFD] ${
-              showBottomPanel ? "h-[265px]" : "h-0"
-            }`}>
+            <div
+              className={`w-full transition-all duration-300 overflow-hidden border-t ${showBottomPanel ? "h-[265px]" : "h-0"}`}
+              style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}
+            >
               <div className="relative w-full h-full">
                 {customBottomPanel}
-                {/* Minimize Button Absolute */}
                 <Button
                     variant="ghost"
                     size="icon"
-                    className="absolute top-2 right-2 h-6 w-6 z-50 rounded-full bg-white border shadow-sm hover:bg-gray-100"
+                    className="absolute top-2 right-2 h-7 w-7 z-50 rounded-lg"
+                    style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}
                     onClick={() => setShowBottomPanel(false)}
                     title="Minimizar panel inferior"
                 >
@@ -2092,16 +2222,15 @@ export function ETLEditor({
               </div>
             </div>
           )}
-          
-          {/* Bottom Panel Toggle (when hidden) */}
+
           {customBottomPanel && !showBottomPanel && (
              <div className="absolute bottom-4 right-4 z-50">
                 <Button
-                    variant="default"
                     size="icon"
-                    className="h-10 w-10 rounded-full shadow-lg bg-emerald-600 hover:bg-emerald-700 text-white"
+                    className="h-10 w-10 rounded-full"
+                    style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
                     onClick={() => setShowBottomPanel(true)}
-                    title="Mostrar panel inferior"
+                    title="Mostrar panel inferior (Log / Datos)"
                 >
                   <PanelLeftOpen className="h-5 w-5 rotate-90" />
                 </Button>
@@ -2110,11 +2239,12 @@ export function ETLEditor({
         </div>
 
         {/* Toggle Right Button */}
-        <div className={`relative z-10 flex items-center h-full -mr-[12px] ${!showRightPanel ? "mr-0" : ""}`}>
+        <div className={`relative z-10 flex items-center h-full -mr-px ${!showRightPanel ? "mr-0" : ""}`}>
            <Button
              variant="outline"
              size="icon"
-             className="h-8 w-6 rounded-l-md border-r-0 shadow-sm bg-white hover:bg-gray-50 z-20"
+             className="h-8 w-6 rounded-l-lg border-r-0 z-20 rounded-r-none"
+             style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
              onClick={() => setShowRightPanel(!showRightPanel)}
              title={showRightPanel ? "Ocultar panel derecho" : "Mostrar panel derecho"}
            >
@@ -2122,15 +2252,13 @@ export function ETLEditor({
            </Button>
         </div>
 
-        {/* Right properties panel */}
-        <aside 
-           className={`bg-white border-l transition-all duration-300 overflow-hidden ${
-             showRightPanel ? "w-[315px] opacity-100" : "w-0 opacity-0"
-           }`}
-           style={{ height: "100%", transition: "width 0.3s ease, opacity 0.3s ease" }}
+        {/* Right properties panel: tema plataforma */}
+        <aside
+           className={`border-l transition-all duration-300 overflow-hidden ${showRightPanel ? "w-[315px] opacity-100" : "w-0 opacity-0"}`}
+           style={{ height: "100%", transition: "width 0.3s ease, opacity 0.3s ease", background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}
         >
-          <div className={`bg-white p-4 sticky top-0 space-y-6 h-full overflow-y-auto w-[315px] ${showRightPanel ? "block" : "hidden"}`}>
-            <h3 className="text-emerald-600 text-lg font-semibold">
+          <div data-etl-right-panel className={`p-4 sticky top-0 space-y-6 h-full overflow-y-auto w-[315px] ${showRightPanel ? "block" : "hidden"}`} style={{ color: "var(--platform-fg)" }}>
+            <h3 className="text-lg font-semibold" style={{ color: "var(--platform-accent)" }}>
               Propiedades del Widget
             </h3>
             {selected ? (
@@ -2146,7 +2274,7 @@ export function ETLEditor({
                 </div>
 
                 <div>
-                  <div className="font-medium text-sm text-gray-700">
+                  <div className="font-medium text-sm" style={{ color: "var(--platform-fg-muted)" }}>
                     Dimensiones
                   </div>
                   <div className="grid grid-cols-2 gap-3 mt-2">
@@ -2562,15 +2690,25 @@ export function ETLEditor({
                             Tablas ({connMeta.tables.length})
                           </div>
                           <div className="max-h-64 overflow-auto rounded-xl border divide-y">
-                            {connMeta.tables.map((t, idx) => (
+                            {connMeta.tables.map((t, idx) => {
+                              const qualified = `${t.schema}.${t.name}`;
+                              const loadingCols = loadingColumnsFor === qualified;
+                              return (
                               <details
                                 key={`${t.schema}.${t.name}-${idx}`}
                                 className="p-2"
                               >
-                                <summary className="cursor-pointer text-sm text-gray-800">
+                                <summary
+                                  className="cursor-pointer text-sm text-gray-800"
+                                  onClick={(e) => {
+                                    if (t.columns.length > 0 || loadingCols) return;
+                                    if (selected.connectionId)
+                                      loadColumnsForTable(selected.connectionId, qualified, "connMeta");
+                                  }}
+                                >
                                   {t.schema}.{t.name}{" "}
                                   <span className="text-gray-500">
-                                    ({t.columns.length} columnas)
+                                    {loadingCols ? "Cargando columnas…" : `(${t.columns.length} columnas)`}
                                   </span>
                                 </summary>
                                 <div className="mt-2 pl-4">
@@ -2608,7 +2746,8 @@ export function ETLEditor({
                                   </table>
                                 </div>
                               </details>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       </div>
@@ -2994,6 +3133,9 @@ export function ETLEditor({
                           </div>
                           <div>
                             <Label>Columnas</Label>
+                            {loadingColumnsFor === selected.filter?.table && (
+                              <div className="text-sm text-amber-600 mt-1">Cargando columnas…</div>
+                            )}
                             <div className="flex flex-wrap gap-2 mt-1">
                               {(() => {
                                 const tbl = (availableTables || []).find(

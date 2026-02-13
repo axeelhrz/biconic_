@@ -18,16 +18,17 @@ export default function EtlTitleWithEdit({
 
   return (
     <>
-      <div className="flex items-center gap-2 text-gray-600 text-sm">
-        <span className="opacity-75">ETL /</span>
-        <span className="font-medium text-gray-900">{title}</span>
+      <div className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+        <span style={{ color: "var(--platform-fg-muted)" }}>ETL /</span>
+        <span className="font-semibold">{title}</span>
         <button
           onClick={() => setIsModalOpen(true)}
-          className="h-6 w-6 rounded flex items-center justify-center hover:bg-gray-100 transition-colors"
+          className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors hover:opacity-80"
+          style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}
           title="Renombrar ETL"
           aria-label="Renombrar ETL"
         >
-          <Pencil className="h-3.5 w-3.5 text-gray-500" />
+          <Pencil className="h-3.5 w-3.5" />
         </button>
       </div>
 

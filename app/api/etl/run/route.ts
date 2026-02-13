@@ -9,6 +9,7 @@ import {
   quoteQualified,
   buildWhereClausePg,
   buildWhereClausePgStar,
+  buildWhereClauseFirebird,
   buildJoinClauseBinary,
 } from "@/lib/sql/helpers";
 import {
@@ -444,6 +445,71 @@ async function executeEtlPipeline(
         .eq("id", primaryConnId)
         .single();
       if (!conn) throw new Error(`Conexión ${primaryConnId} no encontrada.`);
+
+      // Firebird: solo tabla simple (sin JOIN), leer en lotes y devolver filas normalizadas
+      if (conn.type === "firebird") {
+        if (isJoin) throw new Error("Firebird en ETL solo soporta una tabla. No uses JOIN.");
+        const tableToQuery = body!.filter?.table;
+        if (!tableToQuery) throw new Error("Tabla de origen requerida.");
+        const password =
+          (conn as any).db_password_encrypted
+            ? decryptConnectionPassword((conn as any).db_password_encrypted)
+            : (conn as any).db_password ?? "";
+        const tablePart = tableToQuery.includes(".")
+          ? tableToQuery.split(".", 2).map((s) => `"${s.replace(/"/g, '""')}"`).join(".")
+          : `"${tableToQuery.replace(/"/g, '""')}"`;
+        const cols =
+          body!.filter?.columns && body!.filter.columns.length
+            ? body!.filter.columns.map((c) => `"${(c || "").replace(/"/g, '""')}"`).join(", ")
+            : "*";
+        const { clause, params } = buildWhereClauseFirebird(body!.filter?.conditions || []);
+        const baseSql = `SELECT ${cols} FROM ${tablePart} ${clause}`;
+        const Firebird = require("node-firebird");
+        const opts = {
+          host: conn.db_host || "localhost",
+          port: conn.db_port ? Number(conn.db_port) : 15421,
+          database: conn.db_name,
+          user: conn.db_user,
+          password: password || "",
+          lowercase_keys: false,
+        };
+        let offset = 0;
+        let db: any = null;
+        try {
+          db = await new Promise<any>((resolve, reject) => {
+            Firebird.attach(opts, (err: Error | null, connection: any) => {
+              if (err) reject(err);
+              else resolve(connection);
+            });
+          });
+          for (;;) {
+            const sql = offset === 0
+              ? `${baseSql} FETCH FIRST ${pageSize} ROWS ONLY`
+              : `${baseSql} OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY`;
+            const rows = await new Promise<any[]>((resolve, reject) => {
+              db.query(sql, params, (err: Error | null, r: any[]) => {
+                if (err) reject(err);
+                else resolve(r || []);
+              });
+            });
+            const normalized = rows.map((row: Record<string, any>) => {
+              const out: Record<string, any> = {};
+              for (const k in row) {
+                const key = k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+                out[key] = row[k];
+              }
+              return out;
+            });
+            if (normalized.length === 0) break;
+            yield normalized;
+            if (normalized.length < pageSize) break;
+            offset += pageSize;
+          }
+        } finally {
+          if (db?.detach) db.detach(() => {});
+        }
+        return;
+      }
 
       let client: PgClient;
       if (conn.type === "excel_file") {

@@ -161,6 +161,45 @@ export function buildWhereClauseMy(conds: FilterCondition[] = []) {
   return { clause: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
 }
 
+// WHERE clause for Firebird (positional ? params)
+export function buildWhereClauseFirebird(conds: FilterCondition[] = []) {
+  const params: any[] = [];
+  const parts = conds.map((c) => {
+    const col = `"${(c.column || "").replace(/"/g, '""')}"`;
+    switch (c.operator) {
+      case "is null":
+        return `${col} IS NULL`;
+      case "is not null":
+        return `${col} IS NOT NULL`;
+      case "contains":
+        params.push(`%${c.value ?? ""}%`);
+        return `${col} CONTAINING ?`;
+      case "startsWith":
+        params.push(`${c.value ?? ""}%`);
+        return `${col} LIKE ?`;
+      case "endsWith":
+        params.push(`%${c.value ?? ""}`);
+        return `${col} LIKE ?`;
+      case "in": {
+        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const qs = list.map(() => "?");
+        params.push(...list);
+        return `${col} IN (${qs.join(", ")})`;
+      }
+      case "not in": {
+        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const qs = list.map(() => "?");
+        params.push(...list);
+        return `${col} NOT IN (${qs.join(", ")})`;
+      }
+      default:
+        params.push(c.value ?? null);
+        return `${col} ${c.operator} ?`;
+    }
+  });
+  return { clause: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
+}
+
 // Star schema WHERE (primary./join_i.) for Postgres
 export function buildWhereClausePgStar(
   conds: FilterCondition[] = [],

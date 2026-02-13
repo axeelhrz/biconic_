@@ -161,4 +161,20 @@
   color: var(--platform-muted);
 }
 
+/* ETL Editor: panel derecho y inputs usan tema plataforma */
+.biconic-platform-content [data-etl-right-panel] label,
+.biconic-platform-content [data-etl-right-panel] .font-medium {
+  color: var(--platform-fg-muted) !important;
+}
+.biconic-platform-content [data-etl-right-panel] input,
+.biconic-platform-content [data-etl-right-panel] select,
+.biconic-platform-content [data-etl-right-panel] textarea {
+  background: var(--platform-bg) !important;
+  border-color: var(--platform-border) !important;
+  color: var(--platform-fg) !important;
+}
+.biconic-platform-content [data-etl-right-panel] input::placeholder {
+  color: var(--platform-muted);
+}
+
 /* Login */

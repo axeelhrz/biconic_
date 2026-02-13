@@ -99,6 +99,8 @@ export async function getConnections(): Promise<Connection[]> {
       case "postgres":
       case "postgresql":
         return "PostgreSQL";
+      case "firebird":
+        return "Firebird";
       case "excel_file":
       case "excel":
         return "Excel";

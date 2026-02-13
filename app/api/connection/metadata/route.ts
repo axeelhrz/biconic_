@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
+import { decryptConnectionPassword } from "@/lib/connection-secret";
 
 type ConnectionBody = {
-  type?: "mysql" | "postgres" | "postgresql" | "excel";
+  type?: "mysql" | "postgres" | "postgresql" | "excel" | "firebird";
   host?: string;
   database?: string;
   user?: string;
@@ -12,6 +13,8 @@ type ConnectionBody = {
   port?: number;
   ssl?: boolean;
   connectionId?: string | number;
+  /** Para Firebird: si se envía, solo se devuelven las columnas de esta tabla (ej. PUBLIC.VENTAS). */
+  tableName?: string;
 };
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -25,8 +28,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    let { type, host, database, user, password, port, ssl, connectionId } =
+    let { type, host, database, user, password, port, ssl, connectionId, tableName: bodyTableName } =
       body;
+    let connectionTables: string[] | null = null;
     if (connectionId != null) {
       console.log("[metadata] Using connectionId=", String(connectionId));
     }
@@ -48,9 +52,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const { data: conn, error: connError } = await supabase
         .from("connections")
         .select(
-          "id, user_id, type, db_host, db_name, db_user, db_port, original_file_name"
+          "id, user_id, type, db_host, db_name, db_user, db_port, original_file_name, db_password_encrypted, connection_tables"
         )
-        .eq("id", String(connectionId))
         .eq("id", String(connectionId))
         .maybeSingle();
       if (connError || !conn) {
@@ -59,19 +62,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           { status: 404 }
         );
       }
-      // Mapear nuevos campos
       host = (conn as any)?.db_host ?? host;
       database = (conn as any)?.db_name ?? database;
       user = (conn as any)?.db_user ?? user;
       port = (conn as any)?.db_port ?? port;
-
-      // Detectar si es una conexión Excel por el campo type
+      if (!password && (conn as any)?.db_password_encrypted) {
+        try {
+          password = decryptConnectionPassword((conn as any).db_password_encrypted);
+        } catch {}
+      }
+      if (!password && (conn as any)?.type === "firebird") {
+        password = process.env.FLEXXUS_PASSWORD ?? undefined;
+      }
       if (
         (conn as any)?.type === "excel_file" ||
         (conn as any)?.type === "excel"
       ) {
         type = "excel";
       }
+      if ((conn as any)?.type === "firebird") {
+        type = "firebird";
+      }
+      const rawTables = (conn as any)?.connection_tables;
+      connectionTables = Array.isArray(rawTables)
+        ? rawTables.map((t: unknown) => String(t).trim()).filter(Boolean)
+        : null;
 
       console.log("[metadata] Loaded connection from DB (no secrets logged)", {
         hasHost: !!host,
@@ -136,6 +151,178 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       });
     }
 
+    const METADATA_TIMEOUT_MS = 12000; // 12s para MySQL/Postgres
+    const METADATA_TIMEOUT_FIREBIRD_MS = 30000; // 30s para Firebird (conexión puede ser más lenta)
+
+    // Firebird (Flexxus): listar tablas y columnas para el ETL
+    if (type === "firebird") {
+      // Si la conexión tiene tablas configuradas manualmente, devolverlas sin conectar (evita timeout con muchas tablas).
+      // Si además piden columnas de una tabla (tableName), no devolver aquí; más abajo se conecta y se devuelve esa tabla con columnas.
+      if (connectionTables && connectionTables.length > 0 && !(typeof bodyTableName === "string" && bodyTableName.trim())) {
+        const tables = connectionTables.map((t) => {
+          const s = String(t).trim();
+          const parts = s.split(".");
+          const schema = parts.length > 1 ? parts[0] : "PUBLIC";
+          const name = parts.length > 1 ? parts.slice(1).join(".") : s;
+          return { schema, name, columns: [] as { name: string; dataType: string; nullable: boolean; defaultValue: null; isPrimaryKey: boolean }[] };
+        });
+        return NextResponse.json({
+          ok: true,
+          metadata: { dbVersion: "Firebird", schemas: ["PUBLIC"], tables },
+        });
+      }
+
+      if (!host || !database || !user) {
+        return NextResponse.json(
+          { ok: false, error: "Parámetros incompletos para Firebird" },
+          { status: 400 }
+        );
+      }
+      if (!password) {
+        return NextResponse.json(
+          { ok: false, error: "Se requiere contraseña para Firebird. Guardala en la conexión." },
+          { status: 400 }
+        );
+      }
+
+      // Si piden columnas de una tabla concreta: conectar y devolver solo esa tabla con columnas.
+      const tableNameForColumns = typeof bodyTableName === "string" ? bodyTableName.trim() : "";
+      if (tableNameForColumns) {
+        const relationNameRaw = tableNameForColumns.includes(".")
+          ? tableNameForColumns.split(".").slice(-1)[0] ?? tableNameForColumns
+          : tableNameForColumns;
+        const relationName = relationNameRaw.toUpperCase();
+        const schemaPart = tableNameForColumns.includes(".")
+          ? tableNameForColumns.split(".").slice(0, -1).join(".")
+          : "PUBLIC";
+
+        const firebirdColumnsWork = async () => {
+          const Firebird = require("node-firebird");
+          const opts = {
+            host,
+            port: port ? Number(port) : 15421,
+            database,
+            user,
+            password: password || "",
+            lowercase_keys: false,
+          };
+          return await new Promise<{ dbVersion: string; schemas: string[]; tables: { schema: string; name: string; columns: any[] }[] }>((resolve, reject) => {
+            Firebird.attach(opts, (errAttach: Error | null, db: any) => {
+              if (errAttach) {
+                reject(errAttach);
+                return;
+              }
+              const sqlCols =
+                "SELECT TRIM(RDB$FIELD_NAME) AS FIELD_NAME, RDB$FIELD_POSITION AS FIELD_POSITION FROM RDB$RELATION_FIELDS WHERE TRIM(RDB$RELATION_NAME) = ? ORDER BY RDB$FIELD_POSITION";
+              db.query(sqlCols, [relationName], (errC: Error | null, colRows: any[]) => {
+                if (db?.detach) db.detach(() => {});
+                if (errC) {
+                  reject(errC);
+                  return;
+                }
+                const columns = (colRows || []).map((r: any) => ({
+                  name: (r.FIELD_NAME ?? r.field_name ?? "").trim(),
+                  dataType: "varchar",
+                  nullable: true,
+                  defaultValue: null,
+                  isPrimaryKey: false,
+                }));
+                resolve({
+                  dbVersion: "Firebird",
+                  schemas: ["PUBLIC"],
+                  tables: [{ schema: schemaPart, name: relationName, columns }],
+                });
+              });
+            });
+          });
+        };
+
+        try {
+          const metadata = await Promise.race([
+            firebirdColumnsWork(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("METADATA_TIMEOUT")), METADATA_TIMEOUT_FIREBIRD_MS)
+            ),
+          ]);
+          return NextResponse.json({ ok: true, metadata });
+        } catch (e: any) {
+          const msg = e?.message || "";
+          if (msg === "METADATA_TIMEOUT" || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED"))
+            return NextResponse.json(
+              { ok: false, error: "No se pudieron cargar las columnas. La base no respondió a tiempo." },
+              { status: 504 }
+            );
+          return NextResponse.json(
+            { ok: false, error: e?.message || "Error obteniendo columnas de Firebird" },
+            { status: 400 }
+          );
+        }
+      }
+
+      // Solo listar nombres de tablas (una consulta). No pedir columnas por tabla para no hacer N+1 y evitar timeout con muchas tablas.
+      const firebirdWork = async () => {
+        const Firebird = require("node-firebird");
+        const opts = {
+          host,
+          port: port ? Number(port) : 15421,
+          database,
+          user,
+          password: password || "",
+          lowercase_keys: false,
+        };
+        return await new Promise<{ dbVersion: string; schemas: string[]; tables: { schema: string; name: string; columns: any[] }[] }>((resolve, reject) => {
+          Firebird.attach(opts, (errAttach: Error | null, db: any) => {
+            if (errAttach) {
+              reject(errAttach);
+              return;
+            }
+            const sqlTables =
+              "SELECT TRIM(RDB$RELATION_NAME) AS TABLE_NAME FROM RDB$RELATIONS WHERE RDB$SYSTEM_FLAG = 0 AND RDB$VIEW_BLR IS NULL ORDER BY RDB$RELATION_NAME";
+            db.query(sqlTables, [], (errQ: Error | null, rows: any[]) => {
+              if (db?.detach) db.detach(() => {});
+              if (errQ) {
+                reject(errQ);
+                return;
+              }
+              const tableNames = (rows || []).map((r: any) => (r.TABLE_NAME ?? r.table_name ?? "").trim()).filter(Boolean);
+              const tables = tableNames.map((name: string) => ({
+                schema: "PUBLIC",
+                name,
+                columns: [] as { name: string; dataType: string; nullable: boolean; defaultValue: null; isPrimaryKey: boolean }[],
+              }));
+              tables.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+              resolve({ dbVersion: "Firebird", schemas: ["PUBLIC"], tables });
+            });
+          });
+        });
+      };
+
+      try {
+        const metadata = await Promise.race([
+          firebirdWork(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("METADATA_TIMEOUT")), METADATA_TIMEOUT_FIREBIRD_MS)
+          ),
+        ]);
+        return NextResponse.json({ ok: true, metadata });
+      } catch (e: any) {
+        const msg = e?.message || "";
+        if (msg === "METADATA_TIMEOUT" || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED"))
+          return NextResponse.json(
+            {
+              ok: false,
+              error:
+                "La base Firebird no respondió a tiempo. Probá configurar las tablas manualmente: en Conexiones, icono de tabla (Tablas para ETL), agregá los nombres (ej. PUBLIC.VENTAS, una por línea) y guardá.",
+            },
+            { status: 504 }
+          );
+        return NextResponse.json(
+          { ok: false, error: e?.message || "Error obteniendo metadata de Firebird" },
+          { status: 400 }
+        );
+      }
+    }
+
     if (!host || !user) {
       return NextResponse.json(
         { ok: false, error: "Parámetros incompletos" },
@@ -151,14 +338,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         );
       }
 
-      const connection = await mysql.createConnection({
-        host,
-        user,
-        port: port ? Number(port) : 3306,
-        database,
-        password,
-        connectTimeout: 8000,
-      });
+      const mysqlWork = async () => {
+        const connection = await mysql.createConnection({
+          host,
+          user,
+          port: port ? Number(port) : 3306,
+          database,
+          password,
+          connectTimeout: 10000,
+        });
 
       // Version
       const [[versionRow]] = await connection.query<any[]>(
@@ -219,10 +407,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       }
 
       const tables = Array.from(tableMap.values());
-      return NextResponse.json({
-        ok: true,
-        metadata: { dbVersion, schemas, tables },
-      });
+      return { dbVersion, schemas, tables };
+      };
+
+      try {
+        const metadata = await Promise.race([
+          mysqlWork(),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("METADATA_TIMEOUT")),
+              METADATA_TIMEOUT_MS
+            )
+          ),
+        ]);
+        return NextResponse.json({ ok: true, metadata });
+      } catch (e: any) {
+        const msg = e?.message || "";
+        if (msg === "METADATA_TIMEOUT" || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED"))
+          return NextResponse.json(
+            {
+              ok: false,
+              error:
+                "La base de datos no respondió a tiempo o no es accesible desde el servidor. Si está en red local o detrás de firewall, no es accesible desde Vercel.",
+            },
+            { status: 504 }
+          );
+        throw e;
+      }
     }
 
     if (type === "postgres" || type === "postgresql") {
@@ -239,19 +450,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         port: port ?? 5432,
         ssl: !!ssl,
       });
-      const client = new PgClient({
-        host,
-        user,
-        database,
-        port: port ? Number(port) : 5432,
-        password,
-        connectionTimeoutMillis: 8000,
-        ssl: ssl ? { rejectUnauthorized: false } : undefined,
-      } as any);
-      await client.connect();
 
-      // Version
-      const verRes = await client.query("SHOW server_version");
+      const pgWork = async () => {
+        const client = new PgClient({
+          host,
+          user,
+          database,
+          port: port ? Number(port) : 5432,
+          password,
+          connectionTimeoutMillis: 10000,
+          ssl: ssl ? { rejectUnauthorized: false } : undefined,
+        } as any);
+        await client.connect();
+
+        // Version
+        const verRes = await client.query("SHOW server_version");
       const dbVersion = verRes.rows?.[0]?.server_version as string | undefined;
 
       // Schemas
@@ -313,10 +526,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       }
 
       const tables = Array.from(tableMap.values());
-      return NextResponse.json({
-        ok: true,
-        metadata: { dbVersion, schemas, tables },
-      });
+      return { dbVersion, schemas, tables };
+      };
+
+      try {
+        const metadata = await Promise.race([
+          pgWork(),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("METADATA_TIMEOUT")),
+              METADATA_TIMEOUT_MS
+            )
+          ),
+        ]);
+        return NextResponse.json({ ok: true, metadata });
+      } catch (e: any) {
+        const msg = e?.message || "";
+        if (msg === "METADATA_TIMEOUT" || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED"))
+          return NextResponse.json(
+            {
+              ok: false,
+              error:
+                "La base de datos no respondió a tiempo o no es accesible desde el servidor. Si está en red local o detrás de firewall, no es accesible desde Vercel.",
+            },
+            { status: 504 }
+          );
+        throw e;
+      }
     }
 
     // If type was not provided, try PostgreSQL first, then MySQL as a fallback

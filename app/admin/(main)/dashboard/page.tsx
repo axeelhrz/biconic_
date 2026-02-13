@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import AdminDashboardGrid from "@/components/admin/AdminDashboardGrid";
 import { Search, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,16 +8,31 @@ import { CreateDashboardDialog } from "./CreateDashboardDialog";
 import { ClientFilter } from "@/components/admin/dashboard/ClientFilter";
 
 export default function AdminDashboardPage() {
+  const searchParams = useSearchParams();
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"todos" | "publicados" | "borradores">(
     "todos"
   );
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [initialEtlId, setInitialEtlId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const create = searchParams.get("create");
+    const etlId = searchParams.get("etlId");
+    if (create === "1" && etlId) {
+      setShowCreateModal(true);
+      setInitialEtlId(etlId);
+    }
+  }, [searchParams]);
 
   return (
     <div className="flex w-full flex-col gap-8 p-8">
-      <CreateDashboardDialog open={showCreateModal} onOpenChange={setShowCreateModal} />
+      <CreateDashboardDialog
+        open={showCreateModal}
+        onOpenChange={setShowCreateModal}
+        initialEtlId={initialEtlId}
+      />
 
       {/* Header de la sección */}
       <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
@@ -39,7 +55,7 @@ export default function AdminDashboardPage() {
               placeholder="Buscar..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-[42px] w-full rounded-full border pl-10 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-2 sm:w-[280px]"
+              className="h-[42px] w-full rounded-full border pl-10 pr-4 text-sm focus:outline-none focus:ring-2 sm:w-[280px]"
               style={{
                 background: "var(--platform-surface)",
                 borderColor: "var(--platform-border)",

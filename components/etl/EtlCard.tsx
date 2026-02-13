@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import ShareEtlModal from "./ShareEtlModal";
 import { DeleteEtlModal } from "./DeleteEtlModal";
 import { deleteEtlAction } from "@/app/(main)/etl/actions";
+import { deleteEtlAdmin } from "@/app/admin/(main)/etl/actions";
 import { toast } from "sonner";
 
 // --- Iconos necesarios para los botones ---
@@ -74,19 +75,22 @@ export interface Etl {
 }
 
 // --- Componente de Tarjeta modificado ---
-export default function EtlCard({ 
-  etl, 
-  onDeleted, 
-  basePath = "/etl" 
-}: { 
-  etl: Etl; 
+export default function EtlCard({
+  etl,
+  onDeleted,
+  basePath = "/etl",
+  useAdminDelete = false,
+}: {
+  etl: Etl;
   onDeleted?: () => void;
   basePath?: string;
+  useAdminDelete?: boolean;
 }) {
   const router = useRouter();
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const deleteAction = useAdminDelete ? deleteEtlAdmin : deleteEtlAction;
   const {
     title,
     description,
@@ -106,7 +110,7 @@ export default function EtlCard({
   const handleDelete = async () => {
     setIsDeleting(true);
     try {
-      const res = await deleteEtlAction(etl.id);
+      const res = await deleteAction(etl.id);
       if (!res.ok) {
         toast.error(res.error || "Error al eliminar ETL");
         return;
@@ -169,8 +173,10 @@ export default function EtlCard({
 
       <div className="flex items-center justify-end gap-2.5">
         <button
+          type="button"
           className="flex h-[34px] items-center justify-center gap-2 rounded-full px-3 text-sm font-medium text-[#08080b] hover:opacity-90"
           style={{ background: "var(--platform-accent)" }}
+          onClick={() => router.push(`${basePath}/${etl.id}?run=1`)}
         >
           <PlusIcon className="h-4 w-4" />
           <span>Ejecutar</span>
