@@ -100,7 +100,7 @@ export default function FieldSelector({
         placeholder={placeholder}
         className="rounded-xl"
       />
-      {etlData && (
+      {etlData?.etl && etlData?.etlData != null && (
         <div className="mt-1 text-xs text-gray-500">
           {etlData.etlData.rowCount} filas disponibles desde "
           {etlData.etl.title || etlData.etl.name}"
