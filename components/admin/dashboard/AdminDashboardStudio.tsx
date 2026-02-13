@@ -428,7 +428,7 @@ export function AdminDashboardStudio({
         : etlData?.fields?.all ?? [];
       const dimension = fields[0] || "id";
       const metricField = fields.find((_, i) => i > 0) || dimension;
-      const baseAgg = {
+      const baseAgg: AggregationConfig = {
         enabled: true,
         dimension,
         metrics: [{ id: `m-${Date.now()}`, field: metricField, func: "COUNT", alias: "total" }],
