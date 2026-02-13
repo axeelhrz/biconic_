@@ -31,6 +31,7 @@ export function CreateEtlDialog({ open, onOpenChange }: CreateEtlDialogProps) {
   );
   const [loadingClients, setLoadingClients] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [etlTitle, setEtlTitle] = useState("Nuevo ETL");
   const [creating, setCreating] = useState(false);
 
   // Debounced search
@@ -49,7 +50,8 @@ export function CreateEtlDialog({ open, onOpenChange }: CreateEtlDialogProps) {
     if (!selectedClientId) return;
     try {
       setCreating(true);
-      const res = await createEtlAdmin(selectedClientId);
+      const title = etlTitle.trim() || "Nuevo ETL";
+      const res = await createEtlAdmin(selectedClientId, title);
       if (!res.ok) {
         toast.error(res.error || "Error al crear ETL");
         return;
@@ -74,6 +76,14 @@ export function CreateEtlDialog({ open, onOpenChange }: CreateEtlDialogProps) {
         </DialogHeader>
 
         <div className="flex flex-col gap-4 py-4">
+          <div className="flex flex-col gap-2">
+            <Label>Nombre del ETL</Label>
+            <Input
+              placeholder="Ej: Ventas Mensuales"
+              value={etlTitle}
+              onChange={(e) => setEtlTitle(e.target.value)}
+            />
+          </div>
           <div className="flex flex-col gap-2">
             <Label>Asignar a Cliente</Label>
             <Input

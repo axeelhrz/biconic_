@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   Table,
@@ -38,72 +38,82 @@ export default function MonitorsTable({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const mountedRef = useRef(true);
   useEffect(() => {
-    let isMounted = true;
-    const supabase = createClient();
-
-    async function loadLogs() {
-      try {
-        setLoading(true);
-
-        // Fetch logs
-        const { data: logsData, error: logsError } = await supabase
-          .from("etl_runs_log")
-          .select("*")
-          .order("started_at", { ascending: false })
-          .limit(100);
-
-        if (logsError) throw logsError;
-
-        if (!logsData || logsData.length === 0) {
-           if (isMounted) setLogs([]);
-           return;
-        }
-
-        // Fetch ETL names
-        const etlIds = Array.from(
-          new Set(logsData.map((l) => l.etl_id).filter(Boolean))
-        ) as string[];
-
-        let etlNameMap = new Map<string, string>();
-
-        if (etlIds.length > 0) {
-          const { data: etlsData, error: etlsError } = await supabase
-            .from("etl")
-            .select("id, title, name")
-            .in("id", etlIds);
-
-          if (!etlsError && etlsData) {
-            etlsData.forEach((etl) => {
-              etlNameMap.set(etl.id, etl.title || etl.name || "Sin Nombre");
-            });
-          }
-        }
-
-        const mappedLogs: LogEntry[] = logsData.map((log) => ({
-          ...log,
-          etl_name: log.etl_id ? etlNameMap.get(log.etl_id) || "Desconocido" : "N/A",
-        }));
-
-        if (isMounted) {
-          setLogs(mappedLogs);
-          setError(null);
-        }
-      } catch (err: any) {
-        if (isMounted) {
-          setError(err.message || "Error cargando logs");
-        }
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    }
-
-    loadLogs();
-
+    mountedRef.current = true;
     return () => {
-      isMounted = false;
+      mountedRef.current = false;
     };
   }, []);
+
+  const loadLogs = useCallback(async (showLoading = true) => {
+    const supabase = createClient();
+    try {
+      if (showLoading) setLoading(true);
+
+      const { data: logsData, error: logsError } = await supabase
+        .from("etl_runs_log")
+        .select("*")
+        .order("started_at", { ascending: false })
+        .limit(100);
+
+      if (logsError) throw logsError;
+
+      if (!logsData || logsData.length === 0) {
+        if (mountedRef.current) setLogs([]);
+        return;
+      }
+
+      const etlIds = Array.from(
+        new Set(logsData.map((l) => l.etl_id).filter(Boolean))
+      ) as string[];
+
+      let etlNameMap = new Map<string, string>();
+
+      if (etlIds.length > 0) {
+        const { data: etlsData, error: etlsError } = await supabase
+          .from("etl")
+          .select("id, title, name")
+          .in("id", etlIds);
+
+        if (!etlsError && etlsData) {
+          etlsData.forEach((etl) => {
+            etlNameMap.set(etl.id, etl.title || etl.name || "Sin Nombre");
+          });
+        }
+      }
+
+      const mappedLogs: LogEntry[] = logsData.map((log) => ({
+        ...log,
+        etl_name: log.etl_id ? etlNameMap.get(log.etl_id) || "Desconocido" : "N/A",
+      }));
+
+      if (mountedRef.current) {
+        setLogs(mappedLogs);
+        setError(null);
+      }
+    } catch (err: any) {
+      if (mountedRef.current) {
+        setError(err?.message || "Error cargando logs");
+      }
+    } finally {
+      if (mountedRef.current && showLoading) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLogs(true);
+  }, [loadLogs]);
+
+  // Cuando hay ejecuciones en progreso, refrescar cada 5s para actualizar estado
+  const hasInProgress = logs.some(
+    (l) => l.status === "started" || l.status === "running"
+  );
+  useEffect(() => {
+    if (!hasInProgress) return;
+    const interval = setInterval(() => loadLogs(false), 5000);
+    return () => clearInterval(interval);
+  }, [hasInProgress, loadLogs]);
 
   const filteredLogs = logs.filter((log) => {
     const matchesSearch =
