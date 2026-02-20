@@ -73,10 +73,15 @@ type RunBody = {
       connectionId: string;
       filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] };
     };
-    right: {
+    right?: {
       connectionId: string;
       filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] };
     };
+    /** Múltiples tablas a apilar (UNION). Si no se envía, se usa right como única tabla derecha. */
+    rights?: Array<{
+      connectionId: string;
+      filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] };
+    }>;
     unionAll?: boolean;
   };
   clean?: {
@@ -497,10 +502,10 @@ async function executeEtlPipeline(
     // --- DATA SOURCE GENERATOR ---
     async function* dataSourceGenerator(): AsyncGenerator<any[], void, void> {
       const unionConf = body!.union;
-      if (unionConf?.left?.connectionId && unionConf?.right?.connectionId) {
-        // UNION: apilar Dataset A + Dataset B (mismas columnas). Default UNION ALL.
+      const rightSources = unionConf?.rights ?? (unionConf?.right ? [unionConf.right] : []);
+      if (unionConf?.left?.connectionId && rightSources.length > 0) {
+        // UNION: apilar Dataset principal + una o más tablas (mismas columnas). Default UNION ALL.
         const left = unionConf.left;
-        const right = unionConf.right;
         const pageSizeUnion = pageSize;
         const dbUrlUnion = process.env.SUPABASE_DB_URL;
         if (!dbUrlUnion) throw new Error("SUPABASE_DB_URL no disponible para UNION.");
@@ -522,16 +527,17 @@ async function executeEtlPipeline(
         };
 
         const leftInfo = await resolveTableAndConn(left.connectionId, left.filter);
-        const rightInfo = await resolveTableAndConn(right.connectionId, right.filter);
-        if (leftInfo.type !== "excel" || rightInfo.type !== "excel") {
-          if (left.connectionId !== right.connectionId)
-            throw new Error("UNION con dos conexiones distintas solo soportado cuando ambas son Excel. Usá la misma conexión para Postgres.");
+        const rightInfos = await Promise.all(rightSources.map((r: { connectionId: string; filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] } }) => resolveTableAndConn(r.connectionId, r.filter)));
+        if (leftInfo.type !== "excel" || rightInfos.some((r) => r.type !== "excel")) {
+          const allSameConn = rightInfos.every((r) => r.conn && left.connectionId === (r.conn as any).id);
+          if (!allSameConn)
+            throw new Error("UNION con varias conexiones solo soportado cuando todas son Excel. Usá la misma conexión para Postgres.");
         }
 
         const clientUnion = new PgClient({ connectionString: dbUrlUnion });
         await withRetry(() => clientUnion.connect(), { label: "union-connect" });
         try {
-          const runSource = async (source: typeof left, tableQualified: string) => {
+          const runSource = async (source: { connectionId: string; filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] } }, tableQualified: string) => {
             const filter = source.filter || {};
             const tableQ = quoteQualified(tableQualified);
             const selectList = filter.columns?.length ? filter.columns.map((c: string) => quoteIdent(c, "postgres")).join(", ") : "*";
@@ -558,24 +564,23 @@ async function executeEtlPipeline(
           };
 
           const leftTable = leftInfo.table;
-          const rightTable = rightInfo.table;
-          const [leftBatches, rightBatches] = await Promise.all([
-            runSource(left, leftTable),
-            runSource(right, rightTable),
-          ]);
-
           let leftCols: string[] | null = null;
-          for (const batch of leftBatches) {
+          for (const batch of await runSource(left, leftTable)) {
             if (batch.length && leftCols === null) leftCols = Object.keys(batch[0]).sort();
             yield batch;
           }
-          for (const batch of rightBatches) {
-            if (batch.length) {
-              const rightCols = Object.keys(batch[0]).sort();
-              if (leftCols && rightCols.join(",") !== leftCols.join(","))
-                throw new Error("UNION: ambos datasets deben tener las mismas columnas (nombre y orden).");
+          for (let r = 0; r < rightSources.length; r++) {
+            const right = rightSources[r];
+            const rightInfo = rightInfos[r];
+            const rightBatches = await runSource(right, rightInfo.table);
+            for (const batch of rightBatches) {
+              if (batch.length) {
+                const rightCols = Object.keys(batch[0]).sort();
+                if (leftCols && rightCols.join(",") !== leftCols.join(","))
+                  throw new Error("UNION: todos los datasets deben tener las mismas columnas (nombre y orden).");
+              }
+              yield batch;
             }
-            yield batch;
           }
         } finally {
           await clientUnion.end();
