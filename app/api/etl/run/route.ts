@@ -68,6 +68,17 @@ type RunBody = {
     leftColumns?: string[];
     rightColumns?: string[];
   };
+  union?: {
+    left: {
+      connectionId: string;
+      filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] };
+    };
+    right: {
+      connectionId: string;
+      filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] };
+    };
+    unionAll?: boolean;
+  };
   clean?: {
     transforms: Array<
       | { column: string; op: "trim" | "upper" | "lower" | "cast_number" | "cast_date" }
