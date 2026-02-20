@@ -5479,9 +5479,9 @@ export function ETLEditor({
                                   }
                                 : w
                             )
-                          }
+                          )
                         }
-                        className="rounded border-gray-300"
+                        className="rounded border border-gray-300"
                       />
                       <span className="text-sm">UNION ALL (no eliminar duplicados)</span>
                     </label>
