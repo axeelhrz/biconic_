@@ -626,52 +626,74 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const canGoNextDestino = outputTableName.trim().length > 0 && /^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
   const destinoInvalid = outputTableName.trim().length > 0 && !/^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
 
+  /** En Admin siempre mostramos el editor (todas las secciones en una página) para poder modificar cualquier dato al editar */
+  const isEditorMode = true;
+
   return (
     <div className="flex flex-col h-full rounded-2xl overflow-hidden" style={{ background: "var(--platform-surface)", border: "1px solid var(--platform-border)" }}>
-      {/* Stepper con progreso */}
-      <div className="shrink-0 border-b" style={{ borderColor: "var(--platform-border)" }}>
-        <div className="px-4 pt-4 pb-2">
-          <div className="flex items-center justify-between text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>
-            <span>Paso {stepIndex + 1} de {STEPS.length}</span>
-            <span>{Math.round(progressPct)}%</span>
+      {/* Header: en modo editor solo título + guardar; en wizard, stepper con progreso */}
+      {isEditorMode ? (
+        <div className="shrink-0 border-b px-4 py-3 flex items-center justify-between gap-3" style={{ borderColor: "var(--platform-border)" }}>
+          <div>
+            <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>Editor del ETL</h2>
+            <p className="text-xs mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>Modificá cada sección debajo y guardá los cambios.</p>
           </div>
-          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--platform-surface-hover)" }}>
-            <div className="h-full rounded-full transition-all duration-300" style={{ width: `${progressPct}%`, background: "var(--platform-accent)" }} />
+          <Button
+            type="button"
+            className="rounded-xl shrink-0"
+            style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+            onClick={() => saveGuidedConfigToServer()}
+          >
+            Guardar configuración
+          </Button>
+        </div>
+      ) : (
+        <div className="shrink-0 border-b" style={{ borderColor: "var(--platform-border)" }}>
+          <div className="px-4 pt-4 pb-2">
+            <div className="flex items-center justify-between text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>
+              <span>Paso {stepIndex + 1} de {STEPS.length}</span>
+              <span>{Math.round(progressPct)}%</span>
+            </div>
+            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--platform-surface-hover)" }}>
+              <div className="h-full rounded-full transition-all duration-300" style={{ width: `${progressPct}%`, background: "var(--platform-accent)" }} />
+            </div>
+          </div>
+          <div className="flex items-center gap-1 p-2 overflow-x-auto">
+            {STEPS.map((s, i) => {
+              const Icon = s.icon;
+              const isActive = s.id === step;
+              const isPast = stepIndex > i;
+              const canJump = isPast || isActive;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => (!runSuccess && canJump) && setStep(s.id)}
+                  disabled={runSuccess || (!isPast && !isActive)}
+                  className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    background: isActive ? "var(--platform-accent-dim)" : "transparent",
+                    color: isActive ? "var(--platform-accent)" : isPast ? "var(--platform-fg)" : "var(--platform-fg-muted)",
+                  }}
+                  title={`Paso ${i + 1}: ${s.label}`}
+                >
+                  <span className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: isActive ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: isActive ? "var(--platform-bg)" : "inherit" }}>
+                    {isPast ? <CheckCircle2 className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                  </span>
+                  <span className="hidden sm:inline">{s.label}</span>
+                  {i < STEPS.length - 1 && <ChevronRight className="h-4 w-4 opacity-40 shrink-0" />}
+                </button>
+              );
+            })}
           </div>
         </div>
-        <div className="flex items-center gap-1 p-2 overflow-x-auto">
-          {STEPS.map((s, i) => {
-            const Icon = s.icon;
-            const isActive = s.id === step;
-            const isPast = stepIndex > i;
-            const canJump = isPast || isActive || !!initialGuidedConfig;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => (!runSuccess && canJump) && setStep(s.id)}
-                disabled={runSuccess || (!isPast && !isActive)}
-                className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{
-                  background: isActive ? "var(--platform-accent-dim)" : "transparent",
-                  color: isActive ? "var(--platform-accent)" : isPast ? "var(--platform-fg)" : "var(--platform-fg-muted)",
-                }}
-                title={`Paso ${i + 1}: ${s.label}`}
-              >
-                <span className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: isActive ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: isActive ? "var(--platform-bg)" : "inherit" }}>
-                  {isPast ? <CheckCircle2 className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
-                </span>
-                <span className="hidden sm:inline">{s.label}</span>
-                {i < STEPS.length - 1 && <ChevronRight className="h-4 w-4 opacity-40 shrink-0" />}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      )}
 
-      {/* Content */}
+      {/* Content: en modo editor todas las secciones visibles; en wizard solo el paso actual */}
       <div className="flex-1 overflow-y-auto p-6 min-h-0">
-        {step === "conexion" && (
+        {(step === "conexion" || isEditorMode) && (
+        <section id="seccion-conexion" className={isEditorMode ? "mb-10 pb-8 border-b" : ""} style={isEditorMode ? { borderColor: "var(--platform-border)" } : undefined}>
+        {(step === "conexion" || isEditorMode) && (
           <div className="space-y-6 max-w-xl">
             <div>
               <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
@@ -715,15 +737,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   </select>
                 </div>
                 <div className="flex gap-3 pt-2">
-                  <Button
-                    type="button"
-                    className="rounded-xl"
-                    style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                    onClick={() => goToStepAndSave("origen")}
-                    disabled={!canGoNextConexion}
-                  >
-                    Siguiente: Origen <ChevronRight className="ml-2 h-4 w-4" />
-                  </Button>
+                  {!isEditorMode && (
+                    <Button
+                      type="button"
+                      className="rounded-xl"
+                      style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                      onClick={() => goToStepAndSave("origen")}
+                      disabled={!canGoNextConexion}
+                    >
+                      Siguiente: Origen <ChevronRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="outline"
@@ -738,8 +762,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             )}
           </div>
         )}
+        </section>
+        )}
 
-        {step === "origen" && (
+        {(step === "origen" || isEditorMode) && (
+        <section id="seccion-origen" className={isEditorMode ? "mb-10 pb-8 border-b" : ""} style={isEditorMode ? { borderColor: "var(--platform-border)" } : undefined}>
+        {(step === "origen" || isEditorMode) && (
           <div className="space-y-6 max-w-xl">
             <div>
               <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
@@ -816,25 +844,33 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   )}
                 </div>
                 <div className="flex gap-3 pt-2">
-                  <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => setStep("conexion")}>
-                    Atrás
-                  </Button>
-                  <Button
-                    type="button"
-                    className="rounded-xl"
-                    style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                    onClick={() => goToStepAndSave("filtros")}
-                    disabled={!canGoNextOrigen}
-                  >
-                    Siguiente: Columnas y filtros <ChevronRight className="ml-2 h-4 w-4" />
-                  </Button>
+                  {!isEditorMode && (
+                    <>
+                      <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => setStep("conexion")}>
+                        Atrás
+                      </Button>
+                      <Button
+                        type="button"
+                        className="rounded-xl"
+                        style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                        onClick={() => goToStepAndSave("filtros")}
+                        disabled={!canGoNextOrigen}
+                      >
+                        Siguiente: Columnas y filtros <ChevronRight className="ml-2 h-4 w-4" />
+                      </Button>
+                    </>
+                  )}
                 </div>
               </>
             )}
           </div>
         )}
+        </section>
+        )}
 
-        {step === "transformacion" && (
+        {(step === "transformacion" || isEditorMode) && (
+        <section id="seccion-transformacion" className={isEditorMode ? "mb-10 pb-8 border-b" : ""} style={isEditorMode ? { borderColor: "var(--platform-border)" } : undefined}>
+        {(step === "transformacion" || isEditorMode) && (
           <div className="space-y-6 max-w-2xl">
             <div>
               <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
@@ -1332,17 +1368,25 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               );
             })()}
             <div className="flex gap-2">
-              <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("filtros")}>
-                Atrás
-              </Button>
-              <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={() => goToStepAndSave("destino")}>
-                Siguiente: Destino <ChevronRight className="ml-2 h-4 w-4" />
-              </Button>
+              {!isEditorMode && (
+                <>
+                  <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("filtros")}>
+                    Atrás
+                  </Button>
+                  <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={() => goToStepAndSave("destino")}>
+                    Siguiente: Destino <ChevronRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         )}
+        </section>
+        )}
 
-        {step === "filtros" && (
+        {(step === "filtros" || isEditorMode) && (
+        <section id="seccion-filtros" className={isEditorMode ? "mb-10 pb-8 border-b" : ""} style={isEditorMode ? { borderColor: "var(--platform-border)" } : undefined}>
+        {(step === "filtros" || isEditorMode) && (
           <div className="space-y-6 max-w-xl">
             <div>
               <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
@@ -1538,29 +1582,37 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               </div>
             ) : null}
             <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-xl"
-                style={{ borderColor: "var(--platform-border)" }}
-                onClick={() => goToStepAndSave("origen")}
-              >
-                Atrás
-              </Button>
-              <Button
-                type="button"
-                className="rounded-xl"
-                style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                onClick={() => goToStepAndSave("transformacion")}
-                disabled={!canGoNextFiltros}
-              >
-                Siguiente: Transformación <ChevronRight className="ml-2 h-4 w-4" />
-              </Button>
+              {!isEditorMode && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-xl"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    onClick={() => goToStepAndSave("origen")}
+                  >
+                    Atrás
+                  </Button>
+                  <Button
+                    type="button"
+                    className="rounded-xl"
+                    style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                    onClick={() => goToStepAndSave("transformacion")}
+                    disabled={!canGoNextFiltros}
+                  >
+                    Siguiente: Transformación <ChevronRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         )}
+        </section>
+        )}
 
-        {step === "destino" && (
+        {(step === "destino" || isEditorMode) && (
+        <section id="seccion-destino" className={isEditorMode ? "mb-10 pb-8 border-b" : ""} style={isEditorMode ? { borderColor: "var(--platform-border)" } : undefined}>
+        {(step === "destino" || isEditorMode) && (
           <div className="space-y-6 max-w-xl">
             <div>
               <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
@@ -1602,23 +1654,31 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               </select>
             </div>
             <div className="flex gap-3 pt-2">
-              <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("transformacion")}>
-                Atrás
-              </Button>
-              <Button
-                type="button"
-                className="rounded-xl"
-                style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                onClick={() => goToStepAndSave("ejecutar")}
-                disabled={!canGoNextDestino}
-              >
-                Ir a Ejecutar <ChevronRight className="ml-2 h-4 w-4" />
-              </Button>
+              {!isEditorMode && (
+                <>
+                  <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("transformacion")}>
+                    Atrás
+                  </Button>
+                  <Button
+                    type="button"
+                    className="rounded-xl"
+                    style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                    onClick={() => goToStepAndSave("ejecutar")}
+                    disabled={!canGoNextDestino}
+                  >
+                    Ir a Ejecutar <ChevronRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         )}
+        </section>
+        )}
 
-        {step === "ejecutar" && (
+        {(step === "ejecutar" || isEditorMode) && (
+        <section id="seccion-ejecutar" className={isEditorMode ? "mb-10 pb-8" : ""}>
+        {(step === "ejecutar" || isEditorMode) && (
           <div className="space-y-6 max-w-xl">
             {!runSuccess ? (
               <>
@@ -1729,6 +1789,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               </div>
             )}
           </div>
+        )}
+        </section>
         )}
       </div>
     </div>
