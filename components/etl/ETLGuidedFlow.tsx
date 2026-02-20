@@ -626,8 +626,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const canGoNextDestino = outputTableName.trim().length > 0 && /^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
   const destinoInvalid = outputTableName.trim().length > 0 && !/^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
 
-  /** En Admin siempre mostramos el editor (todas las secciones en una página) para poder modificar cualquier dato al editar */
-  const isEditorMode = true;
+  /** Crear ETL: wizard paso a paso. Editar ETL: cuando hay config guardada, mostramos editor (todas las secciones en una página) */
+  const isEditorMode = !!initialGuidedConfig;
 
   return (
     <div className="flex flex-col h-full rounded-2xl overflow-hidden" style={{ background: "var(--platform-surface)", border: "1px solid var(--platform-border)" }}>
