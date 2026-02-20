@@ -9,11 +9,12 @@ import {
   buildJoinClauseBinary,
 } from "@/lib/sql/helpers";
 import {
-  applyTransforms,
+  applyCleanBatch,
   applyCastConversions,
   applyArithmeticOperations,
   applyConditionRules,
   applyCountAggregation,
+  inferColumnTypes,
   CastTargetType
 } from "@/lib/etl/transformations";
 
@@ -64,17 +65,13 @@ type RunBody = {
   };
   clean?: {
     transforms: Array<
-      | {
-          column: string;
-          op: "trim" | "upper" | "lower" | "cast_number" | "cast_date";
-        }
-      | {
-          column: string;
-          op: "replace";
-          find: string;
-          replaceWith: string;
-        }
+      | { column: string; op: "trim" | "upper" | "lower" | "cast_number" | "cast_date" }
+      | { column: string; op: "replace"; find: string; replaceWith: string }
+      | { column: string; op: "replace_value"; find: string; replaceWith: string }
+      | { column: string; op: "normalize_nulls"; patterns: string[]; action: "null" | "replace"; replacement?: string }
+      | { column: string; op: "normalize_spaces" | "strip_invisible" | "utf8_normalize" }
     >;
+    dedupe?: { keyColumns: string[]; keep: "first" | "last" };
   };
   cast?: {
     conversions: Array<{
@@ -99,21 +96,21 @@ type RunBody = {
     operations: Array<{
       id: string;
       leftOperand: { type: "column" | "constant"; value: string };
-      operator: "+" | "-" | "*" | "/" | "%" | "^";
+      operator: "+" | "-" | "*" | "/" | "%" | "^" | "pct_of" | "pct_off";
       rightOperand: { type: "column" | "constant"; value: string };
       resultColumn: string;
     }>;
   };
   condition?: {
+    resultColumn?: string;
+    defaultResultValue?: string;
     rules: Array<{
       id: string;
-      // Legacy fields
       column?: string;
       operator?: string;
       value?: string | number | boolean;
       outputValue?: string;
       outputColumn?: string;
-      // New fields matching applyConditionRules
       leftOperand?: { type: "column" | "constant"; value: string };
       rightOperand?: { type: "column" | "constant"; value: string };
       comparator?: string;
@@ -128,6 +125,8 @@ type RunBody = {
     type: "clean" | "cast" | "arithmetic" | "condition";
     config: any;
   }>;
+  inferTypes?: boolean;
+  limit?: number;
 };
 
 
@@ -168,12 +167,59 @@ export async function POST(req: NextRequest) {
 
       const filter = body.filter;
       const joinConf = body.join;
+      const unionConf = body.union;
 
-        // Helper shared for both Join and Single connection flows
-        const getPasswordFromSecret = async (secretId: string | null) => {
-            if (!secretId) return null;
-            return process.env.DB_PASSWORD_PLACEHOLDER || "tu-contraseña-secreta";
+      const getPasswordFromSecret = async (secretId: string | null) => {
+        if (!secretId) return null;
+        return process.env.DB_PASSWORD_PLACEHOLDER || "tu-contraseña-secreta";
+      };
+
+      if (unionConf?.left?.connectionId && unionConf?.right?.connectionId) {
+        const dbUrlUnion = process.env.SUPABASE_DB_URL;
+        if (!dbUrlUnion) throw new Error("SUPABASE_DB_URL no disponible para vista previa UNION.");
+        const left = unionConf.left;
+        const right = unionConf.right;
+        const resolveTable = async (connId: string, f?: { table?: string }) => {
+          const { data: c } = await supabaseAdmin.from("connections").select("*").eq("id", connId).single();
+          if (!c) throw new Error(`Conexión ${connId} no encontrada.`);
+          if (c.type === "excel_file") {
+            const { data: meta } = await supabaseAdmin.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", connId).single();
+            if (!meta?.physical_table_name) throw new Error(`Sin tabla física para conexión Excel ${connId}.`);
+            return `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
+          }
+          return (f?.table || "").trim() || "";
         };
+        const leftTable = await resolveTable(left.connectionId, left.filter);
+        const rightTable = await resolveTable(right.connectionId, right.filter);
+        if (!leftTable || !rightTable) throw new Error("UNION: ambas fuentes deben tener tabla.");
+        const client = new PgClient({ connectionString: dbUrlUnion });
+        await client.connect();
+        try {
+          const runOne = async (src: typeof left, tableQ: string) => {
+            const { clause, params } = buildWhereClausePg(src.filter?.conditions || []);
+            const sel = src.filter?.columns?.length ? src.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
+            const q = `SELECT ${sel} FROM ${quoteQualified(tableQ)} ${clause} ORDER BY 1 ASC LIMIT ${Math.floor(PREVIEW_LIMIT / 2)}`;
+            const res = await client.query(q, params);
+            return (res.rows || []).map((r: Record<string, any>) => {
+              const out: Record<string, any> = {};
+              for (const k in r) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = r[k];
+              return out;
+            });
+          };
+          const leftRows = await runOne(left, leftTable);
+          const rightRows = await runOne(right, rightTable);
+          if (leftRows.length && rightRows.length) {
+            const a = Object.keys(leftRows[0]).sort().join(",");
+            const b = Object.keys(rightRows[0]).sort().join(",");
+            if (a !== b) throw new Error("UNION: ambos datasets deben tener las mismas columnas.");
+          }
+          const combined = [...leftRows, ...rightRows];
+          if (combined.length) yield { rows: combined, query: `UNION (${leftTable} + ${rightTable})` };
+        } finally {
+          await client.end();
+        }
+        return;
+      }
 
         if (joinConf?.connectionId) {
           const primaryConnId = joinConf.connectionId;
@@ -384,8 +430,18 @@ export async function POST(req: NextRequest) {
       try {
         let transformedBatch = rawBatch;
 
+        if (body.inferTypes) {
+          allPreviewRows.push(...rawBatch);
+          isFirstBatch = false;
+          continue;
+        }
+
         if (isFirstBatch) {
-             const tableName = body.join ? "Multi-Table Join" : (body.filter?.table || "Source Table");
+             const tableName = body.union
+               ? "UNION (Dataset A + Dataset B)"
+               : body.join
+                 ? "Multi-Table Join"
+                 : (body.filter?.table || "Source Table");
              transformationSteps.push(`Source (SQL): Extracted data from ${tableName}`);
              
              if (body.filter?.conditions?.length) {
@@ -401,9 +457,7 @@ export async function POST(req: NextRequest) {
              try {
                switch (step.type) {
                  case "clean":
-                   transformedBatch = transformedBatch.map((row) =>
-                      applyTransforms(row, step.config)
-                   );
+                   transformedBatch = applyCleanBatch(transformedBatch, step.config);
                    if (isFirstBatch && !transformationSteps.includes("Clean (Trim/Format)")) transformationSteps.push("Clean (Trim/Format)");
                    break;
 
@@ -489,9 +543,7 @@ export async function POST(req: NextRequest) {
             // --- LEGACY FIXED ORDER EXECUTION ---
             
             // 1. Clean
-            transformedBatch = rawBatch.map((row) =>
-              applyTransforms(row, body?.clean)
-            );
+            transformedBatch = applyCleanBatch(rawBatch, body?.clean);
             if (!transformationSteps.includes("Clean (Trim/Format)")) transformationSteps.push("Clean (Trim/Format)");
 
             // 2. Cast
@@ -587,7 +639,19 @@ export async function POST(req: NextRequest) {
       }
       
       // Stop if we hit the limit (already limited by SQL but good safety)
-      if (allPreviewRows.length >= PREVIEW_LIMIT) break;
+      const maxRows = body.inferTypes
+        ? Math.min(body.limit || 200, 500)
+        : PREVIEW_LIMIT;
+      if (allPreviewRows.length >= maxRows) break;
+    }
+
+    if (body.inferTypes) {
+      const inferredTypes = inferColumnTypes(allPreviewRows);
+      return NextResponse.json({
+        ok: true,
+        inferredTypes,
+        rowsSampled: allPreviewRows.length,
+      });
     }
 
     return NextResponse.json({

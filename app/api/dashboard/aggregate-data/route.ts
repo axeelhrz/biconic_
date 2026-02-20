@@ -118,6 +118,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Validar que cada métrica base use una función de agregación permitida
+    const allowedAggSet = new Set(ALLOWED_AGG_FUNCTIONS.map((f) => f.toUpperCase()));
+    for (let i = 0; i < body.metrics.length; i++) {
+      const m = body.metrics[i];
+      if (m.formula) continue;
+      const func = (m.func || "").toString().toUpperCase().trim();
+      const allowed =
+        allowedAggSet.has(func) ||
+        func.startsWith("COUNT(DISTINCT");
+      if (!allowed) {
+        return NextResponse.json(
+          { error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use: SUM, AVG, COUNT, MIN, MAX, COUNT(DISTINCT).` },
+          { status: 400 }
+        );
+      }
+    }
+
     const cookieStore = await cookies();
 
     const supabase = createServerClient<Database>(

@@ -366,17 +366,28 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
       );
 
       const supabase = createClient();
-      // Usar la fuente del widget (dataSourceId/etlId) si está definida; si no, la fuente principal del dashboard
-      const etlId = widget.source?.etlId ?? etlData?.etl?.id;
-      if (!etlId) {
-        toast.error("No hay un ETL asociado a este dashboard o al widget");
-        setWidgets((prev) =>
-          prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w))
+      let fullTableName: string | undefined;
+      if (widget.source?.table && String(widget.source.table).includes(".")) {
+        fullTableName = String(widget.source.table).trim();
+      } else if (
+        etlData?.dataSources?.length &&
+        (widget as any).dataSourceId
+      ) {
+        const ds = etlData.dataSources.find(
+          (s) => s.id === (widget as any).dataSourceId
         );
-        return;
+        if (ds?.schema && ds?.tableName)
+          fullTableName = `${ds.schema}.${ds.tableName}`;
       }
-
-      try {
+      if (!fullTableName) {
+        const etlId = widget.source?.etlId ?? etlData?.etl?.id;
+        if (!etlId) {
+          toast.error("No hay un ETL asociado a este dashboard o al widget");
+          setWidgets((prev) =>
+            prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w))
+          );
+          return;
+        }
         const { data: run, error: runErr } = await supabase
           .from("etl_runs_log")
           .select("destination_schema,destination_table_name")
@@ -385,23 +396,19 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
           .order("completed_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-
         if (runErr) throw runErr;
         if (!run || !run.destination_table_name) {
-          toast.warning(
-            "No se encontró una ejecución completada para este ETL."
-          );
+          toast.warning("No se encontró una ejecución completada para este ETL.");
           setWidgets((prev) =>
-            prev.map((w) =>
-              w.id === widgetId ? { ...w, isLoading: false } : w
-            )
+            prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w))
           );
           return;
         }
-
         const schema = run.destination_schema || "etl_output";
-        const table = run.destination_table_name;
-        const fullTableName = `${schema}.${table}`;
+        fullTableName = `${schema}.${run.destination_table_name}`;
+      }
+
+      try {
 
         let dataArray: any[] = [];
         const aggConfig = widget.aggregationConfig;
@@ -485,33 +492,44 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
               cast: f.convertToNumber ? "numeric" : undefined,
             }));
 
+          const dimensionsArray =
+            (aggConfig as any).dimensions?.length > 0
+              ? (aggConfig as any).dimensions
+              : [aggConfig.dimension, (aggConfig as any).dimension2].filter(Boolean);
+          const bodyPayload: Record<string, unknown> = {
+            tableName: fullTableName,
+            dimension: aggConfig.dimension,
+            metrics: aggConfig.metrics.map(({ id, ...rest }) => {
+              const cast =
+                rest.numericCast && rest.numericCast !== "none"
+                  ? rest.numericCast === "sanitize"
+                    ? "sanitize"
+                    : "numeric"
+                  : undefined;
+              const {
+                numericCast,
+                allowStringAsNumeric,
+                conversionType,
+                conversionFactor,
+                precision,
+                ...base
+              } = rest as any;
+              return { ...base, cast };
+            }),
+            filters: preparedFilters,
+            orderBy: aggConfig.orderBy,
+            limit: aggConfig.limit || 1000,
+          };
+          if (dimensionsArray.length > 0) bodyPayload.dimensions = dimensionsArray;
+          if ((aggConfig as any).cumulative && (aggConfig as any).cumulative !== "none")
+            bodyPayload.cumulative = (aggConfig as any).cumulative;
+          if ((aggConfig as any).comparePeriod) bodyPayload.comparePeriod = (aggConfig as any).comparePeriod;
+          if ((aggConfig as any).dateDimension) bodyPayload.dateDimension = (aggConfig as any).dateDimension;
+
           const response = await fetch("/api/dashboard/aggregate-data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              tableName: fullTableName,
-              dimension: aggConfig.dimension,
-              metrics: aggConfig.metrics.map(({ id, ...rest }) => {
-                const cast =
-                  rest.numericCast && rest.numericCast !== "none"
-                    ? rest.numericCast === "sanitize"
-                      ? "sanitize"
-                      : "numeric"
-                    : undefined;
-                const {
-                  numericCast,
-                  allowStringAsNumeric,
-                  conversionType,
-                  conversionFactor,
-                  precision,
-                  ...base
-                } = rest as any;
-                return { ...base, cast };
-              }),
-              filters: preparedFilters,
-              orderBy: aggConfig.orderBy,
-              limit: aggConfig.limit || 1000,
-            }),
+            body: JSON.stringify(bodyPayload),
           });
 
           if (!response.ok) {

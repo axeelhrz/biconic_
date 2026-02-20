@@ -58,6 +58,13 @@ export type AddMetricFormConfig = {
   dataSourceId?: string | null;
 };
 
+/** Métrica guardada para reutilizar (mismo formato que en AdminDashboardStudio) */
+export type SavedMetricForm = {
+  id: string;
+  name: string;
+  metric: AggregationMetricEdit;
+};
+
 const CHART_TYPES: { value: string; label: string }[] = [
   { value: "bar", label: "Barras verticales" },
   { value: "horizontalBar", label: "Barras horizontales" },
@@ -86,6 +93,10 @@ type AddMetricConfigFormProps = {
   etlData: ETLDataResponse | null;
   onSave: (config: AddMetricFormConfig) => void;
   onBack: () => void;
+  /** Métricas guardadas para reutilizar en este dashboard */
+  savedMetrics?: SavedMetricForm[];
+  /** Guardar la definición de una métrica para reutilizarla después */
+  onSaveMetricAsTemplate?: (name: string, metric: AggregationMetricEdit) => void;
 };
 
 export function AddMetricConfigForm({
@@ -93,8 +104,11 @@ export function AddMetricConfigForm({
   etlData,
   onSave,
   onBack,
+  savedMetrics = [],
+  onSaveMetricAsTemplate,
 }: AddMetricConfigFormProps) {
   const [form, setForm] = useState<AddMetricFormConfig>(initialValues);
+  const [saveTemplateName, setSaveTemplateName] = useState<{ index: number; name: string } | null>(null);
   const agg = form.aggregationConfig;
   const metrics = agg.metrics || [];
   const filters = agg.filters || [];
@@ -125,6 +139,26 @@ export function AddMetricConfigForm({
     updateAgg({
       metrics: [...metrics, { id: `m-${Date.now()}`, func: "SUM", field, alias: field || "valor" }],
     });
+  };
+
+  const addSavedMetric = (saved: SavedMetricForm) => {
+    updateAgg({
+      metrics: [...metrics, { ...saved.metric, id: `m-${Date.now()}` }],
+    });
+  };
+
+  const openSaveTemplate = (index: number) => {
+    const m = metrics[index];
+    if (m) setSaveTemplateName({ index, name: m.alias || m.field || "Métrica" });
+  };
+
+  const confirmSaveTemplate = () => {
+    if (saveTemplateName == null || !onSaveMetricAsTemplate) return;
+    const m = metrics[saveTemplateName.index];
+    if (m && saveTemplateName.name.trim()) {
+      onSaveMetricAsTemplate(saveTemplateName.name.trim(), m);
+      setSaveTemplateName(null);
+    }
   };
 
   const removeMetric = (index: number) => {
@@ -309,17 +343,55 @@ export function AddMetricConfigForm({
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <Label className="add-metric-label">Métricas</Label>
-                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addMetric}>+ Añadir</Button>
+                    <div className="flex items-center gap-1">
+                      {savedMetrics.length > 0 && (
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const id = e.target.value;
+                            if (!id) return;
+                            const saved = savedMetrics.find((s) => s.id === id);
+                            if (saved) addSavedMetric(saved);
+                            e.target.value = "";
+                          }}
+                          className="h-7 text-xs rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-[var(--studio-fg)]"
+                        >
+                          <option value="">Usar guardada…</option>
+                          {savedMetrics.map((s) => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </select>
+                      )}
+                      <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addMetric}>+ Crear nueva</Button>
+                    </div>
                   </div>
+                  {saveTemplateName != null && onSaveMetricAsTemplate && (
+                    <div className="flex items-center gap-2 mb-2 p-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]">
+                      <Input
+                        value={saveTemplateName.name}
+                        onChange={(e) => setSaveTemplateName((p) => p ? { ...p, name: e.target.value } : null)}
+                        placeholder="Nombre para reutilizar"
+                        className="h-8 text-xs flex-1"
+                        autoFocus
+                      />
+                      <Button type="button" size="sm" className="h-8 text-xs" onClick={confirmSaveTemplate}>Guardar</Button>
+                      <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setSaveTemplateName(null)}>Cancelar</Button>
+                    </div>
+                  )}
                   <div className="space-y-2">
                     {metrics.map((m, i) => (
                       <div key={m.id} className="rounded-lg border border-[var(--studio-border)] p-2 space-y-2 bg-[var(--studio-bg-elevated)]">
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 items-center">
                           <select value={m.func} onChange={(e) => updateMetric(i, { func: e.target.value })} className="flex-1 h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs text-[var(--studio-fg)]">
                             {AGG_FUNCS.map((f) => (
                               <option key={f.value} value={f.value}>{f.label}</option>
                             ))}
                           </select>
+                          {onSaveMetricAsTemplate && (
+                            <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-[var(--studio-fg-muted)] hover:text-[var(--studio-accent)]" onClick={() => openSaveTemplate(i)} title="Guardar para reutilizar">
+                              <BookmarkPlus className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                           <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500" onClick={() => removeMetric(i)}>
                             <Trash2 className="h-3 w-3" />
                           </Button>

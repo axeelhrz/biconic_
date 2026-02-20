@@ -5,7 +5,8 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
 
-// Interfaz para los datos (sin cambios)
+const STALE_AFTER_MS = 12 * 60 * 1000; // 12 min: si sigue "Procesando", marcar como fallido
+
 interface ImportStatusData {
   import_status: string;
   total_rows: number | null;
@@ -13,30 +14,36 @@ interface ImportStatusData {
   physical_table_name: string | null;
 }
 
-// Props (sin cambios)
 type ImportStatusProps = {
   dataTableId: string;
   onProcessFinished: () => void;
   compact?: boolean;
+  /** Si se pasa, el timeout de 12 min se cuenta desde esta fecha (ej. updated_at del data_table) */
+  importStartedAt?: string;
 };
 
 export default function ImportStatus({
   dataTableId,
   onProcessFinished,
   compact = false,
+  importStartedAt,
 }: ImportStatusProps) {
   const [status, setStatus] = useState<ImportStatusData | null>(null);
   const [progress, setProgress] = useState(0);
   const intervalId = useRef<NodeJS.Timeout | null>(null);
+  const startedAt = useRef<number>(
+    importStartedAt ? new Date(importStartedAt).getTime() : Date.now()
+  );
 
   useEffect(() => {
     if (!dataTableId) return;
+    startedAt.current = importStartedAt
+      ? new Date(importStartedAt).getTime()
+      : Date.now();
 
     const supabase = createClient();
 
-    // Función que realiza el sondeo a la base de datos
     const pollStatus = async () => {
-      // console.log(`[Polling] Verificando estado para ID: ${dataTableId}`);
       const { data, error } = await supabase
         .from("data_tables")
         .select("import_status, total_rows, error_message, physical_table_name")
@@ -45,54 +52,69 @@ export default function ImportStatus({
 
       if (error) {
         console.error("[Polling] Error al buscar el estado:", error);
-        // Si hay un error grave de red, podríamos reintentar, pero si es 404 paramos.
-        // Por simplicidad, dejamos que siga intentando salvo que sea crítico.
         return;
       }
 
       if (data) {
         setStatus(data as ImportStatusData);
 
-        // Estimación de progreso visual
         switch (data.import_status) {
-            case "downloading_file": setProgress(10); break;
-            case "creating_table": setProgress(30); break;
-            case "inserting_rows": 
-                // Indeterminado / en progreso activo
-                setProgress(60); 
-                break;
-            case "completed": setProgress(100); break;
-            case "failed": setProgress(100); break;
+          case "downloading_file": setProgress(10); break;
+          case "creating_table": setProgress(30); break;
+          case "inserting_rows": setProgress(60); break;
+          case "completed": setProgress(100); break;
+          case "failed": setProgress(100); break;
         }
 
         const isFinished =
           data.import_status === "completed" || data.import_status === "failed";
         if (isFinished) {
           if (intervalId.current) clearInterval(intervalId.current);
-
-          // Solo mostramos toast si NO es modo compacto (para evitar spam visual en dashboard)
           if (!compact) {
-             toast[data.import_status === "completed" ? "success" : "error"](
-                data.import_status === "completed"
+            toast[data.import_status === "completed" ? "success" : "error"](
+              data.import_status === "completed"
                 ? `¡Importación completa! Se procesaron ${data.total_rows} filas.`
                 : `Error en la importación: ${data.error_message}`
-             );
+            );
           }
-
           onProcessFinished();
+          return;
+        }
+
+        // Si lleva más de 12 min en "Procesando", marcar como fallido para no quedar colgado
+        const elapsed = Date.now() - startedAt.current;
+        if (elapsed >= STALE_AFTER_MS) {
+          if (intervalId.current) clearInterval(intervalId.current);
+          try {
+            const res = await fetch("/api/process-excel/mark-stale", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ dataTableId }),
+            });
+            const json = await res.json();
+            if (json?.stale) {
+              setStatus({
+                import_status: "failed",
+                total_rows: null,
+                error_message: json?.message || "El procesamiento no completó a tiempo.",
+                physical_table_name: null,
+              });
+              setProgress(100);
+              if (!compact) toast.error("La importación tardó demasiado y se marcó como fallida. Podés volver a subir el archivo.");
+              onProcessFinished();
+            }
+          } catch (_) {}
         }
       }
     };
 
     pollStatus();
-    intervalId.current = setInterval(pollStatus, 2000); // Polling cada 2s para dashboard
+    intervalId.current = setInterval(pollStatus, 2000);
 
     return () => {
-      if (intervalId.current) {
-        clearInterval(intervalId.current);
-      }
+      if (intervalId.current) clearInterval(intervalId.current);
     };
-  }, [dataTableId, onProcessFinished, compact]);
+  }, [dataTableId, onProcessFinished, compact, importStartedAt]);
 
   const getStatusMessage = () => {
     if (!status) return "Iniciando...";

@@ -179,6 +179,9 @@ async function* getRowGenerator(filePath: string) {
   }
 }
 
+// Tiempo máximo de procesamiento (no dejar "Procesando" para siempre)
+const IMPORT_TIMEOUT_MS = 12 * 60 * 1000; // 12 minutos
+
 // --- PROCESAMIENTO EN BACKGROUND ---
 async function processDataImport(
   connectionId: string,
@@ -188,17 +191,39 @@ async function processDataImport(
 ) {
   let tempFilePath: string | null = null;
   let sql: any = null;
+  let terminalStatus = false; // true cuando ya pusimos "completed" o "failed"
+
+  const markFailed = async (message: string) => {
+    if (terminalStatus) return;
+    terminalStatus = true;
+    try {
+      await supabaseAdmin
+        .from("data_tables")
+        .update({ import_status: "failed", error_message: message })
+        .eq("id", dataTableId);
+    } catch (_) {}
+  };
 
   console.log(
     `[BACKGROUND] Iniciando importación para Data Table: ${dataTableId}`
   );
 
-  try {
-    // 1. DESCARGA EFICIENTE (MODIFICADO) -------------------------------------
-    await supabaseAdmin
-      .from("data_tables")
-      .update({ import_status: "downloading_file" })
-      .eq("id", dataTableId);
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error("TIMEOUT")), IMPORT_TIMEOUT_MS);
+  });
+
+  const runImport = async () => {
+    try {
+      if (!dbUrl || dbUrl.trim() === "") {
+        await markFailed("SUPABASE_DB_URL no está configurada. Configurala en .env.local (Supabase → Settings → Database → Connection string).");
+        return;
+      }
+
+      // 1. DESCARGA EFICIENTE (MODIFICADO) -------------------------------------
+      await supabaseAdmin
+        .from("data_tables")
+        .update({ import_status: "downloading_file" })
+        .eq("id", dataTableId);
 
     const { data: connection } = await supabaseAdmin
       .from("connections")
@@ -389,6 +414,8 @@ async function processDataImport(
       type: inferredTypes[i] || "TEXT",
     }));
 
+    if (terminalStatus) return;
+    terminalStatus = true;
     await supabaseAdmin
       .from("data_tables")
       .update({
@@ -400,21 +427,28 @@ async function processDataImport(
       .eq("id", dataTableId);
 
     console.log(`[EXITO] Completado. Total: ${rowCount - 1} filas.`);
-  } catch (error: any) {
-    console.error("[ERROR BACKGROUND]", error);
-    try {
-      await supabaseAdmin
-        .from("data_tables")
-        .update({ import_status: "failed", error_message: error.message })
-        .eq("id", dataTableId);
-    } catch (e) {}
-  } finally {
-    if (tempFilePath && fs.existsSync(tempFilePath)) {
-      try {
-        fs.unlinkSync(tempFilePath);
-      } catch (e) {}
+    } catch (error: any) {
+      console.error("[ERROR BACKGROUND]", error);
+      let msg = error?.message || "Error desconocido";
+      if (typeof msg === "string" && msg.includes("does not exist") && msg.toLowerCase().includes("schema"))
+        msg = "El schema data_warehouse no existe. Ejecutá las migraciones de Supabase (supabase db push o desde el panel SQL).";
+      if (typeof msg === "string" && (msg.includes("ECONNREFUSED") || msg.includes("connection")))
+        msg = "No se pudo conectar a la base de datos. Revisá que SUPABASE_DB_URL en .env.local sea correcta (Supabase → Settings → Database).";
+      await markFailed(msg);
+    } finally {
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        try { fs.unlinkSync(tempFilePath); } catch (_) {}
+      }
+      if (sql) await sql.end();
     }
-    if (sql) await sql.end();
+  };
+
+  try {
+    await Promise.race([runImport(), timeoutPromise]);
+  } catch (e: any) {
+    if (e?.message === "TIMEOUT") await markFailed("Timeout (máximo 12 minutos).");
+  } finally {
+    if (!terminalStatus) await markFailed("Procesamiento interrumpido.");
   }
 }
 
@@ -428,30 +462,50 @@ export async function POST(req: Request) {
 
     const { connectionId, dataTableId } = body;
 
+    // Validar variables de entorno antes de iniciar (evita que "siempre falle" sin mensaje claro)
+    const missing: string[] = [];
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) missing.push("NEXT_PUBLIC_SUPABASE_URL");
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) missing.push("SUPABASE_SERVICE_ROLE_KEY");
+    if (!process.env.SUPABASE_DB_URL) missing.push("SUPABASE_DB_URL");
+
+    if (missing.length > 0) {
+      const msg = `Configuración del servidor incompleta. Agregá en .env.local: ${missing.join(", ")}. SUPABASE_DB_URL es la URL de conexión directa a Postgres (Supabase → Settings → Database).`;
+      if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        try {
+          const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL,
+            process.env.SUPABASE_SERVICE_ROLE_KEY
+          );
+          await supabaseAdmin
+            .from("data_tables")
+            .update({ import_status: "failed", error_message: msg })
+            .eq("id", dataTableId);
+        } catch (_) {}
+      }
+      return NextResponse.json({ error: msg }, { status: 503 });
+    }
+
     const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // Marcar como iniciado
     await supabaseAdmin
       .from("data_tables")
       .update({ import_status: "queued" })
       .eq("id", dataTableId);
 
-    // 🔥 Disparar proceso en background (SIN AWAIT)
-    console.log(
-      `[POST] Iniciando proceso background para Data Table: ${dataTableId}`
-    );
-
-    processDataImport(
+    const importPromise = processDataImport(
       connectionId,
       dataTableId,
       supabaseAdmin,
       process.env.SUPABASE_DB_URL!
     ).catch((err) => console.error("[FATAL BACKGROUND ERROR]", err));
 
-    // Responder inmediatamente
+    // Next 15: after() evita que el proceso se corte al enviar la respuesta (Vercel/local)
+    const { after } = await import("next/server");
+    after(() => importPromise);
+
     return NextResponse.json({
       success: true,
       message: "Procesamiento iniciado en segundo plano",

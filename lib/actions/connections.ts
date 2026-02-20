@@ -24,9 +24,15 @@ type DataTableMetaRow = {
   physical_table_name: string | null;
 };
 
-export async function getConnections(): Promise<Connection[]> {
+export type GetConnectionsOptions = {
+  /** Si se indica, solo se devuelven conexiones de este cliente (útil en admin al editar un ETL). */
+  clientId?: string | null;
+};
+
+export async function getConnections(options?: GetConnectionsOptions): Promise<Connection[]> {
   const supabase = await createClient();
-  
+  const clientId = options?.clientId ?? null;
+
   // 1. Obtener usuario autenticado
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -34,15 +40,19 @@ export async function getConnections(): Promise<Connection[]> {
     return [];
   }
 
-  // 2. Consulta Principal: DEJAR QUE RLS HAGA EL TRABAJO
-  // No usamos .eq("user_id", user.id) ni lógica manual compleja.
-  // La base de datos filtrará automáticamente según las políticas que creaste.
-  const { data: allConnections, error } = await supabase
+  // 2. Consulta: RLS filtra por usuario/permisos; opcionalmente filtrar por cliente para flujo admin/ETL
+  let query = supabase
     .from("connections")
     .select(
       "id, name, type, db_host, db_name, updated_at, original_file_name, client_id, user_id"
     )
     .order("updated_at", { ascending: false });
+
+  if (clientId && clientId.trim()) {
+    query = query.eq("client_id", clientId.trim());
+  }
+
+  const { data: allConnections, error } = await query;
 
   if (error) {
     console.error("Error fetching connections:", error);

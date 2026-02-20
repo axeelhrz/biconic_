@@ -13,7 +13,7 @@ import {
   buildJoinClauseBinary,
 } from "@/lib/sql/helpers";
 import {
-  applyTransforms,
+  applyCleanBatch,
   applyCastConversions,
   applyArithmeticOperations,
   applyConditionRules,
@@ -70,17 +70,13 @@ type RunBody = {
   };
   clean?: {
     transforms: Array<
-      | {
-          column: string;
-          op: "trim" | "upper" | "lower" | "cast_number" | "cast_date";
-        }
-      | {
-          column: string;
-          op: "replace";
-          find: string;
-          replaceWith: string;
-        }
+      | { column: string; op: "trim" | "upper" | "lower" | "cast_number" | "cast_date" }
+      | { column: string; op: "replace"; find: string; replaceWith: string }
+      | { column: string; op: "replace_value"; find: string; replaceWith: string }
+      | { column: string; op: "normalize_nulls"; patterns: string[]; action: "null" | "replace"; replacement?: string }
+      | { column: string; op: "normalize_spaces" | "strip_invisible" | "utf8_normalize" }
     >;
+    dedupe?: { keyColumns: string[]; keep: "first" | "last" };
   };
   cast?: {
     conversions: Array<{
@@ -105,21 +101,21 @@ type RunBody = {
     operations: Array<{
       id: string;
       leftOperand: { type: "column" | "constant"; value: string };
-      operator: "+" | "-" | "*" | "/" | "%" | "^";
+      operator: "+" | "-" | "*" | "/" | "%" | "^" | "pct_of" | "pct_off";
       rightOperand: { type: "column" | "constant"; value: string };
       resultColumn: string;
     }>;
   };
   condition?: {
+    resultColumn?: string;
+    defaultResultValue?: string;
     rules: Array<{
       id: string;
-      // Legacy fields
       column?: string;
       operator?: string;
       value?: string | number | boolean;
       outputValue?: string;
       outputColumn?: string;
-      // New fields matching applyConditionRules
       leftOperand?: { type: "column" | "constant"; value: string };
       rightOperand?: { type: "column" | "constant"; value: string };
       comparator?: string;
@@ -217,12 +213,60 @@ function pgCastExpr(columnIdentifier: string, targetType: CastTargetType) {
 }
 
 // ===================================================================
+// REINTENTOS (evitar fallos por redes o timeouts transitorios)
+// ===================================================================
+
+const ETL_RETRIES = 3;
+const ETL_RETRY_DELAY_MS = 2000;
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: { retries?: number; delayMs?: number; label?: string } = {}
+): Promise<T> {
+  const retries = opts.retries ?? ETL_RETRIES;
+  const delayMs = opts.delayMs ?? ETL_RETRY_DELAY_MS;
+  const label = opts.label ?? "operation";
+  let lastErr: any;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (attempt < retries) {
+        console.warn(`[ETL] ${label} intento ${attempt}/${retries} falló, reintento en ${delayMs}ms:`, (e as Error)?.message);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+/** Asegura estado final en etl_runs_log (nunca dejar "started"/"running" colgado). */
+async function ensureRunTerminalState(
+  supabaseAdmin: any,
+  runId: string,
+  status: "completed" | "failed",
+  payload: { completed_at: string; rows_processed?: number; error_message?: string }
+) {
+  await withRetry(
+    () =>
+      supabaseAdmin
+        .from("etl_runs_log")
+        .update({ status, ...payload })
+        .eq("id", runId)
+        .throwOnError(),
+    { retries: 5, delayMs: 1000, label: "ensureRunTerminalState" }
+  );
+}
+
+// ===================================================================
 // LÓGICA DE FONDO (BACKGROUND WORKER)
 // ===================================================================
 
 /**
  * Executes the entire ETL pipeline asynchronously.
  * Updates the 'etl_runs_log' table with progress and final status.
+ * Usa reintentos en conexiones y escrituras; asegura estado final (completed/failed).
  */
 async function executeEtlPipeline(
   body: RunBody,
@@ -231,6 +275,7 @@ async function executeEtlPipeline(
   user: any
 ) {
   let newTableName = "";
+  const completedAt = () => new Date().toISOString();
 
   try {
     const regex = new RegExp("[-:.]", "g");
@@ -248,14 +293,19 @@ async function executeEtlPipeline(
     }
 
     // --- UPDATE INITIAL LOG WITH DESTINATION ---
-      await supabaseAdmin
-      .from("etl_runs_log")
-      .update({
-        destination_schema: "etl_output",
-        destination_table_name: newTableName,
-        status: "running" // Transition from started to running
-      })
-      .eq("id", runId);
+    await withRetry(
+      () =>
+        supabaseAdmin
+          .from("etl_runs_log")
+          .update({
+            destination_schema: "etl_output",
+            destination_table_name: newTableName,
+            status: "running",
+          })
+          .eq("id", runId)
+          .throwOnError(),
+      { label: "update-running" }
+    );
 
 
     // Preview logic removed from background execution as preview is typically synchronous/short
@@ -420,7 +470,10 @@ async function executeEtlPipeline(
         for (let i = 0; i < batchToInsert.length; i += INSERT_CHUNK_SIZE) {
           const chunk = batchToInsert.slice(i, i + INSERT_CHUNK_SIZE);
           if (chunk.length > 0) {
-            await sqlInsert`INSERT INTO etl_output.${sqlInsert(newTableName)} ${sqlInsert(chunk)}`;
+            await withRetry(
+              () => sqlInsert`INSERT INTO etl_output.${sqlInsert(newTableName)} ${sqlInsert(chunk)}`,
+              { label: "insert-batch" }
+            );
           }
         }
       } catch (insErr: any) {
@@ -432,6 +485,93 @@ async function executeEtlPipeline(
 
     // --- DATA SOURCE GENERATOR ---
     async function* dataSourceGenerator(): AsyncGenerator<any[], void, void> {
+      const unionConf = body!.union;
+      if (unionConf?.left?.connectionId && unionConf?.right?.connectionId) {
+        // UNION: apilar Dataset A + Dataset B (mismas columnas). Default UNION ALL.
+        const left = unionConf.left;
+        const right = unionConf.right;
+        const pageSizeUnion = pageSize;
+        const dbUrlUnion = process.env.SUPABASE_DB_URL;
+        if (!dbUrlUnion) throw new Error("SUPABASE_DB_URL no disponible para UNION.");
+
+        const resolveTableAndConn = async (
+          connId: string,
+          filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] }
+        ) => {
+          const { data: c } = await supabaseAdmin.from("connections").select("*").eq("id", connId).single();
+          if (!c) throw new Error(`Conexión ${connId} no encontrada.`);
+          if (c.type === "excel_file") {
+            const { data: meta } = await supabaseAdmin.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", connId).single();
+            if (!meta?.physical_table_name) throw new Error(`Sin tabla física para conexión Excel ${connId}.`);
+            return { table: `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`, conn: c, type: "excel" };
+          }
+          const t = (filter?.table || "").trim();
+          if (!t) throw new Error(`UNION: la fuente debe tener tabla (filter.table) para conexión ${connId}.`);
+          return { table: t, conn: c, type: c.type };
+        };
+
+        const leftInfo = await resolveTableAndConn(left.connectionId, left.filter);
+        const rightInfo = await resolveTableAndConn(right.connectionId, right.filter);
+        if (leftInfo.type !== "excel" || rightInfo.type !== "excel") {
+          if (left.connectionId !== right.connectionId)
+            throw new Error("UNION con dos conexiones distintas solo soportado cuando ambas son Excel. Usá la misma conexión para Postgres.");
+        }
+
+        const clientUnion = new PgClient({ connectionString: dbUrlUnion });
+        await withRetry(() => clientUnion.connect(), { label: "union-connect" });
+        try {
+          const runSource = async (source: typeof left, tableQualified: string) => {
+            const filter = source.filter || {};
+            const tableQ = quoteQualified(tableQualified);
+            const selectList = filter.columns?.length ? filter.columns.map((c: string) => quoteIdent(c, "postgres")).join(", ") : "*";
+            const { clause, params } = buildWhereClausePg(filter.conditions || []);
+            const base = `SELECT ${selectList} FROM ${tableQ} ${clause} ORDER BY 1 ASC`;
+            const batches: any[][] = [];
+            let offset = 0;
+            for (;;) {
+              const q = `${base} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+              const res = await clientUnion.query(q, [...params, pageSizeUnion, offset]);
+              const rows = (res.rows || []).map((r: Record<string, any>) => {
+                const out: Record<string, any> = {};
+                for (const k in r) {
+                  out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = r[k];
+                }
+                return out;
+              });
+              if (rows.length === 0) break;
+              batches.push(rows);
+              if (rows.length < pageSizeUnion) break;
+              offset += pageSizeUnion;
+            }
+            return batches;
+          };
+
+          const leftTable = leftInfo.table;
+          const rightTable = rightInfo.table;
+          const [leftBatches, rightBatches] = await Promise.all([
+            runSource(left, leftTable),
+            runSource(right, rightTable),
+          ]);
+
+          let leftCols: string[] | null = null;
+          for (const batch of leftBatches) {
+            if (batch.length && leftCols === null) leftCols = Object.keys(batch[0]).sort();
+            yield batch;
+          }
+          for (const batch of rightBatches) {
+            if (batch.length) {
+              const rightCols = Object.keys(batch[0]).sort();
+              if (leftCols && rightCols.join(",") !== leftCols.join(","))
+                throw new Error("UNION: ambos datasets deben tener las mismas columnas (nombre y orden).");
+            }
+            yield batch;
+          }
+        } finally {
+          await clientUnion.end();
+        }
+        return;
+      }
+
       const joinObj: any = (body as any).join;
       const isJoin = !!joinObj;
       const isStarJoin = isJoin && !!joinObj.primaryConnectionId && Array.isArray(joinObj.joins);
@@ -449,22 +589,22 @@ async function executeEtlPipeline(
       // Firebird: solo tabla simple (sin JOIN), leer en lotes y devolver filas normalizadas
       if (conn.type === "firebird") {
         if (isJoin) throw new Error("Firebird en ETL solo soporta una tabla. No uses JOIN.");
-        const tableToQuery = body!.filter?.table;
+        const tableToQuery = (body!.filter?.table || "").trim();
         if (!tableToQuery) throw new Error("Tabla de origen requerida.");
         const password =
           (conn as any).db_password_encrypted
             ? decryptConnectionPassword((conn as any).db_password_encrypted)
             : (conn as any).db_password ?? "";
+        // Firebird: identificadores solo en mayúsculas/numéricos sin comillas evitan "Procedure unknown" / "Token unknown"
+        const safePart = (s: string) => /^[A-Z0-9_]+$/i.test(s) ? s.toUpperCase() : `"${s.replace(/"/g, '""')}"`;
         const tablePart = tableToQuery.includes(".")
-          ? tableToQuery.split(".", 2).map((s) => `"${s.replace(/"/g, '""')}"`).join(".")
-          : `"${tableToQuery.replace(/"/g, '""')}"`;
+          ? tableToQuery.split(".", 2).map((p) => safePart(p.trim())).join(".")
+          : safePart(tableToQuery);
         const cols =
           body!.filter?.columns && body!.filter.columns.length
-            ? body!.filter.columns.map((c) => `"${(c || "").replace(/"/g, '""')}"`).join(", ")
+            ? body!.filter.columns.map((c) => safePart((c || "").trim())).join(", ")
             : "*";
         const { clause, params } = buildWhereClauseFirebird(body!.filter?.conditions || []);
-        // Firebird 2.x/3.x: usar FIRST/SKIP (OFFSET/FETCH no está en 2.x y puede dar error -104)
-        const baseSelect = `SELECT ${cols} FROM ${tablePart} ${clause}`;
         const Firebird = require("node-firebird");
         const opts = {
           host: conn.db_host || "localhost",
@@ -477,23 +617,31 @@ async function executeEtlPipeline(
         let offset = 0;
         let db: any = null;
         try {
-          db = await new Promise<any>((resolve, reject) => {
-            Firebird.attach(opts, (err: Error | null, connection: any) => {
-              if (err) reject(err);
-              else resolve(connection);
-            });
-          });
+          db = await withRetry(
+            () =>
+              new Promise<any>((resolve, reject) => {
+                Firebird.attach(opts, (err: Error | null, connection: any) => {
+                  if (err) reject(err);
+                  else resolve(connection);
+                });
+              }),
+            { label: "firebird-attach" }
+          );
           for (;;) {
             const sql =
               offset === 0
                 ? `SELECT FIRST ${pageSize} ${cols} FROM ${tablePart} ${clause}`
                 : `SELECT FIRST ${pageSize} SKIP ${offset} ${cols} FROM ${tablePart} ${clause}`;
-            const rows = await new Promise<any[]>((resolve, reject) => {
-              db.query(sql, params, (err: Error | null, r: any[]) => {
-                if (err) reject(err);
-                else resolve(r || []);
-              });
-            });
+            const rows = await withRetry(
+              () =>
+                new Promise<any[]>((resolve, reject) => {
+                  db.query(sql, params, (err: Error | null, r: any[]) => {
+                    if (err) reject(err);
+                    else resolve(r || []);
+                  });
+                }),
+              { label: "firebird-query" }
+            );
             const normalized = rows.map((row: Record<string, any>) => {
               const out: Record<string, any> = {};
               for (const k in row) {
@@ -534,7 +682,7 @@ async function executeEtlPipeline(
         throw new Error(`Tipo de conexión no soportado: ${conn.type}.`);
       }
 
-      await client.connect();
+      await withRetry(() => client.connect(), { label: "db-connect" });
 
       try {
         let baseQuery: string;
@@ -729,7 +877,7 @@ async function executeEtlPipeline(
          for (const step of body.pipeline) {
             try {
                switch (step.type) {
-                  case "clean": transformedBatch = transformedBatch.map(r => applyTransforms(r, step.config)); break;
+                  case "clean": transformedBatch = applyCleanBatch(transformedBatch, step.config); break;
                   case "cast": transformedBatch = applyCastConversions(transformedBatch, step.config); break;
                   case "arithmetic": transformedBatch = applyArithmeticOperations(transformedBatch, step.config); break;
                   case "condition": transformedBatch = applyConditionRules(transformedBatch, step.config); break;
@@ -741,7 +889,7 @@ async function executeEtlPipeline(
          }
       } else {
          // Legacy mode
-         transformedBatch = rawBatch.map(r => applyTransforms(r, body?.clean));
+         transformedBatch = applyCleanBatch(rawBatch, body?.clean);
          if (body.cast?.conversions?.length) transformedBatch = applyCastConversions(transformedBatch, body.cast);
          if (body.arithmetic?.operations?.length) transformedBatch = applyArithmeticOperations(transformedBatch, body.arithmetic);
          if (body.condition?.rules?.length) transformedBatch = applyConditionRules(transformedBatch, body.condition);
@@ -790,37 +938,53 @@ async function executeEtlPipeline(
     }
     
     // --- COMPLETION ---
-    await supabaseAdmin
-       .from("etl_runs_log")
-       .update({
-          status: "completed",
-          completed_at: new Date().toISOString(),
-          rows_processed: rowsProcessed
-       })
-       .eq("id", runId)
-       .throwOnError();
-    
-    // Update ETL definition output table link
-    if (body.etlId && !isPreview) {
-       await supabaseAdmin.from("etl").update({ output_table: newTableName } as any).eq("id", body.etlId);
-    }
-    
-    console.log(`[Background Run ${runId}] Completed successfully. Rows: ${rowsProcessed}`);
+    await withRetry(
+      () =>
+        supabaseAdmin
+          .from("etl_runs_log")
+          .update({
+            status: "completed",
+            completed_at: completedAt(),
+            rows_processed: rowsProcessed,
+          })
+          .eq("id", runId)
+          .throwOnError(),
+      { label: "update-completed" }
+    );
 
+    if (body.etlId && !isPreview) {
+      try {
+        await supabaseAdmin.from("etl").update({ output_table: newTableName } as any).eq("id", body.etlId);
+      } catch (_) {}
+    }
+
+    console.log(`[Background Run ${runId}] Completed successfully. Rows: ${rowsProcessed}`);
   } catch (err: any) {
     console.error(`[Background Run ${runId}] Fatal Error:`, err);
     try {
-       await supabaseAdmin
-         .from("etl_runs_log")
-         .update({
-            status: "failed",
-            completed_at: new Date().toISOString(),
-            error_message: err.message || "Unknown error"
-         })
-         .eq("id", runId);
+      await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
+        completed_at: completedAt(),
+        error_message: (err?.message || "Error desconocido").slice(0, 500),
+      });
     } catch (logErr) {
-        console.error("Failed to log fatal error to DB:", logErr);
+      console.error("Failed to log fatal error to DB:", logErr);
     }
+  } finally {
+    // Nunca dejar el run en "started" o "running" sin cerrar
+    try {
+      const { data: row } = await supabaseAdmin
+        .from("etl_runs_log")
+        .select("status")
+        .eq("id", runId)
+        .maybeSingle();
+      const status = (row as any)?.status;
+      if (status === "started" || status === "running") {
+        await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
+          completed_at: completedAt(),
+          error_message: "Ejecución interrumpida o error no registrado",
+        });
+      }
+    } catch (_) {}
   }
 }
 

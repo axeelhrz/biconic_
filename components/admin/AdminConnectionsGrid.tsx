@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import DatabaseConnectionCard, { Connection } from "@/components/connections/ConnectionsCard";
 import { createClient } from "@/lib/supabase/client";
 
@@ -39,11 +39,8 @@ export default function AdminConnectionsGrid({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
+  const loadConnections = useCallback(async () => {
     const supabase = createClient();
-
-    async function loadConnections() {
       console.log("[AdminGrid] 1. Iniciando carga de conexiones...");
       
       try {
@@ -171,7 +168,7 @@ export default function AdminConnectionsGrid({
                 : "Nunca",
             clientId: row.client_id ?? "",
             dataTableId: meta?.id,
-
+            dataTableUpdatedAt: meta?.updated_at,
             importStatus: meta?.import_status,
             creator: row.user_id ? { fullName: userById.get(row.user_id)?.full_name ?? null } : undefined,
             client: row.client_id ? { 
@@ -183,26 +180,20 @@ export default function AdminConnectionsGrid({
 
         console.log("[AdminGrid] ✅ Mapeo finalizado. Total:", mappedConnections.length, mappedConnections);
 
-        if (isMounted) {
-          setConnections(mappedConnections);
-          setError(null);
-        }
+        setConnections(mappedConnections);
+        setError(null);
       } catch (err: any) {
         console.error("[AdminGrid] 💀 Error CRÍTICO en loadConnections:", err);
-        if (isMounted) {
-          setError(err?.message ?? "Error cargando las conexiones");
-          setConnections([]);
-        }
+        setError(err?.message ?? "Error cargando las conexiones");
+        setConnections([]);
       } finally {
-        if (isMounted) setLoading(false);
+        setLoading(false);
       }
-    }
-
-    loadConnections();
-    return () => {
-      isMounted = false;
-    };
   }, []);
+
+  useEffect(() => {
+    loadConnections();
+  }, [loadConnections]);
 
   if (loading) {
     return (
@@ -287,6 +278,7 @@ export default function AdminConnectionsGrid({
           connection={connection}
           onConfigure={onConfigure}
           onDelete={onDelete}
+          onRefreshConnections={loadConnections}
         />
       ))}
       {filteredConnections.length === 0 && (

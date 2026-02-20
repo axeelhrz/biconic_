@@ -1,0 +1,1567 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BIconic — Wizards</title>
+<style>
+  :root {
+    --teal: #00D4B4;
+    --teal-dim: #00b89a;
+    --teal-glow: rgba(0,212,180,0.15);
+    --teal-border: rgba(0,212,180,0.3);
+    --bg: #0A0A0F;
+    --bg2: #111118;
+    --bg3: #18181F;
+    --bg4: #1E1E28;
+    --bg5: #252530;
+    --border: rgba(255,255,255,0.08);
+    --border2: rgba(255,255,255,0.14);
+    --text: #F0F0F5;
+    --text-dim: #9090A8;
+    --text-faint: #55556A;
+    --success: #00D4B4;
+    --warning: #F5A623;
+    --danger: #FF4D6A;
+    --info: #4D9EFF;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+
+  /* LAYOUT */
+  .app { display: flex; height: 100vh; overflow: hidden; }
+
+  /* SIDEBAR */
+  .sidebar { width: 240px; background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+  .sidebar-header { padding: 20px 16px 16px; border-bottom: 1px solid var(--border); }
+  .logo { display: flex; align-items: center; gap: 8px; }
+  .logo-icon { width: 28px; height: 28px; background: var(--teal); border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+  .logo-icon svg { width: 16px; height: 16px; fill: #000; }
+  .logo-text { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; color: white; }
+  .logo-text span { color: var(--teal); }
+  .sidebar-subtitle { font-size: 11px; color: var(--text-faint); margin-top: 4px; letter-spacing: 0.3px; }
+  .sidebar-nav { flex: 1; overflow-y: auto; padding: 10px 0; }
+  .nav-section { padding: 14px 16px 4px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-faint); font-weight: 600; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 16px; cursor: pointer; transition: all 0.15s; font-size: 13px; color: var(--text-dim); border-left: 2px solid transparent; }
+  .nav-item:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+  .nav-item.active { background: var(--teal-glow); color: var(--teal); border-left-color: var(--teal); }
+  .nav-item .nav-badge { margin-left: auto; background: rgba(255,255,255,0.08); color: var(--text-faint); font-size: 10px; padding: 1px 6px; border-radius: 10px; }
+  .nav-item.active .nav-badge { background: var(--teal-glow); color: var(--teal); }
+  .nav-icon { font-size: 14px; width: 16px; text-align: center; }
+
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* TOPBAR */
+  .topbar { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 0 24px; height: 54px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .topbar-left { display: flex; align-items: center; gap: 8px; }
+  .topbar-breadcrumb { font-size: 12px; color: var(--text-faint); }
+  .topbar-breadcrumb span { color: var(--text-dim); }
+  .topbar-title { font-size: 15px; font-weight: 700; color: var(--text); }
+  .topbar-right { display: flex; align-items: center; gap: 10px; }
+
+  .content { flex: 1; overflow-y: auto; padding: 24px; background: var(--bg); }
+
+  /* WIZARD */
+  .wizard-wrap { display: none; }
+  .wizard-wrap.active { display: block; }
+
+  /* STEPPER */
+  .stepper { display: flex; margin-bottom: 24px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .step { flex: 1; padding: 11px 6px; text-align: center; cursor: pointer; border-right: 1px solid var(--border); transition: all 0.2s; font-size: 11px; color: var(--text-faint); }
+  .step:last-child { border-right: none; }
+  .step .step-num { width: 22px; height: 22px; border-radius: 50%; background: var(--bg4); color: var(--text-faint); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin: 0 auto 4px; border: 1px solid var(--border2); }
+  .step.active { background: var(--teal-glow); color: var(--teal); }
+  .step.active .step-num { background: var(--teal); color: #000; border-color: var(--teal); }
+  .step.done { color: var(--teal); }
+  .step.done .step-num { background: rgba(0,212,180,0.2); color: var(--teal); border-color: var(--teal-border); }
+  .step-label { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .step-panel { display: none; }
+  .step-panel.active { display: block; }
+
+  /* CARDS */
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 14px; }
+  .card-title { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
+  .card-subtitle { font-size: 12px; color: var(--text-faint); margin-bottom: 16px; line-height: 1.5; }
+
+  /* FORMS */
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .form-row.full { grid-template-columns: 1fr; }
+  .form-row.three { grid-template-columns: 1fr 1fr 1fr; }
+  .form-group { display: flex; flex-direction: column; gap: 5px; }
+  .form-group label { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .form-group input, .form-group select, .form-group textarea {
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: 6px;
+    padding: 8px 10px; font-size: 13px; color: var(--text); outline: none; transition: border 0.15s;
+  }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 3px var(--teal-glow); }
+  .form-group input[readonly] { color: var(--text-faint); }
+  .form-group .hint { font-size: 11px; color: var(--text-faint); }
+  select option { background: var(--bg3); color: var(--text); }
+
+  /* TOGGLE */
+  .toggle-wrap { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+  .toggle { position: relative; width: 38px; height: 20px; cursor: pointer; flex-shrink: 0; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg5); border: 1px solid var(--border2); border-radius: 20px; transition: 0.3s; }
+  .toggle-slider:before { content: ""; position: absolute; width: 14px; height: 14px; left: 2px; bottom: 2px; background: var(--text-faint); border-radius: 50%; transition: 0.3s; }
+  .toggle input:checked + .toggle-slider { background: var(--teal); border-color: var(--teal); }
+  .toggle input:checked + .toggle-slider:before { transform: translateX(18px); background: #000; }
+  .toggle-label { font-size: 13px; color: var(--text-dim); }
+
+  /* BADGES */
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+  .badge-teal { background: var(--teal-glow); color: var(--teal); border: 1px solid var(--teal-border); }
+  .badge-warn { background: rgba(245,166,35,0.15); color: var(--warning); border: 1px solid rgba(245,166,35,0.3); }
+  .badge-danger { background: rgba(255,77,106,0.15); color: var(--danger); border: 1px solid rgba(255,77,106,0.3); }
+  .badge-info { background: rgba(77,158,255,0.15); color: var(--info); border: 1px solid rgba(77,158,255,0.3); }
+  .badge-gray { background: var(--bg4); color: var(--text-dim); border: 1px solid var(--border2); }
+
+  /* TABLE */
+  .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .data-table th { background: var(--bg3); padding: 8px 10px; text-align: left; font-weight: 600; color: var(--text-faint); border-bottom: 1px solid var(--border); white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .data-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text-dim); }
+  .data-table tr:hover td { background: var(--bg3); }
+  .data-table select { background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; padding: 3px 6px; font-size: 11px; color: var(--text); }
+
+  /* ALERTS */
+  .alert { display: flex; gap: 10px; padding: 11px 14px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; line-height: 1.5; }
+  .alert-teal { background: var(--teal-glow); border: 1px solid var(--teal-border); color: var(--teal); }
+  .alert-warn { background: rgba(245,166,35,0.1); border: 1px solid rgba(245,166,35,0.25); color: var(--warning); }
+  .alert-danger { background: rgba(255,77,106,0.1); border: 1px solid rgba(255,77,106,0.25); color: var(--danger); }
+  .alert-info { background: rgba(77,158,255,0.1); border: 1px solid rgba(77,158,255,0.25); color: var(--info); }
+  .alert-icon { font-size: 14px; flex-shrink: 0; }
+
+  /* BUTTONS */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; }
+  .btn-primary { background: var(--teal); color: #000; }
+  .btn-primary:hover { background: var(--teal-dim); }
+  .btn-secondary { background: var(--bg3); color: var(--text-dim); border: 1px solid var(--border2); }
+  .btn-secondary:hover { background: var(--bg4); color: var(--text); border-color: var(--border2); }
+  .btn-ghost { background: transparent; color: var(--teal); border: 1px solid var(--teal-border); }
+  .btn-ghost:hover { background: var(--teal-glow); }
+  .btn-success { background: var(--teal); color: #000; }
+  .btn-danger { background: rgba(255,77,106,0.15); color: var(--danger); border: 1px solid rgba(255,77,106,0.3); }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+  .btn-row { display: flex; gap: 10px; align-items: center; margin-top: 20px; justify-content: space-between; }
+
+  /* CHIPS */
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 500; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; }
+  .chip-key { background: rgba(160,100,255,0.15); color: #C084FC; border-color: rgba(160,100,255,0.3); }
+  .chip-date { background: var(--teal-glow); color: var(--teal); border-color: var(--teal-border); }
+  .chip-measure { background: rgba(77,158,255,0.15); color: var(--info); border-color: rgba(77,158,255,0.3); }
+  .chip-dim { background: rgba(245,166,35,0.15); color: var(--warning); border-color: rgba(245,166,35,0.3); }
+  .chip-blocked { background: rgba(255,77,106,0.1); color: var(--danger); border-color: rgba(255,77,106,0.25); cursor: not-allowed; }
+  .chip:hover { opacity: 0.85; }
+
+  /* METRIC CHIPS */
+  .metric-chips { display: flex; flex-wrap: wrap; gap: 8px; min-height: 44px; padding: 8px; border: 1px dashed var(--border2); border-radius: 6px; background: var(--bg3); }
+  .metric-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--teal-glow); border: 1px solid var(--teal-border); border-radius: 20px; font-size: 12px; color: var(--teal); }
+  .metric-chip .remove { cursor: pointer; color: var(--text-faint); font-size: 14px; }
+  .metric-chip .remove:hover { color: var(--danger); }
+
+  /* GRAIN OPTIONS */
+  .grain-box { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+  .grain-option { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border2); border-radius: 6px; margin-bottom: 8px; cursor: pointer; transition: all 0.15s; background: var(--bg4); }
+  .grain-option:hover { border-color: var(--teal-border); background: var(--bg3); }
+  .grain-option.selected { border-color: var(--teal); background: var(--teal-glow); }
+  .grain-option input[type=radio] { accent-color: var(--teal); }
+  .grain-meta { margin-left: auto; font-size: 11px; color: var(--text-faint); }
+
+  /* PREVIEW TABLE */
+  .preview-table-wrap { border: 1px solid var(--border); border-radius: 6px; overflow: auto; max-height: 220px; }
+
+  /* CHART GALLERY */
+  .chart-gallery { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+  .chart-card { border: 1px solid var(--border2); border-radius: 8px; padding: 14px 10px; cursor: pointer; text-align: center; transition: all 0.2s; background: var(--bg3); }
+  .chart-card:hover { border-color: var(--teal-border); background: var(--bg4); }
+  .chart-card.selected { border-color: var(--teal); background: var(--teal-glow); }
+  .chart-card .chart-icon { font-size: 26px; margin-bottom: 6px; }
+  .chart-card .chart-name { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+  .chart-card.selected .chart-name { color: var(--teal); }
+  .chart-card .chart-why { font-size: 10px; color: var(--text-faint); margin-top: 3px; }
+  .recommended-tag { display: inline-block; background: var(--teal); color: #000; font-size: 9px; padding: 1px 6px; border-radius: 10px; margin-top: 5px; font-weight: 700; }
+
+  /* RULE BUILDER */
+  .rule-group { border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; background: var(--bg3); }
+  .rule-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .rule-row select, .rule-row input { background: var(--bg4); border: 1px solid var(--border2); border-radius: 5px; padding: 6px 8px; font-size: 12px; color: var(--text); flex: 1; outline: none; }
+  .rule-row select:focus, .rule-row input:focus { border-color: var(--teal); }
+  .connector { font-size: 11px; font-weight: 700; color: var(--teal); padding: 2px 8px; background: var(--teal-glow); border: 1px solid var(--teal-border); border-radius: 4px; }
+
+  /* PROGRESS BAR */
+  .progress-bar-wrap { background: var(--bg4); border-radius: 10px; height: 5px; margin-top: 6px; overflow: hidden; }
+  .progress-bar { height: 100%; border-radius: 10px; background: var(--teal); transition: width 0.4s; }
+
+  /* CHECKLIST */
+  .checklist-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 6px; margin-bottom: 6px; font-size: 13px; border: 1px solid transparent; }
+  .checklist-item.ok { background: var(--teal-glow); color: var(--teal); border-color: var(--teal-border); }
+  .checklist-item.warn { background: rgba(245,166,35,0.1); color: var(--warning); border-color: rgba(245,166,35,0.25); }
+  .checklist-item.error { background: rgba(255,77,106,0.1); color: var(--danger); border-color: rgba(255,77,106,0.25); }
+
+  /* MINI CHART */
+  .mini-chart { display: flex; align-items: flex-end; gap: 3px; height: 50px; padding: 0 4px; }
+  .mini-bar { border-radius: 3px 3px 0 0; flex: 1; min-width: 8px; background: var(--teal); }
+
+  /* FORMULA EDITOR */
+  .formula-editor { border: 1px solid var(--border2); border-radius: 6px; overflow: hidden; background: var(--bg3); }
+  .formula-editor-toolbar { background: var(--bg4); padding: 6px 10px; display: flex; gap: 6px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .formula-editor textarea { width: 100%; padding: 10px; border: none; outline: none; font-family: 'Courier New', monospace; font-size: 13px; min-height: 80px; resize: vertical; background: var(--bg3); color: var(--teal); }
+
+  /* KPI CARD */
+  .kpi-card { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
+  .kpi-value { font-size: 26px; font-weight: 800; color: var(--teal); }
+  .kpi-label { font-size: 11px; color: var(--text-faint); margin-top: 3px; }
+  .kpi-delta { font-size: 13px; margin-top: 6px; font-weight: 600; }
+  .kpi-delta.pos { color: var(--teal); }
+  .kpi-delta.neg { color: var(--danger); }
+
+  /* STATUS PILL */
+  .status-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .status-published { background: var(--teal-glow); color: var(--teal); border: 1px solid var(--teal-border); }
+  .status-draft { background: rgba(245,166,35,0.15); color: var(--warning); border: 1px solid rgba(245,166,35,0.3); }
+
+  /* INFO ROW */
+  .info-row { display: flex; gap: 20px; padding: 10px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; margin-bottom: 4px; }
+  .info-item .info-key { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-faint); font-weight: 600; }
+  .info-item .info-val { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 2px; }
+
+  /* FIELD DROP */
+  .field-drop { border: 1px dashed var(--border2); border-radius: 6px; padding: 10px 12px; min-height: 40px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-faint); background: var(--bg3); }
+  .field-drop.filled { border-color: var(--teal-border); color: var(--teal); background: var(--teal-glow); }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--bg5); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
+  /* PREVIEW BARS */
+  .live-preview { border: 1px solid var(--border); border-radius: 6px; padding: 14px; background: var(--bg3); }
+  .live-bars { display: flex; align-items: flex-end; gap: 4px; height: 70px; }
+  .lb { border-radius: 3px 3px 0 0; flex: 1; }
+  .lb-teal { background: var(--teal); }
+  .lb-green { background: #00B89A; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  /* COLOR SWATCH */
+  .color-swatch { width: 28px; height: 28px; border-radius: 4px; border: 1px solid var(--border2); cursor: pointer; flex-shrink: 0; }
+
+  @media (max-width: 860px) {
+    .sidebar { width: 190px; }
+    .form-row { grid-template-columns: 1fr; }
+    .chart-gallery { grid-template-columns: repeat(2,1fr); }
+    .stepper .step-label { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 16 16"><path d="M2 2h5v5H2zm7 0h5v5H9zm0 7h5v5H9zM2 9h5v5H2z"/></svg>
+        </div>
+        <div class="logo-text">bi<span>conic</span></div>
+      </div>
+      <div class="sidebar-subtitle">Data Intelligence Platform</div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-section">Setup</div>
+      <div class="nav-item active" onclick="showWizard('A', this)">
+        <span class="nav-icon">🗄️</span> Wizard A: Dataset
+        <span class="nav-badge">7</span>
+      </div>
+      <div class="nav-section">Métricas & Análisis</div>
+      <div class="nav-item" onclick="showWizard('B', this)">
+        <span class="nav-icon">📐</span> Wizard B: Métrica
+        <span class="nav-badge">7</span>
+      </div>
+      <div class="nav-item" onclick="showWizard('C', this)">
+        <span class="nav-icon">🔍</span> Wizard C: Análisis
+        <span class="nav-badge">6</span>
+      </div>
+      <div class="nav-item" onclick="showWizard('D', this)">
+        <span class="nav-icon">📊</span> Wizard D: Gráfico
+        <span class="nav-badge">6</span>
+      </div>
+      <div class="nav-section">Dashboard</div>
+      <div class="nav-item" onclick="showWizard('E', this)">
+        <span class="nav-icon">⚡</span> Wizard E: Filtros Globales
+        <span class="nav-badge">5</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="topbar-breadcrumb"><span>Wizards</span> / </div>
+        <div class="topbar-title" id="topbarTitle">Wizard A — Data Setup</div>
+      </div>
+      <div class="topbar-right">
+        <span class="status-pill status-draft">Borrador</span>
+        <button class="btn btn-secondary btn-sm">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="nextStep()">Guardar y continuar →</button>
+      </div>
+    </div>
+    <div class="content" id="mainContent">
+
+      <!-- ==================== WIZARD A ==================== -->
+      <div class="wizard-wrap active" id="wiz-A">
+        <div class="stepper" id="stepper-A">
+          <div class="step active" onclick="gotoStep('A',0)"><div class="step-num">1</div><div class="step-label">Profiling</div></div>
+          <div class="step" onclick="gotoStep('A',1)"><div class="step-num">2</div><div class="step-label">Grain</div></div>
+          <div class="step" onclick="gotoStep('A',2)"><div class="step-num">3</div><div class="step-label">Tiempo</div></div>
+          <div class="step" onclick="gotoStep('A',3)"><div class="step-num">4</div><div class="step-label">Roles BI</div></div>
+          <div class="step" onclick="gotoStep('A',4)"><div class="step-num">5</div><div class="step-label">Relaciones</div></div>
+          <div class="step" onclick="gotoStep('A',5)"><div class="step-num">6</div><div class="step-label">Avanzado</div></div>
+          <div class="step" onclick="gotoStep('A',6)"><div class="step-num">7</div><div class="step-label">Publicar</div></div>
+        </div>
+
+        <!-- A1 -->
+        <div class="step-panel active" id="panel-A-0">
+          <div class="card">
+            <div class="card-title">🔌 Paso 1 — Configurar conexión</div>
+            <div class="card-subtitle">Conectá tu base de datos de origen (PostgreSQL, MySQL, Firebird o Excel). Si ya tenés una conexión, seleccionála.</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Tipo de conexión</label>
+                <select id="conn-type">
+                  <option value="">Seleccionar tipo…</option>
+                  <option value="postgres">PostgreSQL</option>
+                  <option value="mysql">MySQL</option>
+                  <option value="firebird">Firebird</option>
+                  <option value="excel">Excel</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Nombre de la conexión</label>
+                <input type="text" id="conn-name" placeholder="Ej: Base de Ventas" />
+              </div>
+            </div>
+            <div class="form-row" id="conn-details-postgres" style="display:none">
+              <div class="form-group">
+                <label>Host</label>
+                <input type="text" placeholder="localhost" />
+              </div>
+              <div class="form-group">
+                <label>Puerto</label>
+                <input type="number" placeholder="5432" />
+              </div>
+            </div>
+            <div class="form-row" id="conn-details-postgres" style="display:none">
+              <div class="form-group">
+                <label>Base de datos</label>
+                <input type="text" placeholder="nombre_db" />
+              </div>
+              <div class="form-group">
+                <label>Usuario</label>
+                <input type="text" placeholder="usuario" />
+              </div>
+            </div>
+            <div class="form-row" id="conn-details-postgres" style="display:none">
+              <div class="form-group full">
+                <label>Contraseña</label>
+                <input type="password" placeholder="••••••••" />
+              </div>
+            </div>
+            <div class="form-row" id="conn-details-excel" style="display:none">
+              <div class="form-group full">
+                <label>Subir archivo Excel</label>
+                <input type="file" accept=".xlsx,.xls" />
+                <span class="hint">Formatos soportados: .xlsx, .xls</span>
+              </div>
+            </div>
+            <div class="alert alert-info" style="margin-top:12px"><span class="alert-icon">ℹ️</span>Si ya tenés una conexión configurada, podés seleccionarla en el siguiente paso.</div>
+            <div style="margin-top:14px">
+              <button class="btn btn-secondary btn-sm" onclick="testConnection()">🧪 Probar conexión</button>
+            </div>
+          </div>
+          <div class="btn-row"><div></div><button class="btn btn-primary" onclick="nextStep()">Siguiente: Origen →</button></div>
+        </div>
+
+        <!-- A2 -->
+        <div class="step-panel" id="panel-A-1">
+          <div class="card">
+            <div class="card-title">🔑 A2 — Grain técnico (clave única)</div>
+            <div class="card-subtitle">El grain es el set mínimo de columnas que identifica una fila de forma única. No es una etiqueta de negocio.</div>
+            <div class="grain-box">
+              <div class="grain-option selected" onclick="selectGrain(this)">
+                <input type="radio" name="grain" checked />
+                <div><strong style="color:var(--text)">id_venta</strong> <span class="badge badge-teal">✓ 100% unicidad</span></div>
+                <div class="grain-meta">1 columna · clave simple</div>
+              </div>
+              <div class="grain-option" onclick="selectGrain(this)">
+                <input type="radio" name="grain" />
+                <div><strong style="color:var(--text)">fecha + sucursal + producto</strong> <span class="badge badge-warn">~98.2%</span></div>
+                <div class="grain-meta">3 columnas · compuesto</div>
+              </div>
+              <div class="grain-option" onclick="selectGrain(this)">
+                <input type="radio" name="grain" />
+                <div style="color:var(--text-dim)"><strong>Personalizado</strong> — definir columnas manualmente</div>
+                <div class="grain-meta">manual</div>
+              </div>
+            </div>
+            <div style="margin-top:10px"><button class="btn btn-secondary btn-sm">🔎 Probar unicidad</button></div>
+          </div>
+          <div class="alert alert-teal"><span class="alert-icon">✅</span><strong>id_venta</strong> — Unicidad verificada al 100%. Puedes continuar.</div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- A3 -->
+        <div class="step-panel" id="panel-A-2">
+          <div class="card">
+            <div class="card-title">📅 A3 — Dimensión temporal y periodicidad natural</div>
+            <div class="card-subtitle">Define la resolución temporal. Esto restringe granularidades en análisis. Periodicidad natural = detalle mínimo disponible en tiempo.</div>
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox" checked id="hasTime" onchange="toggleTime()"/><span class="toggle-slider"></span></label>
+              <span class="toggle-label">Este dataset tiene dimensión temporal</span>
+            </div>
+            <div id="time-config">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Columna temporal principal</label>
+                  <select><option selected>fecha (DATE)</option><option>created_at (TIMESTAMP)</option></select>
+                </div>
+                <div class="form-group">
+                  <label>Periodicidad natural</label>
+                  <select><option selected>Diaria</option><option>Semanal</option><option>Mensual</option><option>Anual</option><option>Irregular</option></select>
+                </div>
+              </div>
+              <div class="form-group" style="margin-bottom:14px">
+                <label>Zona horaria</label>
+                <select><option>America/Argentina/Cordoba</option><option>UTC</option></select>
+              </div>
+              <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px">
+                <div style="font-size:11px;color:var(--text-faint);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Distribución temporal (preview)</div>
+                <div class="mini-chart">
+                  <div class="mini-bar" style="height:60%;opacity:0.5"></div>
+                  <div class="mini-bar" style="height:75%;opacity:0.6"></div>
+                  <div class="mini-bar" style="height:85%;opacity:0.7"></div>
+                  <div class="mini-bar" style="height:95%;opacity:0.85"></div>
+                  <div class="mini-bar" style="height:100%"></div>
+                  <div class="mini-bar" style="height:88%;opacity:0.8"></div>
+                  <div class="mini-bar" style="height:72%;opacity:0.6"></div>
+                  <div class="mini-bar" style="height:65%;opacity:0.5"></div>
+                </div>
+                <div style="font-size:11px;color:var(--text-faint);margin-top:4px">Últimos 8 períodos — distribución uniforme ✓</div>
+              </div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- A4 -->
+        <div class="step-panel" id="panel-A-3">
+          <div class="card">
+            <div class="card-title">🏷 A4 — Clasificación BI de columnas (roles)</div>
+            <div class="card-subtitle">Define qué columnas se exponen como dimensiones, medidas y claves. Controla lo que aparece en métricas y análisis.</div>
+            <div style="display:flex;gap:8px;margin-bottom:12px">
+              <button class="btn btn-secondary btn-sm">Todas como dimensión</button>
+              <button class="btn btn-secondary btn-sm">Ocultar claves</button>
+            </div>
+            <div style="overflow-x:auto">
+              <table class="data-table">
+                <thead><tr><th>Columna</th><th>Tipo</th><th>Rol BI</th><th>Agregación</th><th>Etiqueta</th><th>Visible</th></tr></thead>
+                <tbody>
+                  <tr><td style="color:var(--text)">id_venta</td><td><span class="badge badge-gray">INT</span></td><td><select><option>key</option></select></td><td>—</td><td><input type="text" value="ID Venta" style="width:90px"/></td><td><input type="checkbox"/></td></tr>
+                  <tr><td style="color:var(--text)">fecha</td><td><span class="badge badge-teal">DATE</span></td><td><select><option>time</option></select></td><td>—</td><td><input type="text" value="Fecha" style="width:90px"/></td><td><input type="checkbox" checked/></td></tr>
+                  <tr><td style="color:var(--text)">sucursal</td><td><span class="badge badge-gray">STR</span></td><td><select><option selected>dimension</option></select></td><td>—</td><td><input type="text" value="Sucursal" style="width:90px"/></td><td><input type="checkbox" checked/></td></tr>
+                  <tr><td style="color:var(--text)">producto</td><td><span class="badge badge-gray">STR</span></td><td><select><option selected>dimension</option></select></td><td>—</td><td><input type="text" value="Producto" style="width:90px"/></td><td><input type="checkbox" checked/></td></tr>
+                  <tr><td style="color:var(--text)">total</td><td><span class="badge badge-info">FLOAT</span></td><td><select><option selected>measure</option></select></td><td><select><option selected>sum</option><option>avg</option><option>min</option><option>max</option></select></td><td><input type="text" value="Total Venta" style="width:90px"/></td><td><input type="checkbox" checked/></td></tr>
+                  <tr><td style="color:var(--text)">descuento</td><td><span class="badge badge-info">FLOAT</span></td><td><select><option selected>measure</option></select></td><td><select><option selected>sum</option><option>avg</option></select></td><td><input type="text" value="Descuento" style="width:90px"/></td><td><input type="checkbox" checked/></td></tr>
+                  <tr><td style="color:var(--text)">margen_pct</td><td><span class="badge badge-info">FLOAT</span></td><td><select><option selected>measure</option></select></td><td><select><option>sum</option><option>avg</option><option selected>none</option></select></td><td><input type="text" value="Margen %" style="width:90px"/></td><td><input type="checkbox" checked/></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="alert alert-warn" style="margin-top:12px"><span class="alert-icon">⚠️</span><strong>margen_pct</strong>: nombre sugiere ratio (%/pct). Agregación recomendada: <code style="background:var(--bg4);padding:1px 5px;border-radius:3px;font-size:11px">none</code> para evitar sumas incorrectas.</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- A5 -->
+        <div class="step-panel" id="panel-A-4">
+          <div class="card">
+            <div class="card-title">🔗 A5 — Relaciones entre datasets (joins)</div>
+            <div class="card-subtitle">Define cómo se combina este dataset con otros del mismo cliente. Toda relación debe ser explícita para habilitar análisis multi-dataset sin duplicaciones.</div>
+            <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:12px">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+                <strong style="font-size:12px;color:var(--text-dim)">Dataset destino:</strong>
+                <select style="background:var(--bg4);border:1px solid var(--border2);border-radius:5px;padding:5px 8px;font-size:12px;color:var(--text)"><option selected>objetivos_mensuales</option><option>dimensiones_producto</option></select>
+                <select style="background:var(--bg4);border:1px solid var(--border2);border-radius:5px;padding:5px 8px;font-size:12px;color:var(--text)"><option selected>many_to_one (N:1)</option><option>1:1</option><option>1:N</option></select>
+              </div>
+              <div style="font-size:11px;font-weight:600;margin-bottom:8px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.5px">Condiciones de join</div>
+              <div class="rule-row">
+                <select><option selected>ventas.sucursal</option></select>
+                <span style="color:var(--teal);font-weight:700">=</span>
+                <select><option selected>objetivos.sucursal</option></select>
+                <button class="btn btn-danger btn-sm">✕</button>
+              </div>
+              <div class="rule-row">
+                <select><option selected>ventas.fecha → mes</option></select>
+                <span style="color:var(--teal);font-weight:700">=</span>
+                <select><option selected>objetivos.anio_mes</option></select>
+                <button class="btn btn-danger btn-sm">✕</button>
+              </div>
+              <button class="btn btn-ghost btn-sm" style="margin-top:6px">+ Agregar condición</button>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="showJoinTest()">🧪 Test join</button>
+            <div id="join-test-result" style="display:none;margin-top:10px">
+              <div class="alert alert-teal"><span class="alert-icon">✅</span>Test join exitoso: <strong>98.7% matches</strong> — 1.2M filas → 1.18M resultado. Cardinalidad many_to_one confirmada.</div>
+            </div>
+            <div style="margin-top:10px"><button class="btn btn-ghost btn-sm">+ Agregar otra relación</button></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- A6 -->
+        <div class="step-panel" id="panel-A-5">
+          <div class="card">
+            <div class="card-title">⚙️ A6 — Allocation strategy (opcional)</div>
+            <div class="card-subtitle">Permite distribuir valores de periodicidad gruesa a granularidad más fina. Requiere aprobación explícita del cliente.</div>
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox" id="allocToggle" onchange="toggleAlloc()"/><span class="toggle-slider"></span></label>
+              <span class="toggle-label">Permitir distribución a granularidad más fina</span>
+            </div>
+            <div id="alloc-config" style="display:none">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Estrategia de distribución</label>
+                  <select><option>Distribución uniforme por días</option><option>Proporcional a días del período</option></select>
+                </div>
+              </div>
+              <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px">
+                <div style="font-size:11px;color:var(--text-faint);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px">Ejemplo numérico</div>
+                <div style="font-size:14px;color:var(--text)">1.000 (anual) → <strong style="color:var(--teal)">83,33</strong> por mes (÷ 12 meses)</div>
+              </div>
+              <div class="alert alert-warn"><span class="alert-icon">⚠️</span>Distribución artificial. Úsese solo si el cliente lo aprueba explícitamente.</div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- A7 -->
+        <div class="step-panel" id="panel-A-6">
+          <div class="card">
+            <div class="card-title">✅ A7 — Validación final y publicación</div>
+            <div class="card-subtitle">Confirma que la metadata está completa y publica el dataset para uso en métricas y análisis.</div>
+            <div class="checklist-item ok">✅ Grain definido: <strong>id_venta</strong> (100% unicidad)</div>
+            <div class="checklist-item ok">✅ Dimensión temporal: <strong>fecha</strong> · Periodicidad: <strong>Diaria</strong></div>
+            <div class="checklist-item ok">✅ Roles BI: 2 dimensiones, 3 medidas, 1 clave</div>
+            <div class="checklist-item ok">✅ Relación con objetivos_mensuales: many_to_one (98.7% match)</div>
+            <div class="checklist-item warn">⚠️ margen_pct: agregación "none" — revisar si es intencional</div>
+            <div class="form-group" style="margin-top:14px">
+              <label>Notas internas (opcional)</label>
+              <textarea rows="2" placeholder="Ej: Dataset actualizado diariamente por ETL batch 02:00 AM ART."></textarea>
+            </div>
+            <div class="info-row" style="margin-top:10px">
+              <div class="info-item"><div class="info-key">Versión</div><div class="info-val">v1</div></div>
+              <div class="info-item"><div class="info-key">Fecha</div><div class="info-val">Feb 2026</div></div>
+              <div class="info-item"><div class="info-key">Cliente</div><div class="info-val">cliente_x</div></div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-secondary">💾 Guardar borrador</button>
+              <button class="btn btn-primary" onclick="publishDataset()">🚀 Publicar dataset</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== WIZARD B ==================== -->
+      <div class="wizard-wrap" id="wiz-B">
+        <div class="stepper" id="stepper-B">
+          <div class="step active" onclick="gotoStep('B',0)"><div class="step-num">1</div><div class="step-label">Identidad</div></div>
+          <div class="step" onclick="gotoStep('B',1)"><div class="step-num">2</div><div class="step-label">Tipo cálculo</div></div>
+          <div class="step" onclick="gotoStep('B',2)"><div class="step-num">3</div><div class="step-label">Cálculo simple</div></div>
+          <div class="step" onclick="gotoStep('B',3)"><div class="step-num">4</div><div class="step-label">Avanzado</div></div>
+          <div class="step" onclick="gotoStep('B',4)"><div class="step-num">5</div><div class="step-label">Propiedades</div></div>
+          <div class="step" onclick="gotoStep('B',5)"><div class="step-num">6</div><div class="step-label">Filtros base</div></div>
+          <div class="step" onclick="gotoStep('B',6)"><div class="step-num">7</div><div class="step-label">Preview</div></div>
+        </div>
+
+        <!-- B1 -->
+        <div class="step-panel active" id="panel-B-0">
+          <div class="card">
+            <div class="card-title">📛 B1 — Identidad y formato de la métrica</div>
+            <div class="card-subtitle">Define cómo se mostrará el KPI en tablas, tooltips y tarjetas. El cálculo se define en pasos siguientes.</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Nombre de métrica *</label>
+                <input type="text" value="Ventas Netas" />
+                <span class="hint">Único por cliente</span>
+              </div>
+              <div class="form-group">
+                <label>Dataset base *</label>
+                <select><option selected>ventas_transaccionales ✓</option></select>
+              </div>
+            </div>
+            <div class="form-row full">
+              <div class="form-group">
+                <label>Descripción de negocio</label>
+                <textarea rows="2">Ventas menos descuentos. Excluye anuladas.</textarea>
+              </div>
+            </div>
+            <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:14px">
+              <div style="font-size:11px;color:var(--text-faint);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Info del dataset (solo lectura)</div>
+              <div class="info-row" style="border:none;margin:0;padding:0">
+                <div class="info-item"><div class="info-key">Grain</div><div class="info-val" style="color:var(--teal)">id_venta</div></div>
+                <div class="info-item"><div class="info-key">Periodicidad</div><div class="info-val">Diaria</div></div>
+                <div class="info-item"><div class="info-key">Estado</div><div class="info-val"><span class="status-pill status-published">Publicado</span></div></div>
+              </div>
+            </div>
+            <div class="form-row three">
+              <div class="form-group">
+                <label>Unidad/Formato</label>
+                <select><option>Número</option><option selected>Moneda ($)</option><option>%</option></select>
+              </div>
+              <div class="form-group">
+                <label>Moneda</label>
+                <select><option selected>ARS</option><option>USD</option></select>
+              </div>
+              <div class="form-group">
+                <label>Decimales</label>
+                <select><option>0</option><option>1</option><option selected>2</option></select>
+              </div>
+            </div>
+          </div>
+          <div class="btn-row"><div></div><button class="btn btn-primary" onclick="nextStep()">Siguiente →</button></div>
+        </div>
+
+        <!-- B2 -->
+        <div class="step-panel" id="panel-B-1">
+          <div class="card">
+            <div class="card-title">🧮 B2 — Tipo de cálculo</div>
+            <div class="card-subtitle">Modo Simple cubre el 80% de los casos. Modo Avanzado habilita un editor de fórmula con funciones BI.</div>
+            <div class="toggle-wrap" style="margin-bottom:14px">
+              <label class="toggle"><input type="checkbox" id="advMode"/><span class="toggle-slider"></span></label>
+              <span class="toggle-label">Modo Avanzado (editor de fórmula)</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="grain-option selected" onclick="selectGrain(this)"><input type="radio" name="calcType" checked/><div><strong style="color:var(--text)">Agregación simple</strong><br/><span style="font-size:11px;color:var(--text-faint)">sum(total), avg(precio)</span></div></div>
+              <div class="grain-option" onclick="selectGrain(this)"><input type="radio" name="calcType"/><div><strong style="color:var(--text)">Conteo</strong><br/><span style="font-size:11px;color:var(--text-faint)">count(*), count_distinct(id)</span></div></div>
+              <div class="grain-option" onclick="selectGrain(this)"><input type="radio" name="calcType"/><div><strong style="color:var(--text)">Ratio</strong><br/><span style="font-size:11px;color:var(--text-faint)">numerador / denominador</span></div></div>
+              <div class="grain-option" onclick="selectGrain(this)"><input type="radio" name="calcType"/><div><strong style="color:var(--text)">Fórmula personalizada</strong><br/><span style="font-size:11px;color:var(--text-faint)">Expresión con campos y funciones</span></div></div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- B3 -->
+        <div class="step-panel" id="panel-B-2">
+          <div class="card">
+            <div class="card-title">⚙️ B3 — Definir cálculo (modo simple)</div>
+            <div class="card-subtitle">Selecciona campos y agregaciones del dataset. Solo se muestran columnas con role=measure.</div>
+            <div style="background:var(--teal-glow);border:1px solid var(--teal-border);border-radius:6px;padding:12px;margin-bottom:14px">
+              <span style="font-size:12px;color:var(--text-faint)">Fórmula generada: </span>
+              <code style="color:var(--teal);font-size:13px">SUM(total) - SUM(descuento)</code>
+            </div>
+            <div class="form-row three">
+              <div class="form-group">
+                <label>Campo A</label>
+                <select><option selected>total (sum)</option><option>descuento (sum)</option></select>
+              </div>
+              <div class="form-group">
+                <label>Operación</label>
+                <select><option selected>−</option><option>+</option><option>×</option><option>÷</option></select>
+              </div>
+              <div class="form-group">
+                <label>Campo B</label>
+                <select><option>total (sum)</option><option selected>descuento (sum)</option></select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Manejo de nulls</label>
+                <select><option selected>COALESCE → 0</option><option>Mantener NULL</option></select>
+              </div>
+              <div class="form-group">
+                <label>División por cero</label>
+                <select><option selected>NULLIF → NULL</option><option>Retornar 0</option></select>
+              </div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- B4 -->
+        <div class="step-panel" id="panel-B-3">
+          <div class="card">
+            <div class="card-title">💻 B4 — Editor de fórmula avanzada</div>
+            <div class="card-subtitle">Fórmulas complejas con validación en tiempo real. Se almacena como AST para soporte multi-motor (BigQuery/Postgres).</div>
+            <div class="formula-editor">
+              <div class="formula-editor-toolbar">
+                <button class="btn btn-secondary btn-sm">SUM</button>
+                <button class="btn btn-secondary btn-sm">AVG</button>
+                <button class="btn btn-secondary btn-sm">IF</button>
+                <button class="btn btn-secondary btn-sm">NULLIF</button>
+                <button class="btn btn-secondary btn-sm">DATE_TRUNC</button>
+              </div>
+              <textarea>(SUM(total) - SUM(descuento)) / NULLIF(SUM(total), 0) * 100</textarea>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-ghost btn-sm">✓ Validar</button>
+              <button class="btn btn-secondary btn-sm">▶ Probar (10 filas)</button>
+            </div>
+            <div class="alert alert-teal" style="margin-top:10px"><span class="alert-icon">✅</span>Fórmula válida. Campos: <strong>total, descuento</strong>. Tipo resultado: FLOAT.</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- B5 -->
+        <div class="step-panel" id="panel-B-4">
+          <div class="card">
+            <div class="card-title">📐 B5 — Propiedades matemáticas</div>
+            <div class="card-subtitle">Declara el comportamiento de la métrica. Previene agregaciones incorrectas en tablas y totales.</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+              <div class="grain-option selected" onclick="selectGrain(this)"><input type="radio" name="add" checked/><div><strong style="color:var(--text)">Aditiva</strong><br/><span style="font-size:11px;color:var(--text-faint)">Se suma en todos los ejes</span></div></div>
+              <div class="grain-option" onclick="selectGrain(this)"><input type="radio" name="add"/><div><strong style="color:var(--text)">Semi-aditiva</strong><br/><span style="font-size:11px;color:var(--text-faint)">Ej: stock (no suma en tiempo)</span></div></div>
+              <div class="grain-option" onclick="selectGrain(this)"><input type="radio" name="add"/><div><strong style="color:var(--text)">No aditiva (ratio)</strong><br/><span style="font-size:11px;color:var(--text-faint)">Ej: margen%, conversión</span></div></div>
+            </div>
+            <div class="alert alert-info"><span class="alert-icon">ℹ️</span>Ventas Netas es diferencia de sumas → <strong>Aditiva</strong> es correcto. Los porcentajes no se pueden sumar directamente.</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- B6 -->
+        <div class="step-panel" id="panel-B-5">
+          <div class="card">
+            <div class="card-title">🔧 B6 — Filtros base del KPI (opcional)</div>
+            <div class="card-subtitle">Filtros embebidos en la métrica. Se aplican automáticamente en todos los análisis que la usen.</div>
+            <div class="rule-group">
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+                <span class="connector">AND</span>
+                <span style="font-size:11px;color:var(--text-faint)">Todas las condiciones deben cumplirse</span>
+              </div>
+              <div class="rule-row">
+                <select><option selected>estado</option><option>canal</option></select>
+                <select><option>= igual</option><option selected>≠ distinto</option></select>
+                <input type="text" value="anulada" />
+                <button class="btn btn-danger btn-sm">✕</button>
+              </div>
+              <button class="btn btn-ghost btn-sm" style="margin-top:6px">+ Agregar condición</button>
+            </div>
+            <button class="btn btn-ghost btn-sm">+ Agregar grupo OR</button>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- B7 -->
+        <div class="step-panel" id="panel-B-6">
+          <div class="card">
+            <div class="card-title">👀 B7 — Preview + publicación</div>
+            <div class="card-subtitle">Valida que el KPI se comporta como se espera antes de publicarlo.</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Rango temporal de prueba</label>
+                <select><option>Últimos 30 días</option><option selected>Últimos 3 meses</option></select>
+              </div>
+              <div class="form-group">
+                <label>Dimensión de prueba</label>
+                <select><option selected>sucursal</option><option>producto</option></select>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
+              <div class="kpi-card"><div class="kpi-value">$2.4M</div><div class="kpi-label">Total Ventas Netas</div><div class="kpi-delta pos">▲ 8.2% vs período ant.</div></div>
+              <div class="kpi-card"><div class="kpi-value">$842K</div><div class="kpi-label">Córdoba</div></div>
+              <div class="kpi-card"><div class="kpi-value">$691K</div><div class="kpi-label">CABA</div></div>
+            </div>
+            <div class="alert alert-teal"><span class="alert-icon">✅</span>Preview sin errores. Métrica calculada correctamente en todos los períodos.</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-secondary">💾 Guardar borrador</button>
+              <button class="btn btn-primary" onclick="publishMetric()">🚀 Publicar métrica</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== WIZARD C ==================== -->
+      <div class="wizard-wrap" id="wiz-C">
+        <div class="stepper" id="stepper-C">
+          <div class="step active" onclick="gotoStep('C',0)"><div class="step-num">1</div><div class="step-label">Métricas</div></div>
+          <div class="step" onclick="gotoStep('C',1)"><div class="step-num">2</div><div class="step-label">Tiempo</div></div>
+          <div class="step" onclick="gotoStep('C',2)"><div class="step-num">3</div><div class="step-label">Dimensiones</div></div>
+          <div class="step" onclick="gotoStep('C',3)"><div class="step-num">4</div><div class="step-label">Filtros</div></div>
+          <div class="step" onclick="gotoStep('C',4)"><div class="step-num">5</div><div class="step-label">Transformaciones</div></div>
+          <div class="step" onclick="gotoStep('C',5)"><div class="step-num">6</div><div class="step-label">Preview</div></div>
+        </div>
+
+        <!-- C1 -->
+        <div class="step-panel active" id="panel-C-0">
+          <div class="card">
+            <div class="card-title">📐 C1 — Seleccionar métricas</div>
+            <div class="card-subtitle">Métricas de distintos datasets son soportadas. El motor aplica re-agregación + join seguro al nivel final.</div>
+            <div class="form-group" style="margin-bottom:12px">
+              <label>Agregar métrica publicada</label>
+              <select onchange="addMetric(this)" style="background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text)">
+                <option value="">— Seleccionar —</option>
+                <option value="Ventas Netas|ARS|ventas_tx">Ventas Netas (ARS)</option>
+                <option value="Objetivo Ventas|ARS|obj_mensual">Objetivo Ventas (ARS)</option>
+                <option value="Margen %|%|ventas_tx">Margen % (%)</option>
+              </select>
+            </div>
+            <div class="metric-chips" id="metric-chips">
+              <div class="metric-chip">📐 Ventas Netas <span class="badge badge-gray">ARS</span><span class="badge badge-teal">ventas_tx</span><span class="remove" onclick="removeChip(this)">×</span></div>
+              <div class="metric-chip">📐 Objetivo Ventas <span class="badge badge-gray">ARS</span><span class="badge badge-info">obj_mensual</span><span class="remove" onclick="removeChip(this)">×</span></div>
+            </div>
+            <div class="alert alert-info" style="margin-top:10px"><span class="alert-icon">ℹ️</span>2 datasets involucrados. El motor aplicará <strong>re-agregación por dataset + LEFT JOIN</strong> al nivel final.</div>
+          </div>
+          <div class="btn-row"><div></div><button class="btn btn-primary" onclick="nextStep()">Siguiente →</button></div>
+        </div>
+
+        <!-- C2 -->
+        <div class="step-panel" id="panel-C-1">
+          <div class="card">
+            <div class="card-title">📅 C2 — Tiempo: rango y granularidad</div>
+            <div class="card-subtitle">La granularidad está limitada por el dataset más grueso. Sin allocation strategy, no se permite granularidad más fina.</div>
+            <div class="alert alert-warn" style="margin-bottom:12px"><span class="alert-icon">⚠️</span>Granularidad máxima disponible: <strong>MES</strong> — objetivos_mensuales es periodicidad mensual. Día y Semana bloqueados.</div>
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox" checked/><span class="toggle-slider"></span></label>
+              <span class="toggle-label">Usar dimensión temporal</span>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Campo de tiempo</label>
+                <select><option selected>fecha (ventas_transaccionales)</option></select>
+              </div>
+              <div class="form-group">
+                <label>Rango</label>
+                <select><option>Últimos 7 días</option><option>Últimos 30 días</option><option selected>Últimos 12 meses</option><option>Custom</option></select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Granularidad</label>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+                <span class="chip chip-blocked">🚫 Día</span>
+                <span class="chip chip-blocked">🚫 Semana</span>
+                <span class="chip chip-date" style="border-width:2px;font-weight:700">✓ Mes</span>
+                <span class="chip chip-dim">Trimestre</span>
+                <span class="chip chip-dim">Año</span>
+              </div>
+              <span class="hint" style="margin-top:6px">Día y Semana bloqueados: objetivos_mensuales es mensual</span>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- C3 -->
+        <div class="step-panel" id="panel-C-2">
+          <div class="card">
+            <div class="card-title">🏷 C3 — Dimensiones y series</div>
+            <div class="card-subtitle">Las dimensiones definen el GROUP BY del resultado (required_grain_keys).</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Dimensión primaria</label>
+                <select><option selected>sucursal</option><option>producto</option><option>— ninguna</option></select>
+              </div>
+              <div class="form-group">
+                <label>Dimensión secundaria</label>
+                <select><option selected>— ninguna</option><option>canal</option></select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Top N</label>
+                <input type="number" value="10" />
+              </div>
+              <div class="form-group">
+                <label>Agrupar resto como</label>
+                <input type="text" value="Otros" />
+              </div>
+            </div>
+            <div class="alert alert-teal"><span class="alert-icon">✅</span>Nivel final del resultado: <strong>Mes + Sucursal</strong><br/>required_grain_keys: <code style="background:var(--bg4);padding:1px 6px;border-radius:3px;font-size:11px">[time__month, dim__sucursal]</code></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- C4 -->
+        <div class="step-panel" id="panel-C-3">
+          <div class="card">
+            <div class="card-title">🔍 C4 — Filtros del análisis</div>
+            <div class="card-subtitle">Restringen el universo sin modificar el nivel final. Se aplican antes de la agregación.</div>
+            <div class="rule-group">
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+                <span class="connector">AND</span>
+              </div>
+              <div class="rule-row">
+                <select><option selected>canal</option></select>
+                <select><option selected>= igual</option></select>
+                <input type="text" value="digital" />
+                <span class="badge badge-info">aplica a: ventas</span>
+                <button class="btn btn-danger btn-sm">✕</button>
+              </div>
+              <button class="btn btn-ghost btn-sm" style="margin-top:6px">+ Agregar condición</button>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- C5 -->
+        <div class="step-panel" id="panel-C-4">
+          <div class="card">
+            <div class="card-title">🔄 C5 — Transformaciones BI (post-aggregate)</div>
+            <div class="card-subtitle">Columnas derivadas sobre el resultado ya agregado (window functions). No afectan la definición del KPI.</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Comparar con</label>
+                <select><option selected>Período anterior (MoM)</option><option>YoY</option><option>Ninguno</option></select>
+              </div>
+              <div class="form-group">
+                <label>Mostrar como</label>
+                <select><option>Solo valor</option><option selected>Valor + Delta %</option></select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Acumulados</label>
+                <select><option selected>Ninguno</option><option>Running total</option><option>YTD</option></select>
+              </div>
+              <div class="form-group">
+                <label>Media móvil (períodos)</label>
+                <input type="number" placeholder="— desactivado" />
+              </div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- C6 -->
+        <div class="step-panel" id="panel-C-5">
+          <div class="card">
+            <div class="card-title">📋 C6 — Preview del resultado del análisis</div>
+            <div class="card-subtitle">Tabla agregada final que consumirá el gráfico.</div>
+            <div class="alert alert-teal" style="margin-bottom:12px"><span class="alert-icon">✅</span>48 filas · Nivel: <strong>Mes + Sucursal</strong> · ventas_tx (re-ag. a mes) JOIN objetivos_mensual</div>
+            <div class="preview-table-wrap" style="margin-bottom:12px">
+              <table class="data-table">
+                <thead><tr><th>time__month</th><th>dim__sucursal</th><th>ventas_netas</th><th>objetivo_ventas</th><th>delta_pct_mom</th></tr></thead>
+                <tbody>
+                  <tr><td>2026-01</td><td>Córdoba</td><td style="color:var(--teal)">$842,300</td><td>$820,000</td><td style="color:var(--teal)">▲ 3.0%</td></tr>
+                  <tr><td>2026-01</td><td>CABA</td><td style="color:var(--teal)">$691,200</td><td>$700,000</td><td style="color:var(--danger)">▼ 1.3%</td></tr>
+                  <tr><td>2026-01</td><td>Rosario</td><td style="color:var(--teal)">$423,800</td><td>$410,000</td><td style="color:var(--teal)">▲ 3.4%</td></tr>
+                  <tr><td>2025-12</td><td>Córdoba</td><td style="color:var(--teal)">$817,400</td><td>$820,000</td><td style="color:var(--danger)">▼ 0.3%</td></tr>
+                  <tr><td>2025-12</td><td>CABA</td><td style="color:var(--teal)">$700,400</td><td>$695,000</td><td style="color:var(--teal)">▲ 0.8%</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <details style="font-size:12px;color:var(--text-faint)">
+              <summary style="cursor:pointer;font-weight:600;color:var(--teal);margin-bottom:6px">▶ Cómo se construyó (modo pro)</summary>
+              <pre style="background:var(--bg3);padding:10px;border-radius:6px;overflow-x:auto;font-size:11px;color:var(--teal);line-height:1.6">subquery_ventas:
+  SELECT date_trunc(fecha,'month') AS time__month,
+         sucursal AS dim__sucursal,
+         SUM(total)-SUM(descuento) AS ventas_netas
+  FROM ventas WHERE estado!='anulada'
+  GROUP BY 1,2
+
+subquery_obj:
+  SELECT anio_mes AS time__month,
+         sucursal AS dim__sucursal,
+         SUM(objetivo) AS objetivo_ventas
+  FROM objetivos GROUP BY 1,2
+
+JOIN:
+  subquery_ventas LEFT JOIN subquery_obj
+  ON time__month AND dim__sucursal</pre>
+            </details>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-secondary">💾 Guardar borrador</button>
+              <button class="btn btn-primary" onclick="publishAnalysis()">🚀 Publicar análisis</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== WIZARD D ==================== -->
+      <div class="wizard-wrap" id="wiz-D">
+        <div class="stepper" id="stepper-D">
+          <div class="step active" onclick="gotoStep('D',0)"><div class="step-num">1</div><div class="step-label">Tipo visual</div></div>
+          <div class="step" onclick="gotoStep('D',1)"><div class="step-num">2</div><div class="step-label">Mapeo</div></div>
+          <div class="step" onclick="gotoStep('D',2)"><div class="step-num">3</div><div class="step-label">Formato</div></div>
+          <div class="step" onclick="gotoStep('D',3)"><div class="step-num">4</div><div class="step-label">Colores</div></div>
+          <div class="step" onclick="gotoStep('D',4)"><div class="step-num">5</div><div class="step-label">Interacciones</div></div>
+          <div class="step" onclick="gotoStep('D',5)"><div class="step-num">6</div><div class="step-label">Guardar</div></div>
+        </div>
+
+        <!-- D1 -->
+        <div class="step-panel active" id="panel-D-0">
+          <div class="card">
+            <div class="card-title">🎨 D1 — Tipo de visual</div>
+            <div class="card-subtitle">El sistema recomienda en base a la forma del resultado. El gráfico NO modifica el cálculo, solo define la presentación.</div>
+            <div class="alert alert-teal" style="margin-bottom:14px"><span class="alert-icon">💡</span><strong>Recomendación automática: Líneas</strong> — análisis con tiempo (mes) + dimensión + 2 métricas = ideal para serie temporal comparativa.</div>
+            <div class="chart-gallery">
+              <div class="chart-card selected" onclick="selectChart(this)">
+                <div class="chart-icon">📈</div>
+                <div class="chart-name">Líneas</div>
+                <div class="chart-why">Serie temporal</div>
+                <div class="recommended-tag">Recomendado</div>
+              </div>
+              <div class="chart-card" onclick="selectChart(this)">
+                <div class="chart-icon">📊</div><div class="chart-name">Barras</div><div class="chart-why">Comparación</div>
+              </div>
+              <div class="chart-card" onclick="selectChart(this)">
+                <div class="chart-icon">📉</div><div class="chart-name">Área</div><div class="chart-why">Tendencia</div>
+              </div>
+              <div class="chart-card" onclick="selectChart(this)">
+                <div class="chart-icon">🔢</div><div class="chart-name">Tarjeta KPI</div><div class="chart-why">Valor único</div>
+              </div>
+              <div class="chart-card" onclick="selectChart(this)">
+                <div class="chart-icon">📋</div><div class="chart-name">Tabla</div><div class="chart-why">Detalle completo</div>
+              </div>
+              <div class="chart-card" onclick="selectChart(this)">
+                <div class="chart-icon">🔀</div><div class="chart-name">Combo</div><div class="chart-why">Línea + Barras</div>
+              </div>
+              <div class="chart-card" onclick="selectChart(this)">
+                <div class="chart-icon">📊</div><div class="chart-name">Barras apiladas</div><div class="chart-why">Composición</div>
+              </div>
+              <div class="chart-card" onclick="selectChart(this)">
+                <div class="chart-icon">🗺️</div><div class="chart-name">Mapa de calor</div><div class="chart-why">2 dimensiones</div>
+              </div>
+            </div>
+          </div>
+          <div class="btn-row"><div></div><button class="btn btn-primary" onclick="nextStep()">Siguiente →</button></div>
+        </div>
+
+        <!-- D2 -->
+        <div class="step-panel" id="panel-D-1">
+          <div class="card">
+            <div class="card-title">🗺️ D2 — Mapeo de campos</div>
+            <div class="card-subtitle">Mapea columnas del resultado del análisis a ejes. Si necesitás otro nivel de detalle, volvé al Wizard C.</div>
+            <div class="alert alert-info" style="margin-bottom:14px"><span class="alert-icon">ℹ️</span>Este gráfico se construye a partir de la tabla del análisis: <strong>Mes + Sucursal</strong></div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Eje X</label>
+                <div class="field-drop filled">📅 time__month</div>
+              </div>
+              <div class="form-group">
+                <label>Eje Y (métricas)</label>
+                <div class="field-drop filled">📐 ventas_netas &nbsp; 📐 objetivo_ventas</div>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Series / Breakdown (opcional)</label>
+                <div class="field-drop">🏷 dim__sucursal</div>
+              </div>
+              <div class="form-group">
+                <label>Eje Y secundario (opcional)</label>
+                <div class="field-drop">— vacío</div>
+              </div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- D3 -->
+        <div class="step-panel" id="panel-D-2">
+          <div class="card">
+            <div class="card-title">⚙️ D3 — Orden, formato y etiquetas</div>
+            <div class="card-subtitle">Solo afecta la presentación visual. No cambia filas ni valores del análisis.</div>
+            <div class="form-row three">
+              <div class="form-group">
+                <label>Ordenar por</label>
+                <select><option selected>time__month</option><option>ventas_netas</option></select>
+              </div>
+              <div class="form-group">
+                <label>Dirección</label>
+                <select><option selected>Ascendente</option><option>Descendente</option></select>
+              </div>
+              <div class="form-group">
+                <label>Etiquetas de datos</label>
+                <div class="toggle-wrap" style="padding:4px 0">
+                  <label class="toggle"><input type="checkbox"/><span class="toggle-slider"></span></label>
+                  <span class="toggle-label" style="font-size:12px">Mostrar</span>
+                </div>
+              </div>
+            </div>
+            <!-- Live preview -->
+            <div class="live-preview">
+              <div style="font-size:11px;color:var(--text-faint);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Preview en vivo</div>
+              <div class="live-bars">
+                <div class="lb lb-teal" style="height:55%;opacity:0.8"></div><div class="lb lb-green" style="height:48%;opacity:0.7"></div>
+                <div class="lb lb-teal" style="height:70%"></div><div class="lb lb-green" style="height:60%;opacity:0.8"></div>
+                <div class="lb lb-teal" style="height:85%"></div><div class="lb lb-green" style="height:78%;opacity:0.9"></div>
+                <div class="lb lb-teal" style="height:95%"></div><div class="lb lb-green" style="height:88%;opacity:0.9"></div>
+              </div>
+              <div style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--text-faint)">
+                <span><span class="legend-dot" style="background:var(--teal)"></span> Ventas Netas</span>
+                <span><span class="legend-dot" style="background:#00B89A"></span> Objetivo</span>
+              </div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- D4 -->
+        <div class="step-panel" id="panel-D-3">
+          <div class="card">
+            <div class="card-title">🎨 D4 — Colores y reglas condicionales</div>
+            <div class="card-subtitle">Reglas de semáforo aplicadas en frontend. No afectan datos del análisis.</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Esquema de color</label>
+                <select><option selected>Automático</option><option>Fijo</option><option>Por categoría</option></select>
+              </div>
+            </div>
+            <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">Reglas condicionales</div>
+            <div class="rule-group">
+              <div class="rule-row">
+                <select><option selected>ventas_netas</option></select>
+                <select><option selected>≥ objetivo</option></select>
+                <div class="color-swatch" style="background:var(--teal)"></div>
+                <span style="font-size:12px;color:var(--text-faint)">Verde teal = por encima</span>
+              </div>
+              <div class="rule-row">
+                <select><option selected>ventas_netas</option></select>
+                <select><option selected>&lt; objetivo</option></select>
+                <div class="color-swatch" style="background:var(--danger)"></div>
+                <span style="font-size:12px;color:var(--text-faint)">Rojo = por debajo</span>
+              </div>
+              <button class="btn btn-ghost btn-sm" style="margin-top:6px">+ Agregar regla</button>
+            </div>
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox" checked/><span class="toggle-slider"></span></label>
+              <span class="toggle-label">Mostrar línea de objetivo (target)</span>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- D5 -->
+        <div class="step-panel" id="panel-D-4">
+          <div class="card">
+            <div class="card-title">🖱️ D5 — Interacciones</div>
+            <div class="card-subtitle">Define el comportamiento interactivo del gráfico dentro del dashboard.</div>
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox"/><span class="toggle-slider"></span></label>
+              <span class="toggle-label">Drilldown por jerarquía</span>
+            </div>
+            <div class="alert alert-warn" style="margin:6px 0 10px"><span class="alert-icon">⚠️</span>Drilldown a "día" no disponible: objetivos_mensuales es solo mensual. Cambiá la granularidad en el Wizard C si es necesario.</div>
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox"/><span class="toggle-slider"></span></label>
+              <span class="toggle-label">Drill-through a tabla detalle</span>
+            </div>
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox" checked/><span class="toggle-slider"></span></label>
+              <span class="toggle-label">Cross-filter — clic filtra otros widgets del dashboard</span>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- D6 -->
+        <div class="step-panel" id="panel-D-5">
+          <div class="card">
+            <div class="card-title">💾 D6 — Título, narrativa y guardado</div>
+            <div class="card-subtitle">Finaliza el gráfico para insertar en dashboards.</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Título</label>
+                <input type="text" value="Ventas vs Objetivo (Mensual)" />
+              </div>
+              <div class="form-group">
+                <label>Subtítulo dinámico</label>
+                <input type="text" value="Últimos 12 meses · Canal Digital · Sucursal" />
+              </div>
+            </div>
+            <div class="form-row three">
+              <div class="form-group">
+                <label>Guardar como</label>
+                <select><option selected>Gráfico reusable</option><option>Widget de dashboard</option></select>
+              </div>
+              <div class="form-group">
+                <label>Tamaño</label>
+                <select><option>S</option><option selected>M</option><option>L</option></select>
+              </div>
+              <div class="form-group">
+                <label>Plantilla</label>
+                <div class="toggle-wrap" style="padding:4px 0">
+                  <label class="toggle"><input type="checkbox"/><span class="toggle-slider"></span></label>
+                  <span class="toggle-label" style="font-size:12px">Guardar como plantilla</span>
+                </div>
+              </div>
+            </div>
+            <div class="alert alert-teal"><span class="alert-icon">✅</span>Visual listo para insertar en dashboards. Basado en análisis: <strong>ventas_vs_objetivo_mes_sucursal</strong></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="publishVisual()">🚀 Publicar gráfico</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== WIZARD E ==================== -->
+      <div class="wizard-wrap" id="wiz-E">
+        <div class="stepper" id="stepper-E">
+          <div class="step active" onclick="gotoStep('E',0)"><div class="step-num">1</div><div class="step-label">Filtros</div></div>
+          <div class="step" onclick="gotoStep('E',1)"><div class="step-num">2</div><div class="step-label">Alcance</div></div>
+          <div class="step" onclick="gotoStep('E',2)"><div class="step-num">3</div><div class="step-label">Activar</div></div>
+        </div>
+
+        <!-- E1 — Definir filtros -->
+        <div class="step-panel active" id="panel-E-0">
+          <div class="card">
+            <div class="card-title">🔧 E1 — Definir filtros del dashboard</div>
+            <div class="card-subtitle">Agregá los filtros que el usuario podrá controlar. Cada filtro actúa como una capa adicional sobre métricas y análisis ya definidos.</div>
+
+            <!-- Lista de filtros existentes -->
+            <div id="filter-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+
+              <!-- Filtro 1 -->
+              <div class="filter-row" style="display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--teal-border);border-radius:6px;padding:10px 12px">
+                <span style="color:var(--teal);font-size:16px">📅</span>
+                <div style="flex:1">
+                  <div style="font-size:13px;font-weight:600;color:var(--text)">Período</div>
+                  <div style="font-size:11px;color:var(--text-faint)">campo: fecha · tipo: rango de fechas · default: Últimos 12 meses</div>
+                </div>
+                <span class="badge badge-teal">activo</span>
+                <button class="btn btn-secondary btn-sm" onclick="this.closest('.filter-row').remove()">✕</button>
+              </div>
+
+              <!-- Filtro 2 -->
+              <div class="filter-row" style="display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:10px 12px">
+                <span style="color:var(--warning);font-size:16px">🏷</span>
+                <div style="flex:1">
+                  <div style="font-size:13px;font-weight:600;color:var(--text)">Sucursal</div>
+                  <div style="font-size:11px;color:var(--text-faint)">campo: sucursal · tipo: selección múltiple · default: todas</div>
+                </div>
+                <span class="badge badge-gray">inactivo</span>
+                <button class="btn btn-secondary btn-sm" onclick="this.closest('.filter-row').remove()">✕</button>
+              </div>
+            </div>
+
+            <!-- Formulario nuevo filtro -->
+            <div style="background:var(--bg3);border:1px dashed var(--border2);border-radius:6px;padding:14px">
+              <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:10px">+ Nuevo filtro</div>
+              <div class="form-row three">
+                <div class="form-group">
+                  <label>Campo</label>
+                  <select id="nf-field">
+                    <option value="">— Seleccionar —</option>
+                    <option>fecha (time)</option>
+                    <option>sucursal (dimension)</option>
+                    <option>canal (dimension)</option>
+                    <option>producto (dimension)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Tipo de control</label>
+                  <select id="nf-type">
+                    <option>Rango de fechas</option>
+                    <option>Selección única</option>
+                    <option>Selección múltiple</option>
+                    <option>Rango numérico</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Valor por defecto</label>
+                  <input type="text" id="nf-default" placeholder="Ej: Todos, Últimos 30 días…"/>
+                </div>
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="addFilter()">+ Agregar filtro</button>
+            </div>
+          </div>
+          <div class="btn-row"><div></div><button class="btn btn-primary" onclick="nextStep()">Siguiente →</button></div>
+        </div>
+
+        <!-- E2 — Alcance por gráfico -->
+        <div class="step-panel" id="panel-E-1">
+          <div class="card">
+            <div class="card-title">🎯 E2 — Alcance: ¿a qué gráficos aplica cada filtro?</div>
+            <div class="card-subtitle">El sistema detecta automáticamente la compatibilidad. Podés sobrescribir manualmente.</div>
+
+            <!-- Tabla de alcance -->
+            <div style="overflow-x:auto">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Gráfico / Indicador</th>
+                    <th style="text-align:center">📅 Período</th>
+                    <th style="text-align:center">🏷 Sucursal</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong style="color:var(--text)">Ventas vs Objetivo</strong><div style="font-size:11px;color:var(--text-faint)">Línea · Mensual</div></td>
+                    <td style="text-align:center"><input type="checkbox" checked style="accent-color:var(--teal);width:16px;height:16px"/></td>
+                    <td style="text-align:center"><input type="checkbox" checked style="accent-color:var(--teal);width:16px;height:16px"/></td>
+                    <td><span class="badge badge-teal">✓ Ambos filtros</span></td>
+                  </tr>
+                  <tr>
+                    <td><strong style="color:var(--text)">Distribución por Sucursal</strong><div style="font-size:11px;color:var(--text-faint)">Barras · Mensual</div></td>
+                    <td style="text-align:center"><input type="checkbox" checked style="accent-color:var(--teal);width:16px;height:16px"/></td>
+                    <td style="text-align:center"><input type="checkbox" checked style="accent-color:var(--teal);width:16px;height:16px"/></td>
+                    <td><span class="badge badge-teal">✓ Ambos filtros</span></td>
+                  </tr>
+                  <tr>
+                    <td><strong style="color:var(--text)">KPI — Margen %</strong><div style="font-size:11px;color:var(--text-faint)">Tarjeta · sin tiempo</div></td>
+                    <td style="text-align:center"><input type="checkbox" style="accent-color:var(--teal);width:16px;height:16px"/></td>
+                    <td style="text-align:center"><input type="checkbox" checked style="accent-color:var(--teal);width:16px;height:16px"/></td>
+                    <td><span class="badge badge-warn">Parcial</span></td>
+                  </tr>
+                  <tr>
+                    <td><strong style="color:var(--text)">Top 10 Productos</strong><div style="font-size:11px;color:var(--text-faint)">Tabla · sin dimensión tiempo</div></td>
+                    <td style="text-align:center"><input type="checkbox" style="accent-color:var(--teal);width:16px;height:16px"/></td>
+                    <td style="text-align:center"><input type="checkbox" style="accent-color:var(--teal);width:16px;height:16px"/></td>
+                    <td><span class="badge badge-gray">Sin filtros</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="alert alert-info" style="margin-top:12px"><span class="alert-icon">ℹ️</span>Los checks en gris indican que el campo no existe en ese análisis. Podés forzarlo si existe relación en Dataset Setup.</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- E3 — Resumen y activar -->
+        <div class="step-panel" id="panel-E-2">
+          <div class="card">
+            <div class="card-title">✅ E3 — Resumen y activar</div>
+            <div class="card-subtitle">Revisá la configuración final antes de activar los filtros en el dashboard.</div>
+
+            <!-- Resumen filtros -->
+            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+              <div style="background:var(--bg3);border:1px solid var(--teal-border);border-radius:6px;padding:12px;display:flex;gap:12px;align-items:flex-start">
+                <span style="font-size:20px">📅</span>
+                <div style="flex:1">
+                  <div style="font-size:13px;font-weight:700;color:var(--teal)">Período</div>
+                  <div style="font-size:12px;color:var(--text-dim);margin-top:2px">Rango de fechas · Default: Últimos 12 meses</div>
+                  <div style="font-size:11px;color:var(--text-faint);margin-top:4px">Aplica a: <strong style="color:var(--text)">Ventas vs Objetivo, Distribución por Sucursal</strong></div>
+                </div>
+                <span class="badge badge-teal">2 gráficos</span>
+              </div>
+              <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:12px;display:flex;gap:12px;align-items:flex-start">
+                <span style="font-size:20px">🏷</span>
+                <div style="flex:1">
+                  <div style="font-size:13px;font-weight:700;color:var(--text)">Sucursal</div>
+                  <div style="font-size:12px;color:var(--text-dim);margin-top:2px">Selección múltiple · Default: todas</div>
+                  <div style="font-size:11px;color:var(--text-faint);margin-top:4px">Aplica a: <strong style="color:var(--text)">Ventas vs Objetivo, Distribución, KPI Margen %</strong></div>
+                </div>
+                <span class="badge badge-teal">3 gráficos</span>
+              </div>
+            </div>
+
+            <!-- Opciones de comportamiento (colapsadas y simples) -->
+            <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:14px">
+              <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:10px">Comportamiento</div>
+              <div class="toggle-wrap" style="padding:4px 0">
+                <label class="toggle"><input type="checkbox" checked/><span class="toggle-slider"></span></label>
+                <span class="toggle-label">Mostrar barra de filtros activos en el dashboard</span>
+              </div>
+              <div class="toggle-wrap" style="padding:4px 0">
+                <label class="toggle"><input type="checkbox" checked/><span class="toggle-slider"></span></label>
+                <span class="toggle-label">Botón "Limpiar filtros" siempre visible</span>
+              </div>
+              <div class="toggle-wrap" style="padding:4px 0">
+                <label class="toggle"><input type="checkbox" checked/><span class="toggle-slider"></span></label>
+                <span class="toggle-label">Mantener filtros activos al volver al dashboard</span>
+              </div>
+            </div>
+
+            <div class="checklist-item ok">✅ 2 filtros configurados</div>
+            <div class="checklist-item ok">✅ Alcance definido: 3 de 4 gráficos afectados</div>
+            <div class="checklist-item warn">⚠️ Top 10 Productos sin filtros — el campo no está disponible en ese análisis</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-secondary">💾 Guardar borrador</button>
+              <button class="btn btn-primary" onclick="publishFilters()">🚀 Activar en dashboard</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+  const wizardTitles = {
+    A: 'Wizard A — Data Setup',
+    B: 'Wizard B — Crear Métrica (KPI)',
+    C: 'Wizard C — Crear Análisis',
+    D: 'Wizard D — Crear Gráfico',
+    E: 'Wizard E — Dashboard Runtime + Global Filters'
+  };
+  let currentWizard = 'A';
+  let currentSteps = { A:0, B:0, C:0, D:0 };
+  let stepCounts = { A:7, B:7, C:6, D:6, E:3 };
+
+  function showWizard(id, el) {
+    document.querySelectorAll('.wizard-wrap').forEach(w => w.classList.remove('active'));
+    document.getElementById('wiz-'+id).classList.add('active');
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    el.classList.add('active');
+    currentWizard = id;
+    document.getElementById('topbarTitle').textContent = wizardTitles[id];
+    renderStep(id, currentSteps[id]);
+  }
+
+  function gotoStep(wiz, idx) {
+    currentSteps[wiz] = idx;
+    renderStep(wiz, idx);
+  }
+
+  function renderStep(wiz, idx) {
+    const steps = document.getElementById('stepper-'+wiz).querySelectorAll('.step');
+    steps.forEach((s,i) => {
+      s.classList.remove('active','done');
+      if (i < idx) s.classList.add('done');
+      else if (i === idx) s.classList.add('active');
+    });
+    document.querySelectorAll('#wiz-'+wiz+' .step-panel').forEach((p,i) => {
+      p.classList.toggle('active', i === idx);
+    });
+  }
+
+  function nextStep() {
+    const wiz = currentWizard;
+    currentSteps[wiz] = Math.min(currentSteps[wiz]+1, stepCounts[wiz]-1);
+    renderStep(wiz, currentSteps[wiz]);
+  }
+
+  function prevStep() {
+    const wiz = currentWizard;
+    currentSteps[wiz] = Math.max(currentSteps[wiz]-1, 0);
+    renderStep(wiz, currentSteps[wiz]);
+  }
+
+  function runProfiling(btn) {
+    btn.textContent = '⏳ Analizando...';
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    setTimeout(() => {
+      document.getElementById('profiling-result').style.display = 'block';
+      btn.textContent = '✓ Completado';
+      btn.style.background = '#00b89a';
+    }, 1300);
+  }
+
+  function selectGrain(el) {
+    el.closest('.grain-box, #panel-B-1, #panel-B-4').querySelectorAll('.grain-option').forEach(o => o.classList.remove('selected'));
+    el.classList.add('selected');
+    if (el.querySelector('input')) el.querySelector('input').checked = true;
+  }
+
+  function selectChart(el) {
+    document.querySelectorAll('#panel-D-0 .chart-card').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+  }
+
+  function toggleTime() {
+    document.getElementById('time-config').style.display = document.getElementById('hasTime').checked ? 'block' : 'none';
+  }
+
+  function toggleAlloc() {
+    document.getElementById('alloc-config').style.display = document.getElementById('allocToggle').checked ? 'block' : 'none';
+  }
+
+  function showJoinTest() {
+    document.getElementById('join-test-result').style.display = 'block';
+  }
+
+  function addMetric(sel) {
+    if (!sel.value) return;
+    const [name, unit, ds] = sel.value.split('|');
+    const div = document.createElement('div');
+    div.className = 'metric-chip';
+    div.innerHTML = `📐 ${name} <span class="badge badge-gray">${unit}</span><span class="badge badge-teal">${ds}</span><span class="remove" onclick="removeChip(this)">×</span>`;
+    document.getElementById('metric-chips').appendChild(div);
+    sel.value = '';
+  }
+
+  function removeChip(el) { el.parentElement.remove(); }
+
+  function publishDataset() { alert('✅ Dataset "Ventas Transaccionales" publicado (v1). Disponible para métricas y análisis.'); }
+  function publishMetric() { alert('✅ Métrica "Ventas Netas" publicada (v1). Disponible para análisis y gráficos.'); }
+  function publishAnalysis() { alert('✅ Análisis "ventas_vs_objetivo_mes_sucursal" publicado. 48 filas · Mes + Sucursal.'); }
+  function addFilter() {
+    const field = document.getElementById('nf-field').value;
+    const type = document.getElementById('nf-type').value;
+    const def = document.getElementById('nf-default').value || 'todos';
+    if (!field) return;
+    const icons = { 'fecha (time)': '📅', 'sucursal (dimension)': '🏷', 'canal (dimension)': '🏷', 'producto (dimension)': '🏷' };
+    const icon = icons[field] || '🔧';
+    const div = document.createElement('div');
+    div.className = 'filter-row';
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:10px 12px';
+    div.innerHTML = `<span style="font-size:16px">${icon}</span><div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text)">${field.split(' ')[0]}</div><div style="font-size:11px;color:var(--text-faint)">campo: ${field} · tipo: ${type} · default: ${def}</div></div><span class="badge badge-gray">inactivo</span><button class="btn btn-secondary btn-sm" onclick="this.closest('.filter-row').remove()">✕</button>`;
+    document.getElementById('filter-list').appendChild(div);
+    document.getElementById('nf-field').value = '';
+    document.getElementById('nf-default').value = '';
+  }
+
+  function publishFilters() { alert('✅ Filtros globales activados en el dashboard. Los gráficos compatibles ya responden a los controles.'); }
+</script>
+</body>
+</html>

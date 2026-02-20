@@ -149,6 +149,97 @@ export function parseDateWithPattern(value: string, pattern?: string): Date | nu
   return isNaN(d.getTime()) ? null : d;
 }
 
+const BOOLEAN_TRUES = ["true", "t", "1", "yes", "y", "si", "sí"];
+const BOOLEAN_FALSES = ["false", "f", "0", "no", "n"];
+const DATE_PATTERNS = [
+  /^\d{4}-\d{2}-\d{2}(T|\s)/,
+  /^\d{4}-\d{2}-\d{2}$/,
+  /^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/,
+  /^\d{2,4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}$/,
+];
+const SAMPLE_SIZE = 200;
+
+function sampleValues(
+  rows: Record<string, any>[],
+  columnName: string
+): any[] {
+  const out: any[] = [];
+  const keys = rows.length ? Object.keys(rows[0]) : [];
+  const key =
+    columnName in (rows[0] ?? {})
+      ? columnName
+      : keys.find(
+          (k) =>
+            k === columnName ||
+            k.endsWith(`_${columnName}`) ||
+            k.endsWith(`.${columnName}`)
+        );
+  if (!key) return out;
+  for (const row of rows) {
+    const v = row[key];
+    if (v != null && v !== "") out.push(v);
+    if (out.length >= SAMPLE_SIZE) break;
+  }
+  return out;
+}
+
+function inferSingleColumnType(values: any[]): CastTargetType {
+  if (values.length === 0) return "string";
+  let allBoolean = true;
+  let allInteger = true;
+  let allNumber = true;
+  let dateLike = 0;
+  for (const v of values) {
+    const s = String(v).trim().toLowerCase();
+    if (
+      !BOOLEAN_TRUES.includes(s) &&
+      !BOOLEAN_FALSES.includes(s) &&
+      s !== ""
+    )
+      allBoolean = false;
+    const n = Number(
+      String(v)
+        .replace(/\s+/g, "")
+        .replace(",", ".")
+    );
+    if (isNaN(n) || s === "") {
+      allNumber = false;
+      allInteger = false;
+    } else {
+      if (n % 1 !== 0) allInteger = false;
+    }
+    const str = String(v).trim();
+    if (DATE_PATTERNS.some((p) => p.test(str)) || !isNaN(Date.parse(str)))
+      dateLike++;
+  }
+  if (allBoolean && values.length > 0) return "boolean";
+  if (dateLike >= Math.min(values.length * 0.8, values.length))
+    return "date";
+  if (allInteger && values.length > 0) return "integer";
+  if (allNumber && values.length > 0) return "number";
+  return "string";
+}
+
+/**
+ * Infiere el tipo de cada columna a partir de una muestra de filas.
+ * Útil para sugerir conversiones en el nodo Cast (texto → número, texto → fecha, etc.).
+ */
+export function inferColumnTypes(
+  rows: Record<string, any>[],
+  columnNames?: string[]
+): Array<{ column: string; inferredType: CastTargetType }> {
+  if (!rows.length) return [];
+  const names =
+    columnNames ?? Object.keys(rows[0]).filter((k) => k && typeof k === "string");
+  const result: Array<{ column: string; inferredType: CastTargetType }> = [];
+  for (const col of names) {
+    const values = sampleValues(rows, col);
+    const inferredType = inferSingleColumnType(values);
+    result.push({ column: col, inferredType });
+  }
+  return result;
+}
+
 // ===================================================================
 // ARITHMETIC
 // ===================================================================
@@ -159,7 +250,7 @@ export function applyArithmeticOperations(
     operations: Array<{
       id: string;
       leftOperand: { type: "column" | "constant"; value: string };
-      operator: "+" | "-" | "*" | "/" | "%" | "^";
+      operator: "+" | "-" | "*" | "/" | "%" | "^" | "pct_of" | "pct_off";
       rightOperand: { type: "column" | "constant"; value: string };
       resultColumn: string;
     }>;
@@ -237,17 +328,33 @@ export function applyArithmeticOperations(
 }
 
 // ===================================================================
-// CLEAN TRIANSFORMS
+// CLEAN TRANSFORMS & DATA QUALITY
 // ===================================================================
+
+export type CleanTransform =
+  | { column: string; op: "trim" | "upper" | "lower" | "cast_number" | "cast_date" }
+  | { column: string; op: "replace"; find: string; replaceWith: string }
+  | { column: string; op: "replace_value"; find: string; replaceWith: string }
+  | { column: string; op: "normalize_nulls"; patterns: string[]; action: "null" | "replace"; replacement?: string }
+  | { column: string; op: "normalize_spaces" }
+  | { column: string; op: "strip_invisible" }
+  | { column: string; op: "utf8_normalize" };
+
+export type CleanConfig = {
+  transforms: CleanTransform[];
+  dedupe?: { keyColumns: string[]; keep: "first" | "last" };
+};
+
+function isNullLike(value: any, patterns: string[]): boolean {
+  if (value == null) return true;
+  const s = String(value).trim();
+  if (s === "") return true;
+  return patterns.some((p) => p === s || (p === "" && s === ""));
+}
 
 export function applyTransforms(
   row: Record<string, any>,
-  config: {
-    transforms: Array<
-      | { column: string; op: "trim" | "upper" | "lower" | "cast_number" | "cast_date" }
-      | { column: string; op: "replace"; find: string; replaceWith: string }
-    >;
-  } | undefined
+  config: { transforms: CleanTransform[] } | undefined
 ) {
   if (!config?.transforms?.length) return row;
   const next: Record<string, any> = { ...row };
@@ -265,8 +372,37 @@ export function applyTransforms(
         break;
       case "replace":
         if (typeof v === "string" && "find" in t) {
-          const regex = new RegExp(t.find, "g");
-          next[t.column] = v.replace(regex, t.replaceWith);
+          try {
+            const regex = new RegExp(t.find, "g");
+            next[t.column] = v.replace(regex, t.replaceWith);
+          } catch {
+            next[t.column] = v;
+          }
+        }
+        break;
+      case "replace_value":
+        if ("find" in t && "replaceWith" in t && String(v) === t.find) {
+          next[t.column] = t.replaceWith;
+        }
+        break;
+      case "normalize_nulls":
+        if ("patterns" in t && isNullLike(v, t.patterns)) {
+          next[t.column] = t.action === "replace" && t.replacement !== undefined ? t.replacement : null;
+        }
+        break;
+      case "normalize_spaces":
+        if (typeof v === "string") {
+          next[t.column] = v.replace(/\s+/g, " ").trim();
+        }
+        break;
+      case "strip_invisible":
+        if (typeof v === "string") {
+          next[t.column] = v.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+        }
+        break;
+      case "utf8_normalize":
+        if (typeof v === "string") {
+          next[t.column] = v.normalize("NFC");
         }
         break;
       case "cast_number":
@@ -282,6 +418,41 @@ export function applyTransforms(
     }
   }
   return next;
+}
+
+export function applyDedupe(
+  rows: Record<string, any>[],
+  keyColumns: string[],
+  keep: "first" | "last"
+): Record<string, any>[] {
+  if (!keyColumns?.length || rows.length === 0) return rows;
+  const seen = new Map<string, number>();
+  const order = keep === "first" ? rows.map((_, i) => i) : rows.map((_, i) => rows.length - 1 - i);
+  const toKeep = new Set<number>();
+  for (const i of order) {
+    const row = rows[i];
+    const key = keyColumns.map((col) => {
+      const val = row[col];
+      return val == null ? "__NULL__" : String(val);
+    }).join("\x00");
+    if (!seen.has(key)) {
+      seen.set(key, i);
+      toKeep.add(i);
+    }
+  }
+  return rows.filter((_, i) => toKeep.has(i));
+}
+
+export function applyCleanBatch(
+  rows: Record<string, any>[],
+  config: CleanConfig | undefined
+): Record<string, any>[] {
+  if (!config?.transforms?.length && !config?.dedupe?.keyColumns?.length) return rows;
+  let out = rows.map((r) => applyTransforms(r, config));
+  if (config?.dedupe?.keyColumns?.length) {
+    out = applyDedupe(out, config.dedupe.keyColumns, config.dedupe.keep ?? "first");
+  }
+  return out;
 }
 
 // ===================================================================
@@ -375,9 +546,59 @@ export function applyCastConversions(
 // CONDITION
 // ===================================================================
 
+function evalCondition(
+  rule: {
+    leftOperand?: { type: "column" | "constant"; value: string };
+    rightOperand?: { type: "column" | "constant"; value: string };
+    comparator?: string;
+  },
+  row: Record<string, any>
+): boolean {
+  const leftValRaw =
+    rule.leftOperand?.type === "column"
+      ? getValue(row, rule.leftOperand.value)
+      : rule.leftOperand?.value;
+  const rightValRaw =
+    rule.rightOperand?.type === "column"
+      ? getValue(row, rule.rightOperand.value)
+      : rule.rightOperand?.value;
+
+  const nLeft = Number(leftValRaw);
+  const nRight = Number(rightValRaw);
+  const isNum =
+    !isNaN(nLeft) &&
+    !isNaN(nRight) &&
+    leftValRaw !== "" &&
+    rightValRaw !== "" &&
+    leftValRaw !== null &&
+    rightValRaw !== null;
+
+  const sLeft = String(leftValRaw ?? "").trim();
+  const sRight = String(rightValRaw ?? "").trim();
+
+  switch (rule.comparator) {
+    case "=":
+      return isNum ? nLeft === nRight : sLeft === sRight;
+    case "!=":
+      return isNum ? nLeft !== nRight : sLeft !== sRight;
+    case ">":
+      return isNum ? nLeft > nRight : sLeft > sRight;
+    case ">=":
+      return isNum ? nLeft >= nRight : sLeft >= sRight;
+    case "<":
+      return isNum ? nLeft < nRight : sLeft < sRight;
+    case "<=":
+      return isNum ? nLeft <= nRight : sLeft <= sRight;
+    default:
+      return false;
+  }
+}
+
 export function applyConditionRules(
   rows: Record<string, any>[],
   config: {
+    resultColumn?: string;
+    defaultResultValue?: string;
     rules: Array<{
       id: string;
       leftOperand?: { type: "column" | "constant"; value: string };
@@ -393,66 +614,47 @@ export function applyConditionRules(
 ): Record<string, any>[] {
   if (!config?.rules?.length) return rows;
 
+  const useFirstMatch =
+    config.resultColumn != null && config.resultColumn !== "";
+
   return rows.reduce<Record<string, any>[]>((acc, row) => {
     const newRow = { ...row };
     let keepRow = true;
 
-    for (const rule of config.rules) {
-      // rule structure matches Frontend Widget
-      const leftValRaw = rule.leftOperand?.type === "column"
-          ? newRow[rule.leftOperand.value]
-          : rule.leftOperand?.value;
-
-      const rightValRaw = rule.rightOperand?.type === "column"
-          ? newRow[rule.rightOperand.value]
-          : rule.rightOperand?.value;
-
-      const nLeft = Number(leftValRaw);
-      const nRight = Number(rightValRaw);
-      const isNum = !isNaN(nLeft) && !isNaN(nRight) && 
-                    leftValRaw !== "" && rightValRaw !== "" && 
-                    leftValRaw !== null && rightValRaw !== null;
-
-      const sLeft = String(leftValRaw ?? "");
-      const sRight = String(rightValRaw ?? "");
-
-      let conditionMet = false;
-
-      switch (rule.comparator) {
-        case "=":
-          conditionMet = isNum ? nLeft === nRight : sLeft === sRight;
+    if (useFirstMatch) {
+      let assigned = false;
+      for (const rule of config.rules) {
+        if (evalCondition(rule, newRow)) {
+          const val =
+            rule.outputType === "boolean"
+              ? true
+              : rule.thenValue ?? "";
+          newRow[config.resultColumn!] = val;
+          assigned = true;
           break;
-        case "!=":
-          conditionMet = isNum ? nLeft !== nRight : sLeft !== sRight;
-          break;
-        case ">":
-          conditionMet = isNum ? nLeft > nRight : sLeft > sRight;
-          break;
-        case ">=":
-          conditionMet = isNum ? nLeft >= nRight : sLeft >= sRight;
-          break;
-        case "<":
-          conditionMet = isNum ? nLeft < nRight : sLeft < sRight;
-          break;
-        case "<=":
-          conditionMet = isNum ? nLeft <= nRight : sLeft <= sRight;
-          break;
-        default:
-          conditionMet = false;
+        }
       }
-
-      if (rule.shouldFilter && !conditionMet) {
-        keepRow = false;
-        break; 
+      if (!assigned) {
+        newRow[config.resultColumn!] =
+          config.defaultResultValue ?? null;
       }
+    } else {
+      for (const rule of config.rules) {
+        const conditionMet = evalCondition(rule, newRow);
 
-      if (rule.outputType && rule.resultColumn) {
-        if (rule.outputType === "boolean") {
-           newRow[rule.resultColumn] = conditionMet;
-        } else {
-           newRow[rule.resultColumn] = conditionMet 
-              ? rule.thenValue 
+        if (rule.shouldFilter && !conditionMet) {
+          keepRow = false;
+          break;
+        }
+
+        if (rule.outputType && rule.resultColumn) {
+          if (rule.outputType === "boolean") {
+            newRow[rule.resultColumn] = conditionMet;
+          } else {
+            newRow[rule.resultColumn] = conditionMet
+              ? rule.thenValue
               : rule.elseValue;
+          }
         }
       }
     }

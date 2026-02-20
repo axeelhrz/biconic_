@@ -46,13 +46,15 @@ export default async function AdminEtlByIdPage({ params, searchParams }: PagePro
 
   const { data: etl, error } = await supabase
     .from("etl")
-    .select("*")
+    .select("*, client_id")
     .eq("id", etlId)
     .single();
 
   if (error) {
     console.error("Error fetching etl:", error.message);
   }
+
+  const etlClientId = (etl as any)?.client_id ?? null;
 
   // Para Admin, permitimos ver todo. Si no existe, es "Nuevo".
   const title = etl?.name || etl?.title || etlId || "Nuevo ETL";
@@ -76,7 +78,9 @@ export default async function AdminEtlByIdPage({ params, searchParams }: PagePro
 
   let connectionsData: Awaited<ReturnType<typeof getConnections>> = [];
   try {
-    connectionsData = await getConnections();
+    connectionsData = await getConnections(
+      etlClientId ? { clientId: etlClientId } : undefined
+    );
   } catch (e) {
     console.error("Error cargando conexiones (puede ser timeout):", e);
     // Dejar array vacío para que la página cargue; el usuario puede recargar

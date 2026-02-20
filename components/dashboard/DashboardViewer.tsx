@@ -117,10 +117,16 @@ type AggregationMetric = {
 type AggregationConfig = {
   enabled: boolean;
   dimension?: string;
+  /** Múltiples dimensiones (GROUP BY) */
+  dimensions?: string[];
+  dimension2?: string;
   metrics: AggregationMetric[];
   filters?: AggregationFilter[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
+  cumulative?: "none" | "running_sum" | "ytd";
+  comparePeriod?: "previous_year" | "previous_month";
+  dateDimension?: string;
 };
 
 type ChartConfig = {
@@ -165,6 +171,8 @@ type Widget = {
     labelField?: string;
     valueFields?: string[];
   };
+  /** ID de la fuente de datos (dashboard_data_sources) para multi-ETL */
+  dataSourceId?: string | null;
   aggregationConfig?: AggregationConfig;
   rows?: any[];
   columns?: Array<{
@@ -431,7 +439,20 @@ export function DashboardViewer({
   const fetchDistinctOptions = useCallback(
     async (widgetId: string, field: string) => {
       const w = widgets.find((x) => x.id === widgetId);
-      if (!w || !w.source?.table || !field) return;
+      if (!w || !field) return;
+      let tableName: string | undefined;
+      if (w.source?.table && String(w.source.table).includes(".")) {
+        tableName = w.source.table;
+      } else if (etlData?.dataSources?.length && (w as any).dataSourceId) {
+        const ds = etlData.dataSources.find((s) => s.id === (w as any).dataSourceId);
+        if (ds) tableName = `${ds.schema}.${ds.tableName}`;
+      }
+      if (!tableName && etlData?.etlData?.name) {
+        tableName = etlData.etlData.name.includes(".")
+          ? etlData.etlData.name
+          : `etl_output.${etlData.etlData.name}`;
+      }
+      if (!tableName) return;
       try {
         const url =
           apiEndpoints?.distinctValues || "/api/dashboard/distinct-values";
@@ -439,16 +460,11 @@ export function DashboardViewer({
           (w.filterConfig?.operator || "").toUpperCase() === "YEAR"
             ? "YEAR"
             : undefined;
-        console.log(
-          "[DashboardViewer] fetchDistinctOptions transform:",
-          transformVal
-        );
-
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            tableName: w.source.table,
+            tableName,
             field,
             limit: 200,
             order: "ASC",
@@ -468,7 +484,7 @@ export function DashboardViewer({
         console.error(e);
       }
     },
-    [widgets, apiEndpoints?.distinctValues]
+    [widgets, etlData, apiEndpoints?.distinctValues]
   );
 
   // Cargar opciones para filtros de tipo select
@@ -1098,15 +1114,35 @@ export function DashboardViewer({
 
       let fullTableName: string | undefined;
 
-      // OPTIMIZATION: Use the table name already resolved by the hook/API
-      if (etlData.etlData?.name) {
+      // 1) Widget con fuente explícita: source.table (ej. "etl_output.dw_ventas")
+      if (widget.source?.table && String(widget.source.table).includes(".")) {
+        fullTableName = String(widget.source.table).trim();
+        console.log("[DashboardViewer] Using widget source.table:", fullTableName);
+      }
+      // 2) Multi-fuente: resolver por dataSourceId desde dataSources del dashboard
+      else if (
+        etlData.dataSources?.length &&
+        (widget as any).dataSourceId
+      ) {
+        const ds = etlData.dataSources.find(
+          (s) => s.id === (widget as any).dataSourceId
+        );
+        if (ds?.schema && ds?.tableName) {
+          fullTableName = `${ds.schema}.${ds.tableName}`;
+          console.log("[DashboardViewer] Using dataSourceId table:", fullTableName);
+        }
+      }
+
+      // 3) Fallback: tabla principal del dashboard (primer ETL)
+      if (!fullTableName && etlData.etlData?.name) {
         fullTableName = etlData.etlData.name;
         if (!fullTableName.includes(".")) {
           fullTableName = `etl_output.${fullTableName}`;
         }
-        console.log("[DashboardViewer] Using cached table:", fullTableName);
-      } else {
-        // Fallback to internal query (only works if authenticated)
+        console.log("[DashboardViewer] Using primary table:", fullTableName);
+      }
+
+      if (!fullTableName && !isPublic) {
         try {
           const { data: run, error: runErr } = await supabase
             .from("etl_runs_log")
@@ -1118,34 +1154,25 @@ export function DashboardViewer({
             .maybeSingle();
 
           if (runErr) throw runErr;
-          if (!run || !run.destination_table_name) {
-            console.warn("[DashboardViewer] No complete ETL run found", {
-              etlId,
-              run,
-            });
-            toast.warning(
-              "No se encontró una ejecución completada para este ETL."
-            );
-            return;
+          if (run?.destination_table_name) {
+            const schema = run.destination_schema || "etl_output";
+            fullTableName = `${schema}.${run.destination_table_name}`;
+            console.log("[DashboardViewer] Using run fallback:", fullTableName);
           }
-
-          const schema = run.destination_schema || "etl_output";
-          const table = run.destination_table_name;
-          fullTableName = `${schema}.${table}`;
-
-          console.log("[DashboardViewer] Loading widget data", {
-            widgetId,
-            fullTableName,
-            schema,
-            table,
-          });
         } catch (e) {
           console.error("[DashboardViewer] Error determining table:", e);
-          return;
         }
       }
 
-      if (!fullTableName) return;
+      if (!fullTableName) {
+        console.warn("[DashboardViewer] No table for widget", widgetId);
+        setWidgets((prev) =>
+          prev.map((w) =>
+            w.id === widgetId ? { ...w, isLoading: false } : w
+          )
+        );
+        return;
+      }
       console.log("[DashboardViewer] Final table:", fullTableName);
 
       try {
@@ -1304,35 +1331,50 @@ export function DashboardViewer({
             metrics: aggConfig.metrics,
           });
 
+          const dimensionsArray =
+            (aggConfig as any).dimensions?.length > 0
+              ? (aggConfig as any).dimensions
+              : [aggConfig.dimension, (aggConfig as any).dimension2].filter(
+                  Boolean
+                );
+          const bodyPayload: Record<string, unknown> = {
+            tableName: fullTableName,
+            dimension: aggConfig.dimension,
+            metrics: aggConfig.metrics.map(({ id, ...rest }) => {
+              const cast =
+                rest.numericCast && rest.numericCast !== "none"
+                  ? rest.numericCast === "sanitize"
+                    ? "sanitize"
+                    : "numeric"
+                  : undefined;
+              const {
+                numericCast,
+                allowStringAsNumeric,
+                conversionType,
+                conversionFactor,
+                precision,
+                ...base
+              } = rest as any;
+              return { ...base, cast };
+            }),
+            filters: preparedFilters,
+            orderBy: aggConfig.orderBy,
+            limit: aggConfig.limit || 1000,
+          };
+          if (dimensionsArray.length > 0) bodyPayload.dimensions = dimensionsArray;
+          if ((aggConfig as any).cumulative && (aggConfig as any).cumulative !== "none")
+            bodyPayload.cumulative = (aggConfig as any).cumulative;
+          if ((aggConfig as any).comparePeriod)
+            bodyPayload.comparePeriod = (aggConfig as any).comparePeriod;
+          if ((aggConfig as any).dateDimension)
+            bodyPayload.dateDimension = (aggConfig as any).dateDimension;
+
           const url =
             apiEndpoints?.aggregateData || "/api/dashboard/aggregate-data";
           const response = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              tableName: fullTableName,
-              dimension: aggConfig.dimension,
-              metrics: aggConfig.metrics.map(({ id, ...rest }) => {
-                const cast =
-                  rest.numericCast && rest.numericCast !== "none"
-                    ? rest.numericCast === "sanitize"
-                      ? "sanitize"
-                      : "numeric"
-                    : undefined;
-                const {
-                  numericCast,
-                  allowStringAsNumeric,
-                  conversionType,
-                  conversionFactor,
-                  precision,
-                  ...base
-                } = rest as any;
-                return { ...base, cast };
-              }),
-              filters: preparedFilters,
-              orderBy: aggConfig.orderBy,
-              limit: aggConfig.limit || 1000,
-            }),
+            body: JSON.stringify(bodyPayload),
           });
 
           if (!response.ok) {
@@ -1702,6 +1744,27 @@ export function DashboardViewer({
       reloadAll();
     }
   }, [widgets, etlData, reloadAll]);
+
+  // Actualización automática periódica (cada 5 min) solo cuando la pestaña está visible
+  const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+  useEffect(() => {
+    if (!etlData || widgets.length === 0) return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        reloadAll();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    const intervalId = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        reloadAll();
+      }
+    }, REFRESH_INTERVAL_MS);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      clearInterval(intervalId);
+    };
+  }, [etlData, widgets.length, reloadAll]);
 
   // Centrar el lienzo al cargar el layout por primera vez
   const centeredOnceRef = useRef(false);

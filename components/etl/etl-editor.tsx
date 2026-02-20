@@ -134,25 +134,36 @@ export type Widget = {
       outputFormat?: string | null; // desired output pattern
     }>;
   };
-  // For cleaning nodes: column transforms
+  // For cleaning nodes: column transforms + data quality
   clean?: {
-    transforms: Array<{
-      column: string;
-      op: "trim" | "upper" | "lower" | "cast_number" | "cast_date";
-    }>;
+    nullCleanup?: {
+      patterns: string[];
+      action: "null" | "replace";
+      replacement?: string;
+      columns: string[];
+    };
+    transforms: Array<
+      | { column: string; op: "trim" | "upper" | "lower" | "cast_number" | "cast_date" }
+      | { column: string; op: "replace"; find: string; replaceWith: string }
+      | { column: string; op: "normalize_spaces" | "strip_invisible" | "utf8_normalize" }
+    >;
+    dataFixes?: Array<{ column: string; find: string; replaceWith: string }>;
+    dedupe?: { keyColumns: string[]; keep: "first" | "last" };
   };
   // For arithmetic nodes: mathematical operations
   arithmetic?: {
     operations: Array<{
       id: string;
       leftOperand: { type: "column" | "constant"; value: string };
-      operator: "+" | "-" | "*" | "/" | "%" | "^";
+      operator: "+" | "-" | "*" | "/" | "%" | "^" | "pct_of" | "pct_off";
       rightOperand: { type: "column" | "constant"; value: string };
       resultColumn: string;
     }>;
   };
-  // For condition nodes: conditional rules producing a new column
+  // For condition nodes: conditional rules (IF / ELSE IF / ELSE)
   condition?: {
+    resultColumn?: string; // Columna única de salida; si está definida, se usa evaluación secuencial (primera que cumpla)
+    defaultResultValue?: string; // Valor cuando ninguna regla cumple
     rules: Array<{
       id: string;
       leftOperand: { type: "column" | "constant"; value: string };
@@ -160,9 +171,9 @@ export type Widget = {
       rightOperand: { type: "column" | "constant"; value: string };
       resultColumn: string;
       outputType: "boolean" | "string" | "number";
-      thenValue?: string; // used when outputType is string/number
-      elseValue?: string; // used when outputType is string/number
-      shouldFilter?: boolean; // If true, filter rows matching this condition
+      thenValue?: string;
+      elseValue?: string;
+      shouldFilter?: boolean;
     }>;
   };
   // For count nodes: count occurrences of a column value
@@ -172,6 +183,8 @@ export type Widget = {
   };
   // For join nodes: multi table star-schema joins
   join?: JoinConfig;
+  // For union nodes: apilar dos datasets con la misma estructura (UNION ALL por defecto)
+  union?: { unionAll: boolean };
   // For end nodes: target warehouse config
   end?: {
     target?: { type: "supabase"; table?: string };
@@ -203,6 +216,7 @@ const PALETTE: { label: string; type: WidgetType }[] = [
   { label: "Condiciones", type: "condition" },
   { label: "Conversión de Tipos", type: "cast" },
   { label: "JOIN de Tablas", type: "join" },
+  { label: "UNION de Tablas", type: "union" },
   // The connections palette is provided externally; we keep built-in palette for charts only
 ];
 
@@ -290,6 +304,9 @@ export function ETLEditor({
   const [progress, setProgress] = useState(0);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [runStartTime, setRunStartTime] = useState<Date | null>(null);
+
+  const [castDetectLoading, setCastDetectLoading] = useState(false);
+  const [castDetectError, setCastDetectError] = useState<string | null>(null);
 
   // 1. Check for active runs on mount (Global)
   useEffect(() => {
@@ -584,6 +601,7 @@ export function ETLEditor({
                 joins: [],
               }
             : undefined,
+        union: type === "union" ? { unionAll: true } : undefined,
         filter:
           type === "filter"
             ? { table: undefined, columns: [], conditions: [] }
@@ -1147,8 +1165,13 @@ export function ETLEditor({
       (fromNode.type === "join" && toNode.type === "count") ||
       (fromNode.type === "join" && toNode.type === "condition") ||
       (fromNode.type === "join" && toNode.type === "cast") ||
+      (fromNode.type === "filter" && toNode.type === "union") ||
       (fromNode.type === "filter" &&
         ["table", "bar", "line", "pie", "kpi", "clean", "cast", "end"].includes(
+          toNode.type
+        )) ||
+      (fromNode.type === "union" &&
+        ["filter", "table", "bar", "line", "pie", "kpi", "clean", "cast", "end", "arithmetic", "count", "condition"].includes(
           toNode.type
         )) ||
       (fromNode.type === "arithmetic" &&
@@ -1752,12 +1775,15 @@ export function ETLEditor({
                       ) : w.type === "clean" ? (
                         <div className="w-full h-full overflow-auto text-left">
                           <div className="text-xs text-gray-500 mb-2">
-                            Nodo de Limpieza
+                            Limpieza y calidad
                           </div>
                           <div className="text-sm text-gray-700">
-                            {w.clean?.transforms?.length
-                              ? `${w.clean.transforms.length} transformaciones`
-                              : "Sin transformaciones"}
+                            {[
+                              w.clean?.transforms?.length && `${w.clean.transforms.length} transform.`,
+                              w.clean?.nullCleanup?.columns?.length && "nulos",
+                              w.clean?.dataFixes?.length && `${w.clean.dataFixes.length} correcciones`,
+                              w.clean?.dedupe?.keyColumns?.length && `dedupe (${w.clean.dedupe.keyColumns.length} cols)`,
+                            ].filter(Boolean).join(" · ") || "Sin configuración"}
                           </div>
                         </div>
                       ) : w.type === "count" ? (
@@ -1797,7 +1823,8 @@ export function ETLEditor({
                               className="text-xs text-gray-600 mt-1"
                             >
                               {op.resultColumn} = {op.leftOperand.value}{" "}
-                              {op.operator} {op.rightOperand.value}
+                              {op.operator === "pct_of" ? "× % de" : op.operator === "pct_off" ? "descuento %" : op.operator}{" "}
+                              {op.rightOperand.value}
                             </div>
                           ))}
                           {/* Preview button inside arithmetic node */}
@@ -1841,6 +1868,14 @@ export function ETLEditor({
                           <div className="text-xs text-gray-500 mb-2">
                             Nodo de Condiciones
                           </div>
+                          {w.condition?.resultColumn && (
+                            <div className="text-xs text-gray-600 mb-1">
+                              Columna: {w.condition.resultColumn}
+                              {w.condition.defaultResultValue != null && w.condition.defaultResultValue !== "" && (
+                                <> · Def: {w.condition.defaultResultValue}</>
+                              )}
+                            </div>
+                          )}
                           <div className="text-sm text-gray-700">
                             {w.condition?.rules?.length
                               ? `${w.condition.rules.length} reglas`
@@ -1851,9 +1886,8 @@ export function ETLEditor({
                               key={r.id}
                               className="text-xs text-gray-600 mt-1"
                             >
-                              {r.resultColumn} = {r.leftOperand.value}{" "}
-                              {r.comparator} {r.rightOperand.value} →{" "}
-                              {r.outputType}
+                              Si {r.leftOperand?.value}{" "}
+                              {r.comparator} {r.rightOperand?.value} → {r.thenValue ?? r.outputType}
                             </div>
                           ))}
                           <div className="mt-2">
@@ -1863,6 +1897,15 @@ export function ETLEditor({
                               widgets={widgets}
                             />
                           </div>
+                        </div>
+                      ) : w.type === "union" ? (
+                        <div className="flex flex-col gap-1">
+                          <span className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                            UNION
+                          </span>
+                          <span className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>
+                            {w.union?.unionAll !== false ? "UNION ALL" : "UNION"}
+                          </span>
                         </div>
                       ) : w.type === "join" ? (
                         <div className="w-full h-full overflow-auto text-left">
@@ -3366,17 +3409,16 @@ export function ETLEditor({
                   </div>
                 )}
 
-                {/* Clean node config */}
+                {/* Clean node config — Limpieza y calidad de datos */}
                 {selected.type === "clean" && (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     <div className="font-medium text-sm text-gray-700">
-                      Configuración de Limpieza
+                      Configuración de Limpieza y Calidad
                     </div>
                     {(() => {
                       const srcEdge = edges.find((e) => e.to === selected.id);
                       const srcNode =
                         srcEdge && widgets.find((w) => w.id === srcEdge.from);
-                      // Permitir nodos intermedios (cast, arithmetic, count, condition, clean) y resolver el filtro aguas arriba
                       const resolveUpstreamFilter = (
                         node: typeof selected | null | undefined
                       ) => {
@@ -3406,7 +3448,6 @@ export function ETLEditor({
                       const tbl = (availableTables || []).find(
                         (t) => `${t.schema}.${t.name}` === table
                       );
-                      // Prefer columns selected in the upstream filter, fallback to table metadata
                       const selectedCols =
                         upstreamFilter?.filter?.columns || [];
                       let columns: Array<{ name: string }> =
@@ -3421,8 +3462,6 @@ export function ETLEditor({
                           : ((tbl?.columns || []).map((c: any) => ({
                               name: String(c?.name ?? ""),
                             })) as Array<{ name: string }>);
-
-                      // Force restriction: if the upstream filter actually has a selection, ignore metadata extras completely
                       const filterSelected =
                         upstreamFilter?.filter?.columns || [];
                       if (filterSelected.length > 0) {
@@ -3433,10 +3472,6 @@ export function ETLEditor({
                         );
                         columns = columns.filter((c) => normalized.has(c.name));
                       }
-
-                      // If the immediate upstream node is a CAST and it has conversions,
-                      // restrict arithmetic selectable columns to those converted (and still present),
-                      // further intersecting with filter-selected columns if any were selected.
                       if (srcNode && srcNode.type === "cast") {
                         const castCols = (srcNode.cast?.conversions || [])
                           .map((cv) => String(cv.column))
@@ -3446,11 +3481,23 @@ export function ETLEditor({
                           columns = columns.filter((c) => castSet.has(c.name));
                         }
                       }
+
                       const transforms = selected.clean?.transforms || [];
                       const setTransforms = (next: typeof transforms) =>
-                        updateSelected({ clean: { transforms: next } });
+                        updateSelected({ clean: { ...selected.clean, transforms: next } });
+                      const nullCleanup = selected.clean?.nullCleanup;
+                      const setNullCleanup = (next: typeof nullCleanup) =>
+                        updateSelected({ clean: { ...selected.clean, nullCleanup: next ?? undefined } });
+                      const dataFixes = selected.clean?.dataFixes || [];
+                      const setDataFixes = (next: typeof dataFixes) =>
+                        updateSelected({ clean: { ...selected.clean, dataFixes: next } });
+                      const dedupe = selected.clean?.dedupe;
+                      const setDedupe = (next: typeof dedupe) =>
+                        updateSelected({ clean: { ...selected.clean, dedupe: next ?? undefined } });
+
+                      const defaultNullPatterns = ["NA", "-", ".", ""];
                       return (
-                        <div className="space-y-2">
+                        <div className="space-y-4">
                           <div className="text-sm text-gray-700">
                             Tabla: {table || "—"}
                           </div>
@@ -3459,54 +3506,282 @@ export function ETLEditor({
                               Conecta a un Filtro con una tabla seleccionada.
                             </div>
                           ) : (
-                            columns.map((c) => {
-                              const current =
-                                transforms.find((t) => t.column === c.name)
-                                  ?.op || "";
-                              return (
-                                <div
-                                  key={c.name}
-                                  className="grid grid-cols-12 gap-2 items-center"
-                                >
-                                  <div className="col-span-6 text-sm text-gray-800">
-                                    {c.name}
-                                  </div>
-                                  <div className="col-span-6">
-                                    <select
-                                      className="w-full rounded-xl border px-2 py-2 text-sm bg-white"
-                                      value={current}
-                                      onChange={(e) => {
-                                        const op = e.target.value as any;
-                                        let next = transforms.filter(
-                                          (t) => t.column !== c.name
-                                        );
-                                        if (op)
-                                          next = [
-                                            ...next,
-                                            { column: c.name, op },
-                                          ];
-                                        setTransforms(next);
-                                      }}
-                                    >
-                                      <option value="">
-                                        (sin transformación)
-                                      </option>
-                                      <option value="trim">
-                                        Recortar espacios
-                                      </option>
-                                      <option value="upper">Mayúsculas</option>
-                                      <option value="lower">Minúsculas</option>
-                                      <option value="cast_number">
-                                        Convertir a número
-                                      </option>
-                                      <option value="cast_date">
-                                        Convertir a fecha
-                                      </option>
-                                    </select>
-                                  </div>
+                            <>
+                              {/* 1. Valores nulos o vacíos */}
+                              <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-2">
+                                <div className="font-medium text-sm text-gray-800">
+                                  Valores nulos o vacíos
                                 </div>
-                              );
-                            })
+                                <p className="text-xs text-gray-600">
+                                  Valores a considerar vacíos (separados por coma): se convertirán a NULL o al valor indicado.
+                                </p>
+                                <div className="flex flex-wrap gap-2 items-center">
+                                  <input
+                                    type="text"
+                                    className="flex-1 min-w-[120px] rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+                                    placeholder="NA, -, ., (vacío)"
+                                    value={nullCleanup?.patterns?.join(", ") ?? defaultNullPatterns.join(", ")}
+                                    onChange={(e) => {
+                                      const patterns = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
+                                      setNullCleanup({
+                                        patterns: patterns.length ? patterns : defaultNullPatterns,
+                                        action: nullCleanup?.action ?? "null",
+                                        replacement: nullCleanup?.replacement,
+                                        columns: nullCleanup?.columns?.length ? nullCleanup.columns : columns.map((c) => c.name),
+                                      });
+                                    }}
+                                  />
+                                  <select
+                                    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm bg-white"
+                                    value={nullCleanup?.action ?? "null"}
+                                    onChange={(e) => {
+                                      const action = e.target.value as "null" | "replace";
+                                      setNullCleanup({
+                                        patterns: nullCleanup?.patterns ?? defaultNullPatterns,
+                                        action,
+                                        replacement: nullCleanup?.replacement,
+                                        columns: nullCleanup?.columns?.length ? nullCleanup.columns : columns.map((c) => c.name),
+                                      });
+                                    }}
+                                  >
+                                    <option value="null">Convertir a NULL</option>
+                                    <option value="replace">Reemplazar por valor</option>
+                                  </select>
+                                  {nullCleanup?.action === "replace" && (
+                                    <input
+                                      type="text"
+                                      className="w-24 rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+                                      placeholder="Valor"
+                                      value={nullCleanup?.replacement ?? ""}
+                                      onChange={(e) =>
+                                        setNullCleanup({
+                                          ...nullCleanup!,
+                                          replacement: e.target.value || undefined,
+                                        })
+                                      }
+                                    />
+                                  )}
+                                </div>
+                                <p className="text-xs text-gray-500">
+                                  Se aplica a todas las columnas de la tabla.
+                                </p>
+                                <button
+                                  type="button"
+                                  className="text-xs text-indigo-600 hover:underline"
+                                  onClick={() => setNullCleanup({
+                                    patterns: nullCleanup?.patterns ?? defaultNullPatterns,
+                                    action: nullCleanup?.action ?? "null",
+                                    replacement: nullCleanup?.replacement,
+                                    columns: columns.map((c) => c.name),
+                                  })}
+                                >
+                                  Activar en todas las columnas
+                                </button>
+                              </div>
+
+                              {/* 2. Normalización de texto por columna */}
+                              <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-2">
+                                <div className="font-medium text-sm text-gray-800">
+                                  Normalización de texto
+                                </div>
+                                <p className="text-xs text-gray-600">
+                                  Por columna: espacios, mayúsculas, caracteres invisibles, UTF-8.
+                                </p>
+                                {columns.map((c) => {
+                                  const current = transforms.find((t) => t.column === c.name) as { op: string; find?: string; replaceWith?: string } | undefined;
+                                  const op = current?.op ?? "";
+                                  return (
+                                    <div key={c.name} className="grid grid-cols-12 gap-2 items-center">
+                                      <div className="col-span-4 text-sm text-gray-800 truncate" title={c.name}>{c.name}</div>
+                                      <div className="col-span-8 flex flex-wrap gap-1 items-center">
+                                        <select
+                                          className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm bg-white flex-1 min-w-[140px]"
+                                          value={op}
+                                          onChange={(e) => {
+                                            const newOp = e.target.value;
+                                            let next = transforms.filter((t) => t.column !== c.name);
+                                            if (newOp) {
+                                              if (newOp === "replace") next = [...next, { column: c.name, op: "replace", find: "", replaceWith: "" }];
+                                              else next = [...next, { column: c.name, op: newOp as any }];
+                                            }
+                                            setTransforms(next);
+                                          }}
+                                        >
+                                          <option value="">(ninguna)</option>
+                                          <option value="trim">Recortar espacios</option>
+                                          <option value="upper">Mayúsculas</option>
+                                          <option value="lower">Minúsculas</option>
+                                          <option value="normalize_spaces">Espacios múltiples → uno</option>
+                                          <option value="strip_invisible">Quitar caracteres invisibles</option>
+                                          <option value="utf8_normalize">Normalizar UTF-8 (NFC)</option>
+                                          <option value="cast_number">Convertir a número</option>
+                                          <option value="cast_date">Convertir a fecha</option>
+                                          <option value="replace">Reemplazar (regex)</option>
+                                        </select>
+                                        {op === "replace" && current && "find" in current && (
+                                          <>
+                                            <input
+                                              type="text"
+                                              className="rounded border border-gray-300 px-1.5 py-1 text-xs w-20"
+                                              placeholder="Buscar"
+                                              value={current.find ?? ""}
+                                              onChange={(ev) => {
+                                                const next = transforms.map((t) =>
+                                                  t.column === c.name && t.op === "replace"
+                                                    ? { ...t, find: ev.target.value }
+                                                    : t
+                                                );
+                                                setTransforms(next);
+                                              }}
+                                            />
+                                            <input
+                                              type="text"
+                                              className="rounded border border-gray-300 px-1.5 py-1 text-xs w-20"
+                                              placeholder="Reemplazar"
+                                              value={current.replaceWith ?? ""}
+                                              onChange={(ev) => {
+                                                const next = transforms.map((t) =>
+                                                  t.column === c.name && t.op === "replace"
+                                                    ? { ...t, replaceWith: ev.target.value }
+                                                    : t
+                                                );
+                                                setTransforms(next);
+                                              }}
+                                            />
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {/* 3. Correcciones permanentes (data fixes) */}
+                              <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-2">
+                                <div className="font-medium text-sm text-gray-800">
+                                  Correcciones permanentes
+                                </div>
+                                <p className="text-xs text-gray-600">
+                                  Reemplazar valor incorrecto por el correcto (coincidencia exacta). Se aplica cada vez que aparezca el valor.
+                                </p>
+                                <div className="space-y-1 max-h-40 overflow-y-auto">
+                                  {dataFixes.map((fix, idx) => (
+                                    <div key={idx} className="flex gap-2 items-center text-sm">
+                                      <select
+                                        className="rounded border border-gray-300 px-1.5 py-1 text-xs flex-1"
+                                        value={fix.column}
+                                        onChange={(e) => {
+                                          const next = [...dataFixes];
+                                          next[idx] = { ...fix, column: e.target.value };
+                                          setDataFixes(next);
+                                        }}
+                                      >
+                                        {columns.map((col) => (
+                                          <option key={col.name} value={col.name}>{col.name}</option>
+                                        ))}
+                                      </select>
+                                      <input
+                                        type="text"
+                                        className="rounded border border-gray-300 px-1.5 py-1 text-xs w-28"
+                                        placeholder="Incorrecto"
+                                        value={fix.find}
+                                        onChange={(e) => {
+                                          const next = [...dataFixes];
+                                          next[idx] = { ...fix, find: e.target.value };
+                                          setDataFixes(next);
+                                        }}
+                                      />
+                                      <span className="text-gray-400">→</span>
+                                      <input
+                                        type="text"
+                                        className="rounded border border-gray-300 px-1.5 py-1 text-xs w-28"
+                                        placeholder="Correcto"
+                                        value={fix.replaceWith}
+                                        onChange={(e) => {
+                                          const next = [...dataFixes];
+                                          next[idx] = { ...fix, replaceWith: e.target.value };
+                                          setDataFixes(next);
+                                        }}
+                                      />
+                                      <button
+                                        type="button"
+                                        className="text-red-600 hover:bg-red-50 rounded p-1"
+                                        onClick={() => setDataFixes(dataFixes.filter((_, i) => i !== idx))}
+                                        aria-label="Quitar"
+                                      >
+                                        ×
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                                <button
+                                  type="button"
+                                  className="text-xs text-indigo-600 hover:underline"
+                                  onClick={() => setDataFixes([...dataFixes, { column: columns[0]?.name ?? "", find: "", replaceWith: "" }])}
+                                >
+                                  + Añadir corrección
+                                </button>
+                              </div>
+
+                              {/* 4. Duplicados */}
+                              <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-2">
+                                <div className="font-medium text-sm text-gray-800">
+                                  Duplicados
+                                </div>
+                                <p className="text-xs text-gray-600">
+                                  Columnas clave para identificar duplicados. Se conserva una fila por clave.
+                                </p>
+                                <div className="flex flex-wrap gap-2 items-center">
+                                  <select
+                                    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm bg-white min-w-[160px]"
+                                    value="__keys__"
+                                    onChange={(e) => {
+                                      const col = e.target.value;
+                                      if (col === "__keys__") return;
+                                      const keys = dedupe?.keyColumns ?? [];
+                                      if (!keys.includes(col)) setDedupe({ keyColumns: [...keys, col], keep: dedupe?.keep ?? "first" });
+                                    }}
+                                  >
+                                    <option value="__keys__">Añadir columna clave</option>
+                                    {columns.map((c) => (
+                                      <option key={c.name} value={c.name}>{c.name}</option>
+                                    ))}
+                                  </select>
+                                  <select
+                                    className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm bg-white"
+                                    value={dedupe?.keep ?? "first"}
+                                    onChange={(e) => setDedupe({ keyColumns: dedupe?.keyColumns ?? [], keep: e.target.value as "first" | "last" })}
+                                  >
+                                    <option value="first">Mantener primera ocurrencia</option>
+                                    <option value="last">Mantener última ocurrencia</option>
+                                  </select>
+                                </div>
+                                {dedupe?.keyColumns?.length ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {dedupe.keyColumns.map((col) => (
+                                      <span
+                                        key={col}
+                                        className="inline-flex items-center gap-1 rounded-full bg-gray-200 px-2 py-0.5 text-xs"
+                                      >
+                                        {col}
+                                        <button
+                                          type="button"
+                                          className="text-gray-600 hover:text-red-600"
+                                          onClick={() =>
+                                            setDedupe({
+                                              keyColumns: dedupe.keyColumns.filter((c) => c !== col),
+                                              keep: dedupe.keep,
+                                            })
+                                          }
+                                        >
+                                          ×
+                                        </button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </>
                           )}
                         </div>
                       );
@@ -3825,6 +4100,9 @@ export function ETLEditor({
                             </div>
                           ) : (
                             <div className="space-y-3">
+                              <p className="text-xs text-gray-500">
+                                Las columnas creadas podés usarlas en operaciones siguientes (ej.: Precio × Descuento → Precio con descuento).
+                              </p>
                               <div className="flex items-center justify-between">
                                 <Label>Operaciones</Label>
                                 <Button
@@ -4026,6 +4304,8 @@ export function ETLEditor({
                                         <option value="/">División (/)</option>
                                         <option value="%">Módulo (%)</option>
                                         <option value="^">Potencia (^)</option>
+                                        <option value="pct_of">Porcentaje de (A × B ÷ 100)</option>
+                                        <option value="pct_off">Descuento % (A × (1 − B))</option>
                                       </select>
                                     </div>
 
@@ -4139,7 +4419,7 @@ export function ETLEditor({
                       Configuración de Conversión de Tipos
                     </div>
                     {(() => {
-                      // Upstream could be filter / arithmetic / count / condition / join
+                      const flow = collectUpstreamFlow(selected.id, widgets, edges);
                       const srcEdge = edges.find((e) => e.to === selected.id);
                       const srcNode =
                         srcEdge && widgets.find((w) => w.id === srcEdge.from);
@@ -4220,10 +4500,155 @@ export function ETLEditor({
                       const casts = selected.cast?.conversions || [];
                       const setCasts = (next: typeof casts) =>
                         updateSelected({ cast: { conversions: next } });
+
+                      const handleDetectTypes = async () => {
+                        setCastDetectError(null);
+                        setCastDetectLoading(true);
+                        try {
+                          const connectionNode = flow.connectionNode;
+                          const filterNode = flow.filterNode;
+                          const joinNode = flow.joinNode;
+                          const unionNode = flow.unionNode;
+                          const leftBranch = flow.leftBranch;
+                          const rightBranch = flow.rightBranch;
+
+                          let payload: Record<string, unknown> = {};
+                          if (unionNode && leftBranch?.connectionNode && leftBranch?.filterNode && rightBranch?.connectionNode && rightBranch?.filterNode) {
+                            payload = {
+                              union: {
+                                left: {
+                                  connectionId: leftBranch.connectionNode.connectionId,
+                                  filter: {
+                                    table: leftBranch.filterNode.filter?.table,
+                                    columns: leftBranch.filterNode.filter?.columns || [],
+                                    conditions: leftBranch.filterNode.filter?.conditions || [],
+                                  },
+                                },
+                                right: {
+                                  connectionId: rightBranch.connectionNode.connectionId,
+                                  filter: {
+                                    table: rightBranch.filterNode.filter?.table,
+                                    columns: rightBranch.filterNode.filter?.columns || [],
+                                    conditions: rightBranch.filterNode.filter?.conditions || [],
+                                  },
+                                },
+                                unionAll: (unionNode as any).union?.unionAll !== false,
+                              },
+                              inferTypes: true,
+                              limit: 150,
+                            };
+                          } else if (joinNode && filterNode) {
+                            const j = (joinNode as any).join || {};
+                            const allSelected = filterNode.filter?.columns || [];
+                            const primarySelected = allSelected.filter((c: string) => c.startsWith("primary.")).map((c: string) => c.slice("primary.".length));
+                            const joinsSelected: Record<string, string[]> = {};
+                            (j.joins || []).forEach((jn: any, idx: number) => {
+                              const prefix = `join_${idx}.`;
+                              joinsSelected[jn.id] = allSelected.filter((c: string) => c.startsWith(prefix)).map((c: string) => c.slice(prefix.length));
+                            });
+                            if (j.joins?.length === 1) {
+                              const only = j.joins[0];
+                              payload = {
+                                join: {
+                                  connectionId: j.primaryConnectionId,
+                                  secondaryConnectionId: only.secondaryConnectionId,
+                                  leftTable: j.primaryTable,
+                                  rightTable: only.secondaryTable,
+                                  joinConditions: [{ leftTable: j.primaryTable, leftColumn: only.primaryColumn, rightTable: only.secondaryTable, rightColumn: only.secondaryColumn, joinType: only.joinType || "INNER" }],
+                                  leftColumns: primarySelected.length ? primarySelected : undefined,
+                                  rightColumns: joinsSelected[only.id]?.length ? joinsSelected[only.id] : undefined,
+                                },
+                                filter: { columns: allSelected, conditions: filterNode.filter?.conditions || [] },
+                                inferTypes: true,
+                                limit: 150,
+                              };
+                            } else {
+                              payload = {
+                                join: {
+                                  primaryConnectionId: j.primaryConnectionId,
+                                  primaryTable: j.primaryTable,
+                                  primaryColumns: primarySelected.length ? primarySelected : j.primaryColumns,
+                                  joins: (j.joins || []).map((jn: any) => ({
+                                    id: jn.id,
+                                    secondaryConnectionId: jn.secondaryConnectionId,
+                                    secondaryTable: jn.secondaryTable,
+                                    joinType: jn.joinType,
+                                    primaryColumn: jn.primaryColumn,
+                                    secondaryColumn: jn.secondaryColumn,
+                                    secondaryColumns: joinsSelected[jn.id]?.length ? joinsSelected[jn.id] : jn.secondaryColumns,
+                                  })),
+                                },
+                                filter: { columns: allSelected, conditions: filterNode.filter?.conditions || [] },
+                                inferTypes: true,
+                                limit: 150,
+                              };
+                            }
+                          } else if (connectionNode?.connectionId && filterNode?.filter?.table) {
+                            payload = {
+                              connectionId: connectionNode.connectionId,
+                              filter: {
+                                table: filterNode.filter.table,
+                                columns: filterNode.filter.columns || [],
+                                conditions: filterNode.filter.conditions || [],
+                              },
+                              inferTypes: true,
+                              limit: 150,
+                            };
+                          } else {
+                            setCastDetectError("Conectá un Filtro con tabla seleccionada (o UNION/JOIN) para detectar tipos.");
+                            return;
+                          }
+
+                          const res = await fetch("/api/etl/run-preview", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(payload),
+                          });
+                          const data = await res.json();
+                          if (!res.ok || !data.ok) {
+                            throw new Error(data?.error || "Error al detectar tipos");
+                          }
+                          const inferred = data.inferredTypes || [];
+                          if (inferred.length === 0) {
+                            setCastDetectError("No se obtuvieron filas para inferir tipos.");
+                            return;
+                          }
+                          setCasts(
+                            inferred.map((t: { column: string; inferredType: string }) => ({
+                              column: t.column,
+                              targetType: t.inferredType,
+                              inputFormat: null,
+                              outputFormat: null,
+                            }))
+                          );
+                        } catch (e: any) {
+                          setCastDetectError(e?.message || "Error al detectar tipos");
+                        } finally {
+                          setCastDetectLoading(false);
+                        }
+                      };
+
                       return (
                         <div className="space-y-3">
                           <div className="text-sm text-gray-700">
                             Tabla origen: {table || "—"}
+                          </div>
+                          <p className="text-xs text-gray-500">
+                            Podés detectar tipos automáticamente desde una muestra de datos o forzar el tipo deseado por columna (texto, entero, decimal, fecha).
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={handleDetectTypes}
+                              disabled={castDetectLoading || columns.length === 0}
+                            >
+                              {castDetectLoading ? "Detectando…" : "Detectar tipos automáticamente"}
+                            </Button>
+                            {castDetectError && (
+                              <span className="text-xs text-red-600">{castDetectError}</span>
+                            )}
                           </div>
                           {columns.length === 0 ? (
                             <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-2">
@@ -4294,16 +4719,16 @@ export function ETLEditor({
                                         }}
                                       >
                                         {[
-                                          "string",
-                                          "number",
-                                          "integer",
-                                          "decimal",
-                                          "boolean",
-                                          "date",
-                                          "datetime",
+                                          { value: "string", label: "Texto" },
+                                          { value: "integer", label: "Entero" },
+                                          { value: "number", label: "Decimal" },
+                                          { value: "decimal", label: "Decimal (numérico)" },
+                                          { value: "boolean", label: "Booleano" },
+                                          { value: "date", label: "Fecha" },
+                                          { value: "datetime", label: "Fecha y hora" },
                                         ].map((t) => (
-                                          <option key={t} value={t}>
-                                            {t}
+                                          <option key={t.value} value={t.value}>
+                                            {t.label}
                                           </option>
                                         ))}
                                       </select>
@@ -4326,9 +4751,9 @@ export function ETLEditor({
                                       c.targetType === "datetime") && (
                                       <div className="space-y-2">
                                         <div>
-                                          <Label>Formato de entrada</Label>
+                                          <Label>Formato de entrada (si la fecha viene como texto)</Label>
                                           <Input
-                                            placeholder="ej: dd 'de' MMMM 'de' yyyy"
+                                            placeholder="ej: dd/MM/yyyy para 01/02/2025"
                                             value={c.inputFormat ?? ""}
                                             onChange={(e) => {
                                               const next = [...casts];
@@ -4411,7 +4836,7 @@ export function ETLEditor({
                 {selected.type === "condition" && (
                   <div className="space-y-3">
                     <div className="font-medium text-sm text-gray-700">
-                      Configuración de Condiciones
+                      Configuración de Condiciones (IF / ELSE IF / ELSE)
                     </div>
                     {(() => {
                       const srcEdge = edges.find((e) => e.to === selected.id);
@@ -4523,12 +4948,58 @@ export function ETLEditor({
                       }
                       const rules = selected.condition?.rules || [];
                       const setRules = (next: typeof rules) =>
-                        updateSelected({ condition: { rules: next } });
+                        updateSelected({
+                          condition: {
+                            ...selected.condition,
+                            rules: next,
+                          },
+                        });
+                      const condResultColumn =
+                        selected.condition?.resultColumn ?? "";
+                      const condDefaultValue =
+                        selected.condition?.defaultResultValue ?? "";
 
                       return (
                         <div className="space-y-3">
                           <div className="text-sm text-gray-700">
                             Tabla: {table || "—"}
+                          </div>
+                          <p className="text-xs text-gray-500">
+                            Definí una columna de resultado y valor por defecto para usar evaluación secuencial: se asigna el valor de la primera regla que cumpla; si ninguna cumple, se usa el valor por defecto.
+                          </p>
+                          <div className="grid grid-cols-1 gap-2">
+                            <div>
+                              <Label>Columna de resultado (todas las condiciones)</Label>
+                              <Input
+                                className="mt-1"
+                                value={condResultColumn}
+                                onChange={(e) =>
+                                  updateSelected({
+                                    condition: {
+                                      ...selected.condition,
+                                      resultColumn: e.target.value.trim() || undefined,
+                                    },
+                                  })
+                                }
+                                placeholder="ej. región"
+                              />
+                            </div>
+                            <div>
+                              <Label>Valor por defecto (si no coincide ninguna)</Label>
+                              <Input
+                                className="mt-1"
+                                value={condDefaultValue}
+                                onChange={(e) =>
+                                  updateSelected({
+                                    condition: {
+                                      ...selected.condition,
+                                      defaultResultValue: e.target.value,
+                                    },
+                                  })
+                                }
+                                placeholder="ej. Resto del mundo"
+                              />
+                            </div>
                           </div>
                           {columns.length === 0 ? (
                             <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-2">
@@ -4537,7 +5008,7 @@ export function ETLEditor({
                           ) : (
                             <div className="space-y-3">
                               <div className="flex items-center justify-between">
-                                <Label>Reglas</Label>
+                                <Label>Reglas (orden = IF → ELSE IF → …)</Label>
                                 {rules.length === 0 && (
                                   <Button
                                     variant="outline"
@@ -4979,6 +5450,41 @@ export function ETLEditor({
                         </div>
                       );
                     })()}
+                  </div>
+                )}
+
+                {/* Union node config */}
+                {selected.type === "union" && (
+                  <div className="space-y-3">
+                    <div className="font-medium text-sm text-gray-700">
+                      Configuración de UNION
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Conectá dos ramas (Conexión → Filtro) al nodo UNION. Ambas tablas deben tener las mismas columnas.
+                    </p>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selected.union?.unionAll !== false}
+                        onChange={(e) =>
+                          setWidgets((prev) =>
+                            prev.map((w) =>
+                              w.id === selected.id
+                                ? {
+                                    ...w,
+                                    union: {
+                                      ...(w.union || {}),
+                                      unionAll: e.target.checked,
+                                    },
+                                  }
+                                : w
+                            )
+                          }
+                        }
+                        className="rounded border-gray-300"
+                      />
+                      <span className="text-sm">UNION ALL (no eliminar duplicados)</span>
+                    </label>
                   </div>
                 )}
 
@@ -5927,37 +6433,23 @@ function FilterExportExcelButton({
   );
 }
 
-// Small component to preview filter results with pagination
-// Helper to collect all upstream nodes and operations sequence to ensure full flow execution
-function collectUpstreamFlow(
-  targetNodeId: string,
+// Traverse backwards from a node until we hit a source (connection or join) and optional filter.
+function getBranchSource(
+  startNodeId: string,
   widgets: Widget[],
   edges: Array<{ id: string; from: string; to: string }>
-) {
+): { filterNode: Widget | null; connectionNode: Widget | null; joinNode: Widget | null } {
   let filterNode: Widget | null = null;
-  let joinNode: Widget | null = null;
   let connectionNode: Widget | null = null;
-
-  // Traverse backwards
-  let currentId = targetNodeId;
-  const path: Widget[] = [];
+  let joinNode: Widget | null = null;
+  let currentId = startNodeId;
   const visited = new Set<string>();
-
-  while (currentId) {
-    if (visited.has(currentId)) break;
+  while (currentId && !visited.has(currentId)) {
     visited.add(currentId);
-    
-    // Find the node object
-    const node = widgets.find(w => w.id === currentId);
+    const node = widgets.find((w) => w.id === currentId);
     if (!node) break;
-
-    // Include nodes in the path
-    path.push(node);
-
-    // Stop at source nodes
     if (node.type === "filter") {
       filterNode = node;
-      // Check for upstream connection or join
       const edge = edges.find((e) => e.to === node.id);
       if (edge) {
         const up = widgets.find((w) => w.id === edge.from);
@@ -5969,15 +6461,80 @@ function collectUpstreamFlow(
       break;
     }
     if (node.type === "join") {
-      joinNode = node; 
-      break; 
+      joinNode = node;
+      break;
     }
     if (node.type === "connection") {
       connectionNode = node;
-      break; 
+      break;
+    }
+    const edge = edges.find((e) => e.to === currentId);
+    if (!edge) break;
+    currentId = edge.from;
+  }
+  return { filterNode, connectionNode, joinNode };
+}
+
+// Helper to collect all upstream nodes and operations sequence to ensure full flow execution
+function collectUpstreamFlow(
+  targetNodeId: string,
+  widgets: Widget[],
+  edges: Array<{ id: string; from: string; to: string }>
+) {
+  let filterNode: Widget | null = null;
+  let joinNode: Widget | null = null;
+  let connectionNode: Widget | null = null;
+  let unionNode: Widget | null = null;
+  let leftBranch: { filterNode: Widget | null; connectionNode: Widget | null } | null = null;
+  let rightBranch: { filterNode: Widget | null; connectionNode: Widget | null } | null = null;
+
+  let currentId = targetNodeId;
+  const path: Widget[] = [];
+  const visited = new Set<string>();
+
+  while (currentId) {
+    if (visited.has(currentId)) break;
+    visited.add(currentId);
+
+    const node = widgets.find((w) => w.id === currentId);
+    if (!node) break;
+
+    path.push(node);
+
+    if (node.type === "union") {
+      unionNode = node;
+      const incoming = edges.filter((e) => e.to === node.id);
+      if (incoming.length >= 2) {
+        const [e1, e2] = incoming.slice(0, 2);
+        const b1 = getBranchSource(e1.from, widgets, edges);
+        const b2 = getBranchSource(e2.from, widgets, edges);
+        leftBranch = { filterNode: b1.filterNode, connectionNode: b1.connectionNode };
+        rightBranch = { filterNode: b2.filterNode, connectionNode: b2.connectionNode };
+      }
+      break;
+    }
+    if (node.type === "filter") {
+      filterNode = node;
+      const edge = edges.find((e) => e.to === node.id);
+      if (edge) {
+        const up = widgets.find((w) => w.id === edge.from);
+        if (up) {
+          if (up.type === "connection") connectionNode = up;
+          else if (up.type === "join") joinNode = up;
+        }
+      }
+      break;
+    }
+    if (node.type === "join") {
+      joinNode = node;
+      break;
+    }
+    if (node.type === "connection") {
+      connectionNode = node;
+      break;
     }
 
-    const edge = edges.find(e => e.to === currentId);
+    const edge = edges.find((e) => e.to === currentId);
     if (!edge) break;
     currentId = edge.from;
   }
@@ -6004,14 +6561,38 @@ function collectUpstreamFlow(
     .filter(n => n.type === "cast")
     .flatMap(n => n.cast?.conversions || []);
 
+  // Expand clean config (nullCleanup + transforms + dataFixes) to API shape; merge all clean nodes
+  function expandCleanConfig(clean: Widget["clean"]) {
+    if (!clean) return undefined;
+    const transforms: Array<{ column: string; op: string; find?: string; replaceWith?: string; patterns?: string[]; action?: "null" | "replace"; replacement?: string }> = [];
+    if (clean.nullCleanup?.columns?.length) {
+      const { patterns, action, replacement } = clean.nullCleanup;
+      for (const col of clean.nullCleanup.columns) {
+        transforms.push({ column: col, op: "normalize_nulls", patterns: patterns || [], action: action || "null", replacement });
+      }
+    }
+    for (const t of clean.transforms || []) {
+      transforms.push(t as typeof transforms[0]);
+    }
+    if (clean.dataFixes?.length) {
+      for (const f of clean.dataFixes) {
+        transforms.push({ column: f.column, op: "replace_value", find: f.find, replaceWith: f.replaceWith });
+      }
+    }
+    return { transforms, dedupe: clean.dedupe };
+  }
+
   const cleanTransforms = fullPath
     .filter(n => n.type === "clean")
-    .flatMap(n => n.clean?.transforms || []);
+    .flatMap(n => expandCleanConfig(n.clean)?.transforms || []);
+
+  const lastCleanNode = fullPath.filter(n => n.type === "clean").pop();
+  const lastCleanDedupe = expandCleanConfig(lastCleanNode?.clean)?.dedupe;
 
   const formattedPipeline = fullPath
     .filter((n) => ["clean", "cast", "arithmetic", "condition"].includes(n.type))
     .map((n) => {
-      if (n.type === "clean") return { type: "clean", config: n.clean };
+      if (n.type === "clean") return { type: "clean", config: expandCleanConfig(n.clean) ?? n.clean };
       if (n.type === "cast") return { type: "cast", config: n.cast };
       if (n.type === "arithmetic") return { type: "arithmetic", config: n.arithmetic };
       if (n.type === "condition") return { type: "condition", config: n.condition };
@@ -6020,14 +6601,18 @@ function collectUpstreamFlow(
     .filter(Boolean);
 
   return {
-    sourceNode: filterNode || joinNode || connectionNode,
+    sourceNode: filterNode || joinNode || connectionNode || unionNode,
     filterNode,
     joinNode,
     connectionNode,
+    unionNode,
+    leftBranch,
+    rightBranch,
     collectedRules: rules,
     collectedOperations: operations,
     collectedConversions: conversions,
     collectedTransforms: cleanTransforms,
+    lastCleanDedupe,
     pipeline: formattedPipeline,
     fullPath
   };
@@ -7222,58 +7807,89 @@ function EndPreviewButton({
     setError(null);
     setRows([]);
     try {
-      // Use helper to traverse backward and collect all transformations
       const flow = collectUpstreamFlow(widget.id, widgets, edges);
-      
-      const upstreamNode = flow.connectionNode || flow.joinNode;
+
+      const upstreamNode = flow.connectionNode || flow.joinNode || flow.unionNode;
       if (!upstreamNode) {
-          throw new Error("Conecta el nodo Fin a una fuente válida (Conexión o JOIN)");
+        throw new Error("Conecta el nodo Fin a una fuente válida (Conexión, JOIN o UNION)");
       }
-      
+
       const filterNode = flow.filterNode;
-      if (!filterNode) {
-          throw new Error("No se encontró un nodo de Filtro en la cadena");
+      const isUnion = upstreamNode.type === "union";
+      if (!isUnion && !filterNode) {
+        throw new Error("No se encontró un nodo de Filtro en la cadena");
+      }
+      if (isUnion) {
+        if (!flow.leftBranch?.connectionNode || !flow.leftBranch?.filterNode || !flow.rightBranch?.connectionNode || !flow.rightBranch?.filterNode) {
+          throw new Error("UNION requiere dos ramas: cada una Conexión → Filtro conectado al UNION");
+        }
+        if (!flow.leftBranch.filterNode.filter?.table || !flow.rightBranch.filterNode.filter?.table) {
+          throw new Error("Cada rama del UNION debe tener una tabla seleccionada en el Filtro");
+        }
       }
 
       const countNode = flow.fullPath.find(w => w.type === "count");
 
-      // Validate filter selections
-      if (upstreamNode.type === "connection") {
-        if (!upstreamNode.connectionId)
-          throw new Error("Conexión sin ID en el nodo de origen");
-        if (!filterNode!.filter?.table)
-          throw new Error("Selecciona una tabla en el Filtro");
-      } else if (upstreamNode.type === "join") {
-        const j = (upstreamNode as any).join || ({} as any);
-        if (
-          !j.primaryTable ||
-          !Array.isArray(j.joins) ||
-          j.joins.length === 0
-        ) {
-          throw new Error("Configura el JOIN antes de ejecutar el flujo");
-        }
-        for (const jn of j.joins) {
-          if (!jn.primaryColumn || !jn.secondaryColumn) {
-            throw new Error("Completa las columnas de unión en cada join");
+      if (!isUnion) {
+        if (upstreamNode.type === "connection") {
+          if (!upstreamNode.connectionId)
+            throw new Error("Conexión sin ID en el nodo de origen");
+          if (!filterNode!.filter?.table)
+            throw new Error("Selecciona una tabla en el Filtro");
+        } else if (upstreamNode.type === "join") {
+          const j = (upstreamNode as any).join || ({} as any);
+          if (
+            !j.primaryTable ||
+            !Array.isArray(j.joins) ||
+            j.joins.length === 0
+          ) {
+            throw new Error("Configura el JOIN antes de ejecutar el flujo");
           }
+          for (const jn of j.joins) {
+            if (!jn.primaryColumn || !jn.secondaryColumn) {
+              throw new Error("Completa las columnas de unión en cada join");
+            }
+          }
+          if (!j.primaryConnectionId) {
+            throw new Error("Selecciona la tabla principal del JOIN");
+          }
+        } else {
+          throw new Error("La fuente debe ser Conexión, JOIN o UNION");
         }
-        if (!j.primaryConnectionId) {
-          throw new Error("Selecciona la tabla principal del JOIN");
-        }
-      } else {
-        throw new Error("La fuente debe ser Conexión o JOIN");
       }
-      
-      // Build payload for single-table or join
+
       let payload: any;
-      
-      // Common parts for preview
       const commonEnd = {
-          target: widget.end?.target || { type: "supabase", table: "preview" },
-          mode: widget.end?.mode || "append",
+        target: widget.end?.target || { type: "supabase", table: "preview" },
+        mode: widget.end?.mode || "append",
       };
 
-      if (upstreamNode.type === "connection") {
+      if (upstreamNode.type === "union" && flow.leftBranch && flow.rightBranch) {
+        payload = {
+          etlId,
+          union: {
+            left: {
+              connectionId: flow.leftBranch.connectionNode!.connectionId,
+              filter: {
+                table: flow.leftBranch.filterNode!.filter!.table,
+                columns: flow.leftBranch.filterNode!.filter!.columns || [],
+                conditions: flow.leftBranch.filterNode!.filter!.conditions || [],
+              },
+            },
+            right: {
+              connectionId: flow.rightBranch.connectionNode!.connectionId,
+              filter: {
+                table: flow.rightBranch.filterNode!.filter!.table,
+                columns: flow.rightBranch.filterNode!.filter!.columns || [],
+                conditions: flow.rightBranch.filterNode!.filter!.conditions || [],
+              },
+            },
+            unionAll: (upstreamNode as any).union?.unionAll !== false,
+          },
+          end: commonEnd,
+          preview: true,
+        };
+      } else if (upstreamNode.type === "connection") {
         payload = {
           etlId,
           connectionId: (upstreamNode as any).connectionId,
@@ -7394,8 +8010,8 @@ function EndPreviewButton({
       }
 
       // Add accumulated simple transformations
-      if (flow.collectedTransforms.length > 0) {
-        payload.clean = { transforms: flow.collectedTransforms };
+      if (flow.collectedTransforms.length > 0 || flow.lastCleanDedupe?.keyColumns?.length) {
+        payload.clean = { transforms: flow.collectedTransforms, dedupe: flow.lastCleanDedupe };
       }
       
       if (flow.collectedConversions.length > 0) {
@@ -7407,7 +8023,14 @@ function EndPreviewButton({
       }
       
       if (flow.collectedRules.length > 0) {
-        payload.condition = { rules: flow.collectedRules };
+        const conditionNode = flow.fullPath.find(
+          (n) => n.type === "condition"
+        ) as Widget | undefined;
+        payload.condition = {
+          rules: flow.collectedRules,
+          resultColumn: conditionNode?.condition?.resultColumn,
+          defaultResultValue: conditionNode?.condition?.defaultResultValue,
+        };
       }
       
       if (flow.pipeline?.length > 0) {
@@ -7586,48 +8209,57 @@ function EndRunButton({
   const run = async () => {
     setLoading(true);
     setError(null);
-    
+
     try {
-      // Use helper to traverse backward and collect all transformations
       const flow = collectUpstreamFlow(widget.id, widgets, edges);
-      
-      const upstreamNode = flow.connectionNode || flow.joinNode;
+
+      const upstreamNode = flow.connectionNode || flow.joinNode || flow.unionNode;
       if (!upstreamNode) {
-         throw new Error("No se encontró una fuente de datos válida (Conexión o JOIN) conectada al Fin");
+        throw new Error("No se encontró una fuente de datos válida (Conexión, JOIN o UNION) conectada al Fin");
       }
-      
+
       const filterNode = flow.filterNode;
-      if (!filterNode) {
-          throw new Error("No se encontró un nodo de Filtro en la cadena");
+      const isUnion = upstreamNode.type === "union";
+      if (!isUnion && !filterNode) {
+        throw new Error("No se encontró un nodo de Filtro en la cadena");
+      }
+      if (isUnion) {
+        if (!flow.leftBranch?.connectionNode || !flow.leftBranch?.filterNode || !flow.rightBranch?.connectionNode || !flow.rightBranch?.filterNode) {
+          throw new Error("UNION requiere dos ramas: cada una debe ser Conexión → Filtro conectado al UNION");
+        }
+        if (!flow.leftBranch.filterNode.filter?.table || !flow.rightBranch.filterNode.filter?.table) {
+          throw new Error("Cada rama del UNION debe tener una tabla seleccionada en el Filtro");
+        }
       }
 
       const countNode = flow.fullPath.find(w => w.type === "count");
 
-      // Validate filter selections
-      if (upstreamNode.type === "connection") {
-        if (!upstreamNode.connectionId)
-          throw new Error("Conexión sin ID en el nodo de origen");
-        if (!filterNode!.filter?.table)
-          throw new Error("Selecciona una tabla en el Filtro");
-      } else if (upstreamNode.type === "join") {
-        const j = (upstreamNode as any).join || ({} as any);
-        if (
-          !j.primaryTable ||
-          !Array.isArray(j.joins) ||
-          j.joins.length === 0
-        ) {
-          throw new Error("Configura el JOIN antes de ejecutar el flujo");
-        }
-        for (const jn of j.joins) {
-          if (!jn.primaryColumn || !jn.secondaryColumn) {
-            throw new Error("Completa las columnas de unión en cada join");
+      if (!isUnion) {
+        if (upstreamNode.type === "connection") {
+          if (!upstreamNode.connectionId)
+            throw new Error("Conexión sin ID en el nodo de origen");
+          if (!filterNode!.filter?.table)
+            throw new Error("Selecciona una tabla en el Filtro");
+        } else if (upstreamNode.type === "join") {
+          const j = (upstreamNode as any).join || ({} as any);
+          if (
+            !j.primaryTable ||
+            !Array.isArray(j.joins) ||
+            j.joins.length === 0
+          ) {
+            throw new Error("Configura el JOIN antes de ejecutar el flujo");
           }
+          for (const jn of j.joins) {
+            if (!jn.primaryColumn || !jn.secondaryColumn) {
+              throw new Error("Completa las columnas de unión en cada join");
+            }
+          }
+          if (!j.primaryConnectionId) {
+            throw new Error("Selecciona la tabla principal del JOIN");
+          }
+        } else {
+          throw new Error("La fuente debe ser Conexión, JOIN o UNION");
         }
-        if (!j.primaryConnectionId) {
-          throw new Error("Selecciona la tabla principal del JOIN");
-        }
-      } else {
-        throw new Error("La fuente debe ser Conexión o JOIN");
       }
 
       if (!widget.end?.target?.table)
@@ -7641,8 +8273,32 @@ function EndRunButton({
           target: widget.end!.target!,
           mode: widget.end!.mode || "overwrite",
       };
-      
-      if (upstreamNode.type === "connection") {
+
+      if (upstreamNode.type === "union" && flow.leftBranch && flow.rightBranch) {
+        payload = {
+          etlId,
+          union: {
+            left: {
+              connectionId: flow.leftBranch.connectionNode!.connectionId,
+              filter: {
+                table: flow.leftBranch.filterNode!.filter!.table,
+                columns: flow.leftBranch.filterNode!.filter!.columns || [],
+                conditions: flow.leftBranch.filterNode!.filter!.conditions || [],
+              },
+            },
+            right: {
+              connectionId: flow.rightBranch.connectionNode!.connectionId,
+              filter: {
+                table: flow.rightBranch.filterNode!.filter!.table,
+                columns: flow.rightBranch.filterNode!.filter!.columns || [],
+                conditions: flow.rightBranch.filterNode!.filter!.conditions || [],
+              },
+            },
+            unionAll: (upstreamNode as any).union?.unionAll !== false,
+          },
+          end: commonEnd,
+        };
+      } else if (upstreamNode.type === "connection") {
         payload = {
           etlId,
           connectionId: (upstreamNode as any).connectionId,
@@ -7731,8 +8387,8 @@ function EndRunButton({
       }
 
       // Add accumulated simple transformations
-      if (flow.collectedTransforms.length > 0) {
-        payload.clean = { transforms: flow.collectedTransforms };
+      if (flow.collectedTransforms.length > 0 || flow.lastCleanDedupe?.keyColumns?.length) {
+        payload.clean = { transforms: flow.collectedTransforms, dedupe: flow.lastCleanDedupe };
       }
       
       if (flow.collectedConversions.length > 0) {
@@ -7744,7 +8400,14 @@ function EndRunButton({
       }
       
       if (flow.collectedRules.length > 0) {
-        payload.condition = { rules: flow.collectedRules };
+        const conditionNode = flow.fullPath.find(
+          (n) => n.type === "condition"
+        ) as Widget | undefined;
+        payload.condition = {
+          rules: flow.collectedRules,
+          resultColumn: conditionNode?.condition?.resultColumn,
+          defaultResultValue: conditionNode?.condition?.defaultResultValue,
+        };
       }
       
       if (countNode?.count) {

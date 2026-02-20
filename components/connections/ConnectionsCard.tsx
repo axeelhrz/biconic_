@@ -93,6 +93,8 @@ export interface Connection {
   // Campos opcionales para importación
   dataTableId?: string;
   importStatus?: string;
+  /** updated_at del data_table; para detectar imports colgados */
+  dataTableUpdatedAt?: string;
   creator?: {
     fullName: string | null;
   };
@@ -115,10 +117,12 @@ export default function ConnectionsCard({
   connection,
   onConfigure,
   onDelete,
+  onRefreshConnections,
 }: {
   connection: Connection;
   onConfigure?: (id: string) => void;
   onDelete?: (id: string, title?: string) => void;
+  onRefreshConnections?: () => void;
 }) {
   const router = useRouter();
 
@@ -210,9 +214,8 @@ export default function ConnectionsCard({
              <ImportStatus 
                 dataTableId={dataTableId!} 
                 compact 
-                onProcessFinished={() => {
-                    // Refrescar?
-                }} 
+                importStartedAt={connection.dataTableUpdatedAt}
+                onProcessFinished={() => onRefreshConnections?.()} 
              />
           </div>
       ) : (

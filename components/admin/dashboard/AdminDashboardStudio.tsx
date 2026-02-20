@@ -132,6 +132,7 @@ export function AdminDashboardStudio({
   const [addMetricInitialIntent, setAddMetricInitialIntent] = useState<StudioIntent | "blank" | null>(null);
   const [pages, setPages] = useState<StudioPage[]>([{ id: "page-1", name: "Página 1" }]);
   const [activePageId, setActivePageId] = useState<string | null>("page-1");
+  const [savedMetrics, setSavedMetrics] = useState<SavedMetric[]>([]);
   const loadedOnce = useRef(false);
 
   const { data: etlData, loading: etlLoading, error: etlError, refetch: refetchEtlData } = useAdminDashboardEtlData(dashboardId);
@@ -163,7 +164,7 @@ export function AdminDashboardStudio({
         let loadedPages: StudioPage[] = [{ id: "page-1", name: "Página 1" }];
         let loadedActivePageId: string = "page-1";
         if (rawLayout && typeof rawLayout === "object") {
-          const layout = rawLayout as { widgets?: unknown[]; theme?: DashboardTheme; pages?: StudioPage[]; activePageId?: string };
+          const layout = rawLayout as { widgets?: unknown[]; theme?: DashboardTheme; pages?: StudioPage[]; activePageId?: string; savedMetrics?: SavedMetric[] };
           if (Array.isArray(layout.pages) && layout.pages.length > 0) {
             loadedPages = layout.pages;
             loadedActivePageId = layout.activePageId ?? layout.pages[0].id;
@@ -185,6 +186,8 @@ export function AdminDashboardStudio({
           setDashboardTheme(loadedTheme);
           setPages(loadedPages);
           setActivePageId(loadedActivePageId);
+          const layout = rawLayout as { savedMetrics?: SavedMetric[] } | undefined;
+          setSavedMetrics(Array.isArray(layout?.savedMetrics) ? layout.savedMetrics : []);
         }
       } catch (e) {
         if (!cancelled) toast.error("No se pudo cargar el dashboard");
@@ -203,7 +206,7 @@ export function AdminDashboardStudio({
       const { error } = await supabase
         .from("dashboard")
         .update({
-          layout: { widgets: cleanWidgets, theme: dashboardTheme, pages, activePageId } as Json,
+          layout: { widgets: cleanWidgets, theme: dashboardTheme, pages, activePageId, savedMetrics } as Json,
           global_filters_config: globalFilters as Json,
         })
         .eq("id", dashboardId);
@@ -216,7 +219,20 @@ export function AdminDashboardStudio({
     } finally {
       setIsSaving(false);
     }
-  }, [widgets, globalFilters, dashboardTheme, dashboardId, pages, activePageId]);
+  }, [widgets, globalFilters, dashboardTheme, dashboardId, pages, activePageId, savedMetrics]);
+
+  const saveMetricAsTemplate = useCallback((name: string, metric: AggregationMetric) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const entry: SavedMetric = { id: `sm-${Date.now()}`, name: trimmed, metric: { ...metric, id: metric.id || `m-${Date.now()}` } };
+    setSavedMetrics((prev) => {
+      const existing = prev.find((s) => s.name === trimmed);
+      if (existing) return prev.map((s) => (s.id === existing.id ? { ...s, name: trimmed, metric } : s));
+      return [...prev, entry];
+    });
+    setIsDirty(true);
+    toast.success(`Métrica "${trimmed}" guardada para reutilizar`);
+  }, []);
 
   const getTableName = useCallback(
     async (widget?: StudioWidget | null): Promise<string | null> => {
@@ -782,6 +798,8 @@ export function AdminDashboardStudio({
                   setAddMetricStep("intent");
                   setAddMetricInitialIntent(null);
                 }}
+                savedMetrics={savedMetrics}
+                onSaveMetricAsTemplate={saveMetricAsTemplate}
               />
             </div>
           ) : (

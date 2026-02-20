@@ -66,6 +66,8 @@ export type MetricConfigWidget = {
   dataSourceId?: string | null;
 };
 
+export type SavedMetricPanel = { id: string; name: string; metric: AggregationMetricEdit };
+
 const CHART_TYPES: { value: string; label: string }[] = [
   { value: "bar", label: "Barras verticales" },
   { value: "horizontalBar", label: "Barras horizontales" },
@@ -100,6 +102,9 @@ type MetricConfigPanelProps = {
   onUpdate: (patch: Partial<MetricConfigWidget>) => void;
   onLoadData: () => void;
   onClose: () => void;
+  /** Métricas guardadas para reutilizar */
+  savedMetrics?: SavedMetricPanel[];
+  onSaveMetricAsTemplate?: (name: string, metric: AggregationMetricEdit) => void;
 };
 
 export function MetricConfigPanel({
@@ -109,7 +114,11 @@ export function MetricConfigPanel({
   onUpdate,
   onLoadData,
   onClose,
+  savedMetrics = [],
+  onSaveMetricAsTemplate,
 }: MetricConfigPanelProps) {
+  const [saveTemplateForIndex, setSaveTemplateForIndex] = useState<number | null>(null);
+  const [saveTemplateName, setSaveTemplateName] = useState("");
   const agg = widget.aggregationConfig || { enabled: false, metrics: [] };
   const filters = agg.filters || [];
   const metrics = agg.metrics || [];
@@ -164,6 +173,10 @@ export function MetricConfigPanel({
 
   const removeFilter = (index: number) => {
     updateAgg({ filters: filters.filter((_, i) => i !== index) });
+  };
+
+  const addSavedMetric = (saved: SavedMetricPanel) => {
+    updateAgg({ metrics: [...metrics, { ...saved.metric, id: `m-${Date.now()}` }] });
   };
 
   const orderFields = agg.enabled
@@ -337,14 +350,41 @@ export function MetricConfigPanel({
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Métricas</Label>
-                          <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addMetric}>
-                            + Añadir
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            {savedMetrics.length > 0 && (
+                              <select
+                                value=""
+                                onChange={(e) => {
+                                  const id = e.target.value;
+                                  if (!id) return;
+                                  const saved = savedMetrics.find((s) => s.id === id);
+                                  if (saved) addSavedMetric(saved);
+                                  e.target.value = "";
+                                }}
+                                className="h-7 text-xs rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2"
+                              >
+                                <option value="">Usar guardada…</option>
+                                {savedMetrics.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                              </select>
+                            )}
+                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addMetric}>
+                              + Crear nueva
+                            </Button>
+                          </div>
                         </div>
+                        {saveTemplateForIndex != null && onSaveMetricAsTemplate && (
+                          <div className="flex items-center gap-2 mb-2 p-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)]/50">
+                            <Input value={saveTemplateName} onChange={(e) => setSaveTemplateName(e.target.value)} placeholder="Nombre para reutilizar" className="h-8 text-xs flex-1" />
+                            <Button type="button" size="sm" className="h-8 text-xs" onClick={() => { const m = metrics[saveTemplateForIndex]; if (m && saveTemplateName.trim()) onSaveMetricAsTemplate(saveTemplateName.trim(), m); setSaveTemplateForIndex(null); setSaveTemplateName(""); }}>Guardar</Button>
+                            <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={() => { setSaveTemplateForIndex(null); setSaveTemplateName(""); }}>Cancelar</Button>
+                          </div>
+                        )}
                         <div className="space-y-3">
                           {metrics.map((m, i) => (
                             <div key={m.id} className="rounded-lg border border-[var(--studio-border)] p-2 space-y-2 bg-[var(--studio-bg)]/50">
-                              <div className="flex gap-2">
+                              <div className="flex gap-2 items-center">
                                 <select
                                   value={m.func}
                                   onChange={(e) => updateMetric(i, { func: e.target.value })}
@@ -354,6 +394,11 @@ export function MetricConfigPanel({
                                     <option key={f.value} value={f.value}>{f.label}</option>
                                   ))}
                                 </select>
+                                {onSaveMetricAsTemplate && (
+                                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-[var(--studio-fg-muted)] hover:text-[var(--studio-accent)]" onClick={() => { setSaveTemplateForIndex(i); setSaveTemplateName(m.alias || m.field || "Métrica"); }} title="Guardar para reutilizar">
+                                    <BookmarkPlus className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
                                 <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500" onClick={() => removeMetric(i)}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
