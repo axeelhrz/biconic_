@@ -84,6 +84,25 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [dataFixes, setDataFixes] = useState<Array<{ column: string; find: string; replaceWith: string }>>([]);
   const [dedupe, setDedupe] = useState<{ keyColumns: string[]; keep: "first" | "last" } | null>(null);
 
+  // UNION (opcional): segunda conexión + tabla + UNION ALL
+  const [useUnion, setUseUnion] = useState(false);
+  const [unionRightConnectionId, setUnionRightConnectionId] = useState<string | number | null>(null);
+  const [unionRightTable, setUnionRightTable] = useState<string | null>(null);
+  const [unionAll, setUnionAll] = useState(true);
+  const [unionRightTables, setUnionRightTables] = useState<{ schema: string; name: string; columns?: { name: string }[] }[]>([]);
+  const [loadingUnionMeta, setLoadingUnionMeta] = useState(false);
+
+  // JOIN (opcional): segunda conexión + tabla + tipo + columnas de enlace
+  const [useJoin, setUseJoin] = useState(false);
+  const [joinSecondaryConnectionId, setJoinSecondaryConnectionId] = useState<string | number | null>(null);
+  const [joinSecondaryTable, setJoinSecondaryTable] = useState<string | null>(null);
+  const [joinType, setJoinType] = useState<"INNER" | "LEFT" | "RIGHT" | "FULL">("INNER");
+  const [joinLeftColumn, setJoinLeftColumn] = useState<string>("");
+  const [joinRightColumn, setJoinRightColumn] = useState<string>("");
+  const [joinRightTables, setJoinRightTables] = useState<{ schema: string; name: string; columns?: { name: string }[] }[]>([]);
+  const [joinRightColumns, setJoinRightColumns] = useState<string[]>([]);
+  const [loadingJoinMeta, setLoadingJoinMeta] = useState(false);
+
   // Cargar tablas al elegir conexión
   useEffect(() => {
     if (!connectionId) {
@@ -153,6 +172,74 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     setDedupe(null);
   }, [connectionId, selectedTable]);
 
+  // Cargar tablas para UNION derecha
+  useEffect(() => {
+    if (!useUnion || !unionRightConnectionId) {
+      setUnionRightTables([]);
+      setUnionRightTable(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingUnionMeta(true);
+    fetchMetadata(unionRightConnectionId)
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled || !data.ok || !data.metadata?.tables) return;
+        setUnionRightTables(data.metadata.tables || []);
+        setUnionRightTable(null);
+      })
+      .finally(() => { if (!cancelled) setLoadingUnionMeta(false); });
+    return () => { cancelled = true; };
+  }, [useUnion, unionRightConnectionId]);
+
+  // Cargar tablas para JOIN secundaria
+  useEffect(() => {
+    if (!useJoin || !joinSecondaryConnectionId) {
+      setJoinRightTables([]);
+      setJoinSecondaryTable(null);
+      setJoinRightColumns([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingJoinMeta(true);
+    fetchMetadata(joinSecondaryConnectionId)
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled || !data.ok || !data.metadata?.tables) return;
+        setJoinRightTables(data.metadata.tables || []);
+        setJoinSecondaryTable(null);
+        setJoinRightColumns([]);
+      })
+      .finally(() => { if (!cancelled) setLoadingJoinMeta(false); });
+    return () => { cancelled = true; };
+  }, [useJoin, joinSecondaryConnectionId]);
+
+  // Columnas de la tabla secundaria del JOIN
+  const joinRightTableInfo = joinRightTables.find((t) => `${t.schema}.${t.name}` === joinSecondaryTable);
+  useEffect(() => {
+    if (!joinSecondaryTable || !joinSecondaryConnectionId) {
+      setJoinRightColumns([]);
+      return;
+    }
+    if (joinRightTableInfo?.columns?.length) {
+      setJoinRightColumns(joinRightTableInfo.columns.map((c) => c.name));
+      return;
+    }
+    // Pedir columnas si la tabla no las trae
+    fetchMetadata(joinSecondaryConnectionId, joinSecondaryTable)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.ok || !data.metadata?.tables?.[0]?.columns) return;
+        const cols = data.metadata.tables[0].columns.map((c: { name: string }) => c.name);
+        setJoinRightTables((prev) =>
+          prev.map((t) =>
+            `${t.schema}.${t.name}` === joinSecondaryTable ? { ...t, columns: data.metadata.tables[0].columns } : t
+          )
+        );
+        setJoinRightColumns(cols);
+      });
+  }, [joinSecondaryTable, joinSecondaryConnectionId, joinRightTableInfo?.columns]);
+
   const canRun =
     connectionId &&
     selectedTable &&
@@ -178,24 +265,76 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (!canRun || !connectionId || !selectedTable) return;
     setRunning(true);
     const cleanConfig = buildCleanConfig();
+    const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
+
     try {
+      let body: Record<string, unknown> = {
+        etlId,
+        end: {
+          target: { type: "supabase", table: outputTableName.trim() },
+          mode: outputMode,
+        },
+      };
+
+      if (useUnion && unionRightConnectionId && unionRightTable) {
+        body.union = {
+          left: {
+            connectionId,
+            filter: {
+              table: selectedTable,
+              columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
+              conditions: conditions.length > 0 ? conditions : [],
+            },
+          },
+          right: {
+            connectionId: unionRightConnectionId,
+            filter: {
+              table: unionRightTable,
+              columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
+              conditions: [],
+            },
+          },
+          unionAll,
+        };
+      } else if (useJoin && joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn) {
+        body.connectionId = connectionId;
+        body.filter = {
+          table: selectedTable,
+          columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
+          conditions: conditions.length > 0 ? conditions : [],
+        };
+        body.join = {
+          connectionId,
+          secondaryConnectionId: joinSecondaryConnectionId,
+          leftTable: selectedTable,
+          rightTable: joinSecondaryTable,
+          joinConditions: [
+            {
+              leftTable: selectedTable,
+              leftColumn: joinLeftColumn,
+              rightTable: joinSecondaryTable,
+              rightColumn: joinRightColumn,
+              joinType,
+            },
+          ],
+          leftColumns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
+          rightColumns: joinRightColumns.length > 0 ? joinRightColumns : undefined,
+        };
+      } else {
+        body.connectionId = connectionId;
+        body.filter = {
+          table: selectedTable,
+          columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
+          conditions: conditions.length > 0 ? conditions : [],
+        };
+      }
+
+      if (cleanConfig) body.clean = cleanConfig;
+
       const res = await fetch("/api/etl/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          etlId,
-          connectionId,
-          filter: {
-            table: selectedTable,
-            columns: columns.length > 0 ? columns : undefined,
-            conditions: conditions.length > 0 ? conditions : [],
-          },
-          ...(cleanConfig && { clean: cleanConfig }),
-          end: {
-            target: { type: "supabase", table: outputTableName.trim() },
-            mode: outputMode,
-          },
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
@@ -637,6 +776,142 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       </div>
                     ) : null}
                   </div>
+
+                  {/* UNION (opcional) */}
+                  <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="use-union"
+                        checked={useUnion}
+                        onChange={(e) => {
+                          const v = e.target.checked;
+                          setUseUnion(v);
+                          if (v) setUseJoin(false);
+                          if (!v) { setUnionRightConnectionId(null); setUnionRightTable(null); }
+                        }}
+                      />
+                      <Label htmlFor="use-union" className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Combinar con otra tabla (UNION)</Label>
+                    </div>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Apilar filas de otra tabla con las mismas columnas. Ambas tablas deben tener la misma estructura.</p>
+                    {useUnion && (
+                      <div className="flex flex-wrap gap-2 items-center pt-2">
+                        <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Segunda conexión</Label>
+                        <select
+                          className="rounded-lg border px-3 py-2 text-sm"
+                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                          value={unionRightConnectionId ?? ""}
+                          onChange={(e) => setUnionRightConnectionId(e.target.value ? e.target.value : null)}
+                        >
+                          <option value="">Elegir conexión</option>
+                          {connections.map((c) => (
+                            <option key={c.id} value={c.id}>{c.title}{String(c.id) === String(connectionId) ? " (principal)" : ""}</option>
+                          ))}
+                        </select>
+                        <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Segunda tabla</Label>
+                        <select
+                          className="rounded-lg border px-3 py-2 text-sm"
+                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                          value={unionRightTable ?? ""}
+                          onChange={(e) => setUnionRightTable(e.target.value || null)}
+                          disabled={!unionRightConnectionId || loadingUnionMeta}
+                        >
+                          <option value="">Elegir tabla</option>
+                          {unionRightTables.map((t) => (
+                            <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</option>
+                          ))}
+                        </select>
+                        <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                          <input type="checkbox" checked={unionAll} onChange={(e) => setUnionAll(e.target.checked)} />
+                          UNION ALL (incluir duplicados)
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* JOIN (opcional) */}
+                  <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="use-join"
+                        checked={useJoin}
+                        onChange={(e) => {
+                          const v = e.target.checked;
+                          setUseJoin(v);
+                          if (v) setUseUnion(false);
+                          if (!v) { setJoinSecondaryConnectionId(null); setJoinSecondaryTable(null); setJoinLeftColumn(""); setJoinRightColumn(""); }
+                        }}
+                      />
+                      <Label htmlFor="use-join" className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Combinar con otra tabla (JOIN)</Label>
+                    </div>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Unir por una columna en común. Elegí la tabla secundaria y las columnas de enlace.</p>
+                    {useJoin && (
+                      <div className="space-y-2 pt-2">
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Segunda conexión</Label>
+                          <select
+                            className="rounded-lg border px-3 py-2 text-sm"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                            value={joinSecondaryConnectionId ?? ""}
+                            onChange={(e) => { setJoinSecondaryConnectionId(e.target.value ? e.target.value : null); setJoinSecondaryTable(null); setJoinLeftColumn(""); setJoinRightColumn(""); }}
+                          >
+                            <option value="">Elegir conexión</option>
+                            {connections.map((c) => (
+                              <option key={c.id} value={c.id}>{c.title}{String(c.id) === String(connectionId) ? " (principal)" : ""}</option>
+                            ))}
+                          </select>
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Segunda tabla</Label>
+                          <select
+                            className="rounded-lg border px-3 py-2 text-sm"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                            value={joinSecondaryTable ?? ""}
+                            onChange={(e) => { setJoinSecondaryTable(e.target.value || null); setJoinRightColumn(""); }}
+                            disabled={!joinSecondaryConnectionId || loadingJoinMeta}
+                          >
+                            <option value="">Elegir tabla</option>
+                            {joinRightTables.map((t) => (
+                              <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</option>
+                            ))}
+                          </select>
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Tipo</Label>
+                          <select
+                            className="rounded-lg border px-3 py-2 text-sm"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                            value={joinType}
+                            onChange={(e) => setJoinType(e.target.value as "INNER" | "LEFT" | "RIGHT" | "FULL")}
+                          >
+                            <option value="INNER">INNER</option>
+                            <option value="LEFT">LEFT</option>
+                            <option value="RIGHT">RIGHT</option>
+                            <option value="FULL">FULL</option>
+                          </select>
+                        </div>
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla principal</Label>
+                          <select
+                            className="rounded-lg border px-3 py-2 text-sm"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                            value={joinLeftColumn}
+                            onChange={(e) => setJoinLeftColumn(e.target.value)}
+                          >
+                            <option value="">Elegir columna</option>
+                            {effectiveColumns.map((c) => (<option key={c} value={c}>{c}</option>))}
+                          </select>
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla secundaria</Label>
+                          <select
+                            className="rounded-lg border px-3 py-2 text-sm"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                            value={joinRightColumn}
+                            onChange={(e) => setJoinRightColumn(e.target.value)}
+                          >
+                            <option value="">Elegir columna</option>
+                            {joinRightColumns.map((c) => (<option key={c} value={c}>{c}</option>))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })()}
@@ -824,12 +1099,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{outputTableName || "—"} · {outputMode === "overwrite" ? "Sobrescribir" : "Agregar"}</p>
                     </div>
                   </div>
-                  {buildCleanConfig() && (
+                  {(buildCleanConfig() || (useUnion && unionRightTable) || (useJoin && joinSecondaryTable)) && (
                     <div className="flex items-center gap-3 px-4 py-3">
                       <Sparkles className="h-5 w-5 shrink-0 opacity-60" style={{ color: "var(--platform-fg-muted)" }} />
                       <div>
                         <p className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Transformación</p>
-                        <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Limpieza de nulos, texto, correcciones y/o duplicados</p>
+                        <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
+                          {useUnion && unionRightTable && `UNION con ${unionRightTable}${unionAll ? " (ALL)" : ""}${buildCleanConfig() ? " · Limpieza" : ""}`}
+                          {useJoin && joinSecondaryTable && !useUnion && `JOIN ${joinType} con ${joinSecondaryTable}${buildCleanConfig() ? " · Limpieza" : ""}`}
+                          {!useUnion && !useJoin && buildCleanConfig() && "Limpieza de nulos, texto, correcciones y/o duplicados"}
+                        </p>
                       </div>
                     </div>
                   )}
