@@ -57,6 +57,7 @@ export default function AdminNewConnectionDialog({
           setTablesFromMetadata([]);
           setSelectedTableKeys(new Set());
           setTableSearchQuery("");
+          setSavingTables(false);
           setConnectionNameCreated("");
         }, 300);
       }
@@ -307,10 +308,35 @@ export default function AdminNewConnectionDialog({
   };
   const selectAllTables = () => setSelectedTableKeys(new Set(tablesFromMetadata.map((t) => `${t.schema}.${t.name}`)));
   const deselectAllTables = () => setSelectedTableKeys(new Set());
-  const handleTableSelectionDone = () => {
-    setShowTableSelection(false);
-    onCreated?.(); // Refrescar lista de conexiones para que aparezca la nueva al principio
-    handleOpenChange(false);
+  const [savingTables, setSavingTables] = useState(false);
+  const handleTableSelectionDone = async () => {
+    if (!createdConnectionId) {
+      setShowTableSelection(false);
+      handleOpenChange(false);
+      return;
+    }
+    setSavingTables(true);
+    try {
+      const supabase = createClient();
+      const connectionTablesList = Array.from(selectedTableKeys);
+      const { error } = await supabase
+        .from("connections")
+        .update({ connection_tables: connectionTablesList })
+        .eq("id", createdConnectionId);
+      if (error) throw error;
+      toast.success(
+        connectionTablesList.length > 0
+          ? `${connectionTablesList.length} tabla(s) guardada(s). En el ETL solo se verán estas tablas para esta conexión.`
+          : "Conexión guardada. Podés configurar tablas después en Conexiones → Tablas para ETL."
+      );
+      setShowTableSelection(false);
+      onCreated?.();
+      handleOpenChange(false);
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudieron guardar las tablas");
+    } finally {
+      setSavingTables(false);
+    }
   };
 
   // Step 2 for DB: list of tables to use for JOIN and data
@@ -374,7 +400,9 @@ export default function AdminNewConnectionDialog({
             </>
           )}
           <div className="flex justify-end">
-            <Button onClick={handleTableSelectionDone}>Listo</Button>
+            <Button onClick={handleTableSelectionDone} disabled={savingTables}>
+              {savingTables ? "Guardando…" : "Listo"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -4,11 +4,18 @@ import { useState } from "react";
 import AdminConnectionsGrid from "@/components/admin/AdminConnectionsGrid";
 import { Search, Plus } from "lucide-react";
 import AdminNewConnectionDialog from "@/components/admin/AdminNewConnectionDialog";
+import ConnectionConfigDialog from "@/components/admin/ConnectionConfigDialog";
+import ConnectionTablesDialog from "@/components/connections/ConnectionTablesDialog";
 import { createClient } from "@/lib/supabase/client";
 
 export default function AdminConnectionsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [configDialogConnectionId, setConfigDialogConnectionId] = useState<string | null>(null);
+  const [tablesDialogOpen, setTablesDialogOpen] = useState(false);
+  const [tablesDialogConnectionId, setTablesDialogConnectionId] = useState<string | null>(null);
+  const [tablesDialogTitle, setTablesDialogTitle] = useState("");
+  const [tablesDialogType, setTablesDialogType] = useState("");
 
   const handleDelete = async (id: string, title?: string) => {
     if (
@@ -89,8 +96,37 @@ export default function AdminConnectionsPage() {
         }}
       />
 
+      <ConnectionConfigDialog
+        open={!!configDialogConnectionId}
+        onOpenChange={(open) => !open && setConfigDialogConnectionId(null)}
+        connectionId={configDialogConnectionId}
+        onOpenTables={(id, title, type) => {
+          setConfigDialogConnectionId(null);
+          setTablesDialogConnectionId(id);
+          setTablesDialogTitle(title);
+          setTablesDialogType(type);
+          setTablesDialogOpen(true);
+        }}
+      />
+
+      <ConnectionTablesDialog
+        open={tablesDialogOpen}
+        onOpenChange={setTablesDialogOpen}
+        connectionId={tablesDialogConnectionId}
+        connectionTitle={tablesDialogTitle}
+        connectionType={tablesDialogType}
+        onSaved={() => {
+          setTablesDialogOpen(false);
+          window.location.reload();
+        }}
+      />
+
       {/* Grid de Conexiones */}
-      <AdminConnectionsGrid searchQuery={searchQuery} onDelete={handleDelete} />
+      <AdminConnectionsGrid
+        searchQuery={searchQuery}
+        onConfigure={(id) => setConfigDialogConnectionId(id)}
+        onDelete={handleDelete}
+      />
     </div>
   );
 }
