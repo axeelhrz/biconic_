@@ -142,18 +142,14 @@ export async function POST(req: NextRequest) {
         ? decryptConnectionPassword((conn as any).db_password_encrypted)
         : (conn as any).db_password ?? process.env.FLEXXUS_PASSWORD ?? "";
       const Firebird = require("node-firebird");
-      // Firebird: identificadores sin comillas en mayúsculas evitan "Token unknown" con el punto
-      const firebirdIdent = (s: string) => /^[A-Z0-9_]+$/i.test(s.trim()) ? s.trim().toUpperCase() : safeIdentFirebird(s.trim());
-      const tableParts = tableQualified.trim().includes(".")
-        ? tableQualified.trim().split(".", 2).map((s) => s.trim())
-        : [tableQualified.trim()];
-      const tablePart = tableParts.length > 1
-        ? `${firebirdIdent(tableParts[0])}.${firebirdIdent(tableParts[1])}`
-        : firebirdIdent(tableParts[0]);
-      const colPart = columnName.trim().includes(".")
-        ? firebirdIdent(columnName.trim().split(".").pop()!)
-        : firebirdIdent(columnName.trim());
-      const sql = `SELECT FIRST ${MAX_VALUES} DISTINCT ${colPart} AS val FROM ${tablePart} WHERE ${colPart} IS NOT NULL ORDER BY ${colPart}`;
+      // Firebird: solo nombre de tabla/relación (sin esquema) para evitar "Token unknown" con el punto en FROM
+      const tableNameOnly = tableQualified.trim().includes(".")
+        ? tableQualified.trim().split(".").pop()!.trim()
+        : tableQualified.trim();
+      const relationName = /^[A-Z0-9_]+$/i.test(tableNameOnly) ? tableNameOnly.toUpperCase() : `"${tableNameOnly.replace(/"/g, '""')}"`;
+      const colNameOnly = columnName.trim().includes(".") ? columnName.trim().split(".").pop()!.trim() : columnName.trim();
+      const colPart = /^[A-Z0-9_]+$/i.test(colNameOnly) ? colNameOnly.toUpperCase() : `"${colNameOnly.replace(/"/g, '""')}"`;
+      const sql = `SELECT FIRST ${MAX_VALUES} DISTINCT ${colPart} AS val FROM ${relationName} WHERE ${colPart} IS NOT NULL ORDER BY 1`;
       return await new Promise<NextResponse>((resolve) => {
         const opts = {
           host: (conn as any).db_host || "localhost",
