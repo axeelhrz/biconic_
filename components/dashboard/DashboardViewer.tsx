@@ -329,7 +329,10 @@ export function DashboardViewer({
   const [widgetToRename, setWidgetToRename] = useState<Widget | null>(null);
   const [newTitle, setNewTitle] = useState("");
 
-  // ... (handlers like handleRemoveWidget, openRenameDialog, saveRename, fetchDistinctOptions, useEffect for filter options)
+  const { data: etlData } = useDashboardEtlData(
+    dashboardId,
+    apiEndpoints?.etlData
+  );
 
   const handleRemoveWidget = (widgetId: string) => {
     const w = widgets.find((x) => x.id === widgetId);
@@ -501,11 +504,6 @@ export function DashboardViewer({
       }
     });
   }, [widgets, fetchDistinctOptions]);
-
-  const { data: etlData } = useDashboardEtlData(
-    dashboardId,
-    apiEndpoints?.etlData
-  );
 
   // ... (Zoom & Pan logic, which is fine)
 

@@ -830,7 +830,7 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                   source: {
                     ...w.source,
                     table: fullTableName,
-                    etlId,
+                    etlId: widget.source?.etlId ?? etlData?.etl?.id,
                     labelField: effectiveLabelField,
                     valueFields: effectiveValueFields,
                   },

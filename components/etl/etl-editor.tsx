@@ -65,6 +65,7 @@ export type WidgetType =
   | "condition"
   | "arithmetic"
   | "join"
+  | "union"
   | "end";
 
 // Nueva configuración de JOIN tipo "star schema"
@@ -3483,17 +3484,18 @@ export function ETLEditor({
                       }
 
                       const transforms = selected.clean?.transforms || [];
+                      const baseClean = () => ({ ...selected.clean, transforms: selected.clean?.transforms ?? [] });
                       const setTransforms = (next: typeof transforms) =>
-                        updateSelected({ clean: { ...selected.clean, transforms: next } });
+                        updateSelected({ clean: { ...baseClean(), transforms: next } });
                       const nullCleanup = selected.clean?.nullCleanup;
                       const setNullCleanup = (next: typeof nullCleanup) =>
-                        updateSelected({ clean: { ...selected.clean, nullCleanup: next ?? undefined } });
+                        updateSelected({ clean: { ...baseClean(), nullCleanup: next ?? undefined } });
                       const dataFixes = selected.clean?.dataFixes || [];
                       const setDataFixes = (next: typeof dataFixes) =>
-                        updateSelected({ clean: { ...selected.clean, dataFixes: next } });
+                        updateSelected({ clean: { ...baseClean(), dataFixes: next } });
                       const dedupe = selected.clean?.dedupe;
                       const setDedupe = (next: typeof dedupe) =>
-                        updateSelected({ clean: { ...selected.clean, dedupe: next ?? undefined } });
+                        updateSelected({ clean: { ...baseClean(), dedupe: next ?? undefined } });
 
                       const defaultNullPatterns = ["NA", "-", ".", ""];
                       return (
@@ -4977,6 +4979,7 @@ export function ETLEditor({
                                   updateSelected({
                                     condition: {
                                       ...selected.condition,
+                                      rules: selected.condition?.rules ?? [],
                                       resultColumn: e.target.value.trim() || undefined,
                                     },
                                   })
@@ -4993,6 +4996,7 @@ export function ETLEditor({
                                   updateSelected({
                                     condition: {
                                       ...selected.condition,
+                                      rules: selected.condition?.rules ?? [],
                                       defaultResultValue: e.target.value,
                                     },
                                   })
