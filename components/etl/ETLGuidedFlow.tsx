@@ -533,8 +533,36 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             </select>
                             {op === "replace" && (
                               <>
-                                <input type="text" className="rounded border px-1.5 py-1 text-xs w-24" placeholder="Buscar" value={t?.find ?? ""} onChange={(ev) => setCleanTransforms((prev) => prev.map((x) => x.column === colName && x.op === "replace" ? { ...x, find: ev.target.value } : x)))} />
-                                <input type="text" className="rounded border px-1.5 py-1 text-xs w-24" placeholder="Reemplazar" value={t?.replaceWith ?? ""} onChange={(ev) => setCleanTransforms((prev) => prev.map((x) => x.column === colName && x.op === "replace" ? { ...x, replaceWith: ev.target.value } : x)))} />
+                                <input
+                                  type="text"
+                                  className="rounded border px-1.5 py-1 text-xs w-24"
+                                  placeholder="Buscar"
+                                  value={t?.find ?? ""}
+                                  onChange={(ev) =>
+                                    setCleanTransforms((prev) =>
+                                      prev.map((x) =>
+                                        x.column === colName && x.op === "replace"
+                                          ? { ...x, find: ev.target.value }
+                                          : x
+                                      )
+                                    )
+                                  }
+                                />
+                                <input
+                                  type="text"
+                                  className="rounded border px-1.5 py-1 text-xs w-24"
+                                  placeholder="Reemplazar"
+                                  value={t?.replaceWith ?? ""}
+                                  onChange={(ev) =>
+                                    setCleanTransforms((prev) =>
+                                      prev.map((x) =>
+                                        x.column === colName && x.op === "replace"
+                                          ? { ...x, replaceWith: ev.target.value }
+                                          : x
+                                      )
+                                    )
+                                  }
+                                />
                               </>
                             )}
                           </div>
