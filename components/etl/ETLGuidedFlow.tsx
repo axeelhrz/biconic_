@@ -64,6 +64,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
   const [conditions, setConditions] = useState<Array<{ column: string; operator: string; value?: string }>>([]);
+  /** Excluir filas por valores: por cada columna, lista de valores a excluir (NOT IN) */
+  const [excludedValues, setExcludedValues] = useState<Array<{ column: string; excluded: string[] }>>([]);
+  const [distinctColumn, setDistinctColumn] = useState<string | null>(null);
+  const [distinctValuesList, setDistinctValuesList] = useState<string[]>([]);
+  const [loadingDistinct, setLoadingDistinct] = useState(false);
+  const [distinctSearch, setDistinctSearch] = useState("");
   const [outputTableName, setOutputTableName] = useState("");
   const [outputMode, setOutputMode] = useState<"overwrite" | "append">("overwrite");
   const [loadingMeta, setLoadingMeta] = useState(false);
@@ -176,6 +182,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     setDedupe(null);
   }, [connectionId, selectedTable]);
 
+  // Reset excluir por valores al cambiar tabla
+  useEffect(() => {
+    setExcludedValues([]);
+    setDistinctColumn(null);
+    setDistinctValuesList([]);
+    setDistinctSearch("");
+  }, [connectionId, selectedTable]);
+
   // Cargar tablas para UNION derecha
   useEffect(() => {
     if (!useUnion || !unionRightConnectionId) {
@@ -247,6 +261,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const canRun =
     connectionId &&
     selectedTable &&
+    columns.length > 0 &&
     outputTableName.trim().length > 0 &&
     /^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
 
@@ -265,11 +280,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return { transforms, dedupe: dedupe ?? undefined };
   }, [nullCleanup, cleanTransforms, dataFixes, dedupe, columns, selectedTableInfo?.columns]);
 
+  const allFilterConditions = useCallback(() => {
+    const fromExcluded = excludedValues.flatMap(({ column, excluded }) =>
+      excluded.length ? [{ column, operator: "not in" as const, value: excluded.join(",") }] : []
+    );
+    return [...conditions, ...fromExcluded];
+  }, [conditions, excludedValues]);
+
   const handleRun = async () => {
     if (!canRun || !connectionId || !selectedTable) return;
     setRunning(true);
     const cleanConfig = buildCleanConfig();
     const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
+    const filterConditions = allFilterConditions();
 
     try {
       let body: Record<string, unknown> = {
@@ -287,7 +310,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             filter: {
               table: selectedTable,
               columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
-              conditions: conditions.length > 0 ? conditions : [],
+              conditions: filterConditions.length > 0 ? filterConditions : [],
             },
           },
           right: {
@@ -305,7 +328,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         body.filter = {
           table: selectedTable,
           columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
-          conditions: conditions.length > 0 ? conditions : [],
+          conditions: filterConditions.length > 0 ? filterConditions : [],
         };
         body.join = {
           connectionId,
@@ -329,7 +352,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         body.filter = {
           table: selectedTable,
           columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
-          conditions: conditions.length > 0 ? conditions : [],
+          conditions: filterConditions.length > 0 ? filterConditions : [],
         };
       }
 
@@ -365,6 +388,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const progressPct = ((stepIndex + 1) / STEPS.length) * 100;
   const canGoNextConexion = !!connectionId;
   const canGoNextOrigen = !!connectionId && !!selectedTable;
+  const canGoNextFiltros = (selectedTableInfo?.columns?.length ?? 0) > 0 && columns.length > 0;
   const canGoNextDestino = outputTableName.trim().length > 0 && /^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
   const destinoInvalid = outputTableName.trim().length > 0 && !/^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
 
@@ -988,7 +1012,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   <div className="flex flex-wrap items-center gap-2 mb-2">
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Columnas a incluir</Label>
                     <span className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
-                      {columns.length === 0 ? "Todas" : `${columns.length} seleccionadas`}
+                      {(() => {
+                        const allNames = (selectedTableInfo?.columns ?? []).map((x) => x.name);
+                        return columns.length === 0 ? "Ninguna" : columns.length === allNames.length ? "Todas" : `${columns.length} seleccionadas`;
+                      })()}
                     </span>
                     <Button
                       type="button"
@@ -996,7 +1023,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       size="sm"
                       className="rounded-lg h-7 text-xs"
                       style={{ borderColor: "var(--platform-border)" }}
-                      onClick={() => setColumns([])}
+                      onClick={() => setColumns((selectedTableInfo?.columns ?? []).map((x) => x.name))}
                     >
                       Seleccionar todo
                     </Button>
@@ -1006,26 +1033,24 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       size="sm"
                       className="rounded-lg h-7 text-xs"
                       style={{ borderColor: "var(--platform-border)" }}
-                      onClick={() => setColumns((selectedTableInfo?.columns ?? []).map((x) => x.name))}
+                      onClick={() => setColumns([])}
                     >
                       Quitar todo
                     </Button>
                   </div>
+                  {columns.length === 0 && (
+                    <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná al menos una columna para continuar.</p>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     {(selectedTableInfo?.columns ?? []).map((c) => {
-                      const active = columns.length === 0 || columns.includes(c.name);
+                      const active = columns.includes(c.name);
                       return (
                         <button
                           key={c.name}
                           type="button"
                           onClick={() => {
-                            const allNames = (selectedTableInfo?.columns ?? []).map((x) => x.name);
-                            if (active) {
-                              if (columns.length === 0) setColumns(allNames.filter((n) => n !== c.name));
-                              else setColumns((prev) => prev.filter((x) => x !== c.name));
-                            } else {
-                              setColumns((prev) => (prev.length + 1 === allNames.length ? [] : [...prev, c.name]));
-                            }
+                            if (active) setColumns((prev) => prev.filter((x) => x !== c.name));
+                            else setColumns((prev) => [...prev, c.name]);
                           }}
                           className="rounded-full px-3 py-1.5 text-xs font-medium border transition-colors"
                           style={{
@@ -1041,76 +1066,124 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   </div>
                 </div>
 
-                {/* Excluir filas por condiciones */}
-                <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                {/* Excluir filas por valores en columna */}
+                <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
                   <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                    Solo se incluirán las filas que cumplan las condiciones. Añadí condiciones para filtrar y excluir filas que no las cumplan.
+                    Elegí una columna, cargá los valores que tiene la tabla y marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado.
                   </p>
-                  <div className="space-y-2">
-                    {conditions.map((cond, idx) => (
-                      <div key={idx} className="flex flex-wrap gap-2 items-center">
-                        <select
-                          className="rounded-lg border px-2 py-1.5 text-sm min-w-[100px]"
-                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                          value={cond.column}
-                          onChange={(e) => setConditions((prev) => { const n = [...prev]; n[idx] = { ...cond, column: e.target.value }; return n; })}
-                        >
-                          {(selectedTableInfo?.columns ?? []).map((col) => (
-                            <option key={col.name} value={col.name}>{col.name}</option>
-                          ))}
-                        </select>
-                        <select
-                          className="rounded-lg border px-2 py-1.5 text-sm min-w-[110px]"
-                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                          value={cond.operator}
-                          onChange={(e) => setConditions((prev) => { const n = [...prev]; n[idx] = { ...cond, operator: e.target.value }; return n; })}
-                        >
-                          <option value="=">=</option>
-                          <option value="!=">≠</option>
-                          <option value=">">&gt;</option>
-                          <option value=">=">≥</option>
-                          <option value="<">&lt;</option>
-                          <option value="<=">≤</option>
-                          <option value="contains">contiene</option>
-                          <option value="startsWith">empieza con</option>
-                          <option value="endsWith">termina con</option>
-                          <option value="in">en lista</option>
-                          <option value="not in">no en lista</option>
-                          <option value="is null">es nulo</option>
-                          <option value="is not null">no es nulo</option>
-                        </select>
-                        {cond.operator !== "is null" && cond.operator !== "is not null" && (
-                          <input
-                            type="text"
-                            className="rounded-lg border px-2 py-1.5 text-sm flex-1 min-w-[100px]"
-                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            placeholder="Valor"
-                            value={cond.value ?? ""}
-                            onChange={(e) => setConditions((prev) => { const n = [...prev]; n[idx] = { ...cond, value: e.target.value || undefined }; return n; })}
-                          />
-                        )}
-                        <button
-                          type="button"
-                          className="rounded p-1.5 text-red-500 hover:bg-red-50"
-                          aria-label="Quitar condición"
-                          onClick={() => setConditions((prev) => prev.filter((_, i) => i !== idx))}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</span>
+                    <select
+                      className="rounded-lg border px-3 py-2 text-sm min-w-[140px]"
+                      style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                      value={distinctColumn ?? ""}
+                      onChange={(e) => {
+                        const col = e.target.value || null;
+                        setDistinctColumn(col);
+                        setDistinctValuesList([]);
+                        setDistinctSearch("");
+                      }}
+                    >
+                      <option value="">Elegir columna</option>
+                      {(selectedTableInfo?.columns ?? []).map((col) => (
+                        <option key={col.name} value={col.name}>{col.name}</option>
+                      ))}
+                    </select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg"
+                      style={{ borderColor: "var(--platform-border)" }}
+                      disabled={!distinctColumn || !connectionId || loadingDistinct}
+                      onClick={async () => {
+                        if (!distinctColumn || !connectionId || !selectedTable) return;
+                        setLoadingDistinct(true);
+                        setDistinctValuesList([]);
+                        try {
+                          const res = await fetch("/api/connection/distinct-values", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              connectionId,
+                              table: selectedTable,
+                              column: distinctColumn,
+                            }),
+                          });
+                          const data = await res.json();
+                          if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
+                          else toast.error(data?.error || "No se pudieron cargar los valores");
+                        } catch (e: any) {
+                          toast.error(e?.message || "Error al cargar");
+                        } finally {
+                          setLoadingDistinct(false);
+                        }
+                      }}
+                    >
+                      {loadingDistinct ? "Cargando…" : "Cargar valores"}
+                    </Button>
                   </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="rounded-lg"
-                    style={{ borderColor: "var(--platform-border)" }}
-                    onClick={() => setConditions((prev) => [...prev, { column: (selectedTableInfo?.columns ?? [])[0]?.name ?? "", operator: "=", value: "" }])}
-                  >
-                    + Añadir condición
-                  </Button>
+                  {distinctValuesList.length > 0 && distinctColumn && (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="Buscar valor…"
+                        value={distinctSearch}
+                        onChange={(e) => setDistinctSearch(e.target.value)}
+                        className="w-full rounded-lg border px-3 py-2 text-sm"
+                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                      />
+                      <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
+                        {distinctValuesList
+                          .filter((v) => !distinctSearch.trim() || String(v).toLowerCase().includes(distinctSearch.trim().toLowerCase()))
+                          .map((val) => {
+                            const current = excludedValues.find((e) => e.column === distinctColumn);
+                            const excluded = (current?.excluded ?? []).includes(String(val));
+                            return (
+                              <label
+                                key={String(val)}
+                                className="flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer hover:bg-[var(--platform-surface-hover)] text-sm"
+                                style={{ color: "var(--platform-fg)" }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={excluded}
+                                  onChange={() => {
+                                    setExcludedValues((prev) => {
+                                      const entry = prev.find((e) => e.column === distinctColumn);
+                                      const nextExcluded = entry ? [...entry.excluded] : [];
+                                      const s = String(val);
+                                      if (nextExcluded.includes(s)) {
+                                        const filtered = nextExcluded.filter((x) => x !== s);
+                                        if (filtered.length === 0) return prev.filter((e) => e.column !== distinctColumn);
+                                        return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: filtered } : e);
+                                      }
+                                      nextExcluded.push(s);
+                                      if (!entry) return [...prev, { column: distinctColumn, excluded: nextExcluded }];
+                                      return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: nextExcluded } : e);
+                                    });
+                                  }}
+                                />
+                                <span className="truncate">{String(val)}</span>
+                              </label>
+                            );
+                          })}
+                      </div>
+                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                        {excludedValues.find((e) => e.column === distinctColumn)?.excluded.length ?? 0} valor(es) marcados para excluir en esta columna.
+                      </p>
+                    </>
+                  )}
+                  {excludedValues.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {excludedValues.map(({ column, excluded }) => (
+                        <span key={column} className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
+                          {column}: {excluded.length} excluidos
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             ) : null}
@@ -1129,6 +1202,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 className="rounded-xl"
                 style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
                 onClick={() => setStep("transformacion")}
+                disabled={!canGoNextFiltros}
               >
                 Siguiente: Transformación <ChevronRight className="ml-2 h-4 w-4" />
               </Button>
