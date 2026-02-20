@@ -816,6 +816,10 @@ export function ETLEditor({
   const [filterMetaError, setFilterMetaError] = useState<string | null>(null);
   /** Qualified table name (ej. PUBLIC.VENTAS) para el que estamos cargando columnas (Firebird bajo demanda). */
   const [loadingColumnsFor, setLoadingColumnsFor] = useState<string | null>(null);
+  /** Buscador de tablas en el panel de conexión seleccionada */
+  const [connectionPanelTableSearch, setConnectionPanelTableSearch] = useState("");
+  /** Buscador de tablas en el panel de filtro / JOIN (select de tabla) */
+  const [panelTableSelectSearch, setPanelTableSelectSearch] = useState("");
 
   useEffect(() => {
     let abort = false;
@@ -851,6 +855,11 @@ export function ETLEditor({
       abort = true;
     };
   }, [selected?.id, selected?.type, selected?.connectionId]);
+
+  useEffect(() => {
+    setConnectionPanelTableSearch("");
+    setPanelTableSelectSearch("");
+  }, [selected?.id, selected?.type]);
 
   // Cache metadata by connection widget id to reuse in filters, with TTL via localStorage
   type DbMetadata = NonNullable<typeof connMeta>;
@@ -2733,8 +2742,17 @@ export function ETLEditor({
                           <div className="font-medium text-sm text-gray-700 mb-1">
                             Tablas ({connMeta.tables.length})
                           </div>
+                          <input
+                            type="text"
+                            placeholder="Buscar tabla…"
+                            value={connectionPanelTableSearch}
+                            onChange={(e) => setConnectionPanelTableSearch(e.target.value)}
+                            className="w-full rounded-md border px-2 py-1.5 text-sm mb-2 bg-white text-gray-800 border-gray-300"
+                          />
                           <div className="max-h-64 overflow-auto rounded-xl border divide-y">
-                            {connMeta.tables.map((t, idx) => {
+                            {connMeta.tables
+                              .filter((t) => !connectionPanelTableSearch.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(connectionPanelTableSearch.trim().toLowerCase()))
+                              .map((t, idx) => {
                               const qualified = `${t.schema}.${t.name}`;
                               const loadingCols = loadingColumnsFor === qualified;
                               return (
@@ -3150,6 +3168,15 @@ export function ETLEditor({
                           )}
                           <div>
                             <Label>Tabla</Label>
+                            {(availableTables?.length ?? 0) > 0 && (
+                              <input
+                                type="text"
+                                placeholder="Buscar tabla…"
+                                value={panelTableSelectSearch}
+                                onChange={(e) => setPanelTableSelectSearch(e.target.value)}
+                                className="w-full rounded-xl border px-3 py-2 text-sm mb-2 bg-white text-gray-800 border-gray-300"
+                              />
+                            )}
                             <select
                               className="w-full rounded-xl border px-3 py-2 text-sm bg-white"
                               value={selected.filter?.table || ""}
@@ -3165,7 +3192,9 @@ export function ETLEditor({
                               disabled={!canConfigure}
                             >
                               <option value="">Selecciona tabla…</option>
-                              {(availableTables || []).map((t) => (
+                              {(availableTables || [])
+                                .filter((t: { schema: string; name: string }) => !panelTableSelectSearch.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(panelTableSelectSearch.trim().toLowerCase()))
+                                .map((t) => (
                                 <option
                                   key={`${t.schema}.${t.name}`}
                                   value={`${t.schema}.${t.name}`}
@@ -5533,6 +5562,15 @@ export function ETLEditor({
                         {/* Primary table */}
                         <div className="space-y-2">
                           <Label>Tabla Principal</Label>
+                          {availableTablesForJoin.length > 0 && (
+                            <input
+                              type="text"
+                              placeholder="Buscar tabla…"
+                              value={panelTableSelectSearch}
+                              onChange={(e) => setPanelTableSelectSearch(e.target.value)}
+                              className="w-full rounded-xl border px-3 py-2 text-sm bg-white text-gray-800 border-gray-300"
+                            />
+                          )}
                           <select
                             className="w-full rounded-xl border px-3 py-2 text-sm bg-white"
                             value={
@@ -5569,7 +5607,9 @@ export function ETLEditor({
                             }}
                           >
                             <option value="">Selecciona tabla…</option>
-                            {availableTablesForJoin.map((t, idx) => (
+                            {availableTablesForJoin
+                              .filter((t) => !panelTableSelectSearch.trim() || t.qualifiedName.toLowerCase().includes(panelTableSelectSearch.trim().toLowerCase()) || (t.connectionName || "").toLowerCase().includes(panelTableSelectSearch.trim().toLowerCase()))
+                              .map((t, idx) => (
                               <option
                                 key={`${t.connectionId}-${t.qualifiedName}-${idx}`}
                                 value={`${t.connectionId}::${t.qualifiedName}`}
@@ -5731,7 +5771,9 @@ export function ETLEditor({
                                         <option value="">
                                           Selecciona tabla…
                                         </option>
-                                        {availableTablesForJoin.map((t, i) => (
+                                        {availableTablesForJoin
+                                          .filter((t) => !panelTableSelectSearch.trim() || t.qualifiedName.toLowerCase().includes(panelTableSelectSearch.trim().toLowerCase()) || (t.connectionName || "").toLowerCase().includes(panelTableSelectSearch.trim().toLowerCase()))
+                                          .map((t, i) => (
                                           <option
                                             key={`${t.connectionId}-${t.qualifiedName}-${i}`}
                                             value={`${t.connectionId}::${t.qualifiedName}`}

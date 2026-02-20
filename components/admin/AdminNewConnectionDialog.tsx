@@ -36,6 +36,7 @@ export default function AdminNewConnectionDialog({
   const [tablesFromMetadata, setTablesFromMetadata] = useState<{ schema: string; name: string }[]>([]);
   const [loadingTables, setLoadingTables] = useState(false);
   const [selectedTableKeys, setSelectedTableKeys] = useState<Set<string>>(new Set());
+  const [tableSearchQuery, setTableSearchQuery] = useState("");
 
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
@@ -55,6 +56,7 @@ export default function AdminNewConnectionDialog({
           setShowTableSelection(false);
           setTablesFromMetadata([]);
           setSelectedTableKeys(new Set());
+          setTableSearchQuery("");
           setConnectionNameCreated("");
         }, 300);
       }
@@ -328,7 +330,14 @@ export default function AdminNewConnectionDialog({
             <p className="text-sm text-muted-foreground">No se encontraron tablas o el tipo de conexión no soporta listado aún.</p>
           ) : (
             <>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2 items-center">
+                <input
+                  type="text"
+                  placeholder="Buscar tabla…"
+                  value={tableSearchQuery}
+                  onChange={(e) => setTableSearchQuery(e.target.value)}
+                  className="flex-1 min-w-[160px] rounded-md border px-3 py-2 text-sm bg-background"
+                />
                 <Button type="button" variant="outline" size="sm" onClick={selectAllTables}>
                   Seleccionar todas
                 </Button>
@@ -337,7 +346,9 @@ export default function AdminNewConnectionDialog({
                 </Button>
               </div>
               <div className="border rounded-md overflow-auto max-h-[320px] p-2 space-y-1">
-                {tablesFromMetadata.map((t) => {
+                {tablesFromMetadata
+                  .filter((t) => !tableSearchQuery.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(tableSearchQuery.trim().toLowerCase()))
+                  .map((t) => {
                   const key = `${t.schema}.${t.name}`;
                   const qualified = `${t.schema}.${t.name}`;
                   return (

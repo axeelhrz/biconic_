@@ -15,6 +15,8 @@ type ConnectionBody = {
   connectionId?: string | number;
   /** Para Firebird: si se envía, solo se devuelven las columnas de esta tabla (ej. PUBLIC.VENTAS). */
   tableName?: string;
+  /** Si true, devuelve todas las tablas de la base (sin filtrar por connection_tables). Para uso en "Descubrir tablas" desde Conexiones. */
+  discoverTables?: boolean;
 };
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -28,7 +30,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    let { type, host, database, user, password, port, ssl, connectionId, tableName: bodyTableName } =
+    let { type, host, database, user, password, port, ssl, connectionId, tableName: bodyTableName, discoverTables } =
       body;
     let connectionTables: string[] | null = null;
     if (connectionId != null) {
@@ -84,9 +86,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         type = "firebird";
       }
       const rawTables = (conn as any)?.connection_tables;
-      connectionTables = Array.isArray(rawTables)
-        ? rawTables.map((t: unknown) => String(t).trim()).filter(Boolean)
-        : null;
+      connectionTables = discoverTables
+        ? null
+        : Array.isArray(rawTables)
+          ? rawTables.map((t: unknown) => String(t).trim()).filter(Boolean)
+          : null;
 
       console.log("[metadata] Loaded connection from DB (no secrets logged)", {
         hasHost: !!host,
@@ -406,7 +410,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         });
       }
 
-      const tables = Array.from(tableMap.values());
+      let tables = Array.from(tableMap.values());
+      if (connectionTables && connectionTables.length > 0) {
+        const allowedSet = new Set(connectionTables.map((t: string) => String(t).trim().toLowerCase()));
+        tables = tables.filter((t: any) => allowedSet.has(`${t.schema}.${t.name}`.toLowerCase()));
+      }
       return { dbVersion, schemas, tables };
       };
 
@@ -525,7 +533,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         });
       }
 
-      const tables = Array.from(tableMap.values());
+      let tables = Array.from(tableMap.values());
+      if (connectionTables && connectionTables.length > 0) {
+        const allowedSet = new Set(connectionTables.map((t: string) => String(t).trim().toLowerCase()));
+        tables = tables.filter((t: any) => allowedSet.has(`${t.schema}.${t.name}`.toLowerCase()));
+      }
       return { dbVersion, schemas, tables };
       };
 

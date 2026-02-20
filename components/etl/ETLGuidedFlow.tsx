@@ -68,6 +68,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [outputMode, setOutputMode] = useState<"overwrite" | "append">("overwrite");
   const [loadingMeta, setLoadingMeta] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState<string | null>(null);
+  const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [running, setRunning] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [runSuccess, setRunSuccess] = useState(false);
@@ -91,6 +92,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [unionAll, setUnionAll] = useState(true);
   const [unionRightTables, setUnionRightTables] = useState<{ schema: string; name: string; columns?: { name: string }[] }[]>([]);
   const [loadingUnionMeta, setLoadingUnionMeta] = useState(false);
+  const [unionTableSearch, setUnionTableSearch] = useState("");
 
   // JOIN (opcional): segunda conexión + tabla + tipo + columnas de enlace
   const [useJoin, setUseJoin] = useState(false);
@@ -102,6 +104,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [joinRightTables, setJoinRightTables] = useState<{ schema: string; name: string; columns?: { name: string }[] }[]>([]);
   const [joinRightColumns, setJoinRightColumns] = useState<string[]>([]);
   const [loadingJoinMeta, setLoadingJoinMeta] = useState(false);
+  const [joinTableSearch, setJoinTableSearch] = useState("");
 
   // Cargar tablas al elegir conexión
   useEffect(() => {
@@ -119,6 +122,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         setTables(data.metadata.tables || []);
         setSelectedTable(null);
         setColumns([]);
+        setTableSearchQuery("");
       })
       .catch(() => {
         if (!cancelled) toast.error("No se pudo cargar la lista de tablas");
@@ -517,26 +521,40 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 </div>
                 <div>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Tabla</Label>
-                  <p className="text-xs mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla que contiene los datos a extraer</p>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>Solo se muestran las tablas configuradas en la conexión. Agregá más desde Conexiones → Tablas para ETL.</p>
                   {loadingMeta ? (
                     <div className="mt-2 flex items-center gap-2 text-sm rounded-xl border px-4 py-3" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
                       <Loader2 className="h-4 w-4 animate-spin" /> Cargando tablas…
                     </div>
                   ) : (
-                    <select
-                      value={selectedTable ?? ""}
-                      onChange={(e) => setSelectedTable(e.target.value || null)}
-                      className="w-full mt-2 rounded-xl border px-4 py-3 text-sm"
-                      style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-                      disabled={!connectionId || tables.length === 0}
-                    >
-                      <option value="">{connectionId && tables.length === 0 ? "No hay tablas" : "Seleccionar tabla…"}</option>
-                      {tables.map((t) => (
-                        <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>
-                          {t.schema}.{t.name}
-                        </option>
-                      ))}
-                    </select>
+                    <>
+                      {tables.length > 0 && (
+                        <input
+                          type="text"
+                          placeholder="Buscar tabla…"
+                          value={tableSearchQuery}
+                          onChange={(e) => setTableSearchQuery(e.target.value)}
+                          className="w-full mt-2 rounded-xl border px-4 py-2.5 text-sm"
+                          style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                        />
+                      )}
+                      <select
+                        value={selectedTable ?? ""}
+                        onChange={(e) => setSelectedTable(e.target.value || null)}
+                        className="w-full mt-2 rounded-xl border px-4 py-3 text-sm"
+                        style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                        disabled={!connectionId || tables.length === 0}
+                      >
+                        <option value="">{connectionId && tables.length === 0 ? "No hay tablas. Configurá tablas en Conexiones." : "Seleccionar tabla…"}</option>
+                        {tables
+                          .filter((t) => !tableSearchQuery.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(tableSearchQuery.trim().toLowerCase()))
+                          .map((t) => (
+                            <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>
+                              {t.schema}.{t.name}
+                            </option>
+                          ))}
+                      </select>
+                    </>
                   )}
                 </div>
                 <div className="flex gap-3 pt-2">
@@ -809,6 +827,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           ))}
                         </select>
                         <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Segunda tabla</Label>
+                        {unionRightTables.length > 0 && (
+                          <input
+                            type="text"
+                            placeholder="Buscar tabla…"
+                            value={unionTableSearch}
+                            onChange={(e) => setUnionTableSearch(e.target.value)}
+                            className="rounded-lg border px-3 py-2 text-sm w-full max-w-[200px]"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                          />
+                        )}
                         <select
                           className="rounded-lg border px-3 py-2 text-sm"
                           style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
@@ -817,9 +845,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           disabled={!unionRightConnectionId || loadingUnionMeta}
                         >
                           <option value="">Elegir tabla</option>
-                          {unionRightTables.map((t) => (
-                            <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</option>
-                          ))}
+                          {unionRightTables
+                            .filter((t) => !unionTableSearch.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(unionTableSearch.trim().toLowerCase()))
+                            .map((t) => (
+                              <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</option>
+                            ))}
                         </select>
                         <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
                           <input type="checkbox" checked={unionAll} onChange={(e) => setUnionAll(e.target.checked)} />
@@ -862,6 +892,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             ))}
                           </select>
                           <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Segunda tabla</Label>
+                          {joinRightTables.length > 0 && (
+                            <input
+                              type="text"
+                              placeholder="Buscar tabla…"
+                              value={joinTableSearch}
+                              onChange={(e) => setJoinTableSearch(e.target.value)}
+                              className="rounded-lg border px-3 py-2 text-sm w-full max-w-[200px]"
+                              style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                            />
+                          )}
                           <select
                             className="rounded-lg border px-3 py-2 text-sm"
                             style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
@@ -870,9 +910,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             disabled={!joinSecondaryConnectionId || loadingJoinMeta}
                           >
                             <option value="">Elegir tabla</option>
-                            {joinRightTables.map((t) => (
-                              <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</option>
-                            ))}
+                            {joinRightTables
+                              .filter((t) => !joinTableSearch.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(joinTableSearch.trim().toLowerCase()))
+                              .map((t) => (
+                                <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</option>
+                              ))}
                           </select>
                           <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Tipo</Label>
                           <select
