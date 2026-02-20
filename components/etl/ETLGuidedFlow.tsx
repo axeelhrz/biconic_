@@ -975,7 +975,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 3. Columnas y filtros (opcional)
               </h3>
               <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                Elegí qué columnas incluir. Si no elegís ninguna, se usan todas.
+                Elegí qué columnas incluir y opcionalmente excluí filas con condiciones.
               </p>
             </div>
             {loadingColumns === selectedTable ? (
@@ -983,40 +983,134 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 <Loader2 className="h-4 w-4 animate-spin" /> Cargando columnas…
               </div>
             ) : (selectedTableInfo?.columns?.length ?? 0) > 0 ? (
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Columnas a incluir</Label>
-                  <span className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
-                    {columns.length === 0 ? "Todas" : `${columns.length} seleccionadas`}
-                  </span>
+              <div className="space-y-5">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Columnas a incluir</Label>
+                    <span className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
+                      {columns.length === 0 ? "Todas" : `${columns.length} seleccionadas`}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg h-7 text-xs"
+                      style={{ borderColor: "var(--platform-border)" }}
+                      onClick={() => setColumns([])}
+                    >
+                      Seleccionar todo
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg h-7 text-xs"
+                      style={{ borderColor: "var(--platform-border)" }}
+                      onClick={() => setColumns((selectedTableInfo?.columns ?? []).map((x) => x.name))}
+                    >
+                      Quitar todo
+                    </Button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(selectedTableInfo?.columns ?? []).map((c) => {
+                      const active = columns.length === 0 || columns.includes(c.name);
+                      return (
+                        <button
+                          key={c.name}
+                          type="button"
+                          onClick={() => {
+                            const allNames = (selectedTableInfo?.columns ?? []).map((x) => x.name);
+                            if (active) {
+                              if (columns.length === 0) setColumns(allNames.filter((n) => n !== c.name));
+                              else setColumns((prev) => prev.filter((x) => x !== c.name));
+                            } else {
+                              setColumns((prev) => (prev.length + 1 === allNames.length ? [] : [...prev, c.name]));
+                            }
+                          }}
+                          className="rounded-full px-3 py-1.5 text-xs font-medium border transition-colors"
+                          style={{
+                            background: active ? "var(--platform-accent-dim)" : "var(--platform-surface-hover)",
+                            borderColor: "var(--platform-border)",
+                            color: active ? "var(--platform-accent)" : "var(--platform-fg-muted)",
+                          }}
+                        >
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {(selectedTableInfo?.columns ?? []).map((c) => {
-                    const active = columns.length === 0 || columns.includes(c.name);
-                    return (
-                      <button
-                        key={c.name}
-                        type="button"
-                        onClick={() => {
-                          const allNames = (selectedTableInfo?.columns ?? []).map((x) => x.name);
-                          if (active) {
-                            if (columns.length === 0) setColumns(allNames.filter((n) => n !== c.name));
-                            else setColumns((prev) => prev.filter((x) => x !== c.name));
-                          } else {
-                            setColumns((prev) => (prev.length + 1 === allNames.length ? [] : [...prev, c.name]));
-                          }
-                        }}
-                        className="rounded-full px-3 py-1.5 text-xs font-medium border transition-colors"
-                        style={{
-                          background: active ? "var(--platform-accent-dim)" : "var(--platform-surface-hover)",
-                          borderColor: "var(--platform-border)",
-                          color: active ? "var(--platform-accent)" : "var(--platform-fg-muted)",
-                        }}
-                      >
-                        {c.name}
-                      </button>
-                    );
-                  })}
+
+                {/* Excluir filas por condiciones */}
+                <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                    Solo se incluirán las filas que cumplan las condiciones. Añadí condiciones para filtrar y excluir filas que no las cumplan.
+                  </p>
+                  <div className="space-y-2">
+                    {conditions.map((cond, idx) => (
+                      <div key={idx} className="flex flex-wrap gap-2 items-center">
+                        <select
+                          className="rounded-lg border px-2 py-1.5 text-sm min-w-[100px]"
+                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                          value={cond.column}
+                          onChange={(e) => setConditions((prev) => { const n = [...prev]; n[idx] = { ...cond, column: e.target.value }; return n; })}
+                        >
+                          {(selectedTableInfo?.columns ?? []).map((col) => (
+                            <option key={col.name} value={col.name}>{col.name}</option>
+                          ))}
+                        </select>
+                        <select
+                          className="rounded-lg border px-2 py-1.5 text-sm min-w-[110px]"
+                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                          value={cond.operator}
+                          onChange={(e) => setConditions((prev) => { const n = [...prev]; n[idx] = { ...cond, operator: e.target.value }; return n; })}
+                        >
+                          <option value="=">=</option>
+                          <option value="!=">≠</option>
+                          <option value=">">&gt;</option>
+                          <option value=">=">≥</option>
+                          <option value="<">&lt;</option>
+                          <option value="<=">≤</option>
+                          <option value="contains">contiene</option>
+                          <option value="startsWith">empieza con</option>
+                          <option value="endsWith">termina con</option>
+                          <option value="in">en lista</option>
+                          <option value="not in">no en lista</option>
+                          <option value="is null">es nulo</option>
+                          <option value="is not null">no es nulo</option>
+                        </select>
+                        {cond.operator !== "is null" && cond.operator !== "is not null" && (
+                          <input
+                            type="text"
+                            className="rounded-lg border px-2 py-1.5 text-sm flex-1 min-w-[100px]"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                            placeholder="Valor"
+                            value={cond.value ?? ""}
+                            onChange={(e) => setConditions((prev) => { const n = [...prev]; n[idx] = { ...cond, value: e.target.value || undefined }; return n; })}
+                          />
+                        )}
+                        <button
+                          type="button"
+                          className="rounded p-1.5 text-red-500 hover:bg-red-50"
+                          aria-label="Quitar condición"
+                          onClick={() => setConditions((prev) => prev.filter((_, i) => i !== idx))}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="rounded-lg"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    onClick={() => setConditions((prev) => [...prev, { column: (selectedTableInfo?.columns ?? [])[0]?.name ?? "", operator: "=", value: "" }])}
+                  >
+                    + Añadir condición
+                  </Button>
                 </div>
               </div>
             ) : null}
