@@ -146,7 +146,7 @@ export async function POST(req: NextRequest) {
         ? tableQualified.trim().split(".", 2).map((s) => safeIdentFirebird(s.trim())).join(".")
         : safeIdentFirebird(tableQualified.trim());
       const col = safeIdentFirebird(columnName.trim());
-      const sql = `SELECT FIRST ${MAX_VALUES} DISTINCT ${col} AS value FROM ${tablePart} WHERE ${col} IS NOT NULL ORDER BY ${col}`;
+      const sql = `SELECT FIRST ${MAX_VALUES} DISTINCT ${col} AS val FROM ${tablePart} WHERE ${col} IS NOT NULL ORDER BY ${col}`;
       return await new Promise<NextResponse>((resolve) => {
         const opts = {
           host: (conn as any).db_host || "localhost",
@@ -168,7 +168,7 @@ export async function POST(req: NextRequest) {
               return;
             }
             const values = (rows || []).map((r: any) => {
-              const v = r?.VALUE ?? r?.value;
+              const v = r?.VAL ?? r?.val;
               return v != null ? String(v) : "";
             });
             resolve(NextResponse.json({ ok: true, values }));
