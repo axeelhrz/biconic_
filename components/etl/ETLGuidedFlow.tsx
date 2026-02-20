@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
+import { useState, useEffect, useCallback, useImperativeHandle, forwardRef, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,13 +50,45 @@ export type ETLGuidedFlowHandle = {
   goToEjecutar: () => void;
 };
 
+/** Configuración guardada al ejecutar (layout.guided_config) para cargar al editar */
+export type GuidedConfig = {
+  connectionId?: string | number | null;
+  filter?: { table?: string; columns?: string[]; conditions?: Array<{ column: string; operator: string; value?: string }> };
+  union?: {
+    left?: { connectionId?: string | number; filter?: { table?: string; columns?: string[]; conditions?: unknown[] } };
+    rights?: Array<{ connectionId: string | number; filter?: { table?: string; columns?: string[] } }>;
+    right?: { connectionId: string | number; filter?: { table?: string; columns?: string[] } };
+    unionAll?: boolean;
+  };
+  join?: {
+    primaryConnectionId?: string | number;
+    primaryTable?: string;
+    joins?: Array<{
+      id?: string;
+      secondaryConnectionId?: string | number;
+      secondaryTable?: string;
+      joinType?: "INNER" | "LEFT" | "RIGHT" | "FULL";
+      primaryColumn?: string;
+      secondaryColumn?: string;
+      secondaryColumns?: string[];
+    }>;
+  };
+  clean?: {
+    transforms?: Array<{ column: string; op: string; find?: string; replaceWith?: string; patterns?: string[]; action?: string; replacement?: string }>;
+    dedupe?: { keyColumns?: string[]; keep?: "first" | "last" };
+  };
+  end?: { target?: { table?: string }; mode?: "overwrite" | "append" };
+};
+
 type Props = {
   etlId: string;
   connections: ServerConnection[];
   initialStep?: StepId;
+  /** Si existe, se usa para inicializar todo el estado del flujo (al editar un ETL ya configurado) */
+  initialGuidedConfig?: GuidedConfig | null;
 };
 
-const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGuidedFlowInner({ etlId, connections, initialStep = "conexion" }, ref) {
+const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGuidedFlowInner({ etlId, connections, initialStep = "conexion", initialGuidedConfig }, ref) {
   const router = useRouter();
   const [step, setStep] = useState<StepId>(initialStep);
   const [connectionId, setConnectionId] = useState<string | number | null>(null);
@@ -125,6 +157,80 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     availableColumns?: { name: string }[];
   }>>([]);
 
+  const skipClearSelectedTableRef = useRef(false);
+  const restoringFromConfigRef = useRef(false);
+
+  // Restaurar estado desde configuración guardada (al editar un ETL ya ejecutado)
+  useEffect(() => {
+    const cfg = initialGuidedConfig as GuidedConfig | undefined | null;
+    restoringFromConfigRef.current = true;
+    if (!cfg || typeof cfg !== "object") return;
+    const connId = cfg.connectionId ?? cfg.filter ?? (cfg.union?.left as any)?.connectionId ?? (cfg.join as any)?.primaryConnectionId;
+    if (connId != null) setConnectionId(connId);
+    const filter = cfg.filter;
+    if (filter?.table) {
+      skipClearSelectedTableRef.current = true;
+      setSelectedTable(filter.table);
+    }
+    const cols = filter?.columns;
+    if (Array.isArray(cols) && cols.length > 0) {
+      const primaryCols = cols.filter((c: string) => c.startsWith("primary.")).map((c: string) => c.replace(/^primary\./, ""));
+      setColumns(primaryCols.length > 0 ? primaryCols : cols);
+    }
+    const conds = filter?.conditions ?? [];
+    const notInConds = conds.filter((c: { operator?: string }) => c.operator === "not in");
+    const restConds = conds.filter((c: { operator?: string }) => c.operator !== "not in");
+    if (restConds.length > 0) setConditions(restConds);
+    if (notInConds.length > 0) setExcludedValues(notInConds.map((c: { column: string; value?: string }) => ({ column: c.column, excluded: (c.value ?? "").split(",").filter(Boolean) })));
+    const end = cfg.end;
+    if (end?.target?.table) setOutputTableName(end.target.table);
+    if (end?.mode) setOutputMode(end.mode);
+    const union = cfg.union;
+    if (union) {
+      setUseUnion(true);
+      setUnionAll(union.unionAll !== false);
+      const rights = union.rights ?? (union.right ? [union.right] : []);
+      setUnionRightItems(rights.map((r: { connectionId: string | number; filter?: { table?: string; columns?: string[] } }) => ({
+        connectionId: r.connectionId,
+        table: r.filter?.table ?? "",
+        columns: r.filter?.columns ?? [],
+      })));
+    }
+    const join = cfg.join;
+    if (join?.joins?.length) {
+      setUseJoin(true);
+      setJoinItems(join.joins.map((j: any, i: number) => ({
+        id: j.id ?? `join_${i}_${Date.now()}`,
+        connectionId: j.secondaryConnectionId,
+        table: j.secondaryTable ?? "",
+        joinType: (j.joinType ?? "INNER") as "INNER" | "LEFT" | "RIGHT" | "FULL",
+        leftColumn: j.primaryColumn ?? "",
+        rightColumn: j.secondaryColumn ?? "",
+        rightColumns: j.secondaryColumns ?? [],
+      })));
+    }
+    const clean = cfg.clean;
+    if (clean) {
+      const transforms = clean.transforms ?? [];
+      const nullNorms = transforms.filter((t: { op?: string }) => t.op === "normalize_nulls");
+      if (nullNorms.length > 0) {
+        const first = nullNorms[0] as any;
+        setNullCleanup({
+          patterns: first.patterns ?? [],
+          action: (first.action === "replace" ? "replace" : "null") as "null" | "replace",
+          replacement: first.replacement,
+          columns: nullNorms.map((t: any) => t.column).filter(Boolean),
+        });
+      }
+      setCleanTransforms(transforms.filter((t: { op?: string }) => t.op && !["normalize_nulls", "replace_value"].includes(t.op)).map((t: any) => ({ column: t.column, op: t.op, find: t.find, replaceWith: t.replaceWith })));
+      setDataFixes(transforms.filter((t: { op?: string }) => t.op === "replace_value").map((t: any) => ({ column: t.column, find: t.find ?? "", replaceWith: t.replaceWith ?? "" })));
+      if (clean.dedupe?.keyColumns?.length) setDedupe({ keyColumns: clean.dedupe.keyColumns, keep: clean.dedupe.keep ?? "first" });
+    }
+    queueMicrotask(() => {
+      restoringFromConfigRef.current = false;
+    });
+  }, [initialGuidedConfig]);
+
   // Cargar tablas al elegir conexión
   useEffect(() => {
     if (!connectionId) {
@@ -139,8 +245,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       .then((data) => {
         if (cancelled || !data.ok || !data.metadata?.tables) return;
         setTables(data.metadata.tables || []);
-        setSelectedTable(null);
-        setColumns([]);
+        if (!skipClearSelectedTableRef.current) {
+          setSelectedTable(null);
+          setColumns([]);
+        } else {
+          skipClearSelectedTableRef.current = false;
+        }
         setTableSearchQuery("");
       })
       .catch(() => {
@@ -187,16 +297,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (selectedTable && !hasColumns && !loadingColumns) loadColumnsForTable();
   }, [selectedTable, hasColumns, loadColumnsForTable, loadingColumns]);
 
-  // Reset transformación al cambiar conexión o tabla
+  // Reset transformación al cambiar conexión o tabla (no cuando acabamos de restaurar desde config)
   useEffect(() => {
+    if (restoringFromConfigRef.current) return;
     setNullCleanup(null);
     setCleanTransforms([]);
     setDataFixes([]);
     setDedupe(null);
   }, [connectionId, selectedTable]);
 
-  // Reset excluir por valores al cambiar tabla
+  // Reset excluir por valores al cambiar tabla (no cuando acabamos de restaurar desde config)
   useEffect(() => {
+    if (restoringFromConfigRef.current) return;
     setExcludedValues([]);
     setDistinctColumn(null);
     setDistinctValuesList([]);

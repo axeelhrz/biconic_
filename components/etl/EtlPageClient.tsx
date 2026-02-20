@@ -17,6 +17,8 @@ type Props = {
   initialGrid: number | undefined;
   initialEdges: Array<{ id: string; from: string; to: string }> | undefined;
   initialGuidedStep?: "conexion" | "origen" | "filtros" | "transformacion" | "destino" | "ejecutar";
+  /** Configuración guardada del flujo guiado (al ejecutar) para cargar al editar */
+  initialGuidedConfig?: Record<string, unknown> | null;
 };
 
 export default function EtlPageClient({
@@ -24,6 +26,7 @@ export default function EtlPageClient({
   title,
   connections,
   initialGuidedStep,
+  initialGuidedConfig,
 }: Props) {
   const guidedFlowRef = useRef<ETLGuidedFlowHandle>(null);
 
@@ -80,7 +83,7 @@ export default function EtlPageClient({
           className="flex-1 overflow-hidden relative rounded-2xl border min-h-0 flex flex-col"
           style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}
         >
-          <ETLGuidedFlow ref={guidedFlowRef} etlId={etlId} connections={connections} initialStep={initialGuidedStep} />
+          <ETLGuidedFlow ref={guidedFlowRef} etlId={etlId} connections={connections} initialStep={initialGuidedStep} initialGuidedConfig={initialGuidedConfig} />
         </div>
       </ETLPreviewProvider>
     </div>

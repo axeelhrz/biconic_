@@ -64,6 +64,7 @@ export default async function AdminEtlByIdPage({ params, searchParams }: PagePro
   let initialEdges:
     | Array<{ id: string; from: string; to: string }>
     | undefined = undefined;
+  let initialGuidedConfig: Record<string, unknown> | null = null;
   try {
     if ((etl as any)?.layout) {
       const layout = (etl as any).layout;
@@ -73,6 +74,9 @@ export default async function AdminEtlByIdPage({ params, searchParams }: PagePro
       if (typeof layout?.zoom === "number") initialZoom = layout.zoom;
       if (typeof layout?.grid === "number") initialGrid = layout.grid;
       if (Array.isArray(layout?.edges)) initialEdges = layout.edges as any;
+      if (layout?.guided_config && typeof layout.guided_config === "object") {
+        initialGuidedConfig = layout.guided_config as Record<string, unknown>;
+      }
     }
   } catch {}
 
@@ -96,6 +100,7 @@ export default async function AdminEtlByIdPage({ params, searchParams }: PagePro
       initialGrid={initialGrid}
       initialEdges={initialEdges}
       initialGuidedStep={initialGuidedStep}
+      initialGuidedConfig={initialGuidedConfig}
     />
   );
 }

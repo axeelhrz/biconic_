@@ -1035,6 +1035,26 @@ export async function POST(req: NextRequest) {
        })
        .throwOnError();
 
+     // Guardar configuración del flujo guiado en el ETL para poder cargarla al editar
+     if (body.etlId) {
+       try {
+         const { data: etlRow } = await supabaseAdmin.from("etl").select("layout").eq("id", body.etlId).single();
+         const currentLayout = (etlRow as any)?.layout ?? {};
+         const guidedConfig = {
+           connectionId: body.connectionId ?? (body.union as any)?.left?.connectionId ?? (body.join as any)?.primaryConnectionId,
+           filter: body.filter ?? (body.union as any)?.left?.filter,
+           union: body.union,
+           join: body.join,
+           clean: body.clean,
+           end: body.end,
+         };
+         await supabaseAdmin
+           .from("etl")
+           .update({ layout: { ...currentLayout, guided_config: guidedConfig } } as any)
+           .eq("id", body.etlId);
+       } catch (_) {}
+     }
+
       // 2. Start Background Process (Fire-and-Forget)
       // Note: In Next.js App Router (Node runtime), we can just not await.
       // If deployed on Vercel Serverless, 'waitUntil' from @vercel/functions is recommended 
