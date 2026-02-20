@@ -142,11 +142,18 @@ export async function POST(req: NextRequest) {
         ? decryptConnectionPassword((conn as any).db_password_encrypted)
         : (conn as any).db_password ?? process.env.FLEXXUS_PASSWORD ?? "";
       const Firebird = require("node-firebird");
-      const tablePart = tableQualified.trim().includes(".")
-        ? tableQualified.trim().split(".", 2).map((s) => safeIdentFirebird(s.trim())).join(".")
-        : safeIdentFirebird(tableQualified.trim());
-      const col = safeIdentFirebird(columnName.trim());
-      const sql = `SELECT FIRST ${MAX_VALUES} DISTINCT ${col} AS val FROM ${tablePart} WHERE ${col} IS NOT NULL ORDER BY ${col}`;
+      // Firebird: identificadores sin comillas en mayúsculas evitan "Token unknown" con el punto
+      const firebirdIdent = (s: string) => /^[A-Z0-9_]+$/i.test(s.trim()) ? s.trim().toUpperCase() : safeIdentFirebird(s.trim());
+      const tableParts = tableQualified.trim().includes(".")
+        ? tableQualified.trim().split(".", 2).map((s) => s.trim())
+        : [tableQualified.trim()];
+      const tablePart = tableParts.length > 1
+        ? `${firebirdIdent(tableParts[0])}.${firebirdIdent(tableParts[1])}`
+        : firebirdIdent(tableParts[0]);
+      const colPart = columnName.trim().includes(".")
+        ? firebirdIdent(columnName.trim().split(".").pop()!)
+        : firebirdIdent(columnName.trim());
+      const sql = `SELECT FIRST ${MAX_VALUES} DISTINCT ${colPart} AS val FROM ${tablePart} WHERE ${colPart} IS NOT NULL ORDER BY ${colPart}`;
       return await new Promise<NextResponse>((resolve) => {
         const opts = {
           host: (conn as any).db_host || "localhost",
