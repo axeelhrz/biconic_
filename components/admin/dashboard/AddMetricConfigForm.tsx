@@ -1,4 +1,4 @@
-\"use client\";
+"use client";
 
 import { useState } from "react";
 import { ChevronLeft, Trash2, BookmarkPlus } from "lucide-react";
