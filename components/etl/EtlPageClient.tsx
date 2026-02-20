@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Save, Undo2, Redo2, Settings, Users, Play } from "lucide-react";
+import { Save, Undo2, Redo2, Settings, Users, Play, Loader2 } from "lucide-react";
 import EtlTitleWithEdit from "@/components/etl/EtlTitleWithEdit";
 import ETLGuidedFlow, { type ETLGuidedFlowHandle } from "@/components/etl/ETLGuidedFlow";
 import { ETLPreviewProvider } from "@/components/etl/ETLPreviewContext";
@@ -29,6 +29,17 @@ export default function EtlPageClient({
   initialGuidedConfig,
 }: Props) {
   const guidedFlowRef = useRef<ETLGuidedFlowHandle>(null);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!guidedFlowRef.current?.saveGuidedConfig) return;
+    setSaving(true);
+    try {
+      await guidedFlowRef.current.saveGuidedConfig();
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="flex-1 w-full flex flex-col gap-4 p-6 box-border h-[calc(100vh-80px)]">
@@ -41,8 +52,8 @@ export default function EtlPageClient({
           <div className="flex items-center gap-3" style={{ color: "var(--platform-fg-muted)" }}>
             <span className="text-xs font-medium uppercase tracking-wider">Admin</span>
             <div className="flex items-center gap-1" role="toolbar" aria-label="Acciones del ETL">
-                <button type="button" className="p-2 rounded-lg hover:bg-[var(--platform-surface-hover)] transition-colors" title="Guardar" aria-label="Guardar">
-                  <Save className="h-4 w-4 opacity-70" style={{ color: "var(--platform-fg-muted)" }} />
+                <button type="button" className="p-2 rounded-lg hover:bg-[var(--platform-surface-hover)] transition-colors disabled:opacity-50" title="Guardar configuración" aria-label="Guardar configuración" onClick={handleSave} disabled={saving}>
+                  {saving ? <Loader2 className="h-4 w-4 opacity-70 animate-spin" style={{ color: "var(--platform-fg-muted)" }} /> : <Save className="h-4 w-4 opacity-70" style={{ color: "var(--platform-fg-muted)" }} />}
                 </button>
                 <button type="button" className="p-2 rounded-lg hover:bg-[var(--platform-surface-hover)] transition-colors" title="Deshacer" aria-label="Deshacer">
                   <Undo2 className="h-4 w-4 opacity-70" style={{ color: "var(--platform-fg-muted)" }} />

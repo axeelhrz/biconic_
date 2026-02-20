@@ -48,6 +48,10 @@ async function fetchMetadata(connectionId: string | number, tableName?: string):
 
 export type ETLGuidedFlowHandle = {
   goToEjecutar: () => void;
+  /** Devuelve la configuración actual del flujo (mismo formato que se envía al ejecutar) */
+  getGuidedConfig: () => Record<string, unknown> | null;
+  /** Guarda la configuración actual en el ETL (layout.guided_config) */
+  saveGuidedConfig: () => Promise<boolean>;
 };
 
 /** Configuración guardada al ejecutar (layout.guided_config) para cargar al editar */
@@ -315,6 +319,45 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     setDistinctSearch("");
   }, [connectionId, selectedTable]);
 
+  // Cargar availableColumns para ítems de UNION/JOIN restaurados (al editar)
+  useEffect(() => {
+    const loadUnionItemColumns = async (item: { connectionId: string | number; table: string; columns: string[]; availableColumns?: { name: string }[] }, index: number) => {
+      if (item.availableColumns?.length) return;
+      try {
+        const res = await fetchMetadata(item.connectionId, item.table);
+        const data = await res.json();
+        const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
+        setUnionRightItems((prev) =>
+          prev.map((it, i) => (i === index ? { ...it, availableColumns: colNames.map((n: string) => ({ name: n })) } : it))
+        );
+      } catch {
+        // ignore
+      }
+    };
+    unionRightItems.forEach((item, i) => {
+      if (item.table && (!item.availableColumns || item.availableColumns.length === 0)) loadUnionItemColumns(item, i);
+    });
+  }, [unionRightItems]);
+
+  useEffect(() => {
+    const loadJoinItemColumns = async (item: { id: string; connectionId: string | number; table: string; rightColumns: string[]; availableColumns?: { name: string }[] }, index: number) => {
+      if (item.availableColumns?.length) return;
+      try {
+        const res = await fetchMetadata(item.connectionId, item.table);
+        const data = await res.json();
+        const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
+        setJoinItems((prev) =>
+          prev.map((it, i) => (i === index ? { ...it, availableColumns: colNames.map((n: string) => ({ name: n })) } : it))
+        );
+      } catch {
+        // ignore
+      }
+    };
+    joinItems.forEach((item, i) => {
+      if (item.table && (!item.availableColumns || item.availableColumns.length === 0)) loadJoinItemColumns(item, i);
+    });
+  }, [joinItems]);
+
   // Cargar tablas para UNION derecha
   useEffect(() => {
     if (!useUnion || !unionRightConnectionId) {
@@ -412,90 +455,102 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return [...conditions, ...fromExcluded];
   }, [conditions, excludedValues]);
 
-  const handleRun = async () => {
-    if (!canRun || !connectionId || !selectedTable) return;
-    setRunning(true);
-    const cleanConfig = buildCleanConfig();
+  /** Construye el objeto guided_config (connectionId, filter, union, join, clean, end) para guardar o ejecutar */
+  const buildGuidedConfigBody = useCallback((): Record<string, unknown> | null => {
+    if (!connectionId || !selectedTable) return null;
     const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
     const filterConditions = allFilterConditions();
-
-    try {
-      let body: Record<string, unknown> = {
-        etlId,
-        end: {
-          target: { type: "supabase", table: outputTableName.trim() },
-          mode: outputMode,
-        },
+    const cleanConfig = buildCleanConfig();
+    let body: Record<string, unknown> = {
+      connectionId,
+      filter: {
+        table: selectedTable,
+        columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
+        conditions: filterConditions.length > 0 ? filterConditions : [],
+      },
+      end: {
+        target: { type: "supabase", table: outputTableName.trim() },
+        mode: outputMode,
+      },
+    };
+    if (useUnion && unionRightItems.length > 0) {
+      body.union = {
+        left: { connectionId, filter: { table: selectedTable, columns: effectiveColumns.length > 0 ? effectiveColumns : undefined, conditions: filterConditions } },
+        rights: unionRightItems.map((item) => ({
+          connectionId: item.connectionId,
+          filter: { table: item.table, columns: item.columns.length > 0 ? item.columns : undefined, conditions: [] },
+        })),
+        unionAll,
       };
-
-      if (useUnion && unionRightItems.length > 0) {
-        body.union = {
-          left: {
-            connectionId,
-            filter: {
-              table: selectedTable,
-              columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
-              conditions: filterConditions.length > 0 ? filterConditions : [],
-            },
-          },
-          rights: unionRightItems.map((item) => ({
-            connectionId: item.connectionId,
-            filter: {
-              table: item.table,
-              columns: item.columns.length > 0 ? item.columns : undefined,
-              conditions: [],
-            },
-          })),
-          unionAll,
-        };
-      } else if (useJoin) {
-        const effectiveJoinItems = joinItems.length > 0
-          ? joinItems
-          : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
-            ? [{ id: "join_0", connectionId: joinSecondaryConnectionId, table: joinSecondaryTable, joinType, leftColumn: joinLeftColumn, rightColumn: joinRightColumn, rightColumns: joinRightColumns }]
-            : [];
-        if (effectiveJoinItems.length > 0) {
-          body.connectionId = connectionId;
-          body.filter = {
-            table: selectedTable,
-            columns: [
-              ...effectiveColumns.map((c) => `primary.${c}`),
-              ...effectiveJoinItems.flatMap((j, i) => (j.rightColumns || []).map((c) => `join_${i}.${c}`)),
-            ],
-            conditions: filterConditions.length > 0 ? filterConditions : [],
-          };
-          body.join = {
-            primaryConnectionId: connectionId,
-            primaryTable: selectedTable,
-            joins: effectiveJoinItems.map((j, i) => ({
-              id: `join_${i}`,
-              secondaryConnectionId: j.connectionId,
-              secondaryTable: j.table,
-              joinType: j.joinType,
-              primaryColumn: j.leftColumn,
-              secondaryColumn: j.rightColumn,
-              secondaryColumns: j.rightColumns?.length ? j.rightColumns : undefined,
-            })),
-          };
-        } else {
-          body.connectionId = connectionId;
-          body.filter = {
-            table: selectedTable,
-            columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
-            conditions: filterConditions.length > 0 ? filterConditions : [],
-          };
-        }
-      } else {
+    } else if (useJoin) {
+      const effectiveJoinItems = joinItems.length > 0
+        ? joinItems
+        : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
+          ? [{ id: "join_0", connectionId: joinSecondaryConnectionId, table: joinSecondaryTable, joinType, leftColumn: joinLeftColumn, rightColumn: joinRightColumn, rightColumns: joinRightColumns }]
+          : [];
+      if (effectiveJoinItems.length > 0) {
         body.connectionId = connectionId;
         body.filter = {
           table: selectedTable,
-          columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
+          columns: [
+            ...effectiveColumns.map((c) => `primary.${c}`),
+            ...effectiveJoinItems.flatMap((j: { rightColumns?: string[] }, i: number) => (j.rightColumns || []).map((c) => `join_${i}.${c}`)),
+          ],
           conditions: filterConditions.length > 0 ? filterConditions : [],
         };
+        body.join = {
+          primaryConnectionId: connectionId,
+          primaryTable: selectedTable,
+          joins: effectiveJoinItems.map((j: { connectionId: string | number; table: string; joinType: string; leftColumn: string; rightColumn: string; rightColumns?: string[] }, i: number) => ({
+            id: `join_${i}`,
+            secondaryConnectionId: j.connectionId,
+            secondaryTable: j.table,
+            joinType: j.joinType,
+            primaryColumn: j.leftColumn,
+            secondaryColumn: j.rightColumn,
+            secondaryColumns: j.rightColumns?.length ? j.rightColumns : undefined,
+          })),
+        };
+      } else {
+        body.filter = { table: selectedTable, columns: effectiveColumns.length > 0 ? effectiveColumns : undefined, conditions: filterConditions };
       }
+    } else {
+      body.filter = { table: selectedTable, columns: effectiveColumns.length > 0 ? effectiveColumns : undefined, conditions: filterConditions };
+    }
+    if (cleanConfig) body.clean = cleanConfig;
+    return body;
+  }, [
+    connectionId,
+    selectedTable,
+    columns,
+    selectedTableInfo?.columns,
+    allFilterConditions,
+    outputTableName,
+    outputMode,
+    useUnion,
+    unionRightItems,
+    unionAll,
+    useJoin,
+    joinItems,
+    joinSecondaryConnectionId,
+    joinSecondaryTable,
+    joinLeftColumn,
+    joinRightColumn,
+    joinRightColumns,
+    joinType,
+    buildCleanConfig,
+  ]);
 
-      if (cleanConfig) body.clean = cleanConfig;
-
+  const handleRun = async () => {
+    if (!canRun || !connectionId || !selectedTable) return;
+    setRunning(true);
+    const guidedBody = buildGuidedConfigBody();
+    if (!guidedBody) {
+      setRunning(false);
+      return;
+    }
+    const body = { etlId, ...guidedBody };
+    try {
       const res = await fetch("/api/etl/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -519,9 +574,50 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const connectionName =
     connections.find((c) => String(c.id) === String(connectionId))?.title ?? "";
 
-  useImperativeHandle(ref, () => ({
-    goToEjecutar: () => setStep("ejecutar"),
-  }), []);
+  const saveGuidedConfigToServer = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
+    const guidedConfig = buildGuidedConfigBody();
+    if (!guidedConfig) {
+      if (!options?.silent) toast.error("Completá al menos conexión y tabla para guardar.");
+      return false;
+    }
+    try {
+      const res = await fetch("/api/etl/save-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ etlId, guidedConfig }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        toast.error(data?.error || "Error al guardar");
+        return false;
+      }
+      if (!options?.silent) toast.success("Configuración guardada.");
+      return true;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Error al guardar";
+      toast.error(msg);
+      return false;
+    }
+  }, [etlId, buildGuidedConfigBody]);
+
+  /** Avanza al paso siguiente y guarda la configuración actual en el ETL (sin toast) */
+  const goToStepAndSave = useCallback(
+    (nextStep: StepId) => {
+      saveGuidedConfigToServer({ silent: true });
+      setStep(nextStep);
+    },
+    [saveGuidedConfigToServer]
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      goToEjecutar: () => setStep("ejecutar"),
+      getGuidedConfig: buildGuidedConfigBody,
+      saveGuidedConfig: () => saveGuidedConfigToServer(),
+    }),
+    [buildGuidedConfigBody, saveGuidedConfigToServer]
+  );
 
   const progressPct = ((stepIndex + 1) / STEPS.length) * 100;
   const canGoNextConexion = !!connectionId;
@@ -548,12 +644,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             const Icon = s.icon;
             const isActive = s.id === step;
             const isPast = stepIndex > i;
-            const canJump = isPast || isActive;
+            const canJump = isPast || isActive || !!initialGuidedConfig;
             return (
               <button
                 key={s.id}
                 type="button"
-                onClick={() => !runSuccess && canJump && setStep(s.id)}
+                onClick={() => (!runSuccess && canJump) && setStep(s.id)}
                 disabled={runSuccess || (!isPast && !isActive)}
                 className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{
@@ -623,7 +719,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     type="button"
                     className="rounded-xl"
                     style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                    onClick={() => setStep("origen")}
+                    onClick={() => goToStepAndSave("origen")}
                     disabled={!canGoNextConexion}
                   >
                     Siguiente: Origen <ChevronRight className="ml-2 h-4 w-4" />
@@ -727,7 +823,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     type="button"
                     className="rounded-xl"
                     style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                    onClick={() => setStep("filtros")}
+                    onClick={() => goToStepAndSave("filtros")}
                     disabled={!canGoNextOrigen}
                   >
                     Siguiente: Columnas y filtros <ChevronRight className="ml-2 h-4 w-4" />
@@ -756,7 +852,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <Sparkles className="h-10 w-10 mx-auto mb-3 opacity-50" style={{ color: "var(--platform-fg-muted)" }} />
                     <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Sin columnas para transformar</p>
                     <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>En el paso anterior elegí al menos una columna o dejá todas para poder configurar transformaciones aquí.</p>
-                    <Button type="button" variant="outline" className="rounded-xl mt-4" style={{ borderColor: "var(--platform-border)" }} onClick={() => setStep("filtros")}>
+                    <Button type="button" variant="outline" className="rounded-xl mt-4" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("filtros")}>
                       Ir a Columnas y filtros
                     </Button>
                   </div>
@@ -1236,10 +1332,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               );
             })()}
             <div className="flex gap-2">
-              <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => setStep("filtros")}>
+              <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("filtros")}>
                 Atrás
               </Button>
-              <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={() => setStep("destino")}>
+              <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={() => goToStepAndSave("destino")}>
                 Siguiente: Destino <ChevronRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
@@ -1447,7 +1543,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 variant="outline"
                 className="rounded-xl"
                 style={{ borderColor: "var(--platform-border)" }}
-                onClick={() => setStep("origen")}
+                onClick={() => goToStepAndSave("origen")}
               >
                 Atrás
               </Button>
@@ -1455,7 +1551,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 type="button"
                 className="rounded-xl"
                 style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                onClick={() => setStep("transformacion")}
+                onClick={() => goToStepAndSave("transformacion")}
                 disabled={!canGoNextFiltros}
               >
                 Siguiente: Transformación <ChevronRight className="ml-2 h-4 w-4" />
@@ -1506,14 +1602,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               </select>
             </div>
             <div className="flex gap-3 pt-2">
-              <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => setStep("transformacion")}>
+              <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("transformacion")}>
                 Atrás
               </Button>
               <Button
                 type="button"
                 className="rounded-xl"
                 style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                onClick={() => setStep("ejecutar")}
+                onClick={() => goToStepAndSave("ejecutar")}
                 disabled={!canGoNextDestino}
               >
                 Ir a Ejecutar <ChevronRight className="ml-2 h-4 w-4" />
@@ -1542,7 +1638,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <p className="text-sm mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>
                         {!outputTableName.trim() ? "Indicá un nombre para la tabla de destino." : "El nombre de la tabla solo puede tener letras, números y guión bajo."}
                       </p>
-                      <Button type="button" variant="outline" size="sm" className="rounded-lg mt-2" style={{ borderColor: "var(--platform-border)" }} onClick={() => setStep("destino")}>
+                      <Button type="button" variant="outline" size="sm" className="rounded-lg mt-2" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("destino")}>
                         Ir a Destino
                       </Button>
                     </div>
@@ -1578,7 +1674,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   )}
                 </div>
                 <div className="flex gap-3 pt-2">
-                  <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => setStep("destino")}>
+                  <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("destino")}>
                     Atrás
                   </Button>
                   <Button
