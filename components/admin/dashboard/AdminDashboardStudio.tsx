@@ -27,7 +27,9 @@ import { StudioPageTabs } from "./StudioPageTabs";
 import { StudioEmptyState, STUDIO_INTENTS, type StudioIntent } from "./StudioEmptyState";
 import { MetricBlock, type MetricBlockState } from "./MetricBlock";
 import type { ChartConfig } from "./MetricBlock";
-import { AddMetricConfigForm, type AddMetricFormConfig } from "./AddMetricConfigForm";
+import { AddMetricConfigForm, type AddMetricFormConfig, type SavedMetricForm } from "./AddMetricConfigForm";
+
+type SavedMetric = SavedMetricForm;
 import type { Json } from "@/lib/supabase/database.types";
 
 // Tipos compatibles con el layout guardado en DB (mismo formato que AdminDashboardEditor)
