@@ -1271,20 +1271,44 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
                                   <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setUnionRightItems((prev) => prev.filter((_, i) => i !== idx))}>Quitar</button>
                                 </div>
-                                <div className="flex flex-wrap gap-2 items-center">
-                                  <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas a traer:</span>
-                                  {(item.availableColumns ?? []).map((col) => (
-                                    <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
-                                      <input
-                                        type="checkbox"
-                                        checked={item.columns.includes(col.name)}
-                                        onChange={(e) => {
-                                          setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: e.target.checked ? [...it.columns, col.name] : it.columns.filter((c) => c !== col.name) } : it));
-                                        }}
-                                      />
-                                      {col.name}
-                                    </label>
-                                  ))}
+                                <div className="space-y-2">
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas a traer:</span>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="rounded-lg h-7 text-xs"
+                                      style={{ borderColor: "var(--platform-border)" }}
+                                      onClick={() => setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: (it.availableColumns ?? []).map((c) => c.name) } : it))}
+                                    >
+                                      Seleccionar todas
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="rounded-lg h-7 text-xs"
+                                      style={{ borderColor: "var(--platform-border)" }}
+                                      onClick={() => setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: [] } : it))}
+                                    >
+                                      Deseleccionar todas
+                                    </Button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    {(item.availableColumns ?? []).map((col) => (
+                                      <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                                        <input
+                                          type="checkbox"
+                                          checked={item.columns.includes(col.name)}
+                                          onChange={(e) => {
+                                            setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: e.target.checked ? [...it.columns, col.name] : it.columns.filter((c) => c !== col.name) } : it));
+                                          }}
+                                        />
+                                        {col.name}
+                                      </label>
+                                    ))}
+                                  </div>
                                 </div>
                               </div>
                             ))}
@@ -1426,20 +1450,44 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{item.joinType} · {item.leftColumn} = {item.rightColumn}</span>
                                   <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setJoinItems((prev) => prev.filter((_, i) => i !== idx))}>Quitar</button>
                                 </div>
-                                <div className="flex flex-wrap gap-2 items-center">
-                                  <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas a traer:</span>
-                                  {(item.availableColumns ?? []).map((col) => (
-                                    <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
-                                      <input
-                                        type="checkbox"
-                                        checked={item.rightColumns.includes(col.name)}
-                                        onChange={(e) => {
-                                          setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: e.target.checked ? [...it.rightColumns, col.name] : it.rightColumns.filter((c) => c !== col.name) } : it));
-                                        }}
-                                      />
-                                      {col.name}
-                                    </label>
-                                  ))}
+                                <div className="space-y-2">
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas a traer:</span>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="rounded-lg h-7 text-xs"
+                                      style={{ borderColor: "var(--platform-border)" }}
+                                      onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: (it.availableColumns ?? []).map((c) => c.name) } : it))}
+                                    >
+                                      Seleccionar todas
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="rounded-lg h-7 text-xs"
+                                      style={{ borderColor: "var(--platform-border)" }}
+                                      onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: [] } : it))}
+                                    >
+                                      Deseleccionar todas
+                                    </Button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    {(item.availableColumns ?? []).map((col) => (
+                                      <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                                        <input
+                                          type="checkbox"
+                                          checked={item.rightColumns.includes(col.name)}
+                                          onChange={(e) => {
+                                            setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: e.target.checked ? [...it.rightColumns, col.name] : it.rightColumns.filter((c) => c !== col.name) } : it));
+                                          }}
+                                        />
+                                        {col.name}
+                                      </label>
+                                    ))}
+                                  </div>
                                 </div>
                               </div>
                             ))}
