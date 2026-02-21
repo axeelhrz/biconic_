@@ -116,6 +116,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [running, setRunning] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [runSuccess, setRunSuccess] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
 
   // Transformación (limpieza y calidad) — mismo modelo que el nodo Clean del editor avanzado
   const [nullCleanup, setNullCleanup] = useState<{
@@ -175,9 +176,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     const connId = cfg.connectionId ?? (cfg.union?.left as { connectionId?: string | number })?.connectionId ?? (cfg.join as { primaryConnectionId?: string | number })?.primaryConnectionId;
     if (connId != null && typeof connId !== "object") setConnectionId(connId);
     const filter = cfg.filter;
-    if (filter?.table) {
+    if (filter?.table != null && String(filter.table).trim() !== "") {
       skipClearSelectedTableRef.current = true;
-      setSelectedTable(filter.table);
+      setSelectedTable(String(filter.table).trim());
     }
     const cols = filter?.columns;
     if (Array.isArray(cols) && cols.length > 0) {
@@ -665,12 +666,24 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             type="button"
             className="rounded-xl shrink-0"
             style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-            onClick={() => {
-              // Esperar al siguiente tick para que React haya aplicado el estado (tabla/columnas recién elegidas) antes de armar el payload
-              setTimeout(() => saveGuidedConfigToServer(), 0);
+            disabled={savingConfig}
+            onClick={async () => {
+              setSavingConfig(true);
+              try {
+                await saveGuidedConfigToServer();
+              } finally {
+                setSavingConfig(false);
+              }
             }}
           >
-            Guardar configuración
+            {savingConfig ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                Guardando…
+              </>
+            ) : (
+              "Guardar configuración"
+            )}
           </Button>
         </div>
       ) : (
