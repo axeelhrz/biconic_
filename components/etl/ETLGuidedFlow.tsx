@@ -457,21 +457,22 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return [...conditions, ...fromExcluded];
   }, [conditions, excludedValues]);
 
-  /** Construye el objeto guided_config (connectionId, filter, union, join, clean, end) para guardar o ejecutar */
+  /** Construye el objeto guided_config (connectionId, filter, union, join, clean, end) para guardar o ejecutar. Permite parcial (solo conexión) para que al guardar quede algo persistido. */
   const buildGuidedConfigBody = useCallback((): Record<string, unknown> | null => {
-    if (!connectionId || !selectedTable) return null;
+    if (!connectionId) return null;
     const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
     const filterConditions = allFilterConditions();
     const cleanConfig = buildCleanConfig();
+    const tableName = selectedTable || undefined;
     let body: Record<string, unknown> = {
       connectionId,
       filter: {
-        table: selectedTable,
+        table: tableName,
         columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
         conditions: filterConditions.length > 0 ? filterConditions : [],
       },
       end: {
-        target: { type: "supabase", table: outputTableName.trim() },
+        target: { type: "supabase", table: (outputTableName || "").trim() || undefined },
         mode: outputMode,
       },
     };
@@ -579,7 +580,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const saveGuidedConfigToServer = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
     const guidedConfig = buildGuidedConfigBody();
     if (!guidedConfig) {
-      if (!options?.silent) toast.error("Completá al menos conexión y tabla para guardar.");
+      if (!options?.silent) toast.error("Completá al menos la conexión para guardar.");
       return false;
     }
     try {

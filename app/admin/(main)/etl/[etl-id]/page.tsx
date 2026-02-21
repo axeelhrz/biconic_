@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getConnections } from "@/lib/actions/connections";
 import EtlPageClient from "@/components/etl/EtlPageClient";
 
+export const dynamic = "force-dynamic";
+
 type PageProps = {
   params: Promise<{ [key: string]: string }>;
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;

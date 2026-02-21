@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 
 /**
  * POST /api/etl/save-config
  * Guarda la configuración del flujo guiado en el ETL (layout.guided_config)
  * para que al editar se carguen todos los datos.
+ * Usa service role para el update y así evitar fallos por RLS.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -25,7 +27,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });
     }
 
-    const { data: etlRow, error: fetchError } = await supabase
+    const adminClient = createServiceRoleClient();
+    const { data: etlRow, error: fetchError } = await adminClient
       .from("etl")
       .select("layout")
       .eq("id", etlId)
@@ -41,7 +44,7 @@ export async function POST(req: NextRequest) {
     const currentLayout = (etlRow as { layout?: Record<string, unknown> })?.layout ?? {};
     const updatedLayout = { ...currentLayout, guided_config: guidedConfig };
 
-    const { error: updateError } = await supabase
+    const { error: updateError } = await adminClient
       .from("etl")
       .update({ layout: updatedLayout })
       .eq("id", etlId);
