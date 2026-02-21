@@ -57,7 +57,13 @@ export type ETLGuidedFlowHandle = {
 /** Configuración guardada al ejecutar (layout.guided_config) para cargar al editar */
 export type GuidedConfig = {
   connectionId?: string | number | null;
-  filter?: { table?: string; columns?: string[]; conditions?: Array<{ column: string; operator: string; value?: string }> };
+  filter?: {
+    table?: string;
+    columns?: string[];
+    conditions?: Array<{ column: string; operator: string; value?: string }>;
+    /** Columna usada en "Excluir filas" para cargar valores y marcar excluidos */
+    excludeRowsColumn?: string;
+  };
   union?: {
     left?: { connectionId?: string | number; filter?: { table?: string; columns?: string[]; conditions?: unknown[] } };
     rights?: Array<{ connectionId: string | number; filter?: { table?: string; columns?: string[] } }>;
@@ -167,6 +173,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const skipClearSelectedTableRef = useRef(false);
   const restoringFromConfigRef = useRef(false);
   const tableSelectRef = useRef<HTMLSelectElement>(null);
+  const distinctLoadFromConfigRef = useRef(false);
 
   // Restaurar estado desde configuración guardada (al editar un ETL ya ejecutado)
   useEffect(() => {
@@ -190,6 +197,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     const restConds = conds.filter((c: { operator?: string }) => c.operator !== "not in");
     if (restConds.length > 0) setConditions(restConds);
     if (notInConds.length > 0) setExcludedValues(notInConds.map((c: { column: string; value?: string }) => ({ column: c.column, excluded: (c.value ?? "").split(",").filter(Boolean) })));
+    const excludeRowsCol = (filter as { excludeRowsColumn?: string })?.excludeRowsColumn ?? notInConds[0]?.column;
+    if (excludeRowsCol && typeof excludeRowsCol === "string") setDistinctColumn(excludeRowsCol.trim());
     const end = cfg.end;
     if (end?.target?.table) setOutputTableName(end.target.table);
     if (end?.mode) setOutputMode(end.mode);
@@ -285,6 +294,29 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     );
     if (normalized) setSelectedTable(`${normalized.schema}.${normalized.name}`);
   }, [tables, selectedTable, selectedTableInfo]);
+
+  // Auto-cargar valores de "Excluir filas" cuando se restaura la config (columna + excluidos guardados) para no tener que pulsar "Cargar valores"
+  useEffect(() => {
+    const cfg = initialGuidedConfig as GuidedConfig | undefined | null;
+    if (!cfg?.filter || distinctLoadFromConfigRef.current) return;
+    const f = cfg.filter as { excludeRowsColumn?: string; conditions?: Array<{ operator?: string }> };
+    const hasExclude = f.excludeRowsColumn || (Array.isArray(f.conditions) && f.conditions.some((c) => c.operator === "not in"));
+    if (!hasExclude || !distinctColumn || !connectionId || !selectedTable) return;
+    if (distinctValuesList.length > 0 || loadingDistinct) return;
+    distinctLoadFromConfigRef.current = true;
+    setLoadingDistinct(true);
+    fetch("/api/connection/distinct-values", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionId, table: selectedTable, column: distinctColumn }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
+      })
+      .finally(() => setLoadingDistinct(false));
+  }, [initialGuidedConfig, distinctColumn, connectionId, selectedTable, distinctValuesList.length, loadingDistinct]);
+
   const hasColumns = (selectedTableInfo?.columns?.length ?? 0) > 0;
 
   const loadColumnsForTable = useCallback(() => {
@@ -477,13 +509,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     const filterConditions = allFilterConditions();
     const cleanConfig = buildCleanConfig();
     const tableName = selectedTable || undefined;
+    const filterPayload: Record<string, unknown> = {
+      table: tableName,
+      columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
+      conditions: filterConditions.length > 0 ? filterConditions : [],
+    };
+    if (distinctColumn) filterPayload.excludeRowsColumn = distinctColumn;
     let body: Record<string, unknown> = {
       connectionId,
-      filter: {
-        table: tableName,
-        columns: effectiveColumns.length > 0 ? effectiveColumns : undefined,
-        conditions: filterConditions.length > 0 ? filterConditions : [],
-      },
+      filter: filterPayload,
       end: {
         target: { type: "supabase", table: (outputTableName || "").trim() || undefined },
         mode: outputMode,
@@ -507,6 +541,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (effectiveJoinItems.length > 0) {
         body.connectionId = connectionId;
         body.filter = {
+          ...filterPayload,
           table: selectedTable,
           columns: [
             ...effectiveColumns.map((c) => `primary.${c}`),
@@ -528,10 +563,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           })),
         };
       } else {
-        body.filter = { table: selectedTable, columns: effectiveColumns.length > 0 ? effectiveColumns : undefined, conditions: filterConditions };
+        body.filter = { ...filterPayload, table: selectedTable, columns: effectiveColumns.length > 0 ? effectiveColumns : undefined, conditions: filterConditions };
       }
     } else {
-      body.filter = { table: selectedTable, columns: effectiveColumns.length > 0 ? effectiveColumns : undefined, conditions: filterConditions };
+      body.filter = filterPayload;
     }
     if (cleanConfig) body.clean = cleanConfig;
     return body;
@@ -543,6 +578,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     allFilterConditions,
     outputTableName,
     outputMode,
+    distinctColumn,
     useUnion,
     unionRightItems,
     unionAll,
