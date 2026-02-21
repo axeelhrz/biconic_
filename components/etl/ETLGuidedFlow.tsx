@@ -619,12 +619,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setRunId(data.runId);
       setRunSuccess(true);
       toast.success("ETL iniciado. Los datos se guardarán en segundo plano.");
+      router.push(`/admin/dashboard?create=1&etlId=${etlId}`);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Error al ejecutar");
     } finally {
       setRunning(false);
     }
-  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, etlId]);
+  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, etlId, router]);
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
   const connectionName =
