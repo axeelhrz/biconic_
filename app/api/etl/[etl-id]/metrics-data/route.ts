@@ -165,12 +165,27 @@ export async function GET(
     const resolved = await resolveEtlToTableAndFields(supabase, etlId);
     const etlInfo = { id: etlRow.id, title: (etlRow as any).title, name: (etlRow as any).name };
 
+    // Si no hay datos completados, verificar si hay una ejecución en curso
+    let runInProgress = false;
+    if (!resolved) {
+      const { data: inProgressRun } = await supabase
+        .from("etl_runs_log")
+        .select("id")
+        .eq("etl_id", etlId)
+        .in("status", ["started", "running"])
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      runInProgress = !!inProgressRun;
+    }
+
     if (!resolved) {
       return NextResponse.json({
         ok: true,
         data: {
           etl: etlInfo,
           hasData: false,
+          runInProgress,
           schema: null,
           tableName: null,
           fields: { all: [], numeric: [], string: [], date: [] },
@@ -189,6 +204,7 @@ export async function GET(
       data: {
         etl: etlInfo,
         hasData: true,
+        runInProgress: false,
         schema: resolved.schema,
         tableName: resolved.tableName,
         fields,
