@@ -80,11 +80,14 @@ export default function EtlCard({
   onDeleted,
   basePath = "/etl",
   useAdminDelete = false,
+  /** Si se proporciona, el botón Editar navega a basePath/[id] + este sufijo (ej: "/edit") */
+  editPathSuffix,
 }: {
   etl: Etl;
   onDeleted?: () => void;
   basePath?: string;
   useAdminDelete?: boolean;
+  editPathSuffix?: string;
 }) {
   const router = useRouter();
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -194,7 +197,7 @@ export default function EtlCard({
         <button
           className="flex h-[34px] items-center justify-center rounded-full border px-4 text-sm font-medium hover:opacity-90"
           style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-          onClick={() => router.push(`${basePath}/${etl.id}`)}
+          onClick={() => router.push(`${basePath}/${etl.id}${editPathSuffix ?? ""}`)}
         >
           Editar
         </button>

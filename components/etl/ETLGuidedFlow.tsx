@@ -90,9 +90,11 @@ type Props = {
   initialStep?: StepId;
   /** Si existe, se usa para inicializar todo el estado del flujo (al editar un ETL ya configurado) */
   initialGuidedConfig?: GuidedConfig | null;
+  /** En true, siempre muestra el editor (todas las secciones en una página). Usado en /admin/etl/[id]/edit */
+  forceEditorMode?: boolean;
 };
 
-const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGuidedFlowInner({ etlId, connections, initialStep = "conexion", initialGuidedConfig }, ref) {
+const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGuidedFlowInner({ etlId, connections, initialStep = "conexion", initialGuidedConfig, forceEditorMode }, ref) {
   const router = useRouter();
   const [step, setStep] = useState<StepId>(initialStep);
   const [connectionId, setConnectionId] = useState<string | number | null>(null);
@@ -626,8 +628,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const canGoNextDestino = outputTableName.trim().length > 0 && /^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
   const destinoInvalid = outputTableName.trim().length > 0 && !/^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
 
-  /** Crear ETL: wizard paso a paso. Editar ETL: cuando hay config guardada, mostramos editor (todas las secciones en una página) */
-  const isEditorMode = !!initialGuidedConfig;
+  /** Crear ETL: wizard paso a paso. Editar ETL: /admin/etl/[id]/edit usa forceEditorMode; o cuando hay config guardada */
+  const isEditorMode = !!forceEditorMode || !!initialGuidedConfig;
 
   return (
     <div className="flex flex-col h-full rounded-2xl overflow-hidden" style={{ background: "var(--platform-surface)", border: "1px solid var(--platform-border)" }}>

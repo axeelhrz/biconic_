@@ -19,6 +19,8 @@ type Props = {
   initialGuidedStep?: "conexion" | "origen" | "filtros" | "transformacion" | "destino" | "ejecutar";
   /** Configuración guardada del flujo guiado (al ejecutar) para cargar al editar */
   initialGuidedConfig?: Record<string, unknown> | null;
+  /** En true, siempre muestra el editor (todas las secciones en una página). Usado en /admin/etl/[id]/edit */
+  forceEditorMode?: boolean;
 };
 
 export default function EtlPageClient({
@@ -27,6 +29,7 @@ export default function EtlPageClient({
   connections,
   initialGuidedStep,
   initialGuidedConfig,
+  forceEditorMode,
 }: Props) {
   const guidedFlowRef = useRef<ETLGuidedFlowHandle>(null);
   const [saving, setSaving] = useState(false);
@@ -94,7 +97,7 @@ export default function EtlPageClient({
           className="flex-1 overflow-hidden relative rounded-2xl border min-h-0 flex flex-col"
           style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}
         >
-          <ETLGuidedFlow ref={guidedFlowRef} etlId={etlId} connections={connections} initialStep={initialGuidedStep} initialGuidedConfig={initialGuidedConfig} />
+          <ETLGuidedFlow ref={guidedFlowRef} etlId={etlId} connections={connections} initialStep={initialGuidedStep} initialGuidedConfig={initialGuidedConfig} forceEditorMode={forceEditorMode} />
         </div>
       </ETLPreviewProvider>
     </div>

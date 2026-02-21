@@ -225,6 +225,7 @@ export default function AdminEtlGrid({
           key={etl.id}
           etl={etl}
           basePath="/admin/etl"
+          editPathSuffix="/edit"
           onDeleted={loadEtls}
           useAdminDelete
         />
