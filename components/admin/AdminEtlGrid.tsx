@@ -49,13 +49,27 @@ export default function AdminEtlGrid({
     if (error) throw error;
     const rows = (data as SupabaseEtlRow[] | null) ?? [];
     const ownerIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
+    const clientIds = Array.from(new Set(rows.map((r) => r.client_id).filter(Boolean))) as string[];
     let ownerById: Record<string, string | null> = {};
+    let clientById: Record<string, string | null> = {};
     if (ownerIds.length > 0) {
       const { data: owners } = await supabase
         .from("profiles")
         .select("id, full_name")
         .in("id", ownerIds);
-      ownerById = Object.fromEntries((owners ?? []).map((o: any) => [o.id, o.full_name ?? null]));
+      ownerById = Object.fromEntries((owners ?? []).map((o: { id: string; full_name?: string | null }) => [o.id, o.full_name ?? null]));
+    }
+    if (clientIds.length > 0) {
+      const { data: clientRows } = await supabase
+        .from("clients")
+        .select("id, company_name, individual_full_name")
+        .in("id", clientIds);
+      clientById = Object.fromEntries(
+        (clientRows ?? []).map((c: { id: string; company_name?: string | null; individual_full_name?: string | null }) => [
+          c.id,
+          (c.company_name || c.individual_full_name) ?? null,
+        ])
+      );
     }
     return rows.map((row) => {
       const status: Etl["status"] =
@@ -71,12 +85,13 @@ export default function AdminEtlGrid({
         status,
         description: row.description ?? "",
         views: typeof row.views === "number" ? row.views : 0,
-        lastExecution: (row as any).lastExecution ?? null,
-        nextExecution: (row as any).nextExecution ?? null,
-        createdAt: (row as any).createdAt ?? null,
+        lastExecution: (row as { lastExecution?: string | null }).lastExecution ?? "",
+        nextExecution: (row as { nextExecution?: string | null }).nextExecution ?? "",
+        createdAt: (row as { createdAt?: string | null }).createdAt ?? "",
         clientId: row.client_id ?? "",
         ownerId: row.user_id,
         owner: row.user_id ? { fullName: ownerById[row.user_id] ?? null } : undefined,
+        client: row.client_id ? { name: clientById[row.client_id] ?? null } : undefined,
       } satisfies Etl;
     });
   }, [clientId]);
@@ -94,6 +109,7 @@ export default function AdminEtlGrid({
       if (res.ok && res.data) {
         const rows = (res.data ?? []) as SupabaseEtlRow[];
         const owners: Record<string, string | null> = res.owners ?? {};
+        const clients: Record<string, string | null> = res.clients ?? {};
         const mapped: Etl[] = rows.map((row) => {
           const status: Etl["status"] =
             row.status === "Publicado" || row.status === "Borrador"
@@ -108,12 +124,13 @@ export default function AdminEtlGrid({
             status,
             description: row.description ?? "",
             views: typeof row.views === "number" ? row.views : 0,
-            lastExecution: (row as any).lastExecution ?? null,
-            nextExecution: (row as any).nextExecution ?? null,
-            createdAt: (row as any).createdAt ?? null,
+            lastExecution: (row as { lastExecution?: string | null }).lastExecution ?? "",
+            nextExecution: (row as { nextExecution?: string | null }).nextExecution ?? "",
+            createdAt: (row as { createdAt?: string | null }).createdAt ?? "",
             clientId: row.client_id ?? "",
             ownerId: row.user_id,
             owner: row.user_id ? { fullName: owners[row.user_id] ?? null } : undefined,
+            client: row.client_id ? { name: clients[row.client_id] ?? null } : undefined,
           } satisfies Etl;
         });
         setEtls(mapped);

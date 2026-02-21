@@ -41,7 +41,7 @@ export async function getEtlsAdmin(options?: { clientId?: string | null }) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "No autorizado", data: [], owners: {} };
+  if (!user) return { ok: false, error: "No autorizado", data: [], owners: {}, clients: {} };
 
   const { data: prof } = await supabase
     .from("profiles")
@@ -49,7 +49,7 @@ export async function getEtlsAdmin(options?: { clientId?: string | null }) {
     .eq("id", user.id)
     .single();
   const isAdmin = (prof as any)?.app_role === "APP_ADMIN";
-  if (!isAdmin) return { ok: false, error: "Solo administradores", data: [], owners: {} };
+  if (!isAdmin) return { ok: false, error: "Solo administradores", data: [], owners: {}, clients: {} };
 
   const adminClient = createServiceRoleClient();
   let query = adminClient
@@ -63,20 +63,34 @@ export async function getEtlsAdmin(options?: { clientId?: string | null }) {
 
   if (error) {
     console.error("getEtlsAdmin:", error);
-    return { ok: false, error: error.message, data: [], owners: {} };
+    return { ok: false, error: error.message, data: [], owners: {}, clients: {} };
   }
 
-  const ownerIds = Array.from(new Set((rows ?? []).map((r: any) => r.user_id).filter(Boolean))) as string[];
+  const ownerIds = Array.from(new Set((rows ?? []).map((r: { user_id?: string }) => r.user_id).filter(Boolean))) as string[];
+  const clientIds = Array.from(new Set((rows ?? []).map((r: { client_id?: string | null }) => r.client_id).filter(Boolean))) as string[];
   let owners: Record<string, string | null> = {};
+  let clients: Record<string, string | null> = {};
   if (ownerIds.length > 0) {
     const { data: profiles } = await adminClient
       .from("profiles")
       .select("id, full_name")
       .in("id", ownerIds);
-    owners = Object.fromEntries((profiles ?? []).map((p: any) => [p.id, p.full_name ?? null]));
+    owners = Object.fromEntries((profiles ?? []).map((p: { id: string; full_name?: string | null }) => [p.id, p.full_name ?? null]));
+  }
+  if (clientIds.length > 0) {
+    const { data: clientRows } = await adminClient
+      .from("clients")
+      .select("id, company_name, individual_full_name")
+      .in("id", clientIds);
+    clients = Object.fromEntries(
+      (clientRows ?? []).map((c: { id: string; company_name?: string | null; individual_full_name?: string | null }) => [
+        c.id,
+        (c.company_name || c.individual_full_name) ?? null,
+      ])
+    );
   }
 
-  return { ok: true, data: (rows ?? []) as any[], owners, error: null };
+  return { ok: true, data: (rows ?? []) as unknown[], owners, clients, error: null };
 }
 
 /** Detalle de un ETL para vista previa (solo lectura). Incluye layout.guided_config. */
