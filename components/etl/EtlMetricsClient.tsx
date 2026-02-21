@@ -3,14 +3,15 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw } from "lucide-react";
+import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
-import type { SavedMetricForm, AggregationMetricEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
+import type { SavedMetricForm, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
 
 const AGG_FUNCS = [
   { value: "SUM", label: "Suma" },
@@ -20,6 +21,26 @@ const AGG_FUNCS = [
   { value: "MAX", label: "Máximo" },
   { value: "COUNT(DISTINCT", label: "Conteo único" },
   { value: "FORMULA", label: "Fórmula / ratio" },
+];
+
+const CHART_TYPES: { value: string; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { value: "bar", label: "Barras", icon: BarChart2 },
+  { value: "horizontalBar", label: "Barras horizontales", icon: BarChart2 },
+  { value: "line", label: "Líneas", icon: LineChart },
+  { value: "pie", label: "Circular", icon: PieChart },
+  { value: "doughnut", label: "Dona", icon: Donut },
+  { value: "kpi", label: "KPI", icon: Hash },
+  { value: "table", label: "Tabla", icon: Table2 },
+  { value: "combo", label: "Combo", icon: BarChart2 },
+];
+
+const FORMULA_QUICKS = [
+  { label: "A ÷ B", expr: "metric_0 / NULLIF(metric_1, 0)" },
+  { label: "% A/B", expr: "100.0 * metric_0 / NULLIF(metric_1, 0)" },
+  { label: "Margen", expr: "(metric_0 - metric_1) / NULLIF(metric_0, 0)" },
+  { label: "A - B", expr: "metric_0 - metric_1" },
+  { label: "A + B", expr: "metric_0 + metric_1" },
+  { label: "A × B", expr: "metric_0 * metric_1" },
 ];
 
 type MetricsDataResponse = {
@@ -78,12 +99,23 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
+  const [formChartType, setFormChartType] = useState("bar");
+  const [formDimension, setFormDimension] = useState("");
+  const [formDimension2, setFormDimension2] = useState("");
+  const [formMetrics, setFormMetrics] = useState<AggregationMetricEdit[]>([
+    { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" },
+  ]);
+  const [formFilters, setFormFilters] = useState<AggregationFilterEdit[]>([]);
+  const [formOrderBy, setFormOrderBy] = useState<{ field: string; direction: "ASC" | "DESC" } | null>(null);
+  const [formLimit, setFormLimit] = useState<number | undefined>(100);
   const [formMetric, setFormMetric] = useState<AggregationMetricEdit>({
     id: `m-${Date.now()}`,
     field: "",
     func: "SUM",
     alias: "",
   });
+  const [previewData, setPreviewData] = useState<Record<string, unknown>[] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const fetchData = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -114,21 +146,76 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   const openNew = () => {
     setEditingId(null);
     setFormName("");
-    setFormMetric({
-      id: `m-${Date.now()}`,
-      field: fields[0] ?? "",
-      func: "SUM",
-      alias: fields[0] ?? "valor",
-    });
+    setFormChartType("bar");
+    setFormDimension("");
+    setFormDimension2("");
+    setFormMetrics([{ id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: fields[0] ?? "valor" }]);
+    setFormFilters([]);
+    setFormOrderBy(null);
+    setFormLimit(100);
+    setFormMetric({ id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: fields[0] ?? "valor" });
+    setPreviewData(null);
     setShowForm(true);
   };
 
-  const openEdit = (saved: SavedMetricForm) => {
+  const openEdit = (saved: SavedMetricForm & { chartType?: string }) => {
     setEditingId(saved.id);
     setFormName(saved.name);
+    setFormChartType((saved as { chartType?: string }).chartType ?? "bar");
+    setFormMetrics([{ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` }]);
     setFormMetric({ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` });
+    setPreviewData(null);
     setShowForm(true);
   };
+
+  const tableNameForPreview = data?.schema && data?.tableName ? `${data.schema}.${data.tableName}` : null;
+
+  const fetchPreview = useCallback(async () => {
+    if (!tableNameForPreview || formMetrics.length === 0) return;
+    setPreviewLoading(true);
+    try {
+      const metricsPayload = formMetrics.map((m) => ({
+        field: m.field || "",
+        func: m.func,
+        alias: m.alias || m.field || "valor",
+        ...(m.condition ? { condition: m.condition } : {}),
+        ...(m.formula ? { formula: m.formula } : {}),
+      }));
+      const res = await fetch("/api/dashboard/aggregate-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tableName: tableNameForPreview,
+          dimension: formDimension || undefined,
+          dimensions: [formDimension, formDimension2].filter(Boolean).length ? [formDimension, formDimension2].filter(Boolean) : undefined,
+          metrics: metricsPayload,
+          filters: formFilters.length ? formFilters.map((f) => ({ field: f.field, operator: f.operator, value: f.value })) : undefined,
+          orderBy: formOrderBy?.field ? formOrderBy : undefined,
+          limit: formLimit ?? 100,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(Array.isArray(json) ? "Error en vista previa" : (json?.error ?? "Error"));
+        return;
+      }
+      setPreviewData(Array.isArray(json) ? json : []);
+    } catch (e) {
+      toast.error("Error al cargar vista previa");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit]);
+
+  const recommendationText = (() => {
+    const hasDim = !!formDimension;
+    const metricCount = formMetrics.length;
+    if (!hasDim && metricCount >= 1) return "Un solo valor numérico: recomendamos **KPI** para destacar el número.";
+    if (hasDim && metricCount === 1) return "Una dimensión y un valor: recomendamos **Barras** o **Líneas**.";
+    if (hasDim && metricCount > 1) return "Varias métricas: **Combo** (barras + línea) o **Tabla** para comparar.";
+    if (hasDim) return "Muchas categorías: **Barras horizontales** para leer mejor.";
+    return "Elegí dimensión y al menos una métrica para ver recomendaciones.";
+  })();
 
   const closeForm = () => {
     setShowForm(false);
@@ -141,17 +228,23 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       toast.error("Nombre requerido");
       return;
     }
+    const firstMetric = formMetrics[0];
+    if (!firstMetric) {
+      toast.error("Agregá al menos una métrica");
+      return;
+    }
+    const metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
     setSaving(true);
     try {
-      let next: SavedMetricForm[];
+      let next: (SavedMetricForm & { chartType?: string })[];
       if (editingId) {
         next = savedMetrics.map((s) =>
           s.id === editingId
-            ? { ...s, name, metric: { ...formMetric, id: s.metric.id } }
+            ? { ...s, name, metric: metricToSave, chartType: formChartType }
             : s
         );
       } else {
-        next = [...savedMetrics, { id: `sm-${Date.now()}`, name, metric: { ...formMetric, id: formMetric.id || `m-${Date.now()}` } }];
+        next = [...savedMetrics, { id: `sm-${Date.now()}`, name, metric: metricToSave, chartType: formChartType }];
       }
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
@@ -288,100 +381,260 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       )}
 
       {showForm && hasData && (
-        <section
-          className="rounded-xl border p-6 space-y-4"
-          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
-        >
-          <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>
-            {editingId ? "Editar métrica" : "Nueva métrica"}
-          </h2>
-          <div>
-            <Label className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-              Nombre (para reutilizar en dashboards)
-            </Label>
-            <Input
-              value={formName}
-              onChange={(e) => setFormName(e.target.value)}
-              placeholder="Ej. Ventas totales"
-              className="mt-1 max-w-sm"
-              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-            />
-          </div>
-          <div>
-            <Label className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-              Función
-            </Label>
-            <select
-              value={formMetric.func}
-              onChange={(e) => setFormMetric((m) => ({ ...m, func: e.target.value }))}
-              className="mt-1 h-9 rounded-md border px-3 w-full max-w-xs text-sm"
-              style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
-            >
-              {AGG_FUNCS.map((f) => (
-                <option key={f.value} value={f.value}>{f.label}</option>
-              ))}
-            </select>
-          </div>
-          {formMetric.func !== "FORMULA" && (
-            <div>
-              <AdminFieldSelector
-                label="Campo"
-                value={formMetric.field}
-                onChange={(v) => setFormMetric((m) => ({ ...m, field: v }))}
-                etlData={etlData}
-                fieldType={formMetric.func === "COUNT" || formMetric.func === "COUNT(DISTINCT" ? "all" : "numeric"}
-                placeholder="Campo..."
-              />
+        <div className="space-y-6">
+          {/* Nombre y tipo de gráfico */}
+          <section
+            className="rounded-2xl border p-6 shadow-sm"
+            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+          >
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: "var(--platform-fg)" }}>
+              <BarChart2 className="h-5 w-5" style={{ color: "var(--platform-accent)" }} />
+              {editingId ? "Editar métrica" : "Nueva métrica"}
+            </h2>
+            <div className="grid gap-6 sm:grid-cols-2">
+              <div>
+                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
+                  Nombre (para reutilizar en dashboards)
+                </Label>
+                <Input
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  placeholder="Ej. Ventas totales"
+                  className="rounded-xl border-0 shadow-sm"
+                  style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                />
+              </div>
+              <div>
+                <Label className="text-sm font-medium mb-3 block" style={{ color: "var(--platform-fg-muted)" }}>
+                  Tipo de gráfico
+                </Label>
+                <div className="flex flex-wrap gap-2">
+                  {CHART_TYPES.map(({ value, label, icon: Icon }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setFormChartType(value)}
+                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
+                      style={{
+                        background: formChartType === value ? "var(--platform-accent)" : "var(--platform-surface-hover)",
+                        color: formChartType === value ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                      }}
+                    >
+                      <Icon className="h-4 w-4" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-          )}
-          {formMetric.func === "FORMULA" && (
-            <div>
-              <Label className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-                Fórmula (metric_0, metric_1…)
-              </Label>
-              <Input
-                value={formMetric.formula ?? ""}
-                onChange={(e) => setFormMetric((m) => ({ ...m, formula: e.target.value }))}
-                placeholder="Ej. metric_0 / NULLIF(metric_1, 0)"
-                className="mt-1 font-mono text-sm"
-                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-              />
+          </section>
+
+          {/* Recomendación */}
+          <section
+            className="rounded-2xl border p-4"
+            style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)", color: "var(--platform-fg)" }}
+          >
+            <div className="flex items-start gap-2">
+              <Sparkles className="h-5 w-5 shrink-0 mt-0.5" style={{ color: "var(--platform-accent)" }} />
+              <p className="text-sm" dangerouslySetInnerHTML={{ __html: recommendationText.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
             </div>
-          )}
-          <div>
-            <Label className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-              Alias
-            </Label>
-            <Input
-              value={formMetric.alias}
-              onChange={(e) => setFormMetric((m) => ({ ...m, alias: e.target.value }))}
-              placeholder="Ej. total_ventas"
-              className="mt-1 max-w-xs"
-              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-            />
-          </div>
-          <div className="flex gap-2 pt-2">
-            <Button
-              type="button"
-              disabled={saving}
-              className="rounded-lg"
-              style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-              onClick={saveMetric}
-            >
+          </section>
+
+          {/* Agregación: dimensión y métricas */}
+          <section
+            className="rounded-2xl border p-6 shadow-sm"
+            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+          >
+            <h3 className="text-base font-semibold mb-4" style={{ color: "var(--platform-fg)" }}>
+              Agregación de datos
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
+                  Agrupar por (dimensión)
+                </Label>
+                <AdminFieldSelector
+                  label=""
+                  value={formDimension}
+                  onChange={setFormDimension}
+                  etlData={etlData}
+                  fieldType="all"
+                  placeholder="Campo..."
+                />
+              </div>
+              <div>
+                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
+                  Segunda dimensión (opcional)
+                </Label>
+                <AdminFieldSelector
+                  label=""
+                  value={formDimension2}
+                  onChange={setFormDimension2}
+                  etlData={etlData}
+                  fieldType="all"
+                  placeholder="Ninguna..."
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                    Métricas
+                  </Label>
+                  <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" onClick={() => setFormMetrics((m) => [...m, { id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: "valor" }])}>
+                    + Añadir métrica
+                  </Button>
+                </div>
+                <div className="space-y-3">
+                  {formMetrics.map((m, i) => (
+                    <div key={m.id} className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                      <div className="flex gap-2 items-center">
+                        <select
+                          value={m.func}
+                          onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: e.target.value } : mm))}
+                          className="flex-1 h-9 rounded-lg border px-3 text-sm"
+                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                        >
+                          {AGG_FUNCS.map((f) => (
+                            <option key={f.value} value={f.value}>{f.label}</option>
+                          ))}
+                        </select>
+                        {formMetrics.length > 1 && (
+                          <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormMetrics((prev) => prev.filter((_, ii) => ii !== i))}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                      {m.func !== "FORMULA" && (
+                        <AdminFieldSelector label="Campo" value={m.field} onChange={(v) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, field: v } : mm))} etlData={etlData} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." />
+                      )}
+                      {m.func === "FORMULA" && (
+                        <div className="space-y-2">
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Fórmula (metric_0, metric_1…)</Label>
+                          <div className="flex flex-wrap gap-1 mb-2">
+                            {FORMULA_QUICKS.map(({ label, expr }) => (
+                              <button key={label} type="button" onClick={() => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: expr } : mm))} className="px-2 py-1 rounded text-xs border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <Input value={m.formula ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: e.target.value } : mm))} placeholder="Ej. metric_0 / NULLIF(metric_1, 0)" className="font-mono text-sm rounded-lg" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        </div>
+                      )}
+                      <div>
+                        <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias</Label>
+                        <Input value={m.alias} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, alias: e.target.value } : mm))} placeholder="Ej. total_ventas" className="h-8 text-sm rounded-lg" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Ordenar por</Label>
+                  <select
+                    value={formOrderBy?.field ?? ""}
+                    onChange={(e) => setFormOrderBy((prev) => ({ field: e.target.value, direction: prev?.direction ?? "DESC" }))}
+                    className="w-full h-9 rounded-lg border px-3 text-sm"
+                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                  >
+                    <option value="">—</option>
+                    {[...(formDimension ? [formDimension] : []), ...(formDimension2 ? [formDimension2] : []), ...fields].filter(Boolean).map((f) => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Sentido</Label>
+                  <select
+                    value={formOrderBy?.direction ?? "DESC"}
+                    onChange={(e) => setFormOrderBy((prev) => prev ? { ...prev, direction: e.target.value as "ASC" | "DESC" } : { field: "", direction: "DESC" })}
+                    className="w-full h-9 rounded-lg border px-3 text-sm"
+                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                  >
+                    <option value="DESC">Descendente</option>
+                    <option value="ASC">Ascendente</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Límite (filas)</Label>
+                <Input type="number" min={1} max={1000} value={formLimit ?? ""} onChange={(e) => setFormLimit(e.target.value ? parseInt(e.target.value, 10) : undefined)} className="max-w-[120px] h-9 rounded-lg text-sm" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} placeholder="100" />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Filtros (opcional)</Label>
+                  <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" onClick={() => setFormFilters((f) => [...f, { id: `f-${Date.now()}`, field: fields[0] ?? "", operator: "=", value: "" }])}>
+                    + Añadir filtro
+                  </Button>
+                </div>
+                {formFilters.length > 0 && (
+                  <div className="space-y-2">
+                    {formFilters.map((f, i) => (
+                      <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                        <select value={f.field} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs min-w-[100px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                          {fields.map((name) => (<option key={name} value={name}>{name}</option>))}
+                        </select>
+                        <select value={f.operator} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs w-20" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                          {["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => (<option key={op} value={op}>{op}</option>))}
+                        </select>
+                        <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {/* Vista previa */}
+          <section
+            className="rounded-2xl border p-6 shadow-sm"
+            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+          >
+            <h3 className="text-base font-semibold mb-4" style={{ color: "var(--platform-fg)" }}>
+              Vista previa
+            </h3>
+            <Button type="button" variant="outline" size="sm" className="rounded-xl mb-4" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
+              {previewLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+              Actualizar vista previa
+            </Button>
+            {previewData && (
+              <div className="overflow-x-auto rounded-xl border" style={{ borderColor: "var(--platform-border)" }}>
+                <table className="w-full text-sm" style={{ color: "var(--platform-fg)" }}>
+                  <thead>
+                    <tr style={{ background: "var(--platform-surface-hover)" }}>
+                      {previewData.length > 0 && Object.keys(previewData[0]).map((k) => (
+                        <th key={k} className="text-left px-4 py-2 font-medium">{k}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewData.slice(0, 10).map((row, idx) => (
+                      <tr key={idx} className="border-t" style={{ borderColor: "var(--platform-border)" }}>
+                        {Object.values(row).map((v, i) => (
+                          <td key={i} className="px-4 py-2">{String(v ?? "")}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {previewData.length > 10 && <p className="text-xs px-4 py-2" style={{ color: "var(--platform-fg-muted)" }}>Mostrando 10 de {previewData.length} filas</p>}
+              </div>
+            )}
+          </section>
+
+          {/* Acciones */}
+          <div className="flex flex-wrap gap-3">
+            <Button type="button" disabled={saving} className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric}>
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {editingId ? "Guardar cambios" : "Crear métrica"}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="rounded-lg"
-              style={{ borderColor: "var(--platform-border)" }}
-              onClick={closeForm}
-            >
+            <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={closeForm}>
               Cancelar
             </Button>
           </div>
-        </section>
+        </div>
       )}
 
       {savedMetrics.length > 0 && (
