@@ -124,7 +124,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [loadingColumns, setLoadingColumns] = useState<string | null>(null);
   const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [running, setRunning] = useState(false);
-  const [runId, setRunId] = useState<string | null>(null);
+  const [, setRunId] = useState<string | null>(null);
   const [runSuccess, setRunSuccess] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
 
@@ -220,9 +220,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     const join = cfg.join;
     if (join?.joins?.length) {
       setUseJoin(true);
-      setJoinItems(join.joins.map((j: any, i: number) => ({
+      type JoinItem = { id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[] };
+      setJoinItems(join.joins.map((j: JoinItem, i: number) => ({
         id: j.id ?? `join_${i}_${Date.now()}`,
-        connectionId: j.secondaryConnectionId,
+        connectionId: j.secondaryConnectionId ?? "",
         table: j.secondaryTable ?? "",
         joinType: (j.joinType ?? "INNER") as "INNER" | "LEFT" | "RIGHT" | "FULL",
         leftColumn: j.primaryColumn ?? "",
@@ -235,16 +236,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       const transforms = clean.transforms ?? [];
       const nullNorms = transforms.filter((t: { op?: string }) => t.op === "normalize_nulls");
       if (nullNorms.length > 0) {
-        const first = nullNorms[0] as any;
+        const first = nullNorms[0] as { patterns?: string[]; action?: string; replacement?: string; column?: string };
         setNullCleanup({
           patterns: first.patterns ?? [],
           action: (first.action === "replace" ? "replace" : "null") as "null" | "replace",
           replacement: first.replacement,
-          columns: nullNorms.map((t: any) => t.column).filter(Boolean),
+          columns: nullNorms.map((t: { column?: string }) => t.column).filter((c): c is string => Boolean(c)),
         });
       }
-      setCleanTransforms(transforms.filter((t: { op?: string }) => t.op && !["normalize_nulls", "replace_value"].includes(t.op)).map((t: any) => ({ column: t.column, op: t.op, find: t.find, replaceWith: t.replaceWith })));
-      setDataFixes(transforms.filter((t: { op?: string }) => t.op === "replace_value").map((t: any) => ({ column: t.column, find: t.find ?? "", replaceWith: t.replaceWith ?? "" })));
+      type TransformItem = { column?: string; op?: string; find?: string; replaceWith?: string };
+      setCleanTransforms(transforms.filter((t: { op?: string }) => t.op && !["normalize_nulls", "replace_value"].includes(t.op)).map((t: TransformItem) => ({ column: t.column ?? "", op: t.op ?? "", find: t.find, replaceWith: t.replaceWith })));
+      setDataFixes(transforms.filter((t: { op?: string }) => t.op === "replace_value").map((t: TransformItem) => ({ column: t.column ?? "", find: t.find ?? "", replaceWith: t.replaceWith ?? "" })));
       if (clean.dedupe?.keyColumns?.length) setDedupe({ keyColumns: clean.dedupe.keyColumns, keep: clean.dedupe.keep ?? "first" });
     }
     queueMicrotask(() => {
@@ -486,7 +488,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   // Construir config de limpieza para la API (mismo formato que el editor avanzado)
   const buildCleanConfig = useCallback(() => {
-    const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
     const transforms: Array<{ column: string; op: string; find?: string; replaceWith?: string; patterns?: string[]; action?: "null" | "replace"; replacement?: string }> = [];
     if (nullCleanup?.columns?.length) {
       nullCleanup.columns.forEach((col) => {
@@ -519,7 +520,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       conditions: filterConditions.length > 0 ? filterConditions : [],
     };
     if (distinctColumn) filterPayload.excludeRowsColumn = distinctColumn;
-    let body: Record<string, unknown> = {
+    const body: Record<string, unknown> = {
       connectionId,
       filter: filterPayload,
       end: {
@@ -1591,8 +1592,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           const data = await res.json();
                           if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
                           else toast.error(data?.error || "No se pudieron cargar los valores");
-                        } catch (e: any) {
-                          toast.error(e?.message || "Error al cargar");
+                        } catch (e: unknown) {
+                          toast.error(e instanceof Error ? e.message : "Error al cargar");
                         } finally {
                           setLoadingDistinct(false);
                         }

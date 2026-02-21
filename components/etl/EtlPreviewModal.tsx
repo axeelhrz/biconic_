@@ -239,8 +239,8 @@ export default function EtlPreviewModal({
                       <div>
                         <span style={{ color: "var(--platform-fg-muted)" }}>Columnas: </span>
                         <span style={{ color: "var(--platform-fg)" }}>
-                          {filter.columns!.slice(0, 5).join(", ")}
-                          {filter.columns!.length > 5 ? ` (+${filter.columns!.length - 5} más)` : ""}
+                          {filter?.columns?.slice(0, 5).join(", ") ?? ""}
+                          {(filter?.columns?.length ?? 0) > 5 ? ` (+${(filter?.columns?.length ?? 0) - 5} más)` : ""}
                         </span>
                       </div>
                     </div>
