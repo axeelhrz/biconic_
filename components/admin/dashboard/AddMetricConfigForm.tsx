@@ -160,9 +160,6 @@ export function AddMetricConfigForm({
       const cfg = saved.aggregationConfig;
       const newMetrics = (cfg.metrics ?? [saved.metric]).map((m, i) => ({ ...m, id: `m-${Date.now()}-${i}` }));
       const newFilters = (cfg.filters ?? []).map((f, i) => ({ ...f, id: f.id || `f-${Date.now()}-${i}` }));
-      updateForm({
-        ...(saved.chartType && { type: saved.chartType }),
-      });
       updateAgg({
         dimension: cfg.dimension ?? agg.dimension,
         dimension2: cfg.dimension2 ?? agg.dimension2,

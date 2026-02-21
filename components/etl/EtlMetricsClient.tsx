@@ -188,9 +188,19 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   const tableNameForPreview = data?.schema && data?.tableName ? `${data.schema}.${data.tableName}` : null;
 
   const fetchPreview = useCallback(async () => {
-    if (!tableNameForPreview || formMetrics.length === 0) return;
+    if (formMetrics.length === 0) return;
     setPreviewLoading(true);
+    setPreviewData(null);
     try {
+      const metricsRes = await fetch(`/api/etl/${etlId}/metrics-data`);
+      const metricsJson = await metricsRes.json();
+      const freshSchema = metricsJson?.data?.schema;
+      const freshTableName = metricsJson?.data?.tableName;
+      const tableName = freshSchema && freshTableName ? `${freshSchema}.${freshTableName}` : tableNameForPreview;
+      if (!tableName) {
+        toast.error("No hay tabla de datos. Ejecutá el ETL y recargá la página.");
+        return;
+      }
       const metricsPayload = formMetrics.map((m) => ({
         field: m.field || "",
         func: m.func,
@@ -202,7 +212,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tableName: tableNameForPreview,
+          tableName,
           dimension: formDimension || undefined,
           dimensions: [formDimension, formDimension2].filter(Boolean).length ? [formDimension, formDimension2].filter(Boolean) : undefined,
           metrics: metricsPayload,
@@ -213,7 +223,13 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       });
       const json = await res.json();
       if (!res.ok) {
-        toast.error(Array.isArray(json) ? "Error en vista previa" : (json?.error ?? "Error"));
+        const msg = (json?.error ?? "Error") as string;
+        if (/does not exist|no existe/i.test(msg)) {
+          toast.error("La tabla del ETL no existe o cambió. Ejecutá el ETL de nuevo y hacé clic en «Recargar» aquí.", { duration: 6000 });
+          fetchData({ silent: true });
+        } else {
+          toast.error(msg);
+        }
         return;
       }
       setPreviewData(Array.isArray(json) ? json : []);
@@ -222,7 +238,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     } finally {
       setPreviewLoading(false);
     }
-  }, [tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit]);
+  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData]);
 
   const recommendationText = (() => {
     const hasDim = !!formDimension;
@@ -266,7 +282,6 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
         id: editingId ?? `sm-${Date.now()}`,
         name,
         metric: metricToSave,
-        chartType: formChartType,
         aggregationConfig,
       };
       if (editingId) {
@@ -410,7 +425,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
 
       {showForm && hasData && (
         <div className="space-y-6">
-          {/* Nombre y tipo de gráfico */}
+          {/* Nombre (solo; el tipo de gráfico se elige al final) */}
           <section
             className="rounded-2xl border p-6 shadow-sm"
             style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
@@ -419,56 +434,21 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
               <BarChart2 className="h-5 w-5" style={{ color: "var(--platform-accent)" }} />
               {editingId ? "Editar métrica" : "Nueva métrica"}
             </h2>
-            <div className="grid gap-6 sm:grid-cols-2">
-              <div>
-                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
-                  Nombre (para reutilizar en dashboards)
-                </Label>
-                <Input
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  placeholder="Ej. Ventas totales"
-                  className="rounded-xl border-0 shadow-sm"
-                  style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                />
-              </div>
-              <div>
-                <Label className="text-sm font-medium mb-3 block" style={{ color: "var(--platform-fg-muted)" }}>
-                  Tipo de gráfico
-                </Label>
-                <div className="flex flex-wrap gap-2">
-                  {CHART_TYPES.map(({ value, label, icon: Icon }) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setFormChartType(value)}
-                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
-                      style={{
-                        background: formChartType === value ? "var(--platform-accent)" : "var(--platform-surface-hover)",
-                        color: formChartType === value ? "var(--platform-bg)" : "var(--platform-fg-muted)",
-                      }}
-                    >
-                      <Icon className="h-4 w-4" />
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <div>
+              <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
+                Nombre (para reutilizar en dashboards)
+              </Label>
+              <Input
+                value={formName}
+                onChange={(e) => setFormName(e.target.value)}
+                placeholder="Ej. Ventas totales"
+                className="rounded-xl border-0 shadow-sm max-w-md"
+                style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+              />
             </div>
           </section>
 
-          {/* Recomendación */}
-          <section
-            className="rounded-2xl border p-4"
-            style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)", color: "var(--platform-fg)" }}
-          >
-            <div className="flex items-start gap-2">
-              <Sparkles className="h-5 w-5 shrink-0 mt-0.5" style={{ color: "var(--platform-accent)" }} />
-              <p className="text-sm" dangerouslySetInnerHTML={{ __html: recommendationText.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
-            </div>
-          </section>
-
-          {/* Agregación: dimensión y métricas */}
+          {/* Agregación: dimensiones opcionales y métricas */}
           <section
             className="rounded-2xl border p-6 shadow-sm"
             style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
@@ -476,10 +456,13 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
             <h3 className="text-base font-semibold mb-4" style={{ color: "var(--platform-fg)" }}>
               Agregación de datos
             </h3>
+            <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
+              Definí las métricas y, si querés, dimensiones para agrupar. Las dimensiones son opcionales (por ejemplo para un KPI total no hace falta).
+            </p>
             <div className="space-y-4">
               <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                 <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
-                  Agrupar por (dimensión)
+                  Agrupar por (dimensión, opcional)
                 </Label>
                 <AdminFieldSelector
                   label=""
@@ -521,8 +504,8 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                         <select
                           value={m.func}
                           onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: e.target.value } : mm))}
-                          className="flex-1 h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          className="flex-1 h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
                         >
                           {AGG_FUNCS.map((f) => (
                             <option key={f.value} value={f.value}>{f.label}</option>
@@ -535,7 +518,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                         )}
                       </div>
                       {m.func !== "FORMULA" && (
-                        <AdminFieldSelector label="Campo" value={m.field} onChange={(v) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, field: v } : mm))} etlData={etlData} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." />
+                        <AdminFieldSelector label="Campo" value={m.field} onChange={(v) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, field: v } : mm))} etlData={etlData} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." className="[&_button]:!bg-[var(--platform-bg)] [&_button]:!border-[var(--platform-border)] [&_button]:!text-[var(--platform-fg)]" />
                       )}
                       {m.func === "FORMULA" && (
                         <div className="space-y-2">
@@ -547,67 +530,69 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                               </button>
                             ))}
                           </div>
-                          <Input value={m.formula ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: e.target.value } : mm))} placeholder="Ej. metric_0 / NULLIF(metric_1, 0)" className="font-mono text-sm rounded-lg" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <Input value={m.formula ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: e.target.value } : mm))} placeholder="Ej. metric_0 / NULLIF(metric_1, 0)" className="font-mono text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                         </div>
                       )}
                       <div>
                         <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias</Label>
-                        <Input value={m.alias} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, alias: e.target.value } : mm))} placeholder="Ej. total_ventas" className="h-8 text-sm rounded-lg" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        <Input value={m.alias} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, alias: e.target.value } : mm))} placeholder="Ej. total_ventas" className="h-8 text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Ordenar por</Label>
-                  <select
-                    value={formOrderBy?.field ?? ""}
-                    onChange={(e) => setFormOrderBy((prev) => ({ field: e.target.value, direction: prev?.direction ?? "DESC" }))}
-                    className="w-full h-9 rounded-lg border px-3 text-sm"
-                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                  >
-                    <option value="">—</option>
-                    {[...(formDimension ? [formDimension] : []), ...(formDimension2 ? [formDimension2] : []), ...fields].filter(Boolean).map((f) => (
-                      <option key={f} value={f}>{f}</option>
-                    ))}
-                  </select>
+              <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Ordenar por</Label>
+                    <select
+                      value={formOrderBy?.field ?? ""}
+                      onChange={(e) => setFormOrderBy((prev) => ({ field: e.target.value, direction: prev?.direction ?? "DESC" }))}
+                      className="w-full h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer"
+                      style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                    >
+                      <option value="">—</option>
+                      {[...(formDimension ? [formDimension] : []), ...(formDimension2 ? [formDimension2] : []), ...fields].filter(Boolean).map((f) => (
+                        <option key={f} value={f}>{f}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Sentido</Label>
+                    <select
+                      value={formOrderBy?.direction ?? "DESC"}
+                      onChange={(e) => setFormOrderBy((prev) => prev ? { ...prev, direction: e.target.value as "ASC" | "DESC" } : { field: "", direction: "DESC" })}
+                      className="w-full h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer"
+                      style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                    >
+                      <option value="DESC">Descendente</option>
+                      <option value="ASC">Ascendente</option>
+                    </select>
+                  </div>
                 </div>
                 <div>
-                  <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Sentido</Label>
-                  <select
-                    value={formOrderBy?.direction ?? "DESC"}
-                    onChange={(e) => setFormOrderBy((prev) => prev ? { ...prev, direction: e.target.value as "ASC" | "DESC" } : { field: "", direction: "DESC" })}
-                    className="w-full h-9 rounded-lg border px-3 text-sm"
-                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                  >
-                    <option value="DESC">Descendente</option>
-                    <option value="ASC">Ascendente</option>
-                  </select>
+                  <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Límite (filas)</Label>
+                  <Input type="number" min={1} max={1000} value={formLimit ?? ""} onChange={(e) => setFormLimit(e.target.value ? parseInt(e.target.value, 10) : undefined)} className="max-w-[120px] h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} placeholder="100" />
                 </div>
               </div>
-              <div>
-                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Límite (filas)</Label>
-                <Input type="number" min={1} max={1000} value={formLimit ?? ""} onChange={(e) => setFormLimit(e.target.value ? parseInt(e.target.value, 10) : undefined)} className="max-w-[120px] h-9 rounded-lg text-sm" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} placeholder="100" />
-              </div>
-              <div>
+              <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                 <div className="flex items-center justify-between mb-2">
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Filtros (opcional)</Label>
-                  <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" onClick={() => setFormFilters((f) => [...f, { id: `f-${Date.now()}`, field: fields[0] ?? "", operator: "=", value: "" }])}>
+                  <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} onClick={() => setFormFilters((f) => [...f, { id: `f-${Date.now()}`, field: fields[0] ?? "", operator: "=", value: "" }])}>
                     + Añadir filtro
                   </Button>
                 </div>
                 {formFilters.length > 0 && (
                   <div className="space-y-2">
                     {formFilters.map((f, i) => (
-                      <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                        <select value={f.field} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs min-w-[100px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                      <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <select value={f.field} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs min-w-[100px] appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
                           {fields.map((name) => (<option key={name} value={name}>{name}</option>))}
                         </select>
-                        <select value={f.operator} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs w-20" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                        <select value={f.operator} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs w-20 appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
                           {["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => (<option key={op} value={op}>{op}</option>))}
                         </select>
-                        <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                         <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
                       </div>
                     ))}
@@ -628,37 +613,81 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
             <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
               Datos agregados con la misma configuración que el gráfico (dimensión, métricas, filtros, orden y límite).
             </p>
-            <Button type="button" variant="outline" size="sm" className="rounded-xl mb-4" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
-              {previewLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-              Actualizar vista previa
-            </Button>
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
+                {previewLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                Actualizar vista previa
+              </Button>
+              <Button type="button" variant="ghost" size="sm" className="rounded-xl text-xs" style={{ color: "var(--platform-fg-muted)" }} onClick={() => fetchData()} disabled={loading}>
+                Recargar datos del ETL
+              </Button>
+            </div>
             {previewData && (
-              <div className="overflow-hidden rounded-xl border" style={{ borderColor: "var(--platform-border)" }}>
-                <div className="overflow-auto max-h-[400px]" style={{ background: "var(--platform-bg-elevated)" }}>
+              <div className="overflow-hidden rounded-xl border shadow-sm" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                <div className="overflow-auto max-h-[400px]">
                   <table className="w-full text-sm" style={{ color: "var(--platform-fg)" }}>
-                    <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface-hover)" }}>
+                    <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)", color: "var(--platform-fg)", borderBottom: "1px solid var(--platform-border)" }}>
                       <tr>
                         {previewData.length > 0 && Object.keys(previewData[0]).map((k) => (
-                          <th key={k} className="text-left px-4 py-2 font-medium whitespace-nowrap">{k}</th>
+                          <th key={k} className="text-left px-4 py-3 font-medium whitespace-nowrap">{k}</th>
                         ))}
                       </tr>
                     </thead>
-                    <tbody>
+                    <tbody style={{ background: "var(--platform-bg-elevated)" }}>
                       {previewData.map((row, idx) => (
-                        <tr key={idx} className="border-t" style={{ borderColor: "var(--platform-border)" }}>
+                        <tr key={idx} className="border-b border-[var(--platform-border)] last:border-b-0 hover:opacity-90" style={{ borderColor: "var(--platform-border)" }}>
                           {Object.values(row).map((v, i) => (
-                            <td key={i} className="px-4 py-2 whitespace-nowrap">{String(v ?? "")}</td>
+                            <td key={i} className="px-4 py-2.5 whitespace-nowrap" style={{ color: "var(--platform-fg)" }}>{String(v ?? "")}</td>
                           ))}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                <p className="text-xs px-4 py-2 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                <p className="text-xs px-4 py-2.5 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-surface)" }}>
                   {previewData.length} {previewData.length === 1 ? "fila" : "filas"} (mismo resultado que el gráfico)
                 </p>
               </div>
             )}
+          </section>
+
+          {/* Vista previa de visualización: solo para ver cómo podría verse; el tipo de gráfico se elige al usar la métrica en el dashboard */}
+          <section
+            className="rounded-2xl border p-6 shadow-sm"
+            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+          >
+            <h3 className="text-base font-semibold mb-2 flex items-center gap-2" style={{ color: "var(--platform-fg)" }}>
+              Vista previa de visualización
+            </h3>
+            <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
+              Probá distintos tipos de gráfico para ver cómo se verían los datos. Esto no se guarda con la métrica: cuando uses esta métrica en un dashboard, ahí elegís el tipo de gráfico que querés.
+            </p>
+            <section
+              className="rounded-xl border p-4 mb-4"
+              style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)", color: "var(--platform-fg)" }}
+            >
+              <div className="flex items-start gap-2">
+                <Sparkles className="h-5 w-5 shrink-0 mt-0.5" style={{ color: "var(--platform-accent)" }} />
+                <p className="text-sm" dangerouslySetInnerHTML={{ __html: recommendationText.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
+              </div>
+            </section>
+            <div className="flex flex-wrap gap-2">
+              {CHART_TYPES.map(({ value, label, icon: Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setFormChartType(value)}
+                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
+                  style={{
+                    background: formChartType === value ? "var(--platform-accent)" : "var(--platform-surface-hover)",
+                    color: formChartType === value ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                  }}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </button>
+              ))}
+            </div>
           </section>
 
           {/* Acciones */}

@@ -18,6 +18,10 @@ export interface SelectProps {
   placeholder?: string;
   className?: string;
   buttonClassName?: string;
+  /** Clases para el panel desplegable (lista de opciones) */
+  optionsClassName?: string;
+  /** Clases para cada opción (se combinan con estado active) */
+  optionClassName?: string;
   disabled?: boolean;
   name?: string;
   // To support react-hook-form register spread
@@ -33,6 +37,8 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
       placeholder = "Seleccione",
       className,
       buttonClassName,
+      optionsClassName,
+      optionClassName,
       disabled,
       name,
       ...rest
@@ -99,16 +105,17 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
               }}
               name={name}
               className={cn(
-                // Match current input styles
-                "h-10 w-full rounded-[25px] border border-[#D9DCE3] bg-white px-4 text-[16px] font-light text-[#555555] focus:outline-none",
+                "h-10 w-full rounded-[25px] border px-4 text-[16px] font-light focus:outline-none",
                 "flex items-center justify-between",
+                "border-[var(--platform-border,#D9DCE3)] bg-[var(--platform-bg,#fff)] text-[var(--platform-fg,#555555)]",
                 disabled && "opacity-50 cursor-not-allowed",
                 buttonClassName
               )}
               {...rest}
             >
               <span
-                className={cn("truncate", !selectedOption && "text-gray-400")}
+                className={cn("truncate", !selectedOption && "opacity-70")}
+                style={{ color: "inherit" }}
               >
                 {selectedOption ? selectedOption.label : placeholder}
               </span>
@@ -129,8 +136,9 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
             >
               <Listbox.Options
                 className={cn(
-                  // Let the dropdown grow to fit long option labels, but keep at least the trigger width
-                  "absolute z-10 mt-2 max-h-60 w-auto max-w-[90vw] overflow-auto rounded-2xl border border-[#D9DCE3] bg-white py-2 shadow-lg focus:outline-none whitespace-nowrap"
+                  "absolute z-10 mt-2 max-h-60 w-auto max-w-[90vw] overflow-auto rounded-2xl border py-2 shadow-lg focus:outline-none whitespace-nowrap",
+                  "border-[var(--platform-border,#D9DCE3)] bg-[var(--platform-bg,#fff)]",
+                  optionsClassName
                 )}
                 style={{ minWidth: buttonWidth || undefined }}
               >
@@ -139,8 +147,10 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                     key={option.value}
                     className={({ active }) =>
                       cn(
-                        "relative cursor-pointer select-none px-4 py-2 text-[16px] text-[#555555]",
-                        active && "bg-gray-50"
+                        "relative cursor-pointer select-none px-4 py-2 text-[16px]",
+                        "text-[var(--platform-fg,#555555)]",
+                        active && "bg-[var(--platform-surface-hover,#f3f4f6)]",
+                        optionClassName
                       )
                     }
                     value={option.value}
@@ -151,7 +161,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                           {option.label}
                         </span>
                         {selected ? (
-                          <Check className="h-4 w-4 text-[#02B8D1]" />
+                          <Check className="h-4 w-4 text-[var(--platform-accent,#02B8D1)]" />
                         ) : null}
                       </div>
                     )}
