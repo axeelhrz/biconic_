@@ -205,21 +205,6 @@ export default function AdminEtlGrid({
     loadEtls();
   }, [loadEtls]);
 
-  // Refrescar lista solo cuando la pestaña vuelve a ser visible (p. ej. después de crear un ETL)
-  useEffect(() => {
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    const onVisibility = () => {
-      if (document.visibilityState !== "visible") return;
-      if (timeout) clearTimeout(timeout);
-      timeout = setTimeout(() => loadEtls(), 300);
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      if (timeout) clearTimeout(timeout);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [loadEtls]);
-
   if (loading) {
     return (
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
