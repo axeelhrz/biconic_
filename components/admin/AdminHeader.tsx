@@ -18,6 +18,7 @@ const navLinks = [
   { href: "/admin", label: "Panel general" },
   { href: "/admin/dashboard", label: "Dashboard" },
   { href: "/admin/etl", label: "ETL" },
+  { href: "/admin/metrics", label: "Métricas" },
   { href: "/admin/monitors", label: "Monitores" },
   { href: "/admin/connections", label: "Conexiones" },
   {

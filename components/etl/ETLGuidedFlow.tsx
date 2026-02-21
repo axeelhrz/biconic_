@@ -620,7 +620,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setRunId(data.runId);
       setRunSuccess(true);
       toast.success("ETL iniciado. Los datos se guardarán en segundo plano.");
-      router.push(`/admin/dashboard?create=1&etlId=${etlId}`);
+      router.push(`/admin/etl/${etlId}/metrics`);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Error al ejecutar");
     } finally {
@@ -1924,7 +1924,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     type="button"
                     className="rounded-xl flex items-center gap-2"
                     style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                    onClick={() => router.push(`/admin/dashboard?create=1&etlId=${etlId}`)}
+                    onClick={() => router.push(`/admin/etl/${etlId}/metrics`)}
                   >
                     <LayoutDashboard className="h-4 w-4" /> Crear dashboard con estos datos
                   </Button>

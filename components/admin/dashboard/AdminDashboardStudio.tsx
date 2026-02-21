@@ -135,9 +135,17 @@ export function AdminDashboardStudio({
   const [pages, setPages] = useState<StudioPage[]>([{ id: "page-1", name: "Página 1" }]);
   const [activePageId, setActivePageId] = useState<string | null>("page-1");
   const [savedMetrics, setSavedMetrics] = useState<SavedMetric[]>([]);
+  const [layoutLoaded, setLayoutLoaded] = useState(false);
   const loadedOnce = useRef(false);
+  const etlMetricsMergedRef = useRef(false);
 
   const { data: etlData, loading: etlLoading, error: etlError, refetch: refetchEtlData } = useAdminDashboardEtlData(dashboardId);
+
+  // Reset merge flag when dashboard changes so we merge ETL metrics again for the new dashboard
+  useEffect(() => {
+    etlMetricsMergedRef.current = false;
+    setLayoutLoaded(false);
+  }, [dashboardId]);
 
   const status: DashboardStatus = isRunning ? "en_ejecucion" : isDirty ? "borrador" : "activo";
   const lastUpdateLabel = lastSavedAt
@@ -190,6 +198,7 @@ export function AdminDashboardStudio({
           setActivePageId(loadedActivePageId);
           const layout = rawLayout as { savedMetrics?: SavedMetric[] } | undefined;
           setSavedMetrics(Array.isArray(layout?.savedMetrics) ? layout.savedMetrics : []);
+          setLayoutLoaded(true);
         }
       } catch (e) {
         if (!cancelled) toast.error("No se pudo cargar el dashboard");
@@ -199,6 +208,40 @@ export function AdminDashboardStudio({
     load();
     return () => { cancelled = true; };
   }, [dashboardId]);
+
+  // Cargar métricas reutilizables de los ETLs del dashboard y fusionar con las del layout (solo tras cargar layout)
+  useEffect(() => {
+    if (!layoutLoaded || !etlData || etlLoading || etlMetricsMergedRef.current) return;
+    const etlIds = new Set<string>();
+    if (etlData.etl?.id) etlIds.add(etlData.etl.id);
+    etlData.dataSources?.forEach((s) => etlIds.add(s.etlId));
+    if (etlIds.size === 0) return;
+    etlMetricsMergedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      const all: SavedMetric[] = [];
+      for (const etlId of etlIds) {
+        try {
+          const res = await fetch(`/api/etl/${etlId}/metrics`);
+          const json = await res.json();
+          if (json.ok && Array.isArray(json.data?.savedMetrics)) {
+            all.push(...(json.data.savedMetrics as SavedMetric[]));
+          }
+        } catch {
+          // ignore per-ETL errors
+        }
+      }
+      if (cancelled) return;
+      setSavedMetrics((prev) => {
+        const byName = new Set(prev.map((s) => s.name));
+        const fromEtl = all.filter((m) => !byName.has(m.name));
+        return fromEtl.length > 0 ? [...prev, ...fromEtl] : prev;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [layoutLoaded, etlData, etlLoading]);
 
   const saveDashboard = useCallback(async () => {
     setIsSaving(true);

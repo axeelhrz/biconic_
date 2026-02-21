@@ -93,7 +93,7 @@ export default function EtlCard({
 
   const handleEjecutar = () => {
     if (basePath === "/admin/etl") {
-      router.push(`/admin/dashboard?create=1&etlId=${etl.id}`);
+      router.push(`/admin/etl/${etl.id}/metrics`);
     } else {
       router.push(`${basePath}/${etl.id}?run=1`);
     }
@@ -236,7 +236,7 @@ export default function EtlCard({
               onClick={handleEjecutar}
               className="inline-flex h-10 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-all hover:opacity-90"
               style={{ background: "linear-gradient(135deg, #16a34a 0%, #22c55e 100%)", color: "#fff", boxShadow: "0 2px 8px rgba(34, 197, 94, 0.3)" }}
-              title={basePath === "/admin/etl" ? "Crear dashboard con este ETL" : "Abrir para ejecutar"}
+              title={basePath === "/admin/etl" ? "Crear métricas reutilizables con los datos del ETL" : "Abrir para ejecutar"}
             >
               <Play className="h-4 w-4" />
               <span>Ejecutar</span>
