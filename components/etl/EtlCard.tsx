@@ -9,19 +9,18 @@ import { toast } from "sonner";
 
 // --- Iconos necesarios para los botones ---
 
-// Icono de "Más" para el botón Ejecutar
-const PlusIcon = ({ className }: { className?: string }) => (
-  <svg
-    className={className}
-    viewBox="0 0 20 20"
-    fill="currentColor"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <path
-      fillRule="evenodd"
-      clipRule="evenodd"
-      d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
-    />
+// Icono de "Ejecutar" (Play)
+const PlayIcon = ({ className }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+    <path d="M8 5v14l11-7L8 5z" />
+  </svg>
+);
+
+// Icono de "Vista previa" (Ojo)
+const EyeIcon = ({ className }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" xmlns="http://www.w3.org/2000/svg">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+    <circle cx="12" cy="12" r="3" />
   </svg>
 );
 
@@ -174,15 +173,33 @@ export default function EtlCard({
         </div>
       </div>
 
-      <div className="flex items-center justify-end gap-2.5">
+      <div className="flex flex-wrap items-center justify-end gap-2.5">
         <button
           type="button"
           className="flex h-[34px] items-center justify-center gap-2 rounded-full px-3 text-sm font-medium hover:opacity-90"
           style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
-          onClick={() => router.push(`${basePath}/${etl.id}?run=1`)}
+          onClick={() => {
+            if (basePath === "/admin/etl") {
+              router.push(`/admin/dashboard?create=1&etlId=${etl.id}`);
+            } else {
+              router.push(`${basePath}/${etl.id}?run=1`);
+            }
+          }}
+          title={basePath === "/admin/etl" ? "Ir a crear dashboard con este ETL" : "Abrir ETL para ejecutar"}
         >
-          <PlusIcon className="h-4 w-4" />
+          <PlayIcon className="h-4 w-4" />
           <span>Ejecutar</span>
+        </button>
+
+        <button
+          type="button"
+          className="flex h-[34px] items-center justify-center gap-2 rounded-full border px-3 text-sm font-medium hover:opacity-90"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={() => router.push(`${basePath}/${etl.id}`)}
+          title="Vista previa del ETL"
+        >
+          <EyeIcon className="h-4 w-4" />
+          <span className="hidden sm:inline">Vista previa</span>
         </button>
 
         <button
