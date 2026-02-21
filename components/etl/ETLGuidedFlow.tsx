@@ -274,6 +274,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const selectedTableInfo = tables.find(
     (t) => `${t.schema}.${t.name}` === selectedTable
   );
+
+  // Normalizar selectedTable cuando viene de config guardada: si la lista de tablas usa otro casing (ej. public.clientes vs PUBLIC.CLIENTES), usar la clave real para que el <select> muestre la tabla y selectedTableInfo exista
+  useEffect(() => {
+    if (!selectedTable || tables.length === 0 || selectedTableInfo) return;
+    const normalized = tables.find(
+      (t) => `${t.schema}.${t.name}`.toLowerCase() === selectedTable.toLowerCase()
+    );
+    if (normalized) setSelectedTable(`${normalized.schema}.${normalized.name}`);
+  }, [tables, selectedTable, selectedTableInfo]);
   const hasColumns = (selectedTableInfo?.columns?.length ?? 0) > 0;
 
   const loadColumnsForTable = useCallback(() => {
@@ -428,10 +437,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       });
   }, [joinSecondaryTable, joinSecondaryConnectionId, joinRightTableInfo?.columns]);
 
+  const hasColumnsToRun =
+    columns.length > 0 || (selectedTableInfo?.columns?.length ?? 0) > 0;
   const canRun =
-    connectionId &&
-    selectedTable &&
-    columns.length > 0 &&
+    !!connectionId &&
+    !!selectedTable &&
+    hasColumnsToRun &&
     outputTableName.trim().length > 0 &&
     /^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
 
@@ -645,7 +656,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             type="button"
             className="rounded-xl shrink-0"
             style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-            onClick={() => saveGuidedConfigToServer()}
+            onClick={() => {
+              // Esperar al siguiente tick para que React haya aplicado el estado (tabla/columnas recién elegidas) antes de armar el payload
+              setTimeout(() => saveGuidedConfigToServer(), 0);
+            }}
           >
             Guardar configuración
           </Button>
@@ -1699,11 +1713,31 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <div>
                       <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Falta configurar</p>
                       <p className="text-sm mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>
-                        {!outputTableName.trim() ? "Indicá un nombre para la tabla de destino." : "El nombre de la tabla solo puede tener letras, números y guión bajo."}
+                        {!selectedTable
+                          ? "Elegí la tabla de origen en la sección 2 (Origen de datos)."
+                          : !hasColumnsToRun
+                            ? "Elegí al menos una columna en la sección 3 (Columnas y filtros) o esperá a que se carguen."
+                            : !outputTableName.trim()
+                              ? "Indicá un nombre para la tabla de destino."
+                              : "El nombre de la tabla solo puede tener letras, números y guión bajo."}
                       </p>
-                      <Button type="button" variant="outline" size="sm" className="rounded-lg mt-2" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("destino")}>
-                        Ir a Destino
-                      </Button>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {!selectedTable && (
+                          <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("origen")}>
+                            Ir a Origen
+                          </Button>
+                        )}
+                        {selectedTable && !hasColumnsToRun && (
+                          <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("filtros")}>
+                            Ir a Columnas y filtros
+                          </Button>
+                        )}
+                        {(selectedTable && hasColumnsToRun) && (
+                          <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("destino")}>
+                            Ir a Destino
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
