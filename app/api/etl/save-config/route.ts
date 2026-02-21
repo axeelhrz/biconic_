@@ -42,7 +42,12 @@ export async function POST(req: NextRequest) {
     }
 
     const currentLayout = (etlRow as { layout?: Record<string, unknown> })?.layout ?? {};
-    const updatedLayout = { ...currentLayout, guided_config: guidedConfig };
+    // Clonar guidedConfig para persistir el objeto completo (evitar referencias y asegurar JSON válido)
+    const guidedConfigToStore =
+      typeof guidedConfig === "object" && guidedConfig !== null
+        ? (JSON.parse(JSON.stringify(guidedConfig)) as Record<string, unknown>)
+        : guidedConfig;
+    const updatedLayout = { ...currentLayout, guided_config: guidedConfigToStore };
 
     const { error: updateError } = await adminClient
       .from("etl")

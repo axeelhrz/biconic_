@@ -171,8 +171,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     const cfg = initialGuidedConfig as GuidedConfig | undefined | null;
     restoringFromConfigRef.current = true;
     if (!cfg || typeof cfg !== "object") return;
-    const connId = cfg.connectionId ?? cfg.filter ?? (cfg.union?.left as any)?.connectionId ?? (cfg.join as any)?.primaryConnectionId;
-    if (connId != null) setConnectionId(connId);
+    const connId = cfg.connectionId ?? (cfg.union?.left as { connectionId?: string | number })?.connectionId ?? (cfg.join as { primaryConnectionId?: string | number })?.primaryConnectionId;
+    if (connId != null && typeof connId !== "object") setConnectionId(connId);
     const filter = cfg.filter;
     if (filter?.table) {
       skipClearSelectedTableRef.current = true;
@@ -603,10 +603,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     }
   }, [etlId, buildGuidedConfigBody]);
 
-  /** Avanza al paso siguiente y guarda la configuración actual en el ETL (sin toast) */
+  /** Avanza al paso siguiente y guarda la configuración actual en el ETL (sin toast). Espera el guardado para que se persista el estado actual (tabla, columnas, etc.). */
   const goToStepAndSave = useCallback(
-    (nextStep: StepId) => {
-      saveGuidedConfigToServer({ silent: true });
+    async (nextStep: StepId) => {
+      await saveGuidedConfigToServer({ silent: true });
       setStep(nextStep);
     },
     [saveGuidedConfigToServer]
