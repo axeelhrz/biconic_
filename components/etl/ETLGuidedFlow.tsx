@@ -165,6 +165,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   const skipClearSelectedTableRef = useRef(false);
   const restoringFromConfigRef = useRef(false);
+  const tableSelectRef = useRef<HTMLSelectElement>(null);
 
   // Restaurar estado desde configuración guardada (al editar un ETL ya ejecutado)
   useEffect(() => {
@@ -589,10 +590,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     connections.find((c) => String(c.id) === String(connectionId))?.title ?? "";
 
   const saveGuidedConfigToServer = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
-    const guidedConfig = buildGuidedConfigBody();
+    let guidedConfig = buildGuidedConfigBody();
     if (!guidedConfig) {
       if (!options?.silent) toast.error("Completá al menos la conexión para guardar.");
       return false;
+    }
+    // Asegurar que la tabla mostrada en el <select> se persista (evitar estado desactualizado al guardar)
+    const tableFromDom = tableSelectRef.current?.value?.trim();
+    if (tableFromDom && typeof guidedConfig.filter === "object" && guidedConfig.filter !== null) {
+      guidedConfig = {
+        ...guidedConfig,
+        filter: { ...(guidedConfig.filter as Record<string, unknown>), table: tableFromDom },
+      };
     }
     try {
       const res = await fetch("/api/etl/save-config", {
@@ -842,6 +851,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         />
                       )}
                       <select
+                        ref={tableSelectRef}
                         value={selectedTable ?? ""}
                         onChange={(e) => setSelectedTable(e.target.value || null)}
                         className="w-full mt-2 rounded-xl border px-4 py-3 text-sm"
