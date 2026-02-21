@@ -91,11 +91,12 @@ export default function AdminHeader() {
         const { createClient } = await import("@/lib/supabase/client");
         const supabase = createClient();
         const { data: sub } = supabase.auth.onAuthStateChange(
-          (_event, _session) => {
-            if (mounted) {
-              setIsUserLoading(true);
-              loadUser();
-            }
+          (event, _session) => {
+            if (!mounted) return;
+            // No recargar al volver a la pestaña (TOKEN_REFRESHED); solo en cambio real de sesión
+            if (event === "TOKEN_REFRESHED") return;
+            setIsUserLoading(true);
+            loadUser();
           }
         );
 

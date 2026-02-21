@@ -75,11 +75,11 @@ export default function DashboardHeader() {
         const { createClient } = await import("@/lib/supabase/client");
         const supabase = createClient();
         const { data: sub } = supabase.auth.onAuthStateChange(
-          (_event, _session) => {
-            if (mounted) {
-              setIsUserLoading(true);
-              loadUser();
-            }
+          (event, _session) => {
+            if (!mounted) return;
+            if (event === "TOKEN_REFRESHED") return;
+            setIsUserLoading(true);
+            loadUser();
           }
         );
 
