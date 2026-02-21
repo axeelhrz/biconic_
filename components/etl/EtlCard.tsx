@@ -1,61 +1,24 @@
 "use client";
+
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import ShareEtlModal from "./ShareEtlModal";
 import { DeleteEtlModal } from "./DeleteEtlModal";
+import EtlPreviewModal from "./EtlPreviewModal";
 import { deleteEtlAction } from "@/app/(main)/etl/actions";
 import { deleteEtlAdmin } from "@/app/admin/(main)/etl/actions";
 import { toast } from "sonner";
+import {
+  Play,
+  Eye,
+  Share2,
+  Pencil,
+  Trash2,
+  Calendar,
+  Zap,
+  Clock,
+} from "lucide-react";
 
-// --- Iconos necesarios para los botones ---
-
-// Icono de "Ejecutar" (Play)
-const PlayIcon = ({ className }: { className?: string }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-    <path d="M8 5v14l11-7L8 5z" />
-  </svg>
-);
-
-// Icono de "Vista previa" (Ojo)
-const EyeIcon = ({ className }: { className?: string }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" xmlns="http://www.w3.org/2000/svg">
-    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>
-);
-
-// Icono de "Papelera" para el botón de eliminar
-const TrashIcon = ({ className }: { className?: string }) => (
-  <svg
-    className={className}
-    fill="currentColor"
-    viewBox="0 0 20 20"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <path
-      fillRule="evenodd"
-      d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z"
-      clipRule="evenodd"
-    />
-  </svg>
-);
-
-// Icono de "Compartir"
-const ShareIcon = ({ className }: { className?: string }) => (
-  <svg
-    className={className}
-    viewBox="0 0 24 24"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <path
-      d="M18 16.08C17.24 16.08 16.56 16.38 16.04 16.85L8.91 12.7C8.96 12.47 9 12.24 9 12C9 11.76 8.96 11.53 8.91 11.3L15.96 7.19C16.5 7.69 17.21 8 18 8C19.66 8 21 6.66 21 5C21 3.34 19.66 2 18 2C16.34 2 15 3.34 15 5C15 5.24 15.04 5.47 15.09 5.7L8.04 9.81C7.5 9.31 6.79 9 6 9C4.34 9 3 10.34 3 12C3 13.66 4.34 15 6 15C6.79 15 7.5 15.31 8.04 15.81L15.12 19.95C15.08 20.17 15.04 20.4 15.04 20.62C15.04 22.28 16.38 23.62 18.04 23.62C19.7 23.62 21.04 22.28 21.04 20.62C21.04 18.96 19.7 17.62 18 17.62"
-      fill="currentColor"
-    />
-  </svg>
-);
-
-// --- Interfaz de datos actualizada para la tarjeta ---
 export interface Etl {
   id: string;
   clientId: string;
@@ -67,19 +30,15 @@ export interface Etl {
   createdAt: string;
   imageUrl: string;
   views: number;
-  owner?: {
-    fullName: string | null;
-  };
+  owner?: { fullName: string | null };
   ownerId?: string;
 }
 
-// --- Componente de Tarjeta modificado ---
 export default function EtlCard({
   etl,
   onDeleted,
   basePath = "/etl",
   useAdminDelete = false,
-  /** Si se proporciona, el botón Editar navega a basePath/[id] + este sufijo (ej: "/edit") */
   editPathSuffix,
 }: {
   etl: Etl;
@@ -91,6 +50,7 @@ export default function EtlCard({
   const router = useRouter();
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const deleteAction = useAdminDelete ? deleteEtlAdmin : deleteEtlAction;
   const {
@@ -102,12 +62,8 @@ export default function EtlCard({
     createdAt,
   } = etl;
 
-  const statusClasses =
-    status === "Conectado" || status === "Publicado"
-      ? "bg-[var(--platform-success-dim)] text-[var(--platform-success)]"
-      : status === "Borrador"
-      ? "bg-[var(--platform-warning)]/20 text-[var(--platform-warning)]"
-      : "bg-[var(--platform-surface-hover)] text-[var(--platform-fg-muted)]";
+  const isPublished = status === "Conectado" || status === "Publicado";
+  const isDraft = status === "Borrador";
 
   const handleDelete = async () => {
     setIsDeleting(true);
@@ -120,114 +76,182 @@ export default function EtlCard({
       toast.success("ETL eliminado correctamente");
       setDeleteModalOpen(false);
       onDeleted?.();
-    } catch (error) {
+    } catch {
       toast.error("Error al eliminar ETL");
     } finally {
       setIsDeleting(false);
     }
   };
 
+  const handleEjecutar = () => {
+    if (basePath === "/admin/etl") {
+      router.push(`/admin/dashboard?create=1&etlId=${etl.id}`);
+    } else {
+      router.push(`${basePath}/${etl.id}?run=1`);
+    }
+  };
+
   return (
-    <div
-      className="flex h-[335px] w-full max-w-[424px] flex-col justify-between rounded-[20px] border p-5 font-sans transition-shadow hover:border-[var(--platform-accent)]"
+    <article
+      className="group relative flex w-full max-w-[400px] flex-col overflow-hidden rounded-2xl border transition-all duration-200 hover:shadow-xl hover:shadow-black/5"
       style={{
         background: "var(--platform-surface)",
         borderColor: "var(--platform-border)",
-        boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
       }}
     >
-      <div className="flex flex-col items-start gap-4">
-        <span
-          className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-medium ${statusClasses}`}
-        >
-          {status}
-        </span>
+      {/* Barra superior de estado */}
+      <div
+        className="h-1 w-full shrink-0"
+        style={{
+          background: isPublished
+            ? "linear-gradient(90deg, var(--platform-success) 0%, var(--platform-success) 100%)"
+            : isDraft
+              ? "linear-gradient(90deg, var(--platform-warning) 0%, var(--platform-warning) 100%)"
+              : "var(--platform-border)",
+        }}
+      />
 
-        <div className="flex flex-col">
-          <h3 className="text-base font-medium" style={{ color: "var(--platform-fg)" }}>{title}</h3>
-          <p className="text-sm font-normal" style={{ color: "var(--platform-fg-muted)" }}>{description}</p>
-          {etl.owner && (
-            <p className="mt-1 text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
-              Dueño: {etl.owner.fullName || "Desconocido"}
+      <div className="flex flex-1 flex-col p-5">
+        {/* Header: badge + título */}
+        <div className="mb-4">
+          <span
+            className="inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+            style={{
+              background: isPublished
+                ? "rgba(34, 197, 94, 0.12)"
+                : isDraft
+                  ? "rgba(234, 179, 8, 0.12)"
+                  : "var(--platform-surface-hover)",
+              color: isPublished
+                ? "var(--platform-success, #22c55e)"
+                : isDraft
+                  ? "var(--platform-warning, #eab308)"
+                  : "var(--platform-fg-muted)",
+            }}
+          >
+            {status}
+          </span>
+          <h3
+            className="mt-3 line-clamp-2 text-lg font-semibold leading-tight"
+            style={{ color: "var(--platform-fg)" }}
+          >
+            {title}
+          </h3>
+          {description && (
+            <p
+              className="mt-1.5 line-clamp-2 text-sm leading-relaxed"
+              style={{ color: "var(--platform-fg-muted)" }}
+            >
+              {description}
+            </p>
+          )}
+          {etl.owner?.fullName && (
+            <p
+              className="mt-2 text-xs font-medium"
+              style={{ color: "var(--platform-fg-muted)" }}
+            >
+              {etl.owner.fullName}
             </p>
           )}
         </div>
 
-        <div className="flex flex-col gap-2.5 self-stretch">
-          <div>
-            <p className="text-sm font-normal" style={{ color: "var(--platform-fg-muted)" }}>
-              Última ejecución
-            </p>
-            <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{lastExecution}</p>
+        {/* Mini stats */}
+        <div
+          className="mb-4 grid grid-cols-3 gap-3 rounded-xl border p-3"
+          style={{
+            borderColor: "var(--platform-border)",
+            background: "var(--platform-bg)",
+          }}
+        >
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1.5">
+              <Zap className="h-3.5 w-3.5" style={{ color: "var(--platform-fg-muted)" }} />
+              <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--platform-fg-muted)" }}>
+                Última ejec.
+              </span>
+            </div>
+            <span className="text-xs font-medium truncate" style={{ color: "var(--platform-fg)" }} title={lastExecution}>
+              {lastExecution || "—"}
+            </span>
           </div>
-          <div>
-            <p className="text-sm font-normal" style={{ color: "var(--platform-fg-muted)" }}>
-              Próxima ejecución
-            </p>
-            <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{nextExecution}</p>
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5" style={{ color: "var(--platform-fg-muted)" }} />
+              <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--platform-fg-muted)" }}>
+                Próxima
+              </span>
+            </div>
+            <span className="text-xs font-medium truncate" style={{ color: "var(--platform-fg)" }} title={nextExecution}>
+              {nextExecution || "—"}
+            </span>
           </div>
-          <div>
-            <p className="text-sm font-normal" style={{ color: "var(--platform-fg-muted)" }}>Creado</p>
-            <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{createdAt}</p>
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1.5">
+              <Calendar className="h-3.5 w-3.5" style={{ color: "var(--platform-fg-muted)" }} />
+              <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--platform-fg-muted)" }}>
+                Creado
+              </span>
+            </div>
+            <span className="text-xs font-medium truncate" style={{ color: "var(--platform-fg)" }} title={createdAt}>
+              {createdAt || "—"}
+            </span>
           </div>
+        </div>
+
+        {/* Acciones */}
+        <div className="mt-auto flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleEjecutar}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition-all hover:opacity-90"
+            style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
+            title={basePath === "/admin/etl" ? "Crear dashboard con este ETL" : "Abrir para ejecutar"}
+          >
+            <Play className="h-4 w-4" />
+            <span>Ejecutar</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setPreviewModalOpen(true)}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-medium transition-colors hover:opacity-90"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            title="Vista previa (solo lectura)"
+          >
+            <Eye className="h-4 w-4" />
+            <span className="hidden sm:inline">Vista previa</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShareModalOpen(true)}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:opacity-90"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            title="Compartir"
+          >
+            <Share2 className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push(`${basePath}/${etl.id}${editPathSuffix ?? ""}`)}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:opacity-90"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            title="Editar"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="Eliminar"
+            onClick={() => setDeleteModalOpen(true)}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors hover:opacity-90"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+            title="Eliminar"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-end gap-2.5">
-        <button
-          type="button"
-          className="flex h-[34px] items-center justify-center gap-2 rounded-full px-3 text-sm font-medium hover:opacity-90"
-          style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
-          onClick={() => {
-            if (basePath === "/admin/etl") {
-              router.push(`/admin/dashboard?create=1&etlId=${etl.id}`);
-            } else {
-              router.push(`${basePath}/${etl.id}?run=1`);
-            }
-          }}
-          title={basePath === "/admin/etl" ? "Ir a crear dashboard con este ETL" : "Abrir ETL para ejecutar"}
-        >
-          <PlayIcon className="h-4 w-4" />
-          <span>Ejecutar</span>
-        </button>
-
-        <button
-          type="button"
-          className="flex h-[34px] items-center justify-center gap-2 rounded-full border px-3 text-sm font-medium hover:opacity-90"
-          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-          onClick={() => router.push(`${basePath}/${etl.id}`)}
-          title="Vista previa del ETL"
-        >
-          <EyeIcon className="h-4 w-4" />
-          <span className="hidden sm:inline">Vista previa</span>
-        </button>
-
-        <button
-          className="flex h-[34px] items-center justify-center gap-2 rounded-full border px-3 text-sm font-medium hover:opacity-90"
-          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-          onClick={() => setShareModalOpen(true)}
-          title="Compartir"
-        >
-          <ShareIcon className="h-4 w-4" />
-        </button>
-
-        <button
-          className="flex h-[34px] items-center justify-center rounded-full border px-4 text-sm font-medium hover:opacity-90"
-          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-          onClick={() => router.push(`${basePath}/${etl.id}${editPathSuffix ?? ""}`)}
-        >
-          Editar
-        </button>
-
-        <button
-          aria-label="Eliminar"
-          className="transition-colors hover:opacity-80"
-          style={{ color: "var(--platform-fg-muted)" }}
-          onClick={() => setDeleteModalOpen(true)}
-        >
-          <TrashIcon className="h-5 w-5" />
-        </button>
-      </div>
       <ShareEtlModal
         etlId={etl.id}
         clientId={etl.clientId}
@@ -242,6 +266,12 @@ export default function EtlCard({
         etlName={title}
         isDeleting={isDeleting}
       />
-    </div>
+      <EtlPreviewModal
+        etlId={etl.id}
+        open={previewModalOpen}
+        onOpenChange={setPreviewModalOpen}
+        etlTitle={title}
+      />
+    </article>
   );
 }

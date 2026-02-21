@@ -79,6 +79,76 @@ export async function getEtlsAdmin(options?: { clientId?: string | null }) {
   return { ok: true, data: (rows ?? []) as any[], owners, error: null };
 }
 
+/** Detalle de un ETL para vista previa (solo lectura). Incluye layout.guided_config. */
+export async function getEtlForPreview(etlId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "No autorizado", data: null };
+
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("app_role")
+    .eq("id", user.id)
+    .single();
+  if ((prof as { app_role?: string })?.app_role !== "APP_ADMIN")
+    return { ok: false, error: "Solo administradores", data: null };
+
+  const adminClient = createServiceRoleClient();
+  const { data: row, error } = await adminClient
+    .from("etl")
+    .select("id, title, name, description, status, published, created_at, output_table, user_id, client_id, layout")
+    .eq("id", etlId)
+    .single();
+
+  if (error || !row) {
+    return { ok: false, error: error?.message ?? "ETL no encontrado", data: null };
+  }
+
+  let ownerName: string | null = null;
+  if ((row as { user_id?: string }).user_id) {
+    const { data: profile } = await adminClient
+      .from("profiles")
+      .select("full_name")
+      .eq("id", (row as { user_id: string }).user_id)
+      .single();
+    ownerName = (profile as { full_name?: string | null })?.full_name ?? null;
+  }
+
+  let clientName: string | null = null;
+  if ((row as { client_id?: string | null }).client_id) {
+    const { data: client } = await adminClient
+      .from("clients")
+      .select("company_name, individual_full_name")
+      .eq("id", (row as { client_id: string }).client_id)
+      .single();
+    clientName = (client as { company_name?: string | null; individual_full_name?: string | null })
+      ?.company_name || (client as { individual_full_name?: string | null })?.individual_full_name ?? null;
+  }
+
+  const layout = (row as { layout?: { guided_config?: unknown } })?.layout;
+  const guidedConfig = layout?.guided_config && typeof layout.guided_config === "object" ? layout.guided_config as Record<string, unknown> : null;
+
+  return {
+    ok: true,
+    data: {
+      id: (row as { id: string }).id,
+      title: (row as { title?: string }).title ?? (row as { name?: string }).name ?? "Sin título",
+      name: (row as { name?: string }).name,
+      description: (row as { description?: string | null }).description ?? "",
+      status: (row as { status?: string }).status ?? "Borrador",
+      published: (row as { published?: boolean }).published,
+      created_at: (row as { created_at?: string }).created_at,
+      output_table: (row as { output_table?: string | null }).output_table,
+      ownerName,
+      clientName,
+      guidedConfig,
+    },
+    error: null,
+  };
+}
+
 // Search Clients
 export async function searchClients(query: string) {
   const supabase = await createClient();
