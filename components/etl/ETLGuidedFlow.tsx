@@ -606,7 +606,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setRunning(false);
       return;
     }
-    const body = { etlId, ...guidedBody };
+    const body = { etlId, ...guidedBody, waitForCompletion: true };
     try {
       const res = await fetch("/api/etl/run", {
         method: "POST",
@@ -619,11 +619,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       }
       setRunId(data.runId);
       setRunSuccess(true);
-      toast.success("ETL iniciado. Los datos se guardarán en segundo plano.");
+      setRunning(false);
+      toast.success("ETL completado. Redirigiendo a métricas…");
       router.push(`/admin/etl/${etlId}/metrics`);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Error al ejecutar");
-    } finally {
       setRunning(false);
     }
   }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, etlId, router]);

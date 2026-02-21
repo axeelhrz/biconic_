@@ -151,6 +151,8 @@ type RunBody = {
     mode: "overwrite" | "append" | "replace";
   };
   preview?: boolean;
+  /** Si true, la API espera a que el pipeline termine antes de responder (para redirigir a métricas con datos listos). */
+  waitForCompletion?: boolean;
 };
 
 
@@ -1055,17 +1057,20 @@ export async function POST(req: NextRequest) {
        } catch (_) {}
      }
 
-      // 2. Start Background Process (Fire-and-Forget)
-      // Note: In Next.js App Router (Node runtime), we can just not await.
-      // If deployed on Vercel Serverless, 'waitUntil' from @vercel/functions is recommended 
-      // but standard promise floating often works for short tasks or if configuring function duration.
-      // Since this is a long running task, "waitUntil" is safer if available, but for now we rely on standard behavior.
-      const backgroundPromise = executeEtlPipeline(body, runId, supabaseAdmin, user);
-      
-      // We attach a catch handler to prevent unhandled rejections crashing the process
-      backgroundPromise.catch(err => console.error("Unhandled background ETL error:", err));
-    
-      // 3. Return immediately
+      // 2. Run pipeline (síncrono si waitForCompletion, sino fire-and-forget)
+      const pipelinePromise = executeEtlPipeline(body, runId, supabaseAdmin, user);
+
+      if (body.waitForCompletion) {
+        await pipelinePromise;
+        return NextResponse.json({
+          ok: true,
+          runId,
+          completed: true,
+          message: "ETL completado. Los datos están listos."
+        });
+      }
+
+      pipelinePromise.catch(err => console.error("Unhandled background ETL error:", err));
       return NextResponse.json({
         ok: true,
         runId,
