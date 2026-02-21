@@ -596,12 +596,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (!options?.silent) toast.error("Completá al menos la conexión para guardar.");
       return false;
     }
-    // Asegurar que la tabla mostrada en el <select> se persista (evitar estado desactualizado al guardar)
-    const tableFromDom = tableSelectRef.current?.value?.trim();
-    if (tableFromDom && typeof guidedConfig.filter === "object" && guidedConfig.filter !== null) {
+    // Persistir siempre la tabla seleccionada: valor del <select> (lo que ve el usuario) o estado
+    const tableToSave = (tableSelectRef.current?.value ?? selectedTable ?? "")?.trim() || undefined;
+    if (tableToSave && typeof guidedConfig.filter === "object" && guidedConfig.filter !== null) {
       guidedConfig = {
         ...guidedConfig,
-        filter: { ...(guidedConfig.filter as Record<string, unknown>), table: tableFromDom },
+        filter: { ...(guidedConfig.filter as Record<string, unknown>), table: tableToSave },
       };
     }
     try {
@@ -622,7 +622,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       toast.error(msg);
       return false;
     }
-  }, [etlId, buildGuidedConfigBody]);
+  }, [etlId, buildGuidedConfigBody, selectedTable]);
 
   /** Avanza al paso siguiente y guarda la configuración actual en el ETL (sin toast). Espera el guardado para que se persista el estado actual (tabla, columnas, etc.). */
   const goToStepAndSave = useCallback(
