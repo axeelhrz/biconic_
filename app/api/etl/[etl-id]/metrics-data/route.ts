@@ -121,6 +121,62 @@ async function resolveEtlToTableAndFields(
   };
 }
 
+/** Usa la tabla configurada en layout.guided_config.end.target.table */
+async function resolveFromGuidedConfig(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  layout: Record<string, unknown> | null
+): Promise<{
+  schema: string;
+  tableName: string;
+  created_at: string | null;
+  sampleData: any[];
+  rowCount: number;
+  columnsFromConfig?: string[];
+} | null> {
+  const end = layout?.guided_config && typeof layout.guided_config === "object"
+    ? (layout.guided_config as Record<string, unknown>).end as Record<string, unknown> | undefined
+    : undefined;
+  const target = end?.target && typeof end.target === "object"
+    ? end.target as Record<string, unknown>
+    : undefined;
+  const rawTable = target?.table;
+  if (typeof rawTable !== "string" || !rawTable.trim()) return null;
+  const tableName = rawTable.trim().replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+  if (!tableName) return null;
+
+  const filter = layout?.guided_config && typeof layout.guided_config === "object"
+    ? (layout.guided_config as Record<string, unknown>).filter as Record<string, unknown> | undefined
+    : undefined;
+  const columnsFromConfig = Array.isArray(filter?.columns) ? (filter.columns as string[]) : undefined;
+
+  for (const schemaName of ["etl_output", "public"]) {
+    try {
+      const schemaClient = supabase.schema(schemaName as "public" | "etl_output") as any;
+      const { count, error: countErr } = await schemaClient
+        .from(tableName)
+        .select("*", { count: "exact", head: true });
+      if (countErr) continue;
+      const rowCount = count ?? 0;
+      let sampleData: any[] = [];
+      if (rowCount > 0) {
+        const { data } = await schemaClient.from(tableName).select("*").limit(1);
+        sampleData = data || [];
+      }
+      return {
+        schema: schemaName,
+        tableName,
+        created_at: null,
+        sampleData,
+        rowCount,
+        columnsFromConfig: columnsFromConfig && columnsFromConfig.length > 0 ? columnsFromConfig : undefined,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 /**
  * GET /api/etl/[etl-id]/metrics-data
  * Devuelve datos del ETL (tabla, columnas, fields) para la pantalla de creación de métricas.
@@ -162,22 +218,15 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "ETL no encontrado" }, { status: 404 });
     }
 
-    const resolved = await resolveEtlToTableAndFields(supabase, etlId);
-    const etlInfo = { id: etlRow.id, title: (etlRow as any).title, name: (etlRow as any).name };
-
-    // Si no hay datos completados, verificar si hay una ejecución en curso
-    let runInProgress = false;
+    let resolved = await resolveEtlToTableAndFields(supabase, etlId);
     if (!resolved) {
-      const { data: inProgressRun } = await supabase
-        .from("etl_runs_log")
-        .select("id")
-        .eq("etl_id", etlId)
-        .eq("status", "started")
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      runInProgress = !!inProgressRun;
+      const layout = (etlRow as { layout?: Record<string, unknown> }).layout;
+      resolved = await resolveFromGuidedConfig(supabase, layout ?? null);
     }
+
+    const etlInfo = { id: etlRow.id, title: (etlRow as any).title, name: (etlRow as any).name };
+    const layout = (etlRow as { layout?: { saved_metrics?: unknown[] } }).layout;
+    const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
 
     if (!resolved) {
       return NextResponse.json({
@@ -185,26 +234,26 @@ export async function GET(
         data: {
           etl: etlInfo,
           hasData: false,
-          runInProgress,
           schema: null,
           tableName: null,
           fields: { all: [], numeric: [], string: [], date: [] },
           rowCount: 0,
-          savedMetrics: Array.isArray((etlRow as any).layout?.saved_metrics) ? (etlRow as any).layout.saved_metrics : [],
+          savedMetrics,
         },
       });
     }
 
-    const fields = deriveFieldsFromSample(resolved.sampleData);
-    const layout = (etlRow as { layout?: { saved_metrics?: unknown[] } }).layout;
-    const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
+    let fields = deriveFieldsFromSample(resolved.sampleData);
+    if (fields.all.length === 0 && (resolved as any).columnsFromConfig?.length) {
+      const cols = (resolved as any).columnsFromConfig as string[];
+      fields = { all: cols, numeric: cols, string: cols, date: [] };
+    }
 
     return NextResponse.json({
       ok: true,
       data: {
         etl: etlInfo,
         hasData: true,
-        runInProgress: false,
         schema: resolved.schema,
         tableName: resolved.tableName,
         fields,

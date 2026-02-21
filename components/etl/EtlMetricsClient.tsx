@@ -27,7 +27,6 @@ type MetricsDataResponse = {
   data?: {
     etl: { id: string; title?: string; name?: string };
     hasData: boolean;
-    runInProgress?: boolean;
     schema: string | null;
     tableName: string | null;
     fields: { all: string[]; numeric: string[]; string: string[]; date: string[] };
@@ -110,15 +109,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
 
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
   const hasData = data?.hasData ?? false;
-  const runInProgress = data?.runInProgress ?? false;
   const fields = data?.fields?.all ?? [];
-
-  // Auto-refrescar mientras la ejecución está en curso (sin mostrar loading)
-  useEffect(() => {
-    if (!runInProgress) return;
-    const interval = setInterval(() => fetchData({ silent: true }), 5000);
-    return () => clearInterval(interval);
-  }, [runInProgress, fetchData]);
 
   const openNew = () => {
     setEditingId(null);
@@ -268,57 +259,31 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
             color: "var(--platform-fg-muted)",
           }}
         >
-          {runInProgress ? (
-            <>
-              <p className="text-sm mb-3">
-                La ejecución del ETL está en curso. Los datos estarán disponibles en unos segundos.
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="rounded-lg"
-                  onClick={() => fetchData()}
-                  disabled={loading}
-                  style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
-                >
-                  {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-                  Recargar
-                </Button>
-                <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                  (se actualiza automáticamente cada 5 s)
-                </span>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-sm">
-                Ejecutá el ETL primero para generar datos y poder crear métricas reutilizables.
-              </p>
-              <div className="flex flex-wrap items-center gap-2 mt-2">
-                <Link
-                  href={`/admin/etl/${etlId}?run=1`}
-                  className="inline-flex items-center gap-2 text-sm font-medium"
-                  style={{ color: "var(--platform-accent)" }}
-                >
-                  Ir a ejecutar ETL
-                  <ChevronLeft className="h-4 w-4 rotate-180" />
-                </Link>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="rounded-lg"
-                  onClick={() => fetchData()}
-                  style={{ color: "var(--platform-fg-muted)" }}
-                >
-                  <RefreshCw className="h-4 w-4 mr-1" />
-                  Recargar
-                </Button>
-              </div>
-            </>
-          )}
+          <p className="text-sm">
+            Ejecutá el ETL primero para generar datos y poder crear métricas reutilizables.
+          </p>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <Link
+              href={`/admin/etl/${etlId}?run=1`}
+              className="inline-flex items-center gap-2 text-sm font-medium"
+              style={{ color: "var(--platform-accent)" }}
+            >
+              Ir a ejecutar ETL
+              <ChevronLeft className="h-4 w-4 rotate-180" />
+            </Link>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="rounded-lg"
+              onClick={() => fetchData()}
+              disabled={loading}
+              style={{ color: "var(--platform-fg-muted)" }}
+            >
+              {loading ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+              Recargar
+            </Button>
+          </div>
         </div>
       )}
 
