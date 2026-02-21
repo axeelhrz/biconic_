@@ -4,8 +4,39 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import postgres from "postgres";
 
+// Lista de clientes para filtros (id + nombre)
+export async function getClientsList() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return [];
+
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("app_role")
+    .eq("id", user.id)
+    .single();
+  if ((prof as { app_role?: string })?.app_role !== "APP_ADMIN") return [];
+
+  const adminClient = createServiceRoleClient();
+  const { data: rows, error } = await adminClient
+    .from("clients")
+    .select("id, company_name, individual_full_name")
+    .order("company_name", { ascending: true, nullsFirst: false })
+    .limit(500);
+  if (error) {
+    console.error("getClientsList:", error);
+    return [];
+  }
+  return (rows ?? []).map((r: { id: string; company_name?: string | null; individual_full_name?: string | null }) => ({
+    id: r.id,
+    name: r.company_name || r.individual_full_name || "Sin nombre",
+  }));
+}
+
 // Lista de todos los ETLs para la vista Admin (bypasea RLS para que el admin vea todos)
-export async function getEtlsAdmin() {
+export async function getEtlsAdmin(options?: { clientId?: string | null }) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -21,10 +52,14 @@ export async function getEtlsAdmin() {
   if (!isAdmin) return { ok: false, error: "Solo administradores", data: [], owners: {} };
 
   const adminClient = createServiceRoleClient();
-  const { data: rows, error } = await adminClient
+  let query = adminClient
     .from("etl")
     .select("*")
-    .order("id", { ascending: false });
+    .order("created_at", { ascending: false });
+  if (options?.clientId != null && options.clientId !== "") {
+    query = query.eq("client_id", options.clientId);
+  }
+  const { data: rows, error } = await query;
 
   if (error) {
     console.error("getEtlsAdmin:", error);

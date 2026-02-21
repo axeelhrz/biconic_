@@ -1,18 +1,25 @@
 
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import AdminEtlGrid from "@/components/admin/AdminEtlGrid";
 import { Search, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CreateEtlDialog } from "./CreateEtlDialog";
+import { getClientsList } from "./actions";
 
 export default function AdminEtlPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"todos" | "publicados" | "borradores">(
     "todos"
   );
+  const [clientId, setClientId] = useState<string>("");
+  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    getClientsList().then(setClients);
+  }, []);
 
   const handleNewEtl = () => {
     setShowCreateModal(true);
@@ -42,7 +49,7 @@ export default function AdminEtlPage() {
             <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
             <input
               type="text"
-              placeholder="Buscar..."
+              placeholder="Buscar por título o descripción..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="h-[42px] w-full rounded-full border pl-10 pr-4 text-sm focus:outline-none focus:ring-2 sm:w-[280px]"
@@ -53,6 +60,23 @@ export default function AdminEtlPage() {
               }}
             />
           </div>
+
+          <select
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            className="h-[42px] rounded-full border pl-4 pr-8 text-sm focus:outline-none focus:ring-2 min-w-[180px]"
+            style={{
+              background: "var(--platform-surface)",
+              borderColor: "var(--platform-border)",
+              color: "var(--platform-fg)",
+            }}
+            title="Filtrar por cliente"
+          >
+            <option value="">Todos los clientes</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
 
           <div
             className="flex items-center gap-2 rounded-full border p-1"
@@ -95,7 +119,7 @@ export default function AdminEtlPage() {
       </div>
 
       {/* Grid de ETLs */}
-      <AdminEtlGrid key={refreshKey} searchQuery={searchQuery} filter={filter} />
+      <AdminEtlGrid key={refreshKey} searchQuery={searchQuery} filter={filter} clientId={clientId} />
     </div>
   );
 }

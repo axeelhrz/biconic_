@@ -24,11 +24,13 @@ type FilterType = "todos" | "publicados" | "borradores";
 interface AdminEtlGridProps {
   searchQuery?: string;
   filter?: FilterType;
+  clientId?: string;
 }
 
 export default function AdminEtlGrid({
   searchQuery = "",
   filter = "todos",
+  clientId = "",
 }: AdminEtlGridProps) {
   const [etls, setEtls] = useState<Etl[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,10 +38,14 @@ export default function AdminEtlGrid({
 
   const loadFromClient = useCallback(async (): Promise<Etl[]> => {
     const supabase = createClient();
-    const { data, error } = await supabase
+    let query = supabase
       .from("etl")
       .select("*")
-      .order("id", { ascending: false });
+      .order("created_at", { ascending: false });
+    if (clientId && clientId.trim() !== "") {
+      query = query.eq("client_id", clientId.trim());
+    }
+    const { data, error } = await query;
     if (error) throw error;
     const rows = (data as SupabaseEtlRow[] | null) ?? [];
     const ownerIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
@@ -73,14 +79,14 @@ export default function AdminEtlGrid({
         owner: row.user_id ? { fullName: ownerById[row.user_id] ?? null } : undefined,
       } satisfies Etl;
     });
-  }, []);
+  }, [clientId]);
 
   const loadEtls = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const timeoutMs = 8000;
-      const adminPromise = getEtlsAdmin();
+      const adminPromise = getEtlsAdmin({ clientId: clientId?.trim() || undefined });
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("timeout")), timeoutMs)
       );
@@ -127,7 +133,7 @@ export default function AdminEtlGrid({
     } finally {
       setLoading(false);
     }
-  }, [loadFromClient]);
+  }, [loadFromClient, clientId]);
 
   useEffect(() => {
     loadEtls();
@@ -200,7 +206,8 @@ export default function AdminEtlGrid({
         : filter === "publicados"
         ? d.status === "Publicado"
         : d.status === "Borrador";
-    return matchesQuery && matchesFilter;
+    const matchesClient = !clientId?.trim() || (d.clientId ?? "") === clientId.trim();
+    return matchesQuery && matchesFilter && matchesClient;
   });
 
   if (etls.length === 0) {
