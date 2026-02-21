@@ -98,7 +98,7 @@ export async function getEtlForPreview(etlId: string) {
   const adminClient = createServiceRoleClient();
   const { data: row, error } = await adminClient
     .from("etl")
-    .select("id, title, name, description, status, published, created_at, output_table, user_id, client_id, layout")
+    .select("id, title, name, status, published, created_at, output_table, user_id, client_id, layout")
     .eq("id", etlId)
     .single();
 
@@ -106,41 +106,54 @@ export async function getEtlForPreview(etlId: string) {
     return { ok: false, error: error?.message ?? "ETL no encontrado", data: null };
   }
 
+  const r = row as {
+    id: string;
+    title?: string | null;
+    name?: string | null;
+    status?: string | null;
+    published?: boolean;
+    created_at?: string | null;
+    output_table?: string | null;
+    user_id?: string | null;
+    client_id?: string | null;
+    layout?: { guided_config?: unknown } | null;
+  };
+
   let ownerName: string | null = null;
-  if ((row as { user_id?: string }).user_id) {
+  if (r.user_id) {
     const { data: profile } = await adminClient
       .from("profiles")
       .select("full_name")
-      .eq("id", (row as { user_id: string }).user_id)
+      .eq("id", r.user_id)
       .single();
     ownerName = (profile as { full_name?: string | null })?.full_name ?? null;
   }
 
   let clientName: string | null = null;
-  if ((row as { client_id?: string | null }).client_id) {
+  if (r.client_id) {
     const { data: client } = await adminClient
       .from("clients")
       .select("company_name, individual_full_name")
-      .eq("id", (row as { client_id: string }).client_id)
+      .eq("id", r.client_id)
       .single();
     const c = client as { company_name?: string | null; individual_full_name?: string | null } | null;
     clientName = c?.company_name?.trim() || c?.individual_full_name?.trim() || null;
   }
 
-  const layout = (row as { layout?: { guided_config?: unknown } })?.layout;
+  const layout = r.layout;
   const guidedConfig = layout?.guided_config && typeof layout.guided_config === "object" ? layout.guided_config as Record<string, unknown> : null;
 
   return {
     ok: true,
     data: {
-      id: (row as { id: string }).id,
-      title: (row as { title?: string }).title ?? (row as { name?: string }).name ?? "Sin título",
-      name: (row as { name?: string }).name,
-      description: (row as { description?: string | null }).description ?? "",
-      status: (row as { status?: string }).status ?? "Borrador",
-      published: (row as { published?: boolean }).published,
-      created_at: (row as { created_at?: string }).created_at,
-      output_table: (row as { output_table?: string | null }).output_table,
+      id: r.id,
+      title: r.title ?? r.name ?? "Sin título",
+      name: r.name ?? undefined,
+      description: "",
+      status: r.status ?? "Borrador",
+      published: r.published ?? false,
+      created_at: r.created_at ?? undefined,
+      output_table: r.output_table ?? undefined,
       ownerName,
       clientName,
       guidedConfig,
