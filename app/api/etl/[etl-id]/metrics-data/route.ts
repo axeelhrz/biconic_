@@ -172,7 +172,7 @@ export async function GET(
         .from("etl_runs_log")
         .select("id")
         .eq("etl_id", etlId)
-        .in("status", ["started", "running"])
+        .eq("status", "started")
         .order("started_at", { ascending: false })
         .limit(1)
         .maybeSingle();
