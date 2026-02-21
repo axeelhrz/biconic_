@@ -103,9 +103,10 @@ async function resolveEtlToTableAndFields(
   const schema = latestRun.destination_schema || "etl_output";
   const tableName = latestRun.destination_table_name;
   const schemaClient = supabase.schema(schema as "public" | "etl_output") as any;
-  const { count } = await schemaClient
+  const { count, error: countError } = await schemaClient
     .from(tableName)
     .select("*", { count: "exact", head: true });
+  if (countError) return null;
   const rowCount = count ?? 0;
   let sampleData: any[] = [];
   if (rowCount > 0) {
@@ -177,6 +178,46 @@ async function resolveFromGuidedConfig(
   return null;
 }
 
+/** Usa etl.output_table (tabla real creada en la última ejecución exitosa) */
+async function resolveFromOutputTable(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  outputTable: string
+): Promise<{
+  schema: string;
+  tableName: string;
+  created_at: string | null;
+  sampleData: any[];
+  rowCount: number;
+} | null> {
+  const tableName = outputTable.trim().replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+  if (!tableName) return null;
+  for (const schemaName of ["etl_output", "public"]) {
+    try {
+      const schemaClient = supabase.schema(schemaName as "public" | "etl_output") as any;
+      const { count, error: countErr } = await schemaClient
+        .from(tableName)
+        .select("*", { count: "exact", head: true });
+      if (countErr) continue;
+      const rowCount = count ?? 0;
+      let sampleData: any[] = [];
+      if (rowCount > 0) {
+        const { data } = await schemaClient.from(tableName).select("*").limit(1);
+        sampleData = data || [];
+      }
+      return {
+        schema: schemaName,
+        tableName,
+        created_at: null,
+        sampleData,
+        rowCount,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 /**
  * GET /api/etl/[etl-id]/metrics-data
  * Devuelve datos del ETL (tabla, columnas, fields) para la pantalla de creación de métricas.
@@ -210,7 +251,7 @@ export async function GET(
 
     const { data: etlRow, error: etlError } = await supabase
       .from("etl")
-      .select("id, title, name, layout")
+      .select("id, title, name, layout, output_table")
       .eq("id", etlId)
       .maybeSingle();
 
@@ -219,6 +260,12 @@ export async function GET(
     }
 
     let resolved = await resolveEtlToTableAndFields(supabase, etlId);
+    if (!resolved && (etlRow as { output_table?: string | null }).output_table) {
+      resolved = await resolveFromOutputTable(
+        supabase,
+        (etlRow as { output_table: string }).output_table
+      );
+    }
     if (!resolved) {
       const layout = (etlRow as { layout?: Record<string, unknown> }).layout;
       resolved = await resolveFromGuidedConfig(supabase, layout ?? null);

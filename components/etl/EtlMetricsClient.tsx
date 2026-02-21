@@ -158,12 +158,29 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     setShowForm(true);
   };
 
-  const openEdit = (saved: SavedMetricForm & { chartType?: string }) => {
+  const openEdit = (saved: SavedMetricForm) => {
     setEditingId(saved.id);
     setFormName(saved.name);
-    setFormChartType((saved as { chartType?: string }).chartType ?? "bar");
-    setFormMetrics([{ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` }]);
-    setFormMetric({ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` });
+    setFormChartType(saved.chartType ?? "bar");
+    const cfg = saved.aggregationConfig;
+    if (cfg) {
+      setFormDimension(cfg.dimension ?? "");
+      setFormDimension2(cfg.dimension2 ?? "");
+      setFormMetrics((cfg.metrics ?? [saved.metric]).map((m) => ({ ...m, id: m.id || `m-${Date.now()}-${Math.random().toString(36).slice(2)}` })));
+      setFormFilters((cfg.filters ?? []).map((f) => ({ ...f, id: f.id || `f-${Date.now()}-${Math.random().toString(36).slice(2)}` })));
+      setFormOrderBy(cfg.orderBy ?? null);
+      setFormLimit(cfg.limit ?? 100);
+      const first = (cfg.metrics ?? [saved.metric])[0];
+      setFormMetric(first ? { ...first, id: first.id || `m-${Date.now()}` } : { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" });
+    } else {
+      setFormDimension("");
+      setFormDimension2("");
+      setFormMetrics([{ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` }]);
+      setFormFilters([]);
+      setFormOrderBy(null);
+      setFormLimit(100);
+      setFormMetric({ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` });
+    }
     setPreviewData(null);
     setShowForm(true);
   };
@@ -234,17 +251,28 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       return;
     }
     const metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
+    const aggregationConfig = {
+      dimension: formDimension || undefined,
+      dimension2: formDimension2 || undefined,
+      metrics: formMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` })),
+      filters: formFilters.length ? formFilters : undefined,
+      orderBy: formOrderBy ?? undefined,
+      limit: formLimit ?? 100,
+    };
     setSaving(true);
     try {
-      let next: (SavedMetricForm & { chartType?: string })[];
+      let next: SavedMetricForm[];
+      const item: SavedMetricForm = {
+        id: editingId ?? `sm-${Date.now()}`,
+        name,
+        metric: metricToSave,
+        chartType: formChartType,
+        aggregationConfig,
+      };
       if (editingId) {
-        next = savedMetrics.map((s) =>
-          s.id === editingId
-            ? { ...s, name, metric: metricToSave, chartType: formChartType }
-            : s
-        );
+        next = savedMetrics.map((s) => (s.id === editingId ? item : s));
       } else {
-        next = [...savedMetrics, { id: `sm-${Date.now()}`, name, metric: metricToSave, chartType: formChartType }];
+        next = [...savedMetrics, item];
       }
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
@@ -449,7 +477,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
               Agregación de datos
             </h3>
             <div className="space-y-4">
-              <div>
+              <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                 <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
                   Agrupar por (dimensión)
                 </Label>
@@ -460,9 +488,10 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                   etlData={etlData}
                   fieldType="all"
                   placeholder="Campo..."
+                  className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]"
                 />
               </div>
-              <div>
+              <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                 <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
                   Segunda dimensión (opcional)
                 </Label>
@@ -473,6 +502,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                   etlData={etlData}
                   fieldType="all"
                   placeholder="Ninguna..."
+                  className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]"
                 />
               </div>
               <div>
@@ -587,39 +617,46 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
             </div>
           </section>
 
-          {/* Vista previa */}
+          {/* Vista previa: mismos datos agregados que usará el gráfico */}
           <section
             className="rounded-2xl border p-6 shadow-sm"
             style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
           >
-            <h3 className="text-base font-semibold mb-4" style={{ color: "var(--platform-fg)" }}>
+            <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>
               Vista previa
             </h3>
+            <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
+              Datos agregados con la misma configuración que el gráfico (dimensión, métricas, filtros, orden y límite).
+            </p>
             <Button type="button" variant="outline" size="sm" className="rounded-xl mb-4" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
               {previewLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
               Actualizar vista previa
             </Button>
             {previewData && (
-              <div className="overflow-x-auto rounded-xl border" style={{ borderColor: "var(--platform-border)" }}>
-                <table className="w-full text-sm" style={{ color: "var(--platform-fg)" }}>
-                  <thead>
-                    <tr style={{ background: "var(--platform-surface-hover)" }}>
-                      {previewData.length > 0 && Object.keys(previewData[0]).map((k) => (
-                        <th key={k} className="text-left px-4 py-2 font-medium">{k}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {previewData.slice(0, 10).map((row, idx) => (
-                      <tr key={idx} className="border-t" style={{ borderColor: "var(--platform-border)" }}>
-                        {Object.values(row).map((v, i) => (
-                          <td key={i} className="px-4 py-2">{String(v ?? "")}</td>
+              <div className="overflow-hidden rounded-xl border" style={{ borderColor: "var(--platform-border)" }}>
+                <div className="overflow-auto max-h-[400px]" style={{ background: "var(--platform-bg-elevated)" }}>
+                  <table className="w-full text-sm" style={{ color: "var(--platform-fg)" }}>
+                    <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface-hover)" }}>
+                      <tr>
+                        {previewData.length > 0 && Object.keys(previewData[0]).map((k) => (
+                          <th key={k} className="text-left px-4 py-2 font-medium whitespace-nowrap">{k}</th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {previewData.length > 10 && <p className="text-xs px-4 py-2" style={{ color: "var(--platform-fg-muted)" }}>Mostrando 10 de {previewData.length} filas</p>}
+                    </thead>
+                    <tbody>
+                      {previewData.map((row, idx) => (
+                        <tr key={idx} className="border-t" style={{ borderColor: "var(--platform-border)" }}>
+                          {Object.values(row).map((v, i) => (
+                            <td key={i} className="px-4 py-2 whitespace-nowrap">{String(v ?? "")}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs px-4 py-2 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                  {previewData.length} {previewData.length === 1 ? "fila" : "filas"} (mismo resultado que el gráfico)
+                </p>
               </div>
             )}
           </section>

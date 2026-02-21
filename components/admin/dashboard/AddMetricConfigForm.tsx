@@ -58,11 +58,25 @@ export type AddMetricFormConfig = {
   dataSourceId?: string | null;
 };
 
+/** Configuración de agregación guardada en una métrica reutilizable */
+export type SavedMetricAggregationConfig = {
+  dimension?: string;
+  dimension2?: string;
+  metrics: AggregationMetricEdit[];
+  filters?: AggregationFilterEdit[];
+  orderBy?: { field: string; direction: "ASC" | "DESC" };
+  limit?: number;
+};
+
 /** Métrica guardada para reutilizar (mismo formato que en AdminDashboardStudio) */
 export type SavedMetricForm = {
   id: string;
   name: string;
   metric: AggregationMetricEdit;
+  /** Tipo de gráfico recomendado */
+  chartType?: string;
+  /** Configuración completa de agregación (persistida al guardar) */
+  aggregationConfig?: SavedMetricAggregationConfig;
 };
 
 const CHART_TYPES: { value: string; label: string }[] = [
@@ -142,9 +156,26 @@ export function AddMetricConfigForm({
   };
 
   const addSavedMetric = (saved: SavedMetricForm) => {
-    updateAgg({
-      metrics: [...metrics, { ...saved.metric, id: `m-${Date.now()}` }],
-    });
+    if (saved.aggregationConfig) {
+      const cfg = saved.aggregationConfig;
+      const newMetrics = (cfg.metrics ?? [saved.metric]).map((m, i) => ({ ...m, id: `m-${Date.now()}-${i}` }));
+      const newFilters = (cfg.filters ?? []).map((f, i) => ({ ...f, id: f.id || `f-${Date.now()}-${i}` }));
+      updateForm({
+        ...(saved.chartType && { type: saved.chartType }),
+      });
+      updateAgg({
+        dimension: cfg.dimension ?? agg.dimension,
+        dimension2: cfg.dimension2 ?? agg.dimension2,
+        metrics: newMetrics,
+        filters: newFilters.length ? newFilters : agg.filters,
+        orderBy: cfg.orderBy ?? agg.orderBy,
+        limit: cfg.limit ?? agg.limit,
+      });
+    } else {
+      updateAgg({
+        metrics: [...metrics, { ...saved.metric, id: `m-${Date.now()}` }],
+      });
+    }
   };
 
   const openSaveTemplate = (index: number) => {
