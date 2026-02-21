@@ -9,8 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { getEtlForPreview, updateEtlAdmin } from "@/app/admin/(main)/etl/actions";
 import { getConnections } from "@/lib/actions/connections";
-import { Loader2, Plus, Trash2, ExternalLink } from "lucide-react";
-import Link from "next/link";
+import { Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 export type GuidedConfig = {
@@ -82,6 +81,8 @@ export default function EditEtlModal({
   const [data, setData] = useState<PreviewData | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [tables, setTables] = useState<{ schema: string; name: string }[]>([]);
+  const [tableColumns, setTableColumns] = useState<string[]>([]);
+  const [loadingColumns, setLoadingColumns] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -149,6 +150,7 @@ export default function EditEtlModal({
   useEffect(() => {
     if (!connectionId) {
       setTables([]);
+      setTableColumns([]);
       return;
     }
     fetch("/api/connection/metadata", {
@@ -163,6 +165,29 @@ export default function EditEtlModal({
       })
       .catch(() => setTables([]));
   }, [connectionId]);
+
+  // Fetch columns for selected table (for "Excluir filas" dropdown)
+  useEffect(() => {
+    if (!connectionId || !table) {
+      setTableColumns([]);
+      return;
+    }
+    setLoadingColumns(true);
+    fetch("/api/connection/metadata", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionId, tableName: table }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.metadata?.tables?.[0]?.columns) {
+          const cols = (res.metadata.tables[0].columns as { name: string }[]).map((c) => c.name);
+          setTableColumns(cols);
+        } else setTableColumns([]);
+      })
+      .catch(() => setTableColumns([]))
+      .finally(() => setLoadingColumns(false));
+  }, [connectionId, table]);
 
   const addCondition = () => setConditions((c) => [...c, { column: "", operator: "=", value: "" }]);
   const removeCondition = (i: number) => setConditions((c) => c.filter((_, j) => j !== i));
@@ -421,14 +446,24 @@ export default function EditEtlModal({
             {/* Excluir filas */}
             <div className="space-y-2">
               <label className={labelClass} style={{ color: style.muted }}>Excluir filas (columna)</label>
-              <input
-                type="text"
+              <select
                 value={excludeRowsColumn}
                 onChange={(e) => setExcludeRowsColumn(e.target.value)}
                 className={inputClass}
                 style={{ background: style.input, borderColor: style.border, color: style.text }}
-                placeholder="Nombre de columna para excluir valores"
-              />
+                disabled={loadingColumns}
+              >
+                <option value="">Ninguna</option>
+                {excludeRowsColumn && !tableColumns.includes(excludeRowsColumn) && (
+                  <option value={excludeRowsColumn}>{excludeRowsColumn}</option>
+                )}
+                {tableColumns.map((col) => (
+                  <option key={col} value={col}>{col}</option>
+                ))}
+              </select>
+              {table && tableColumns.length === 0 && !loadingColumns && (
+                <p className="text-[10px]" style={{ color: style.muted }}>Selecciona conexión y tabla para cargar columnas</p>
+              )}
             </div>
 
             {/* Destino */}
@@ -456,16 +491,7 @@ export default function EditEtlModal({
             </div>
 
             {/* Botones */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t" style={{ borderColor: style.border }}>
-              <Link
-                href={`/admin/etl/${etlId}/edit`}
-                className="text-xs font-medium flex items-center gap-1"
-                style={{ color: "rgba(34, 197, 94, 0.9)" }}
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                Abrir editor completo (UNION, JOIN, limpieza)
-              </Link>
-              <div className="flex gap-2">
+            <div className="flex justify-end gap-2 pt-2 border-t" style={{ borderColor: style.border }}>
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
@@ -488,7 +514,6 @@ export default function EditEtlModal({
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Guardar
               </button>
-              </div>
             </div>
           </div>
         )}
