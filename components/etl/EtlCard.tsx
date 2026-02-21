@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import ShareEtlModal from "./ShareEtlModal";
 import { DeleteEtlModal } from "./DeleteEtlModal";
 import EtlPreviewModal from "./EtlPreviewModal";
+import EditEtlModal from "./EditEtlModal";
 import { deleteEtlAction } from "@/app/(main)/etl/actions";
 import { deleteEtlAdmin } from "@/app/admin/(main)/etl/actions";
 import { toast } from "sonner";
@@ -40,12 +41,14 @@ export interface Etl {
 export default function EtlCard({
   etl,
   onDeleted,
+  onSaved,
   basePath = "/etl",
   useAdminDelete = false,
   editPathSuffix,
 }: {
   etl: Etl;
   onDeleted?: () => void;
+  onSaved?: () => void;
   basePath?: string;
   useAdminDelete?: boolean;
   editPathSuffix?: string;
@@ -54,7 +57,9 @@ export default function EtlCard({
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const isAdminEtl = basePath === "/admin/etl";
   const deleteAction = useAdminDelete ? deleteEtlAdmin : deleteEtlAction;
   const {
     title,
@@ -265,10 +270,10 @@ export default function EtlCard({
             </button>
             <button
               type="button"
-              onClick={() => router.push(`${basePath}/${etl.id}${editPathSuffix ?? ""}`)}
+              onClick={() => (isAdminEtl ? setEditModalOpen(true) : router.push(`${basePath}/${etl.id}${editPathSuffix ?? ""}`))}
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:opacity-90"
               style={{ color: "rgba(255,255,255,0.85)" }}
-              title="Editar"
+              title={isAdminEtl ? "Editar (modal)" : "Editar"}
             >
               <Pencil className="h-4 w-4" />
             </button>
@@ -306,6 +311,15 @@ export default function EtlCard({
         onOpenChange={setPreviewModalOpen}
         etlTitle={title}
       />
+      {isAdminEtl && (
+        <EditEtlModal
+          etlId={etl.id}
+          open={editModalOpen}
+          onOpenChange={setEditModalOpen}
+          clientId={etl.clientId || undefined}
+          onSaved={onSaved}
+        />
+      )}
     </article>
   );
 }

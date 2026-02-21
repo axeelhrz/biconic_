@@ -198,6 +198,45 @@ export async function getEtlForPreview(etlId: string) {
   };
 }
 
+/** Actualizar ETL (título, nombre, estado) desde admin. */
+export async function updateEtlAdmin(
+  etlId: string,
+  payload: { title?: string; status?: string; published?: boolean }
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "No autorizado" };
+
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("app_role")
+    .eq("id", user.id)
+    .single();
+  if ((prof as { app_role?: string })?.app_role !== "APP_ADMIN")
+    return { ok: false, error: "Solo administradores" };
+
+  const adminClient = createServiceRoleClient();
+  const update: Record<string, unknown> = {};
+  if (payload.title != null) {
+    update.title = payload.title;
+    update.name = payload.title;
+  }
+  if (payload.status != null) update.status = payload.status;
+  if (payload.published != null) update.published = payload.published;
+
+  if (Object.keys(update).length === 0) return { ok: true };
+
+  const { error } = await adminClient
+    .from("etl")
+    .update(update)
+    .eq("id", etlId);
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
 // Search Clients
 export async function searchClients(query: string) {
   const supabase = await createClient();
