@@ -123,8 +123,8 @@ export async function getEtlForPreview(etlId: string) {
       .select("company_name, individual_full_name")
       .eq("id", (row as { client_id: string }).client_id)
       .single();
-    clientName = (client as { company_name?: string | null; individual_full_name?: string | null })
-      ?.company_name || (client as { individual_full_name?: string | null })?.individual_full_name ?? null;
+    const c = client as { company_name?: string | null; individual_full_name?: string | null } | null;
+    clientName = c?.company_name?.trim() || c?.individual_full_name?.trim() || null;
   }
 
   const layout = (row as { layout?: { guided_config?: unknown } })?.layout;
