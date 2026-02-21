@@ -52,6 +52,10 @@ export type ETLGuidedFlowHandle = {
   getGuidedConfig: () => Record<string, unknown> | null;
   /** Guarda la configuración actual en el ETL (layout.guided_config) */
   saveGuidedConfig: () => Promise<boolean>;
+  /** Indica si se puede ejecutar el ETL (conexión, tabla, columnas, destino válido) */
+  getCanRun: () => boolean;
+  /** Ejecuta el ETL si la configuración es válida (mismo efecto que el botón "Ejecutar ETL") */
+  run: () => void;
 };
 
 /** Configuración guardada al ejecutar (layout.guided_config) para cargar al editar */
@@ -593,7 +597,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     buildCleanConfig,
   ]);
 
-  const handleRun = async () => {
+  const handleRun = useCallback(async () => {
     if (!canRun || !connectionId || !selectedTable) return;
     setRunning(true);
     const guidedBody = buildGuidedConfigBody();
@@ -615,12 +619,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setRunId(data.runId);
       setRunSuccess(true);
       toast.success("ETL iniciado. Los datos se guardarán en segundo plano.");
-    } catch (e: any) {
-      toast.error(e?.message || "Error al ejecutar");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Error al ejecutar");
     } finally {
       setRunning(false);
     }
-  };
+  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, etlId]);
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
   const connectionName =
@@ -675,8 +679,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       goToEjecutar: () => setStep("ejecutar"),
       getGuidedConfig: buildGuidedConfigBody,
       saveGuidedConfig: () => saveGuidedConfigToServer(),
+      getCanRun: () => canRun,
+      run: () => handleRun(),
     }),
-    [buildGuidedConfigBody, saveGuidedConfigToServer]
+    [buildGuidedConfigBody, saveGuidedConfigToServer, canRun, handleRun]
   );
 
   const progressPct = ((stepIndex + 1) / STEPS.length) * 100;

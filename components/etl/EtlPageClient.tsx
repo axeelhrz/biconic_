@@ -77,9 +77,12 @@ export default function EtlPageClient({
             <Button
               className="rounded-full h-9 px-5 text-sm font-medium border-0"
               style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-              onClick={() => guidedFlowRef.current?.goToEjecutar()}
-              title="Ir al paso Ejecutar"
-              aria-label="Ir al paso Ejecutar"
+              onClick={() => {
+                guidedFlowRef.current?.goToEjecutar();
+                if (guidedFlowRef.current?.getCanRun?.()) guidedFlowRef.current?.run?.();
+              }}
+              title="Ir al paso Ejecutar y ejecutar si la configuración está lista"
+              aria-label="Ejecutar ETL"
             >
               <Play className="h-4 w-4 mr-2" /> Ejecutar
             </Button>
