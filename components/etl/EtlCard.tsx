@@ -106,18 +106,6 @@ export default function EtlCard({
         boxShadow: "0 4px 20px rgba(0,0,0,0.25), 0 0 0 1px rgba(255,255,255,0.04)",
       }}
     >
-      {/* Barra superior de estado */}
-      <div
-        className="h-1.5 w-full shrink-0"
-        style={{
-          background: isPublished
-            ? "linear-gradient(90deg, #16a34a 0%, #22c55e 100%)"
-            : isDraft
-              ? "linear-gradient(90deg, #ca8a04 0%, #eab308 100%)"
-              : "rgba(255,255,255,0.08)",
-        }}
-      />
-
       <div className="flex flex-1 flex-col p-6">
         {/* Header: badge + título */}
         <div className="mb-4">
@@ -235,56 +223,66 @@ export default function EtlCard({
           </div>
         </div>
 
-        {/* Acciones */}
-        <div className="mt-auto flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleEjecutar}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-all hover:opacity-90"
-            style={{ background: "linear-gradient(135deg, #16a34a 0%, #22c55e 100%)", color: "#fff", boxShadow: "0 2px 8px rgba(34, 197, 94, 0.3)" }}
-            title={basePath === "/admin/etl" ? "Crear dashboard con este ETL" : "Abrir para ejecutar"}
+        {/* Acciones: principales + secundarias */}
+        <div className="mt-auto space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleEjecutar}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-all hover:opacity-90"
+              style={{ background: "linear-gradient(135deg, #16a34a 0%, #22c55e 100%)", color: "#fff", boxShadow: "0 2px 8px rgba(34, 197, 94, 0.3)" }}
+              title={basePath === "/admin/etl" ? "Crear dashboard con este ETL" : "Abrir para ejecutar"}
+            >
+              <Play className="h-4 w-4" />
+              <span>Ejecutar</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreviewModalOpen(true)}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-medium transition-colors hover:opacity-90"
+              style={{ borderColor: "rgba(34, 197, 94, 0.35)", color: "rgba(255,255,255,0.9)" }}
+              title="Vista previa (solo lectura)"
+            >
+              <Eye className="h-4 w-4" />
+              <span className="hidden sm:inline">Vista previa</span>
+            </button>
+          </div>
+          <div
+            className="flex items-center gap-1 rounded-xl border py-2 px-3"
+            style={{ borderColor: "rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.15)" }}
           >
-            <Play className="h-4 w-4" />
-            <span>Ejecutar</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setPreviewModalOpen(true)}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-medium transition-colors hover:opacity-90"
-            style={{ borderColor: "rgba(34, 197, 94, 0.35)", color: "rgba(255,255,255,0.9)" }}
-            title="Vista previa (solo lectura)"
-          >
-            <Eye className="h-4 w-4" />
-            <span className="hidden sm:inline">Vista previa</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setShareModalOpen(true)}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border transition-colors hover:opacity-90"
-            style={{ borderColor: "rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.85)" }}
-            title="Compartir"
-          >
-            <Share2 className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push(`${basePath}/${etl.id}${editPathSuffix ?? ""}`)}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border transition-colors hover:opacity-90"
-            style={{ borderColor: "rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.85)" }}
-            title="Editar"
-          >
-            <Pencil className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            aria-label="Eliminar"
-            onClick={() => setDeleteModalOpen(true)}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border transition-colors hover:opacity-90"
-            style={{ borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.5)" }}
-            title="Eliminar"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
+            <span className="text-[10px] font-medium uppercase tracking-wider mr-2" style={{ color: "rgba(255,255,255,0.4)" }}>
+              Más
+            </span>
+            <button
+              type="button"
+              onClick={() => setShareModalOpen(true)}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:opacity-90"
+              style={{ color: "rgba(255,255,255,0.85)" }}
+              title="Compartir"
+            >
+              <Share2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push(`${basePath}/${etl.id}${editPathSuffix ?? ""}`)}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:opacity-90"
+              style={{ color: "rgba(255,255,255,0.85)" }}
+              title="Editar"
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Eliminar"
+              onClick={() => setDeleteModalOpen(true)}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:opacity-90"
+              style={{ color: "rgba(255,255,255,0.5)" }}
+              title="Eliminar"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
 

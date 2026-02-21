@@ -11,13 +11,44 @@ type SupabaseEtlRow = {
   name?: string;
   image_url?: string | null;
   thumbnail_url?: string | null;
-  status?: string | null; 
+  status?: string | null;
   published?: boolean | null;
   description?: string | null;
   views?: number | null;
   user_id?: string;
   client_id?: string | null;
+  created_at?: string | null;
+  lastExecution?: string | null;
+  createdAt?: string | null;
 };
+
+function formatEtlDate(iso: string | null | undefined): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleDateString("es-AR", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function formatEtlDateTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("es-AR", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
 
 type FilterType = "todos" | "publicados" | "borradores";
 
@@ -48,8 +79,26 @@ export default function AdminEtlGrid({
     const { data, error } = await query;
     if (error) throw error;
     const rows = (data as SupabaseEtlRow[] | null) ?? [];
+    const etlIds = rows.map((r) => String(r.id)).filter(Boolean);
     const ownerIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
     const clientIds = Array.from(new Set(rows.map((r) => r.client_id).filter(Boolean))) as string[];
+
+    let lastRunByEtlId: Record<string, string> = {};
+    if (etlIds.length > 0) {
+      const { data: runs } = await supabase
+        .from("etl_runs_log")
+        .select("etl_id, completed_at, started_at")
+        .in("etl_id", etlIds)
+        .order("started_at", { ascending: false });
+      for (const run of runs ?? []) {
+        const id = (run as { etl_id?: string | null }).etl_id;
+        if (id && lastRunByEtlId[id] == null)
+          lastRunByEtlId[id] =
+            (run as { completed_at?: string | null }).completed_at ??
+            (run as { started_at?: string }).started_at ??
+            "";
+      }
+    }
     let ownerById: Record<string, string | null> = {};
     let clientById: Record<string, string | null> = {};
     if (ownerIds.length > 0) {
@@ -85,9 +134,9 @@ export default function AdminEtlGrid({
         status,
         description: row.description ?? "",
         views: typeof row.views === "number" ? row.views : 0,
-        lastExecution: (row as { lastExecution?: string | null }).lastExecution ?? "",
-        nextExecution: (row as { nextExecution?: string | null }).nextExecution ?? "",
-        createdAt: (row as { createdAt?: string | null }).createdAt ?? "",
+        lastExecution: formatEtlDateTime(lastRunByEtlId[String(row.id)] ?? (row as SupabaseEtlRow).lastExecution),
+        nextExecution: "", // No hay próxima ejecución en el modelo actual
+        createdAt: formatEtlDate((row as SupabaseEtlRow).created_at ?? (row as SupabaseEtlRow).createdAt),
         clientId: row.client_id ?? "",
         ownerId: row.user_id,
         owner: row.user_id ? { fullName: ownerById[row.user_id] ?? null } : undefined,
@@ -124,9 +173,9 @@ export default function AdminEtlGrid({
             status,
             description: row.description ?? "",
             views: typeof row.views === "number" ? row.views : 0,
-            lastExecution: (row as { lastExecution?: string | null }).lastExecution ?? "",
-            nextExecution: (row as { nextExecution?: string | null }).nextExecution ?? "",
-            createdAt: (row as { createdAt?: string | null }).createdAt ?? "",
+            lastExecution: formatEtlDateTime((row as SupabaseEtlRow).lastExecution),
+            nextExecution: "", // No hay próxima ejecución en el modelo actual
+            createdAt: formatEtlDate((row as SupabaseEtlRow).created_at ?? (row as SupabaseEtlRow).createdAt),
             clientId: row.client_id ?? "",
             ownerId: row.user_id,
             owner: row.user_id ? { fullName: owners[row.user_id] ?? null } : undefined,

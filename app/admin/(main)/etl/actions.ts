@@ -90,7 +90,29 @@ export async function getEtlsAdmin(options?: { clientId?: string | null }) {
     );
   }
 
-  return { ok: true, data: (rows ?? []) as unknown[], owners, clients, error: null };
+  // Última ejecución por ETL desde etl_runs_log (la más reciente por started_at)
+  const etlIds = (rows ?? []).map((r: { id: string }) => String(r.id)).filter(Boolean);
+  let lastRunByEtlId: Record<string, string> = {};
+  if (etlIds.length > 0) {
+    const { data: runs } = await adminClient
+      .from("etl_runs_log")
+      .select("etl_id, completed_at, started_at")
+      .in("etl_id", etlIds)
+      .order("started_at", { ascending: false });
+    for (const run of runs ?? []) {
+      const id = run.etl_id as string | null;
+      if (id && lastRunByEtlId[id] == null)
+        lastRunByEtlId[id] = (run.completed_at as string | null) ?? (run.started_at as string);
+    }
+  }
+
+  const enrichedRows = (rows ?? []).map((r: { id: string; created_at?: string | null }) => ({
+    ...r,
+    lastExecution: lastRunByEtlId[String(r.id)] ?? null,
+    createdAt: r.created_at ?? null,
+  }));
+
+  return { ok: true, data: enrichedRows as unknown[], owners, clients, error: null };
 }
 
 /** Detalle de un ETL para vista previa (solo lectura). Incluye layout.guided_config. */
