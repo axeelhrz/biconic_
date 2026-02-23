@@ -251,13 +251,8 @@ export async function POST(req: NextRequest) {
           const tablePart = tableQ.includes(".")
             ? tableQ.split(".", 2).map((p) => quoteFb(p)).filter(Boolean).join(".")
             : quoteFb(tableQ);
-          const colList = (src.filter?.columns || [])
-            .map((c: string) => (c != null ? String(c).trim() : ""))
-            .filter((c: string) => c !== "" && c !== "." && !/^\.+$/.test(c));
-          const colListLimited = colList.length > 100 ? colList.slice(0, 100) : colList;
-          const cols = colListLimited.length > 0
-            ? colListLimited.map((c: string) => quoteFb(c)).join(", ")
-            : "*";
+          // Firebird: usar SELECT * para evitar -104 (Token unknown) con nombres de columna que contienen punto
+          const cols = "*";
           const rawConditions = (src.filter?.conditions || []).filter(
             (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
           );
