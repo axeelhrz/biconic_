@@ -8,6 +8,7 @@ import {
   buildWhereClausePg,
   buildWhereClausePgStar,
   buildJoinClauseBinary,
+  buildWhereClauseFirebird,
 } from "@/lib/sql/helpers";
 import {
   applyCleanBatch,
@@ -203,6 +204,11 @@ export async function POST(req: NextRequest) {
         const rightTable = await resolveTable(right.connectionId, right.filter);
         if (!leftTable || !rightTable) throw new Error("UNION: ambas fuentes deben tener tabla.");
 
+        const { data: leftConn } = await supabaseAdmin.from("connections").select("*").eq("id", left.connectionId).single();
+        const { data: rightConn } = await supabaseAdmin.from("connections").select("*").eq("id", right.connectionId).single();
+        if (!leftConn) throw new Error(`Conexión izquierda ${left.connectionId} no encontrada.`);
+        if (!rightConn) throw new Error(`Conexión derecha ${right.connectionId} no encontrada.`);
+
         const buildPgUrl = (conn: { db_host?: string | null; db_user?: string | null; db_port?: number | null; db_name?: string | null; db_password_encrypted?: string | null }) => {
           if (!conn.db_host || !conn.db_user || !conn.db_name) throw new Error("Conexión sin host, usuario o base de datos.");
           const password = decryptConnectionPassword(conn.db_password_encrypted);
@@ -210,20 +216,15 @@ export async function POST(req: NextRequest) {
           return `postgres://${conn.db_user}:${encodeURIComponent(password)}@${conn.db_host}:${port}/${conn.db_name}?sslmode=require`;
         };
 
-        let dbUrlUnion: string | null = process.env.SUPABASE_DB_URL || null;
-        if (!dbUrlUnion) {
-          const { data: leftConn } = await supabaseAdmin.from("connections").select("*").eq("id", left.connectionId).single();
-          if (!leftConn) throw new Error(`Conexión izquierda ${left.connectionId} no encontrada.`);
-          const leftType = (leftConn.type || "").toLowerCase();
-          if (leftType === "excel_file") {
-            dbUrlUnion = process.env.SUPABASE_DB_URL || null;
-            if (!dbUrlUnion) throw new Error("Para vista previa UNION con archivos Excel configurá la variable de entorno SUPABASE_DB_URL.");
-          } else if (leftType === "postgres" || leftType === "postgresql") {
-            dbUrlUnion = buildPgUrl(leftConn);
-          } else {
-            throw new Error(`Vista previa UNION con conexión tipo "${leftConn.type}" no soportada. Usá conexiones PostgreSQL o configurá SUPABASE_DB_URL.`);
-          }
+        const leftType = (leftConn.type || "").toLowerCase();
+        let dbUrlUnion: string | null = null;
+        if (leftType === "excel_file") {
+          dbUrlUnion = process.env.SUPABASE_DB_URL || null;
+          if (!dbUrlUnion) throw new Error("Para vista previa UNION con archivos Excel configurá la variable de entorno SUPABASE_DB_URL.");
+        } else if (leftType === "postgres" || leftType === "postgresql") {
+          dbUrlUnion = buildPgUrl(leftConn);
         }
+        // Si izquierda es firebird, dbUrlUnion queda null (solo se usan clientes Firebird para esa rama)
 
         const runOne = async (client: PgClient, src: typeof left, tableQ: string) => {
           const { clause, params } = buildWhereClausePg(src.filter?.conditions || []);
@@ -237,58 +238,131 @@ export async function POST(req: NextRequest) {
           });
         };
 
+        const runOneFirebird = async (
+          conn: { db_host?: string | null; db_port?: number | null; db_name?: string | null; db_user?: string | null; db_password_encrypted?: string | null },
+          src: typeof left,
+          tableQ: string
+        ): Promise<Record<string, any>[]> => {
+          const password = (conn as any).db_password_encrypted
+            ? decryptConnectionPassword((conn as any).db_password_encrypted)
+            : (conn as any).db_password ?? "";
+          const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(s) ? s.toUpperCase() : `"${s.replace(/"/g, '""')}"`);
+          const tablePart = tableQ.includes(".")
+            ? tableQ.split(".", 2).map((p) => safePart(p.trim())).join(".")
+            : safePart(tableQ);
+          const cols = src.filter?.columns?.length
+            ? src.filter.columns.map((c: string) => safePart((c || "").trim())).join(", ")
+            : "*";
+          const { clause, params } = buildWhereClauseFirebird(src.filter?.conditions || []);
+          const limit = Math.floor(PREVIEW_LIMIT / 2);
+          const Firebird = require("node-firebird");
+          const opts = {
+            host: conn.db_host || "localhost",
+            port: conn.db_port ? Number(conn.db_port) : 15421,
+            database: conn.db_name,
+            user: conn.db_user,
+            password: password || "",
+            lowercase_keys: false,
+          };
+          return new Promise((resolve, reject) => {
+            Firebird.attach(opts, (err: Error | null, db: any) => {
+              if (err) return reject(err);
+              const sql = `SELECT FIRST ${limit} ${cols} FROM ${tablePart} ${clause}`.trim();
+              db.query(sql, params, (qerr: Error | null, rows: any[]) => {
+                const detach = () => { if (db?.detach) db.detach(() => {}); };
+                if (qerr) { detach(); return reject(qerr); }
+                const normalized = (rows || []).map((row: Record<string, any>) => {
+                  const out: Record<string, any> = {};
+                  for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
+                  return out;
+                });
+                detach();
+                resolve(normalized);
+              });
+            });
+          });
+        };
+
         const sameConnection = String(left.connectionId) === String(right.connectionId);
-        if (sameConnection && dbUrlUnion) {
-          const client = new PgClient({ connectionString: dbUrlUnion });
-          await client.connect();
-          try {
-            const leftRows = await runOne(client, left, leftTable);
-            const rightRows = await runOne(client, right, rightTable);
-            if (leftRows.length && rightRows.length) {
-              const a = Object.keys(leftRows[0]).sort().join(",");
-              const b = Object.keys(rightRows[0]).sort().join(",");
-              if (a !== b) throw new Error("UNION: ambos datasets deben tener las mismas columnas.");
-            }
-            const combined = [...leftRows, ...rightRows];
-            if (combined.length) yield { rows: combined, query: `UNION (${leftTable} + ${rightTable})` };
-          } finally {
-            await client.end();
+
+        const collectUnionRows = (leftRows: Record<string, any>[], rightRows: Record<string, any>[]) => {
+          if (leftRows.length && rightRows.length) {
+            const a = Object.keys(leftRows[0]).sort().join(",");
+            const b = Object.keys(rightRows[0]).sort().join(",");
+            if (a !== b) throw new Error("UNION: ambos datasets deben tener las mismas columnas.");
           }
+          const combined = [...leftRows, ...rightRows];
+          if (combined.length) return { rows: combined, query: `UNION (${leftTable} + ${rightTable})` };
+          return null;
+        };
+
+        let leftRows: Record<string, any>[];
+        let rightRows: Record<string, any>[];
+
+        if (sameConnection) {
+          if (leftType === "firebird") {
+            leftRows = await runOneFirebird(leftConn, left, leftTable);
+            rightRows = await runOneFirebird(rightConn, right, rightTable);
+          } else if (dbUrlUnion) {
+            const client = new PgClient({ connectionString: dbUrlUnion });
+            await client.connect();
+            try {
+              leftRows = await runOne(client, left, leftTable);
+              rightRows = await runOne(client, right, rightTable);
+            } finally {
+              await client.end();
+            }
+          } else {
+            return;
+          }
+          const result = collectUnionRows(leftRows, rightRows);
+          if (result) yield result;
+          return;
+        }
+
+        // Dos conexiones distintas
+        const rightType = (rightConn.type || "").toLowerCase();
+        if (leftType === "firebird") {
+          leftRows = await runOneFirebird(leftConn, left, leftTable);
         } else if (dbUrlUnion) {
-          const rightConnId = right.connectionId;
-          let rightUrl = dbUrlUnion;
-          if (!sameConnection) {
-            const { data: rightConn } = await supabaseAdmin.from("connections").select("*").eq("id", rightConnId).single();
-            if (!rightConn) throw new Error(`Conexión derecha ${rightConnId} no encontrada.`);
-            const rightType = (rightConn.type || "").toLowerCase();
-            if (rightType === "excel_file") {
-              rightUrl = process.env.SUPABASE_DB_URL || "";
-              if (!rightUrl) throw new Error("Para UNION con Excel en la tabla derecha configurá SUPABASE_DB_URL.");
-            } else if (rightType === "postgres" || rightType === "postgresql") {
-              rightUrl = buildPgUrl(rightConn);
-            } else {
-              throw new Error(`Vista previa UNION con conexión derecha tipo "${rightConn.type}" no soportada.`);
-            }
-          }
           const clientLeft = new PgClient({ connectionString: dbUrlUnion });
-          const clientRight = new PgClient({ connectionString: rightUrl });
           await clientLeft.connect();
-          await clientRight.connect();
           try {
-            const leftRows = await runOne(clientLeft, left, leftTable);
-            const rightRows = await runOne(clientRight, right, rightTable);
-            if (leftRows.length && rightRows.length) {
-              const a = Object.keys(leftRows[0]).sort().join(",");
-              const b = Object.keys(rightRows[0]).sort().join(",");
-              if (a !== b) throw new Error("UNION: ambos datasets deben tener las mismas columnas.");
-            }
-            const combined = [...leftRows, ...rightRows];
-            if (combined.length) yield { rows: combined, query: `UNION (${leftTable} + ${rightTable})` };
+            leftRows = await runOne(clientLeft, left, leftTable);
           } finally {
             await clientLeft.end();
+          }
+        } else {
+          return;
+        }
+
+        if (rightType === "firebird") {
+          rightRows = await runOneFirebird(rightConn, right, rightTable);
+        } else if (rightType === "excel_file") {
+          const rightUrl = process.env.SUPABASE_DB_URL || "";
+          if (!rightUrl) throw new Error("Para UNION con Excel en la tabla derecha configurá SUPABASE_DB_URL.");
+          const clientRight = new PgClient({ connectionString: rightUrl });
+          await clientRight.connect();
+          try {
+            rightRows = await runOne(clientRight, right, rightTable);
+          } finally {
             await clientRight.end();
           }
+        } else if (rightType === "postgres" || rightType === "postgresql") {
+          const rightUrl = buildPgUrl(rightConn);
+          const clientRight = new PgClient({ connectionString: rightUrl });
+          await clientRight.connect();
+          try {
+            rightRows = await runOne(clientRight, right, rightTable);
+          } finally {
+            await clientRight.end();
+          }
+        } else {
+          throw new Error(`Vista previa UNION con conexión derecha tipo "${rightConn.type}" no soportada.`);
         }
+
+        const result = collectUnionRows(leftRows, rightRows);
+        if (result) yield result;
         return;
       }
 
