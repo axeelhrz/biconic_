@@ -182,6 +182,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     availableColumns?: { name: string }[];
   }>>([]);
 
+  const [previewRows, setPreviewRows] = useState<Record<string, unknown>[] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+
   const skipClearSelectedTableRef = useRef(false);
   const restoringFromConfigRef = useRef(false);
   // Restaurar estado desde configuración guardada (al editar un ETL ya ejecutado)
@@ -597,6 +602,71 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     joinRightColumns,
     joinType,
     buildCleanConfig,
+  ]);
+
+  const fetchPreview = useCallback(() => {
+    const body = buildGuidedConfigBody();
+    if (!body || !connectionId || !selectedTable) {
+      setPreviewRows(null);
+      setPreviewError(null);
+      return;
+    }
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = new AbortController();
+    setPreviewLoading(true);
+    setPreviewError(null);
+    const previewBody = { ...body } as Record<string, unknown>;
+    delete previewBody.end;
+    if (previewBody.union && typeof previewBody.union === "object" && Array.isArray((previewBody.union as { rights?: unknown[] }).rights)) {
+      const u = previewBody.union as { left: unknown; rights: unknown[]; unionAll?: boolean };
+      if (u.rights.length > 0) (previewBody.union as Record<string, unknown>).right = u.rights[0];
+    }
+    fetch("/api/etl/run-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(previewBody),
+      signal: previewAbortRef.current.signal,
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.ok && Array.isArray(data.previewRows)) {
+          setPreviewRows(data.previewRows);
+          setPreviewError(null);
+        } else {
+          setPreviewRows(null);
+          setPreviewError(data?.error || "Error al cargar vista previa");
+        }
+      })
+      .catch((e: unknown) => {
+        if ((e as { name?: string }).name === "AbortError") return;
+        setPreviewRows(null);
+        setPreviewError(e instanceof Error ? e.message : "Error al cargar vista previa");
+      })
+      .finally(() => {
+        setPreviewLoading(false);
+      });
+  }, [buildGuidedConfigBody, connectionId, selectedTable]);
+
+  useEffect(() => {
+    const t = setTimeout(() => fetchPreview(), 600);
+    return () => clearTimeout(t);
+  }, [
+    fetchPreview,
+    step,
+    connectionId,
+    selectedTable,
+    columns,
+    conditions,
+    excludedValues,
+    distinctColumn,
+    nullCleanup,
+    cleanTransforms,
+    dataFixes,
+    dedupe,
+    useUnion,
+    unionRightItems,
+    useJoin,
+    joinItems,
   ]);
 
   const handleRun = useCallback(async () => {
@@ -1905,6 +1975,64 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         )}
         </section>
         )}
+
+        {/* Vista previa de datos: persistente en todos los pasos, se actualiza en tiempo real */}
+        <section className="mt-8 pt-6 border-t" style={{ borderColor: "var(--platform-border)" }}>
+          <div className="rounded-xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+            <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+              <h3 className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>Vista previa de datos</h3>
+              {previewLoading && (
+                <span className="text-xs flex items-center gap-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Actualizando…
+                </span>
+              )}
+            </div>
+            <div className="p-2">
+              {previewError && (
+                <p className="text-sm py-4 px-3 rounded-lg" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }}>
+                  {previewError}
+                </p>
+              )}
+              {!previewError && previewRows && previewRows.length > 0 && (
+                <div className="overflow-auto rounded-lg border" style={{ maxHeight: 320, borderColor: "var(--platform-border)" }}>
+                  <table className="w-full text-sm border-collapse" style={{ color: "var(--platform-fg)" }}>
+                    <thead>
+                      <tr style={{ background: "var(--platform-bg-elevated)", borderBottom: "1px solid var(--platform-border)" }}>
+                        {Object.keys(previewRows[0]).map((key) => (
+                          <th key={key} className="text-left font-medium py-2 px-3 whitespace-nowrap sticky top-0 z-10" style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}>
+                            {key}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewRows.map((row, idx) => (
+                        <tr key={idx} className="border-b border-b-[var(--platform-border)] hover:bg-[var(--platform-surface-hover)]">
+                          {Object.keys(previewRows[0]).map((key) => (
+                            <td key={key} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={String((row as Record<string, unknown>)[key] ?? "")}>
+                              {String((row as Record<string, unknown>)[key] ?? "")}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {!previewError && !previewLoading && (!previewRows || previewRows.length === 0) && connectionId && selectedTable && (
+                <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
+                  Completá conexión y tabla para ver la vista previa. Se actualiza automáticamente al cambiar filtros o transformaciones.
+                </p>
+              )}
+              {!connectionId && !previewLoading && (
+                <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
+                  Elegí una conexión y tabla para ver aquí una vista previa de los datos.
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );
