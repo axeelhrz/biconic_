@@ -198,7 +198,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       }
       setData(json.data);
       setEtlData(buildEtlDataFromMetricsResponse(json.data));
-      if (sampleRows > 0 && Array.isArray(json.data?.rawRows)) setRawTableData(json.data.rawRows);
+      if (Array.isArray(json.data?.rawRows)) setRawTableData(json.data.rawRows);
     } catch (e) {
       toast.error("Error al cargar métricas");
     } finally {

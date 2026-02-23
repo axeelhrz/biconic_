@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 
 type FieldsInfo = {
   all: string[];
@@ -300,13 +301,44 @@ export async function GET(
     const url = new URL(request.url);
     const sampleRows = Math.min(500, Math.max(0, parseInt(url.searchParams.get("sampleRows") ?? "0", 10) || 0));
     let rawRows: any[] = resolved.sampleData;
-    if (sampleRows > 0) {
-      try {
-        const schemaClient = supabase.schema(resolved.schema as "public" | "etl_output") as any;
-        const { data: rows } = await schemaClient.from(resolved.tableName).select("*").limit(sampleRows);
-        rawRows = rows ?? [];
-      } catch {
-        rawRows = resolved.sampleData;
+    let rowCount = resolved.rowCount;
+
+    const schemaName = resolved.schema as "public" | "etl_output";
+    const tableName = resolved.tableName;
+    const limitRows = sampleRows > 0 ? sampleRows : Math.max(1, 500);
+
+    try {
+      const serviceClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+        ? createServiceRoleClient()
+        : null;
+      const clientToUse = serviceClient ?? supabase;
+      const schemaClient = clientToUse.schema(schemaName) as any;
+      const { count: realCount, error: countError } = await schemaClient
+        .from(tableName)
+        .select("*", { count: "exact", head: true });
+      if (!countError && realCount != null) rowCount = realCount;
+
+      const { data: rows } = await schemaClient
+        .from(tableName)
+        .select("*")
+        .limit(limitRows);
+      const fetchedRows = rows ?? [];
+      if (fetchedRows.length > 0) {
+        rawRows = fetchedRows;
+        if (fields.all.length === 0) {
+          const derived = deriveFieldsFromSample(fetchedRows.slice(0, 1));
+          if (derived.all.length > 0) fields = derived;
+        }
+      }
+    } catch {
+      if (sampleRows > 0) {
+        try {
+          const schemaClient = supabase.schema(schemaName) as any;
+          const { data: rows } = await schemaClient.from(tableName).select("*").limit(sampleRows);
+          rawRows = rows ?? [];
+        } catch {
+          rawRows = resolved.sampleData;
+        }
       }
     }
 
@@ -318,7 +350,7 @@ export async function GET(
         schema: resolved.schema,
         tableName: resolved.tableName,
         fields,
-        rowCount: resolved.rowCount,
+        rowCount,
         savedMetrics,
         rawRows,
       },

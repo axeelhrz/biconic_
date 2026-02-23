@@ -1,10 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
-import AdminDashboardSection from "@/components/admin/dashboard/AdminDashboardSection";
+import AdminOverviewPanel from "@/components/admin/dashboard/AdminOverviewPanel";
 
 export default async function Page() {
   const supabase = await createClient();
 
-  // Fetch counts in parallel
   const [
     { count: dashboardCount },
     { count: clientsCount },
@@ -24,9 +23,5 @@ export default async function Page() {
     connections: connectionsCount || 0,
   };
 
-  return (
-    <>
-      <AdminDashboardSection statsCounts={statsCounts} />
-    </>
-  );
+  return <AdminOverviewPanel statsCounts={statsCounts} />;
 }
