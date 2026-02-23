@@ -4,8 +4,10 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { Listbox, Transition } from "@headlessui/react";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+const PANEL_MAX_HEIGHT = 260;
 
 export type SelectOption = {
   label: string;
@@ -72,9 +74,11 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
     };
 
     const buttonRef = React.useRef<HTMLButtonElement | null>(null);
+    const searchInputRef = React.useRef<HTMLInputElement | null>(null);
     const [buttonWidth, setButtonWidth] = React.useState<number>(0);
     const [anchorRect, setAnchorRect] = React.useState<{ top: number; left: number; width: number; height: number } | null>(null);
     const [listboxOpen, setListboxOpen] = React.useState(false);
+    const [searchQuery, setSearchQuery] = React.useState("");
 
     React.useEffect(() => {
       const updateSize = () => {
@@ -113,9 +117,29 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
         {({ open }) => {
           React.useEffect(() => {
             setListboxOpen(open);
+            if (!open) setSearchQuery("");
+          }, [open]);
+
+          React.useEffect(() => {
+            if (open && searchQuery === "") searchInputRef.current?.focus();
           }, [open]);
 
           const rect = anchorRect ?? (open && buttonRef.current ? buttonRef.current.getBoundingClientRect() : null);
+          const canOpenDown = !rect || (typeof window !== "undefined" && rect.top + rect.height + 8 + PANEL_MAX_HEIGHT <= window.innerHeight - 16);
+          const panelTop = rect
+            ? canOpenDown
+              ? rect.top + rect.height + 8
+              : Math.max(16, rect.top - PANEL_MAX_HEIGHT - 8)
+            : 0;
+
+          const filteredOptions = React.useMemo(
+            () =>
+              !searchQuery.trim()
+                ? options
+                : options.filter((o) => o.label.toLowerCase().includes(searchQuery.trim().toLowerCase())),
+            [options, searchQuery]
+          );
+
           const optionsPanel = (
             <Transition
               show={open}
@@ -129,7 +153,8 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
               <Listbox.Options
                 static
                 className={cn(
-                  "fixed mt-2 overflow-auto rounded-2xl border p-3 focus:outline-none",
+                  "fixed overflow-auto rounded-2xl border p-3 focus:outline-none",
+                  !canOpenDown ? "mb-2" : "mt-2",
                   optionsClassName
                 )}
                 style={{
@@ -137,16 +162,39 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                   width: rect ? rect.width : buttonWidth || undefined,
                   minWidth: 200,
                   maxWidth: 320,
-                  top: rect ? rect.top + rect.height + 8 : 0,
+                  maxHeight: typeof window !== "undefined" ? window.innerHeight - 32 : PANEL_MAX_HEIGHT,
+                  top: panelTop,
                   left: rect ? rect.left : 0,
                   borderColor: "var(--platform-border)",
                   background: "var(--platform-surface)",
                   boxShadow: "0 10px 40px rgba(0,0,0,0.08)",
                 }}
               >
-                <div className="max-h-[220px] overflow-y-auto overflow-x-hidden rounded-xl -mx-1 px-1 py-2" style={{ background: "var(--platform-bg)" }}>
+                <div className="relative mb-2">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    placeholder="Buscar..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    className="w-full rounded-xl border py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-[var(--platform-accent)]"
+                    style={{
+                      borderColor: "var(--platform-border)",
+                      background: "var(--platform-bg)",
+                      color: "var(--platform-fg)",
+                    }}
+                  />
+                </div>
+                <div className="max-h-[200px] overflow-y-auto overflow-x-hidden rounded-xl -mx-1 px-1 py-2" style={{ background: "var(--platform-bg)" }}>
                   <div className="flex flex-col gap-0.5">
-                    {options.map((option: SelectOption) => (
+                    {filteredOptions.length === 0 ? (
+                      <div className="py-4 text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+                        {searchQuery.trim() ? "No hay resultados" : "Sin opciones"}
+                      </div>
+                    ) : (
+                      filteredOptions.map((option: SelectOption) => (
                       <Listbox.Option
                         key={option.value}
                         className={({ selected }) =>
@@ -166,7 +214,8 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                           </>
                         )}
                       </Listbox.Option>
-                    ))}
+                    ))
+                    )}
                   </div>
                 </div>
               </Listbox.Options>
