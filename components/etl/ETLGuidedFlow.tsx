@@ -18,6 +18,7 @@ import {
   Link2,
 } from "lucide-react";
 import { Connection as ServerConnection } from "@/components/connections/ConnectionsCard";
+import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
 
 const STEPS = [
@@ -174,7 +175,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   const skipClearSelectedTableRef = useRef(false);
   const restoringFromConfigRef = useRef(false);
-  const tableSelectRef = useRef<HTMLSelectElement>(null);
   const distinctLoadFromConfigRef = useRef(false);
 
   // Restaurar estado desde configuración guardada (al editar un ETL ya ejecutado)
@@ -636,8 +636,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (!options?.silent) toast.error("Completá al menos la conexión para guardar.");
       return false;
     }
-    // Persistir siempre la tabla seleccionada: valor del <select> (lo que ve el usuario) o estado
-    const tableToSave = (tableSelectRef.current?.value ?? selectedTable ?? "")?.trim() || undefined;
+    // Persistir siempre la tabla seleccionada desde el estado
+    const tableToSave = (selectedTable ?? "")?.trim() || undefined;
     if (tableToSave && typeof guidedConfig.filter === "object" && guidedConfig.filter !== null) {
       guidedConfig = {
         ...guidedConfig,
@@ -803,19 +803,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 <div>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Conexión</Label>
                   <p className="text-xs mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>Base de datos de origen</p>
-                  <select
-                    value={connectionId ?? ""}
-                    onChange={(e) => setConnectionId(e.target.value ? e.target.value : null)}
-                    className="w-full mt-2 rounded-xl border px-4 py-3 text-sm"
-                    style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-                  >
-                    <option value="">Seleccionar conexión…</option>
-                    {connections.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.title || `Conexión ${c.id}`}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="mt-2">
+                    <Select
+                      value={connectionId != null ? String(connectionId) : ""}
+                      onChange={(v: string) => setConnectionId(v ? v : null)}
+                      options={connections.map((c) => ({ value: String(c.id), label: c.title || `Conexión ${c.id}` }))}
+                      placeholder="Seleccionar conexión…"
+                    />
+                  </div>
                 </div>
                 <div className="flex gap-3 pt-2">
                   {!isEditorMode && (
@@ -872,19 +867,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 <div>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Conexión</Label>
                   <p className="text-xs mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>Base de datos de origen (PostgreSQL, MySQL, etc.)</p>
-                  <select
-                    value={connectionId ?? ""}
-                    onChange={(e) => setConnectionId(e.target.value ? e.target.value : null)}
-                    className="w-full mt-2 rounded-xl border px-4 py-3 text-sm"
-                    style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-                  >
-                    <option value="">Seleccionar conexión…</option>
-                    {connections.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.title || `Conexión ${c.id}`}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="mt-2">
+                    <Select
+                      value={connectionId != null ? String(connectionId) : ""}
+                      onChange={(v: string) => setConnectionId(v ? v : null)}
+                      options={connections.map((c) => ({ value: String(c.id), label: c.title || `Conexión ${c.id}` }))}
+                      placeholder="Seleccionar conexión…"
+                    />
+                  </div>
                 </div>
                 <div>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Tabla</Label>
@@ -905,23 +895,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                         />
                       )}
-                      <select
-                        ref={tableSelectRef}
+                      <Select
                         value={selectedTable ?? ""}
-                        onChange={(e) => setSelectedTable(e.target.value || null)}
-                        className="w-full mt-2 rounded-xl border px-4 py-3 text-sm"
-                        style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-                        disabled={!connectionId || tables.length === 0}
-                      >
-                        <option value="">{connectionId && tables.length === 0 ? "No hay tablas. Configurá tablas en Conexiones." : "Seleccionar tabla…"}</option>
-                        {tables
+                        onChange={(v: string) => setSelectedTable(v || null)}
+                        options={tables
                           .filter((t) => !tableSearchQuery.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(tableSearchQuery.trim().toLowerCase()))
-                          .map((t) => (
-                            <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>
-                              {t.schema}.{t.name}
-                            </option>
-                          ))}
-                      </select>
+                          .map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
+                        placeholder={connectionId && tables.length === 0 ? "No hay tablas. Configurá tablas en Conexiones." : "Seleccionar tabla…"}
+                        disabled={!connectionId || tables.length === 0}
+                        className="mt-2"
+                      />
                     </>
                   )}
                 </div>

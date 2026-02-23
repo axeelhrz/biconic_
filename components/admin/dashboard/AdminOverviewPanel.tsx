@@ -367,24 +367,28 @@ export default function AdminOverviewPanel({ statsCounts, initialAllDashboards =
               Ver todos
             </button>
           </div>
-          <div className="p-6 space-y-4">
-            <div className="flex items-center justify-between rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-              <span className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Publicados</span>
-              <span className="text-xl font-bold tabular-nums" style={{ color: "var(--platform-success)" }}>{publishedCount}</span>
+          <div className="p-6">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                <span className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Publicados</span>
+                <span className="text-xl font-bold tabular-nums" style={{ color: "var(--platform-success)" }}>{publishedCount}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                <span className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Borradores</span>
+                <span className="text-xl font-bold tabular-nums" style={{ color: "var(--platform-warning)" }}>{draftCount}</span>
+              </div>
             </div>
-            <div className="flex items-center justify-between rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-              <span className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Borradores</span>
-              <span className="text-xl font-bold tabular-nums" style={{ color: "var(--platform-warning)" }}>{draftCount}</span>
+            <div className="mt-6 pt-4 border-t" style={{ borderColor: "var(--platform-border)" }}>
+              <Button
+                onClick={() => setModalAllDashboards(true)}
+                variant="outline"
+                className="w-full rounded-xl gap-2"
+                style={{ borderColor: "var(--platform-border)" }}
+              >
+                <ExternalLink className="h-4 w-4" />
+                Ver listado completo
+              </Button>
             </div>
-            <Button
-              onClick={() => setModalAllDashboards(true)}
-              variant="outline"
-              className="w-full rounded-xl gap-2"
-              style={{ borderColor: "var(--platform-border)" }}
-            >
-              <ExternalLink className="h-4 w-4" />
-              Ver listado completo
-            </Button>
           </div>
         </div>
       </section>
@@ -435,7 +439,7 @@ export default function AdminOverviewPanel({ statsCounts, initialAllDashboards =
                 </ul>
               )}
             </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-2" style={{ borderColor: "var(--platform-border)" }}>
+            <div className="px-6 py-4 border-t flex justify-end gap-4" style={{ borderColor: "var(--platform-border)" }}>
               <Button variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => setModalClient(null)}>Cerrar</Button>
               <Button className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }} onClick={() => { setModalClient(null); router.push(`/admin/clients/${modalClient.id}`); }}>
                 Ir al cliente
@@ -496,7 +500,7 @@ export default function AdminOverviewPanel({ statsCounts, initialAllDashboards =
                 <p className="py-8 text-center" style={{ color: "var(--platform-fg-muted)" }}>Aún no hay dashboards.</p>
               )}
             </div>
-            <div className="px-6 py-4 border-t flex justify-end flex-shrink-0" style={{ borderColor: "var(--platform-border)" }}>
+            <div className="px-6 py-4 border-t flex justify-end flex-shrink-0 gap-4" style={{ borderColor: "var(--platform-border)" }}>
               <Button variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => setModalAllDashboards(false)}>Cerrar</Button>
               <Button className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }} onClick={() => { setModalAllDashboards(false); router.push("/admin/dashboard"); }}>
                 Ir a Dashboards

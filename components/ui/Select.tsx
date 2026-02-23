@@ -95,7 +95,6 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
           <div className={cn("relative w-full", className)}>
             <Listbox.Button
               ref={(el) => {
-                // keep both the forwarded ref and our local ref in sync
                 if (typeof ref === "function") ref(el as any);
                 else if (ref)
                   (
@@ -105,24 +104,21 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
               }}
               name={name}
               className={cn(
-                "h-10 w-full rounded-[25px] border px-4 text-[16px] font-light focus:outline-none",
-                "flex items-center justify-between",
-                "border-[var(--platform-border,#D9DCE3)] bg-[var(--platform-bg,#fff)] text-[var(--platform-fg,#555555)]",
+                "flex h-11 w-full items-center justify-between gap-2 rounded-xl border px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]",
                 disabled && "opacity-50 cursor-not-allowed",
                 buttonClassName
               )}
+              style={{
+                borderColor: "var(--platform-border)",
+                background: "var(--platform-surface)",
+                color: "var(--platform-fg-muted)",
+              }}
               {...rest}
             >
-              <span
-                className={cn("truncate", !selectedOption && "opacity-70")}
-                style={{ color: "inherit" }}
-              >
+              <span className="truncate">
                 {selectedOption ? selectedOption.label : placeholder}
               </span>
-              <ChevronDown
-                className="ml-2 h-4 w-4 text-gray-500"
-                aria-hidden="true"
-              />
+              <ChevronDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
             </Listbox.Button>
 
             <Transition
@@ -136,37 +132,41 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
             >
               <Listbox.Options
                 className={cn(
-                  "absolute z-10 mt-2 max-h-60 w-auto max-w-[90vw] overflow-auto rounded-2xl border py-2 shadow-lg focus:outline-none whitespace-nowrap",
-                  "border-[var(--platform-border,#D9DCE3)] bg-[var(--platform-bg,#fff)]",
+                  "absolute left-0 top-full z-50 mt-2 w-full overflow-auto rounded-2xl border p-3 focus:outline-none",
                   optionsClassName
                 )}
-                style={{ minWidth: buttonWidth || undefined }}
+                style={{
+                  minWidth: buttonWidth || undefined,
+                  borderColor: "var(--platform-border)",
+                  background: "var(--platform-surface)",
+                  boxShadow: "0 10px 40px rgba(0,0,0,0.08)",
+                }}
               >
-                {options.map((option: SelectOption) => (
-                  <Listbox.Option
-                    key={option.value}
-                    className={({ active }) =>
-                      cn(
-                        "relative cursor-pointer select-none px-4 py-2 text-[16px]",
-                        "text-[var(--platform-fg,#555555)]",
-                        active && "bg-[var(--platform-surface-hover,#f3f4f6)]",
-                        optionClassName
-                      )
-                    }
-                    value={option.value}
-                  >
-                    {({ selected }) => (
-                      <div className="flex items-center justify-between">
-                        <span className={cn(selected && "font-medium")}>
-                          {option.label}
-                        </span>
-                        {selected ? (
-                          <Check className="h-4 w-4 text-[var(--platform-accent,#02B8D1)]" />
-                        ) : null}
-                      </div>
-                    )}
-                  </Listbox.Option>
-                ))}
+                <div className="max-h-[220px] overflow-y-auto rounded-xl -mx-1 px-1" style={{ background: "var(--platform-bg)" }}>
+                  <div className="flex flex-col gap-0.5">
+                    {options.map((option: SelectOption) => (
+                      <Listbox.Option
+                        key={option.value}
+                        className={({ selected }) =>
+                          cn(
+                            "flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2.5 text-sm text-left transition-all",
+                            selected && "ring-2 ring-[var(--platform-accent)]",
+                            selected ? "bg-[var(--platform-accent-dim)] text-[var(--platform-accent)]" : "bg-transparent text-[var(--platform-fg)]",
+                            optionClassName
+                          )
+                        }
+                        value={option.value}
+                      >
+                        {({ selected }) => (
+                          <>
+                            <span className="truncate">{option.label}</span>
+                            {selected && <Check className="h-4 w-4 shrink-0" strokeWidth={2.5} />}
+                          </>
+                        )}
+                      </Listbox.Option>
+                    ))}
+                  </div>
+                </div>
               </Listbox.Options>
             </Transition>
           </div>
