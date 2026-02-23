@@ -265,16 +265,16 @@ export async function POST(req: NextRequest) {
           const password = (conn as any).db_password_encrypted
             ? decryptConnectionPassword((conn as any).db_password_encrypted)
             : (conn as any).db_password ?? "";
-          // Firebird: solo nombre de tabla (sin esquema) para evitar -104 Token unknown en el punto (col.31); usar MAYÚSCULAS
-          const tableNameOnly = (tableQ || "").trim().split(".").pop() || (tableQ || "").trim();
-          const tablePart = tableNameOnly.toUpperCase();
-          const quoteFb = (s: string) => (s == null || String(s).trim() === "" ? "" : `"${String(s).trim().replace(/"/g, '""')}"`);
+          const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(String(s).trim()) ? String(s).trim().toUpperCase() : `"${String(s).trim().replace(/"/g, '""')}"`);
+          const tablePart = tableQ.includes(".")
+            ? tableQ.split(".", 2).map((p) => safePart(p)).filter(Boolean).join(".")
+            : safePart(tableQ);
           const colList = (src.filter?.columns || [])
             .map((c: string) => (c != null ? String(c).trim() : ""))
             .filter((c: string) => c !== "" && c !== "." && !/^\.+$/.test(c));
           const colListLimited = colList.length > 150 ? colList.slice(0, 150) : colList;
           const cols = colListLimited.length > 0
-            ? colListLimited.map((c: string) => quoteFb(c)).join(", ")
+            ? colListLimited.map((c: string) => safePart(c)).join(", ")
             : "*";
           const rawConditions = (src.filter?.conditions || []).filter(
             (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
@@ -542,15 +542,16 @@ export async function POST(req: NextRequest) {
             const password = (conn as any).db_password_encrypted
               ? decryptConnectionPassword((conn as any).db_password_encrypted)
               : (conn as any).db_password ?? "";
-            const tableNameOnly = (tableToQuery || "").trim().split(".").pop() || tableToQuery.trim();
-            const tablePart = tableNameOnly.toUpperCase();
-            const quoteFb = (s: string) => (s == null || String(s).trim() === "" ? "" : `"${String(s).trim().replace(/"/g, '""')}"`);
+            const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(String(s).trim()) ? String(s).trim().toUpperCase() : `"${String(s).trim().replace(/"/g, '""')}"`);
+            const tablePart = tableToQuery.includes(".")
+              ? tableToQuery.split(".", 2).map((p) => safePart(p)).filter(Boolean).join(".")
+              : safePart(tableToQuery);
             const colList = (filter?.columns || [])
               .map((c: string) => (c != null ? String(c).trim() : ""))
               .filter((c: string) => c !== "" && c !== "." && !/^\.+$/.test(c));
             const colListLimited = colList.length > 150 ? colList.slice(0, 150) : colList;
             const colsFirebird = colListLimited.length > 0
-              ? colListLimited.map((c: string) => quoteFb(c)).join(", ")
+              ? colListLimited.map((c: string) => safePart(c)).join(", ")
               : "*";
             const rawConditions = (filter?.conditions || []).filter(
               (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
