@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus, Search, Pencil, BarChart3, Loader2, ChevronRight } from "lucide-react";
+import { Plus, Search, Pencil, BarChart3, Loader2, ChevronRight, Database, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { searchEtls } from "@/app/admin/(main)/dashboard/actions";
@@ -88,82 +88,157 @@ export default function AdminMetricsPage() {
 
       {createOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: "rgba(0,0,0,0.4)" }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(6px)" }}
           onClick={() => setCreateOpen(false)}
         >
           <div
-            className="flex flex-col gap-4 rounded-2xl border p-6 w-full max-w-md"
-            style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}
+            className="flex flex-col w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200"
+            style={{
+              background: "var(--platform-surface)",
+              border: "1px solid var(--platform-border)",
+              boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25), 0 0 0 1px var(--platform-border)",
+            }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
-              Crear métricas para un ETL
-            </h2>
-            <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-              Seleccioná un ETL para ir a su pantalla de creación de métricas.
-            </p>
-            <div>
-              <label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
-                Buscar ETL
-              </label>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
+            {/* Header */}
+            <div
+              className="px-6 pt-6 pb-4"
+              style={{ borderBottom: "1px solid var(--platform-border)", background: "var(--platform-bg-elevated)" }}
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <div
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+                  style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
+                >
+                  <Sparkles className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold tracking-tight" style={{ color: "var(--platform-fg)" }}>
+                    Crear métricas
+                  </h2>
+                  <p className="text-sm mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>
+                    Elegí un ETL para definir métricas reutilizables
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Search */}
+            <div className="px-6 pt-5 pb-4">
+              <div className="relative rounded-xl transition-all duration-200">
+                <Search
+                  className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 pointer-events-none"
+                  style={{ color: "var(--platform-fg-muted)" }}
+                />
                 <Input
-                  placeholder="Por nombre o título..."
+                  placeholder="Buscar por nombre o título del ETL..."
                   value={etlQuery}
                   onChange={(e) => setEtlQuery(e.target.value)}
-                  className="pl-9 rounded-xl border"
-                  style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                  className="pl-11 pr-4 h-12 rounded-xl border-0 text-base placeholder:text-[var(--platform-fg-muted)] focus-visible:ring-2 focus-visible:ring-[var(--platform-accent)]"
+                  style={{
+                    background: "var(--platform-bg)",
+                    color: "var(--platform-fg)",
+                    border: "1px solid var(--platform-border)",
+                  }}
                 />
               </div>
             </div>
+
+            {/* Results */}
             <div
-              className="max-h-[240px] overflow-y-auto rounded-xl border p-2 space-y-1"
-              style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}
+              className="flex-1 min-h-[200px] max-h-[320px] overflow-y-auto px-4 pb-4"
+              style={{ background: "var(--platform-bg-elevated)" }}
             >
               {etlOptionsLoading ? (
-                <div className="flex items-center justify-center py-6">
-                  <Loader2 className="h-6 w-6 animate-spin" style={{ color: "var(--platform-accent)" }} />
+                <div className="flex flex-col items-center justify-center py-12 gap-3">
+                  <Loader2 className="h-8 w-8 animate-spin" style={{ color: "var(--platform-accent)" }} />
+                  <p className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                    Buscando ETLs...
+                  </p>
                 </div>
               ) : etlOptions.length === 0 ? (
-                <p className="text-sm py-4 text-center" style={{ color: "var(--platform-fg-muted)" }}>
-                  {etlQuery ? "Sin resultados" : "Escribí para buscar ETLs"}
-                </p>
-              ) : (
-                etlOptions.map((etl) => (
-                  <button
-                    key={etl.id}
-                    type="button"
-                    onClick={() => setSelectedEtlId(etl.id)}
-                    className="w-full flex items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm transition-colors"
-                    style={{
-                      background: selectedEtlId === etl.id ? "var(--platform-accent-dim)" : "transparent",
-                      color: selectedEtlId === etl.id ? "var(--platform-accent)" : "var(--platform-fg)",
-                    }}
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                  <div
+                    className="flex h-14 w-14 items-center justify-center rounded-2xl mb-4"
+                    style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}
                   >
-                    <span>{etl.title}</span>
-                    {selectedEtlId === etl.id && <ChevronRight className="h-4 w-4" />}
-                  </button>
-                ))
+                    <Database className="h-7 w-7" />
+                  </div>
+                  <p className="text-sm font-medium mb-1" style={{ color: "var(--platform-fg)" }}>
+                    {etlQuery ? "Sin resultados" : "Escribí para buscar"}
+                  </p>
+                  <p className="text-xs max-w-[240px]" style={{ color: "var(--platform-fg-muted)" }}>
+                    {etlQuery
+                      ? "No hay ETLs que coincidan con tu búsqueda. Probá con otro término."
+                      : "Ingresá el nombre o título del ETL para ver opciones."}
+                  </p>
+                </div>
+              ) : (
+                <ul className="space-y-1.5 py-1">
+                  {etlOptions.map((etl) => (
+                    <li key={etl.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedEtlId(etl.id)}
+                        className="w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all duration-150 group hover:border-[var(--platform-border)] hover:bg-[var(--platform-surface)]"
+                        style={{
+                          background: selectedEtlId === etl.id ? "var(--platform-accent-dim)" : "transparent",
+                          color: selectedEtlId === etl.id ? "var(--platform-accent)" : "var(--platform-fg)",
+                          borderColor: selectedEtlId === etl.id ? "var(--platform-accent)" : "transparent",
+                        }}
+                      >
+                        <div
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                          style={{
+                            background: selectedEtlId === etl.id ? "var(--platform-accent)" : "var(--platform-bg)",
+                            color: selectedEtlId === etl.id ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                          }}
+                        >
+                          <Database className="h-4 w-4" />
+                        </div>
+                        <span className="flex-1 font-medium text-sm truncate">{etl.title}</span>
+                        {selectedEtlId === etl.id ? (
+                          <span
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
+                            style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                          >
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </span>
+                        ) : (
+                          <ChevronRight className="h-4 w-4 shrink-0 opacity-0 group-hover:opacity-40 transition-opacity" style={{ color: "var(--platform-fg-muted)" }} />
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
-            <div className="flex gap-2 justify-end">
+
+            {/* Footer */}
+            <div
+              className="flex items-center justify-end gap-3 px-6 py-4"
+              style={{ borderTop: "1px solid var(--platform-border)", background: "var(--platform-surface)" }}
+            >
               <Button
                 variant="outline"
                 onClick={() => setCreateOpen(false)}
-                className="rounded-xl"
-                style={{ borderColor: "var(--platform-border)" }}
+                className="rounded-xl h-10 px-5 font-medium"
+                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
               >
                 Cancelar
               </Button>
               <Button
                 onClick={goToCreateForEtl}
                 disabled={!selectedEtlId}
-                className="rounded-xl"
-                style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                className="rounded-xl h-10 px-5 font-medium gap-2"
+                style={{
+                  background: selectedEtlId ? "var(--platform-accent)" : "var(--platform-bg-elevated)",
+                  color: selectedEtlId ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                }}
               >
-                Ir a crear métricas
+                Continuar al ETL
+                <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
           </div>

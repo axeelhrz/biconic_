@@ -300,7 +300,7 @@ export async function GET(
     const url = new URL(request.url);
     const sampleRows = Math.min(500, Math.max(0, parseInt(url.searchParams.get("sampleRows") ?? "0", 10) || 0));
     let rawRows: any[] = resolved.sampleData;
-    if (sampleRows > 0 && resolved.rowCount > 0) {
+    if (sampleRows > 0) {
       try {
         const schemaClient = supabase.schema(resolved.schema as "public" | "etl_output") as any;
         const { data: rows } = await schemaClient.from(resolved.tableName).select("*").limit(sampleRows);

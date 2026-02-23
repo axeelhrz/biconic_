@@ -189,7 +189,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     if (!opts?.silent) setLoading(true);
     try {
       const sampleRows = opts?.sampleRows ?? 0;
-      const url = sampleRows > 0 ? `/api/etl/${etlId}/metrics-data?sampleRows=${Math.min(500, sampleRows)}` : `/api/etl/${etlId}/metrics-data`;
+      const url = sampleRows > 0 ? `/api/etl/${etlId}/metrics-data?sampleRows=${Math.min(500, Math.max(0, sampleRows))}` : `/api/etl/${etlId}/metrics-data`;
       const res = await fetch(url);
       const json: MetricsDataResponse = await res.json();
       if (!res.ok || !json.ok || !json.data) {
@@ -212,10 +212,10 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   }, [fetchData]);
 
   useEffect(() => {
-    if (showForm && (data?.hasData ?? false) && data?.rowCount && data.rowCount > 0 && rawTableData.length <= 1) {
-      fetchData({ silent: true, sampleRows: 200 });
+    if (showForm && (data?.hasData ?? false) && (rawTableData.length <= 1 || (data?.rowCount ?? 0) === 0)) {
+      fetchData({ silent: true, sampleRows: 500 });
     }
-  }, [showForm, data?.hasData, data?.rowCount, fetchData]);
+  }, [showForm, data?.hasData, data?.rowCount, rawTableData.length, fetchData]);
 
   useEffect(() => {
     const allFields = data?.fields?.all ?? [];
@@ -650,7 +650,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 mb-4">
-                    <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => fetchData({ silent: true, sampleRows: 200 })} disabled={loading}>
+                    <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => fetchData({ silent: true, sampleRows: 500 })} disabled={loading}>
                       {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Recargar muestra
                     </Button>
                   </div>
