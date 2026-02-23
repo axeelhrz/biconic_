@@ -421,18 +421,13 @@ export default function AdminEtlGrid({
         {(filtered.length > 0 ? filtered : []).map((etl) => (
           <div key={etl.id} className="relative">
             <div
-              className="absolute left-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-md border"
-              style={{
-                background: "rgba(255,255,255,0.95)",
-                borderColor: "var(--platform-border)",
-                boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
-              }}
+              className="absolute left-2.5 top-2.5 z-10"
               onClick={(e) => e.stopPropagation()}
             >
               <Checkbox
                 checked={selectedSet.has(etl.id)}
                 onCheckedChange={() => toggleSelect(etl.id)}
-                className="h-3.5 w-3.5 rounded-[4px] border-[1.5px] data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:border-[var(--platform-accent)]"
+                className="h-4 w-4 rounded-md border-2 border-[var(--platform-fg-muted)] data-[state=checked]:border-[var(--platform-accent)] data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:text-white"
               />
             </div>
             <EtlCard
