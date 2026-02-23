@@ -1593,23 +1593,20 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     Elegí una columna; se cargarán automáticamente los valores. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado.
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
-                    <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</span>
-                    <select
-                      className="rounded-lg border px-3 py-2 text-sm min-w-[140px]"
-                      style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                      value={distinctColumn ?? ""}
-                      onChange={(e) => {
-                        const col = e.target.value || null;
-                        setDistinctColumn(col);
-                        setDistinctValuesList([]);
-                        setDistinctSearch("");
-                      }}
-                    >
-                      <option value="">Elegir columna</option>
-                      {(selectedTableInfo?.columns ?? []).map((col) => (
-                        <option key={col.name} value={col.name}>{col.name}</option>
-                      ))}
-                    </select>
+                    <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>
+                    <div className="min-w-[180px]">
+                      <Select
+                        value={distinctColumn ?? ""}
+                        onChange={(v: string) => {
+                          const col = v || null;
+                          setDistinctColumn(col);
+                          setDistinctValuesList([]);
+                          setDistinctSearch("");
+                        }}
+                        options={(selectedTableInfo?.columns ?? []).map((col) => ({ value: col.name, label: col.name }))}
+                        placeholder="Elegir columna"
+                      />
+                    </div>
                     {loadingDistinct && distinctColumn && (
                       <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores…</span>
                     )}
