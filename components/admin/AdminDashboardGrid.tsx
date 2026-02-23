@@ -19,6 +19,7 @@ type SupabaseDashboardRow = {
   views?: number | null;
   user_id?: string;
   client_id?: string | null;
+  layout?: { widgets?: Array<{ gridOrder?: number; gridSpan?: number; type?: string; pageId?: string }>; pages?: Array<{ id: string; name?: string }>; activePageId?: string } | null;
 };
 
 type FilterType = "todos" | "publicados" | "borradores";
@@ -98,10 +99,10 @@ export default function AdminDashboardGrid({
               status,
               description: row.description ?? "",
               views: typeof row.views === "number" ? row.views : 0,
-              // Always show owner for admin
               owner: { fullName: ownerProfile?.full_name ?? "Desconocido" },
               clientId: row.client_id ?? undefined,
               ownerId: row.user_id,
+              layout: row.layout ?? undefined,
             } satisfies Dashboard;
           });
 

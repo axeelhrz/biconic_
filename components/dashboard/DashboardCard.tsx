@@ -1,9 +1,17 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
+import { LayoutDashboard } from "lucide-react";
 import EyeIcon from "../icons/EyeIcon";
 import EllipsisHorizontalIcon from "../icons/EllipsisHorizontalIcon";
 import ShareDashboardModal from "./ShareDashboardModal"; // Import the modal
+
+// Layout guardado (widgets con posición/span) para previsualización en la tarjeta
+export type DashboardLayoutPreview = {
+  widgets?: Array<{ gridOrder?: number; gridSpan?: number; type?: string; pageId?: string }>;
+  pages?: Array<{ id: string; name?: string }>;
+  activePageId?: string;
+};
 
 // Definimos el tipo de datos que espera la tarjeta
 export interface Dashboard {
@@ -17,12 +25,60 @@ export interface Dashboard {
   // New fields for sharing logic
   clientId?: string;
   ownerId?: string;
+  /** Si existe, se muestra la previsualización del layout en lugar de la imagen por defecto */
+  layout?: DashboardLayoutPreview | null;
 }
 
 interface DashboardCardProps {
     dashboard: Dashboard;
     href?: string;
     onDelete?: (dashboard: Dashboard) => void;
+}
+
+// Colores por tipo de widget para la minipreview
+const WIDGET_TYPE_COLORS: Record<string, string> = {
+  bar: "#0d9488",
+  horizontalBar: "#0d9488",
+  line: "#2563eb",
+  pie: "#a855f7",
+  doughnut: "#a855f7",
+  kpi: "#16a34a",
+  table: "#64748b",
+  combo: "#ea580c",
+};
+
+function DashboardLayoutPreview({ layout }: { layout: DashboardLayoutPreview }) {
+  const widgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
+  const firstPageId = layout?.activePageId ?? layout?.pages?.[0]?.id;
+  const sorted = [...widgets]
+    .filter((w) => !firstPageId || w.pageId === firstPageId)
+    .sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999))
+    .slice(0, 8); // máximo 8 bloques en la preview
+
+  if (sorted.length === 0) return null;
+
+  return (
+    <div
+      className="grid w-full h-full grid-cols-4 gap-1 p-2"
+      style={{ background: "var(--platform-bg-elevated)" }}
+    >
+      {sorted.map((w, i) => {
+        const span = Math.min(4, Math.max(1, w.gridSpan ?? 2));
+        const color = WIDGET_TYPE_COLORS[w.type ?? ""] ?? "var(--platform-accent)";
+        return (
+          <div
+            key={i}
+            className="rounded min-h-[24px] opacity-90"
+            style={{
+              gridColumn: `span ${span}`,
+              background: color,
+              minHeight: "28px",
+            }}
+          />
+        );
+      })}
+    </div>
+  );
 }
 
 // Inline Share Icon if not available (copying from EtlCard for consistency)
@@ -46,8 +102,9 @@ export default function DashboardCard({
   href,
   onDelete,
 }: DashboardCardProps) {
-  const { id, title, imageUrl, status, description, views, owner } = dashboard;
+  const { id, title, imageUrl, status, description, views, owner, layout } = dashboard;
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const hasLayoutPreview = layout?.widgets && layout.widgets.length > 0;
 
   // Badge de estado: verde/amarillo con tema oscuro
   const statusClasses =
@@ -69,14 +126,24 @@ export default function DashboardCard({
           boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
         }}
       >
-        {/* Imagen de Vista Previa */}
-        <div className="relative h-[193px] w-full">
-          <Image
-            src={imageUrl}
-            alt={`Vista previa de ${title}`}
-            layout="fill"
-            objectFit="cover"
-          />
+        {/* Previsualización: layout del dashboard creado o placeholder */}
+        <div className="relative h-[193px] w-full overflow-hidden bg-[var(--platform-bg)]">
+          {hasLayoutPreview ? (
+            <DashboardLayoutPreview layout={layout!} />
+          ) : imageUrl && imageUrl !== "/Image.svg" ? (
+            <Image
+              src={imageUrl}
+              alt={`Vista previa de ${title}`}
+              fill
+              className="object-cover"
+            />
+          ) : (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4" style={{ color: "var(--platform-fg-muted)" }}>
+              <LayoutDashboard className="h-10 w-10 opacity-50" />
+              <span className="text-xs font-medium">Sin previsualización</span>
+              <span className="text-[10px] opacity-80">Abrí el dashboard para diseñar</span>
+            </div>
+          )}
         </div>
 
         {/* Contenido de la Tarjeta */}

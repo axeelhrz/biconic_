@@ -100,17 +100,21 @@ export function ClientFilter({ onSelect }: ClientFilterProps) {
 
       {isOpen && (
         <div
-          className="absolute left-0 top-full z-50 mt-2 w-[280px] rounded-lg border p-2 shadow-xl"
+          className="absolute left-0 top-full z-50 mt-2 w-[300px] rounded-2xl border p-3 shadow-lg"
           style={{
             borderColor: "var(--platform-border)",
             background: "var(--platform-surface)",
+            boxShadow: "0 10px 40px rgba(0,0,0,0.08)",
           }}
         >
-          <div className="relative mb-2">
-            <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
+          <p className="text-xs font-semibold uppercase tracking-wider mb-2 px-1" style={{ color: "var(--platform-fg-muted)" }}>
+            Clientes
+          </p>
+          <div className="relative mb-3">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
             <input
               autoFocus
-              className="w-full rounded-md border py-1.5 pl-8 pr-2 text-sm outline-none focus:ring-2"
+              className="w-full rounded-xl border py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-[var(--platform-accent)]"
               style={{
                 borderColor: "var(--platform-border)",
                 background: "var(--platform-bg)",
@@ -122,36 +126,38 @@ export function ClientFilter({ onSelect }: ClientFilterProps) {
             />
           </div>
 
-          <div className="max-h-[200px] overflow-y-auto">
+          <div className="max-h-[220px] overflow-y-auto rounded-xl -mx-1 px-1" style={{ background: "var(--platform-bg)" }}>
             {loading ? (
-              <div className="flex justify-center p-4">
-                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--platform-fg-muted)" }} />
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin" style={{ color: "var(--platform-accent)" }} />
               </div>
             ) : clients.length === 0 ? (
-              <div className="p-2 text-center text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+              <div className="py-6 text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
                 No se encontraron resultados
               </div>
             ) : (
-              <div className="flex flex-col gap-1">
-                {clients.map((client) => (
-                  <div
-                    key={client.id}
-                    onClick={() => handleSelect(client)}
-                    className={cn(
-                      "flex cursor-pointer items-center justify-between rounded px-2 py-1.5 text-sm hover:opacity-90",
-                      selectedClient?.id === client.id && "font-medium"
-                    )}
-                    style={{
-                      background: selectedClient?.id === client.id ? "var(--platform-accent-dim)" : "transparent",
-                      color: selectedClient?.id === client.id ? "var(--platform-accent)" : "var(--platform-fg)",
-                    }}
-                  >
-                    <span className="truncate">{client.name}</span>
-                    {selectedClient?.id === client.id && (
-                      <Check className="h-3 w-3" />
-                    )}
-                  </div>
-                ))}
+              <div className="flex flex-col gap-0.5">
+                {clients.map((client) => {
+                  const selected = selectedClient?.id === client.id;
+                  return (
+                    <button
+                      key={client.id}
+                      type="button"
+                      onClick={() => handleSelect(client)}
+                      className={cn(
+                        "flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2.5 text-sm text-left transition-all",
+                        selected && "ring-2 ring-[var(--platform-accent)]"
+                      )}
+                      style={{
+                        background: selected ? "var(--platform-accent-dim)" : "transparent",
+                        color: selected ? "var(--platform-accent)" : "var(--platform-fg)",
+                      }}
+                    >
+                      <span className="truncate">{client.name}</span>
+                      {selected && <Check className="h-4 w-4 shrink-0" strokeWidth={2.5} />}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

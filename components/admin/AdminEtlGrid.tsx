@@ -5,7 +5,15 @@ import { createClient } from "@/lib/supabase/client";
 import { getEtlsAdmin, deleteEtlAdmin } from "@/app/admin/(main)/etl/actions";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import { Trash2, X } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Trash2, X, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 // Optional shape to help with mapping Supabase rows to the Etl UI type
@@ -72,6 +80,7 @@ export default function AdminEtlGrid({
   const [error, setError] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteModalOpen, setBulkDeleteModalOpen] = useState(false);
 
   const loadFromClient = useCallback(async (): Promise<Etl[]> => {
     const supabase = createClient();
@@ -282,13 +291,11 @@ export default function AdminEtlGrid({
     });
   };
   const clearSelection = () => setSelectedIds([]);
-  const handleBulkDelete = async () => {
+  const openBulkDeleteModal = () => {
+    if (selectedIds.length > 0) setBulkDeleteModalOpen(true);
+  };
+  const handleBulkDeleteConfirm = async () => {
     if (selectedIds.length === 0) return;
-    const msg =
-      selectedIds.length === 1
-        ? "¿Eliminar este ETL? Esta acción no se puede deshacer."
-        : `¿Eliminar los ${selectedIds.length} ETLs seleccionados? Esta acción no se puede deshacer.`;
-    if (!confirm(msg)) return;
     setBulkDeleting(true);
     let ok = 0;
     let fail = 0;
@@ -298,6 +305,7 @@ export default function AdminEtlGrid({
     }
     setBulkDeleting(false);
     setSelectedIds([]);
+    setBulkDeleteModalOpen(false);
     loadEtls();
     if (fail > 0) toast.error(`${fail} no se pudieron eliminar.`);
     if (ok > 0) toast.success(ok === 1 ? "ETL eliminado." : `${ok} ETLs eliminados.`);
@@ -357,7 +365,7 @@ export default function AdminEtlGrid({
             size="sm"
             className="rounded-lg h-9 gap-1.5"
             style={{ background: "var(--platform-danger)", color: "#fff" }}
-            onClick={handleBulkDelete}
+            onClick={openBulkDeleteModal}
             disabled={bulkDeleting}
           >
             <Trash2 className="h-4 w-4" />
@@ -366,21 +374,65 @@ export default function AdminEtlGrid({
         </div>
       )}
 
+      <Dialog open={bulkDeleteModalOpen} onOpenChange={setBulkDeleteModalOpen}>
+        <DialogContent
+          className="sm:max-w-[400px]"
+          style={{
+            background: "var(--platform-surface)",
+            borderColor: "var(--platform-border)",
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: "var(--platform-fg)" }}>
+              {selectedIds.length === 1 ? "Eliminar ETL" : "Eliminar ETLs seleccionados"}
+            </DialogTitle>
+            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
+              {selectedIds.length === 1
+                ? "¿Eliminar este ETL? Esta acción no se puede deshacer."
+                : `¿Eliminar los ${selectedIds.length} ETLs seleccionados? Esta acción no se puede deshacer.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setBulkDeleteModalOpen(false)}
+              disabled={bulkDeleting}
+              className="rounded-xl"
+              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              className="rounded-xl gap-2"
+              style={{ background: "var(--platform-danger)", color: "#fff" }}
+              onClick={handleBulkDeleteConfirm}
+              disabled={bulkDeleting}
+            >
+              {bulkDeleting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {bulkDeleting ? "Eliminando…" : "Eliminar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {(filtered.length > 0 ? filtered : []).map((etl) => (
           <div key={etl.id} className="relative">
             <div
-              className="absolute left-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm"
+              className="absolute left-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-md border"
               style={{
-                background: "var(--platform-surface)",
+                background: "rgba(255,255,255,0.95)",
                 borderColor: "var(--platform-border)",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
               }}
               onClick={(e) => e.stopPropagation()}
             >
               <Checkbox
                 checked={selectedSet.has(etl.id)}
                 onCheckedChange={() => toggleSelect(etl.id)}
-                className="h-5 w-5 rounded border-2 data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:border-[var(--platform-accent)]"
+                className="h-3.5 w-3.5 rounded-[4px] border-[1.5px] data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:border-[var(--platform-accent)]"
               />
             </div>
             <EtlCard
