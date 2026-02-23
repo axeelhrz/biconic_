@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { Client as PgClient } from "pg";
 import {
   quoteIdent,
@@ -186,8 +187,6 @@ export async function POST(req: NextRequest) {
       };
 
       if (unionConf?.left?.connectionId && unionConf?.right?.connectionId) {
-        const dbUrlUnion = process.env.SUPABASE_DB_URL;
-        if (!dbUrlUnion) throw new Error("SUPABASE_DB_URL no disponible para vista previa UNION.");
         const left = unionConf.left;
         const right = unionConf.right;
         const resolveTable = async (connId: string, f?: { table?: string }) => {
@@ -203,31 +202,92 @@ export async function POST(req: NextRequest) {
         const leftTable = await resolveTable(left.connectionId, left.filter);
         const rightTable = await resolveTable(right.connectionId, right.filter);
         if (!leftTable || !rightTable) throw new Error("UNION: ambas fuentes deben tener tabla.");
-        const client = new PgClient({ connectionString: dbUrlUnion });
-        await client.connect();
-        try {
-          const runOne = async (src: typeof left, tableQ: string) => {
-            const { clause, params } = buildWhereClausePg(src.filter?.conditions || []);
-            const sel = src.filter?.columns?.length ? src.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
-            const q = `SELECT ${sel} FROM ${quoteQualified(tableQ)} ${clause} ORDER BY 1 ASC LIMIT ${Math.floor(PREVIEW_LIMIT / 2)}`;
-            const res = await client.query(q, params);
-            return (res.rows || []).map((r: Record<string, any>) => {
-              const out: Record<string, any> = {};
-              for (const k in r) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = r[k];
-              return out;
-            });
-          };
-          const leftRows = await runOne(left, leftTable);
-          const rightRows = await runOne(right, rightTable);
-          if (leftRows.length && rightRows.length) {
-            const a = Object.keys(leftRows[0]).sort().join(",");
-            const b = Object.keys(rightRows[0]).sort().join(",");
-            if (a !== b) throw new Error("UNION: ambos datasets deben tener las mismas columnas.");
+
+        const buildPgUrl = (conn: { db_host?: string | null; db_user?: string | null; db_port?: number | null; db_name?: string | null; db_password_encrypted?: string | null }) => {
+          if (!conn.db_host || !conn.db_user || !conn.db_name) throw new Error("Conexión sin host, usuario o base de datos.");
+          const password = decryptConnectionPassword(conn.db_password_encrypted);
+          const port = conn.db_port ?? 5432;
+          return `postgres://${conn.db_user}:${encodeURIComponent(password)}@${conn.db_host}:${port}/${conn.db_name}?sslmode=require`;
+        };
+
+        let dbUrlUnion: string | null = process.env.SUPABASE_DB_URL || null;
+        if (!dbUrlUnion) {
+          const { data: leftConn } = await supabaseAdmin.from("connections").select("*").eq("id", left.connectionId).single();
+          if (!leftConn) throw new Error(`Conexión izquierda ${left.connectionId} no encontrada.`);
+          const leftType = (leftConn.type || "").toLowerCase();
+          if (leftType === "excel_file") {
+            dbUrlUnion = process.env.SUPABASE_DB_URL || null;
+            if (!dbUrlUnion) throw new Error("Para vista previa UNION con archivos Excel configurá la variable de entorno SUPABASE_DB_URL.");
+          } else if (leftType === "postgres" || leftType === "postgresql") {
+            dbUrlUnion = buildPgUrl(leftConn);
+          } else {
+            throw new Error(`Vista previa UNION con conexión tipo "${leftConn.type}" no soportada. Usá conexiones PostgreSQL o configurá SUPABASE_DB_URL.`);
           }
-          const combined = [...leftRows, ...rightRows];
-          if (combined.length) yield { rows: combined, query: `UNION (${leftTable} + ${rightTable})` };
-        } finally {
-          await client.end();
+        }
+
+        const runOne = async (client: PgClient, src: typeof left, tableQ: string) => {
+          const { clause, params } = buildWhereClausePg(src.filter?.conditions || []);
+          const sel = src.filter?.columns?.length ? src.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
+          const q = `SELECT ${sel} FROM ${quoteQualified(tableQ)} ${clause} ORDER BY 1 ASC LIMIT ${Math.floor(PREVIEW_LIMIT / 2)}`;
+          const res = await client.query(q, params);
+          return (res.rows || []).map((r: Record<string, any>) => {
+            const out: Record<string, any> = {};
+            for (const k in r) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = r[k];
+            return out;
+          });
+        };
+
+        const sameConnection = String(left.connectionId) === String(right.connectionId);
+        if (sameConnection && dbUrlUnion) {
+          const client = new PgClient({ connectionString: dbUrlUnion });
+          await client.connect();
+          try {
+            const leftRows = await runOne(client, left, leftTable);
+            const rightRows = await runOne(client, right, rightTable);
+            if (leftRows.length && rightRows.length) {
+              const a = Object.keys(leftRows[0]).sort().join(",");
+              const b = Object.keys(rightRows[0]).sort().join(",");
+              if (a !== b) throw new Error("UNION: ambos datasets deben tener las mismas columnas.");
+            }
+            const combined = [...leftRows, ...rightRows];
+            if (combined.length) yield { rows: combined, query: `UNION (${leftTable} + ${rightTable})` };
+          } finally {
+            await client.end();
+          }
+        } else if (dbUrlUnion) {
+          const rightConnId = right.connectionId;
+          let rightUrl = dbUrlUnion;
+          if (!sameConnection) {
+            const { data: rightConn } = await supabaseAdmin.from("connections").select("*").eq("id", rightConnId).single();
+            if (!rightConn) throw new Error(`Conexión derecha ${rightConnId} no encontrada.`);
+            const rightType = (rightConn.type || "").toLowerCase();
+            if (rightType === "excel_file") {
+              rightUrl = process.env.SUPABASE_DB_URL || "";
+              if (!rightUrl) throw new Error("Para UNION con Excel en la tabla derecha configurá SUPABASE_DB_URL.");
+            } else if (rightType === "postgres" || rightType === "postgresql") {
+              rightUrl = buildPgUrl(rightConn);
+            } else {
+              throw new Error(`Vista previa UNION con conexión derecha tipo "${rightConn.type}" no soportada.`);
+            }
+          }
+          const clientLeft = new PgClient({ connectionString: dbUrlUnion });
+          const clientRight = new PgClient({ connectionString: rightUrl });
+          await clientLeft.connect();
+          await clientRight.connect();
+          try {
+            const leftRows = await runOne(clientLeft, left, leftTable);
+            const rightRows = await runOne(clientRight, right, rightTable);
+            if (leftRows.length && rightRows.length) {
+              const a = Object.keys(leftRows[0]).sort().join(",");
+              const b = Object.keys(rightRows[0]).sort().join(",");
+              if (a !== b) throw new Error("UNION: ambos datasets deben tener las mismas columnas.");
+            }
+            const combined = [...leftRows, ...rightRows];
+            if (combined.length) yield { rows: combined, query: `UNION (${leftTable} + ${rightTable})` };
+          } finally {
+            await clientLeft.end();
+            await clientRight.end();
+          }
         }
         return;
       }
