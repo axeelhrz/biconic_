@@ -528,12 +528,70 @@ export async function POST(req: NextRequest) {
             if (!internalDbUrl) throw new Error("Variable de entorno SUPABASE_DB_URL no encontrada para conexión interna.");
             dbUrl = internalDbUrl;
 
+        } else if ((conn.type || "").toLowerCase() === "firebird") {
+            // Vista previa tabla única Firebird: misma lógica segura que en UNION (solo nombre de tabla, SELECT *, WHERE inlined)
+            if (!tableToQuery?.trim()) {
+              console.error("[Preview] No table specified for Firebird.");
+              return;
+            }
+            const password = (conn as any).db_password_encrypted
+              ? decryptConnectionPassword((conn as any).db_password_encrypted)
+              : (conn as any).db_password ?? "";
+            const tableNameOnly = (tableToQuery || "").trim().split(".").pop() || tableToQuery.trim();
+            const tablePart = tableNameOnly.toUpperCase();
+            const rawConditions = (filter?.conditions || []).filter(
+              (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
+            );
+            const { clause, params } = buildWhereClauseFirebird(rawConditions);
+            const escapeFbLiteral = (v: any): string => {
+              if (v == null) return "NULL";
+              if (typeof v === "boolean") return v ? "1" : "0";
+              if (typeof v === "number" && !Number.isNaN(v)) {
+                if (Number.isInteger(v)) return String(v);
+                return `CAST('${String(v)}' AS DOUBLE PRECISION)`;
+              }
+              const s = String(v);
+              return `'${s.replace(/'/g, "''")}'`;
+            };
+            let clauseInlined = clause;
+            for (const p of params) {
+              const pos = clauseInlined.indexOf("?");
+              if (pos === -1) break;
+              clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
+            }
+            const limit = Math.min(PREVIEW_LIMIT, 1000);
+            const Firebird = require("node-firebird");
+            const opts = {
+              host: conn.db_host || "localhost",
+              port: conn.db_port ? Number(conn.db_port) : 15421,
+              database: conn.db_name,
+              user: conn.db_user,
+              password: password || "",
+              lowercase_keys: false,
+            };
+            const baseQuery = `SELECT FIRST ${limit} * FROM ${tablePart} ${clauseInlined}`.trim();
+            const rows = await new Promise<Record<string, any>[]>((resolve, reject) => {
+              const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
+              Firebird.attach(opts, (err: Error | null, db: any) => {
+                if (err) { clearTimeout(t); return reject(err); }
+                db.query(baseQuery, [], (qerr: Error | null, r: any[]) => {
+                  clearTimeout(t);
+                  if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                  if (qerr) return reject(qerr);
+                  const normalized = (r || []).map((row: Record<string, any>) => {
+                    const out: Record<string, any> = {};
+                    for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
+                    return out;
+                  });
+                  resolve(normalized);
+                });
+              });
+            });
+            if (rows.length) yield { rows, query: baseQuery };
+            return;
         } else {
             // Lógica para Postgres externo
-            // getPasswordFromSecret moved to top of scope
-
             const password = await getPasswordFromSecret(conn.db_password_secret_id);
-            
             const dbConfig = {
                 host: conn.db_host,
                 user: conn.db_user,
@@ -541,13 +599,13 @@ export async function POST(req: NextRequest) {
                 port: conn.db_port,
                 database: conn.db_name
             };
-
             if (!dbConfig.host || !dbConfig.user || !dbConfig.database) {
                  throw new Error(`Configuración de conexión incompleta para ID: ${body.connectionId}`);
             }
-
             dbUrl = `postgres://${dbConfig.user}:${dbConfig.password}@${dbConfig.host}:${dbConfig.port}/${dbConfig.database}?sslmode=require`;
         }
+
+        if ((conn.type || "").toLowerCase() !== "firebird") {
         const client = new PgClient({ connectionString: dbUrl });
         await client.connect();
 
@@ -567,19 +625,15 @@ export async function POST(req: NextRequest) {
 
             const { clause: whereClause, params } = buildWhereClausePg(conditions);
             
-            // Fix: Add deterministic ordering for stable pagination
-            // We use ORDER BY 1 (first column) as a generic fallback if no PK known
             baseQuery = `SELECT ${selectList} FROM ${tableQ} ${whereClause} ORDER BY 1 ASC`;
             queryParams = params;
           } else {
-             // Fallback if generic query needed (should not happen if flow is correct)
              console.error("[Preview] No table specified for query.");
              return; 
           }
 
-          // Chunked fetching strategy
           const BATCH_SIZE = 5000;
-          const MAX_SCAN_LIMIT = 100000; // Scan up to 100k rows to find matches
+          const MAX_SCAN_LIMIT = 100000;
           let offset = 0;
           let totalFixedScanned = 0;
 
@@ -588,19 +642,19 @@ export async function POST(req: NextRequest) {
               const res = await client.query(pagedQuery, queryParams);
               const batchSize = res.rows.length;
               
-              if (batchSize === 0) break; // End of table
+              if (batchSize === 0) break;
 
-              yield { rows: res.rows, query: baseQuery }; // Return baseQuery to show user the logic, or pagedQuery? Base is cleaner.
+              yield { rows: res.rows, query: baseQuery };
               
               offset += batchSize;
               totalFixedScanned += batchSize;
               
-              // If we fetched less than requested, we reached the end
               if (batchSize < BATCH_SIZE) break;
           }
 
         } finally {
           await client.end();
+        }
         }
       }
     }
