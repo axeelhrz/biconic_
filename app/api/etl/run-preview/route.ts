@@ -269,13 +269,8 @@ export async function POST(req: NextRequest) {
           const tablePart = tableQ.includes(".")
             ? (tableQ.split(".").pop() || tableQ.trim()).trim().toUpperCase()
             : safePart(tableQ);
-          const colList = (src.filter?.columns || [])
-            .map((c: string) => (c != null ? String(c).trim() : ""))
-            .filter((c: string) => c !== "" && c !== "." && !/^\.+$/.test(c));
-          const colListLimited = colList.length > 150 ? colList.slice(0, 150) : colList;
-          const cols = colListLimited.length > 0
-            ? colListLimited.map((c: string) => safePart(c)).join(", ")
-            : "*";
+          // Firebird con solo nombre de tabla: usar SELECT * para evitar -206 (Column unknown) por diferencias de nombre/casing
+          const cols = "*";
           const rawConditions = (src.filter?.conditions || []).filter(
             (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
           );
@@ -546,13 +541,8 @@ export async function POST(req: NextRequest) {
             const tablePart = tableToQuery.includes(".")
               ? (tableToQuery.split(".").pop() || tableToQuery.trim()).trim().toUpperCase()
               : safePart(tableToQuery);
-            const colList = (filter?.columns || [])
-              .map((c: string) => (c != null ? String(c).trim() : ""))
-              .filter((c: string) => c !== "" && c !== "." && !/^\.+$/.test(c));
-            const colListLimited = colList.length > 150 ? colList.slice(0, 150) : colList;
-            const colsFirebird = colListLimited.length > 0
-              ? colListLimited.map((c: string) => safePart(c)).join(", ")
-              : "*";
+            // Firebird con solo nombre de tabla: usar SELECT * para evitar -206 (Column unknown)
+            const colsFirebird = "*";
             const rawConditions = (filter?.conditions || []).filter(
               (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
             );
