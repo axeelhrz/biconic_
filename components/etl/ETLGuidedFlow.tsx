@@ -121,7 +121,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [outputMode, setOutputMode] = useState<"overwrite" | "append">("overwrite");
   const [loadingMeta, setLoadingMeta] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState<string | null>(null);
-  const [tableSearchQuery, setTableSearchQuery] = useState("");
   const [running, setRunning] = useState(false);
   const [, setRunId] = useState<string | null>(null);
   const [runSuccess, setRunSuccess] = useState(false);
@@ -270,7 +269,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         } else {
           skipClearSelectedTableRef.current = false;
         }
-        setTableSearchQuery("");
       })
       .catch(() => {
         if (!cancelled) toast.error("No se pudo cargar la lista de tablas");
@@ -879,28 +877,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <Loader2 className="h-4 w-4 animate-spin" /> Cargando tablas…
                     </div>
                   ) : (
-                    <>
-                      {tables.length > 0 && (
-                        <input
-                          type="text"
-                          placeholder="Buscar tabla…"
-                          value={tableSearchQuery}
-                          onChange={(e) => setTableSearchQuery(e.target.value)}
-                          className="w-full mt-2 rounded-xl border px-4 py-2.5 text-sm"
-                          style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-                        />
-                      )}
-                      <Select
-                        value={selectedTable ?? ""}
-                        onChange={(v: string) => setSelectedTable(v || null)}
-                        options={tables
-                          .filter((t) => !tableSearchQuery.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(tableSearchQuery.trim().toLowerCase()))
-                          .map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
-                        placeholder={connectionId && tables.length === 0 ? "No hay tablas. Configurá tablas en Conexiones." : "Seleccionar tabla…"}
-                        disabled={!connectionId || tables.length === 0}
-                        className="mt-2"
-                      />
-                    </>
+                    <Select
+                      value={selectedTable ?? ""}
+                      onChange={(v: string) => setSelectedTable(v || null)}
+                      options={tables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
+                      placeholder={connectionId && tables.length === 0 ? "No hay tablas. Configurá tablas en Conexiones." : "Seleccionar tabla…"}
+                      disabled={!connectionId || tables.length === 0}
+                      searchable
+                      searchPlaceholder="Buscar tabla…"
+                      className="mt-2"
+                    />
                   )}
                 </div>
                 <div className="flex gap-3 pt-2">

@@ -4,7 +4,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { Listbox, Transition } from "@headlessui/react";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const PANEL_MAX_HEIGHT = 260;
@@ -25,6 +25,10 @@ export interface SelectProps {
   optionsClassName?: string;
   /** Clases para cada opción (se combinan con estado active) */
   optionClassName?: string;
+  /** Si true, muestra un campo de búsqueda dentro del desplegable para filtrar opciones */
+  searchable?: boolean;
+  /** Placeholder del campo de búsqueda cuando searchable es true */
+  searchPlaceholder?: string;
   disabled?: boolean;
   name?: string;
   // To support react-hook-form register spread
@@ -42,6 +46,8 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
       buttonClassName,
       optionsClassName,
       optionClassName,
+      searchable = false,
+      searchPlaceholder = "Buscar...",
       disabled,
       name,
       ...rest
@@ -77,6 +83,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
     const [buttonWidth, setButtonWidth] = React.useState<number>(0);
     const [anchorRect, setAnchorRect] = React.useState<{ top: number; left: number; width: number; height: number } | null>(null);
     const [listboxOpen, setListboxOpen] = React.useState(false);
+    const [searchQuery, setSearchQuery] = React.useState("");
 
     React.useEffect(() => {
       const updateSize = () => {
@@ -115,6 +122,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
         {({ open }) => {
           React.useEffect(() => {
             setListboxOpen(open);
+            if (!open) setSearchQuery("");
           }, [open]);
 
           const rect = anchorRect ?? (open && buttonRef.current ? buttonRef.current.getBoundingClientRect() : null);
@@ -124,6 +132,10 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
               ? rect.top + rect.height + 8
               : Math.max(16, rect.top - PANEL_MAX_HEIGHT - 8)
             : 0;
+
+          const filteredOptions = searchable && searchQuery.trim()
+            ? options.filter((o: SelectOption) => o.label.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+            : options;
 
           const optionsPanel = (
             <Transition
@@ -155,14 +167,32 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                   boxShadow: "0 10px 40px rgba(0,0,0,0.08)",
                 }}
               >
-                <div className="max-h-[220px] overflow-y-auto overflow-x-hidden rounded-xl -mx-1 px-1 py-2" style={{ background: "var(--platform-bg)" }}>
+                {searchable && (
+                  <div className="relative mb-2">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
+                    <input
+                      type="text"
+                      placeholder={searchPlaceholder}
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      className="w-full rounded-xl border py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-[var(--platform-accent)]"
+                      style={{
+                        borderColor: "var(--platform-border)",
+                        background: "var(--platform-bg)",
+                        color: "var(--platform-fg)",
+                      }}
+                    />
+                  </div>
+                )}
+                <div className={cn(searchable ? "max-h-[200px]" : "max-h-[220px]", "overflow-y-auto overflow-x-hidden rounded-xl -mx-1 px-1 py-2")} style={{ background: "var(--platform-bg)" }}>
                   <div className="flex flex-col gap-0.5">
-                    {options.length === 0 ? (
+                    {filteredOptions.length === 0 ? (
                       <div className="py-4 text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-                        Sin opciones
+                        {searchable && searchQuery.trim() ? "No hay resultados" : "Sin opciones"}
                       </div>
                     ) : (
-                      options.map((option: SelectOption) => (
+                      filteredOptions.map((option: SelectOption) => (
                       <Listbox.Option
                         key={option.value}
                         className={({ selected }) =>
