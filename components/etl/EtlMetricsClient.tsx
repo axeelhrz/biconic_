@@ -508,39 +508,35 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       )}
 
       {showForm && hasData && (
-        <div className="flex gap-6 rounded-2xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", minHeight: "480px" }}>
-          {/* Sidebar: Wizards A, B, C, D */}
-          <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-            <div className="p-4 border-b" style={{ borderColor: "var(--platform-border)" }}>
-              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--platform-fg-muted)" }}>Setup</p>
-              <button type="button" onClick={() => { setWizard("A"); setWizardStep(0); }} className="flex items-center gap-2 w-full mt-2 px-3 py-2 rounded-lg text-left text-sm font-medium transition-colors" style={{ color: wizard === "A" ? "var(--platform-accent)" : "var(--platform-fg-muted)", background: wizard === "A" ? "var(--platform-accent-dim)" : "transparent" }}>
-                <span>🗄️</span> Wizard A: Dataset
-                <span className="ml-auto text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>1</span>
+        <div className="flex flex-col rounded-2xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", minHeight: "480px" }}>
+          {/* Tabs: Dataset, Métrica, Análisis, Gráfico */}
+          <div className="flex border-b flex-shrink-0" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+            {(["A", "B", "C", "D"] as const).map((w) => (
+              <button
+                key={w}
+                type="button"
+                onClick={() => { setWizard(w); setWizardStep(0); }}
+                className="flex-1 min-w-0 py-3 px-4 text-sm font-medium transition-colors relative"
+                style={{
+                  color: wizard === w ? "var(--platform-accent)" : "var(--platform-fg-muted)",
+                  background: wizard === w ? "var(--platform-surface)" : "transparent",
+                }}
+              >
+                {w === "A" ? "Dataset" : w === "B" ? "Métrica" : w === "C" ? "Análisis" : "Gráfico"}
+                <span className="ml-1.5 text-xs font-normal opacity-80" style={{ color: "inherit" }}>({WIZARD_STEPS[w].length})</span>
+                {wizard === w && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full" style={{ background: "var(--platform-accent)" }} />
+                )}
               </button>
-            </div>
-            <div className="p-4 border-b" style={{ borderColor: "var(--platform-border)" }}>
-              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--platform-fg-muted)" }}>Métricas & Análisis</p>
-              <button type="button" onClick={() => { setWizard("B"); setWizardStep(0); }} className="flex items-center gap-2 w-full mt-2 px-3 py-2 rounded-lg text-left text-sm font-medium transition-colors" style={{ color: wizard === "B" ? "var(--platform-accent)" : "var(--platform-fg-muted)", background: wizard === "B" ? "var(--platform-accent-dim)" : "transparent" }}>
-                <span>📐</span> Wizard B: Métrica
-                <span className="ml-auto text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>3</span>
-              </button>
-              <button type="button" onClick={() => { setWizard("C"); setWizardStep(0); }} className="flex items-center gap-2 w-full mt-1 px-3 py-2 rounded-lg text-left text-sm font-medium transition-colors" style={{ color: wizard === "C" ? "var(--platform-accent)" : "var(--platform-fg-muted)", background: wizard === "C" ? "var(--platform-accent-dim)" : "transparent" }}>
-                <span>🔍</span> Wizard C: Análisis
-                <span className="ml-auto text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>3</span>
-              </button>
-              <button type="button" onClick={() => { setWizard("D"); setWizardStep(0); }} className="flex items-center gap-2 w-full mt-1 px-3 py-2 rounded-lg text-left text-sm font-medium transition-colors" style={{ color: wizard === "D" ? "var(--platform-accent)" : "var(--platform-fg-muted)", background: wizard === "D" ? "var(--platform-accent-dim)" : "transparent" }}>
-                <span>📊</span> Wizard D: Gráfico
-                <span className="ml-auto text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>3</span>
-              </button>
-            </div>
-          </aside>
+            ))}
+          </div>
 
-          <div className="flex-1 flex flex-col min-w-0">
-            {/* Top bar: breadcrumb + step title + actions */}
+          <div className="flex flex-col min-w-0 flex-1">
+            {/* Top bar: step title + actions */}
             <div className="flex items-center justify-between gap-4 px-4 py-3 border-b flex-shrink-0" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
               <div>
-                <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Wizard {wizard} — {WIZARD_STEPS[wizard][wizardStep]}</p>
-                <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>{wizard === "A" ? "Dataset" : wizard === "B" ? "Métrica" : wizard === "C" ? "Análisis" : "Gráfico"}</h2>
+                <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{wizard === "A" ? "Dataset" : wizard === "B" ? "Métrica" : wizard === "C" ? "Análisis" : "Gráfico"} — {WIZARD_STEPS[wizard][wizardStep]}</p>
+                <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>{WIZARD_STEPS[wizard][wizardStep]}</h2>
               </div>
               <div className="flex items-center gap-2">
                 <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={closeForm}>Cancelar</Button>
