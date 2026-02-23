@@ -174,6 +174,32 @@ export async function POST(req: NextRequest) {
     } = await supabaseAdmin.auth.getUser();
     if (!user) throw new Error("No autorizado");
 
+    // Normalize guided JOIN format (primaryConnectionId + joins[]) to legacy shape (connectionId, secondaryConnectionId, leftTable, rightTable, joinConditions, leftColumns, rightColumns)
+    const guidedJoin = body?.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[] }> } | undefined;
+    if (guidedJoin?.primaryConnectionId && Array.isArray(guidedJoin.joins) && guidedJoin.joins.length > 0) {
+      const first = guidedJoin.joins[0];
+      const filterCols = (body!.filter?.columns as string[] | undefined) || [];
+      const leftCols = filterCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, ""));
+      const rightCols = filterCols.filter((c: string) => /^join_0\./i.test(c)).map((c: string) => c.replace(/^join_0\./i, ""));
+      (body as any).join = {
+        connectionId: String(guidedJoin.primaryConnectionId),
+        secondaryConnectionId: first.secondaryConnectionId != null ? String(first.secondaryConnectionId) : undefined,
+        leftTable: guidedJoin.primaryTable ?? "",
+        rightTable: first.secondaryTable ?? "",
+        leftColumns: leftCols.length > 0 ? leftCols : undefined,
+        rightColumns: rightCols.length > 0 ? rightCols : (first.secondaryColumns?.length ? first.secondaryColumns : undefined),
+        joinConditions: [
+          {
+            leftTable: guidedJoin.primaryTable ?? "l",
+            leftColumn: first.primaryColumn ?? "",
+            rightTable: first.secondaryTable ?? "r",
+            rightColumn: first.secondaryColumn ?? "",
+            joinType: (first.joinType || "INNER").toUpperCase() as "INNER" | "LEFT" | "RIGHT" | "FULL",
+          },
+        ],
+      };
+    }
+
     // Generator restricted to a HARD LIMIT of 1000 rows
     async function* dataSourceGenerator() {
       if (!body) return;
@@ -429,6 +455,12 @@ export async function POST(req: NextRequest) {
             .single();
 
           if (!conn1 || !conn2) return;
+
+          const conn1Type = (conn1.type || "").toLowerCase();
+          const conn2Type = (conn2.type || "").toLowerCase();
+          if (conn1Type === "firebird" || conn2Type === "firebird") {
+            throw new Error("Vista previa JOIN con Firebird no disponible. Usá dos conexiones Postgres para previsualizar el JOIN.");
+          }
 
           const pwd1 = await getPasswordFromSecret(conn1.db_password_secret_id);
           const dbUrl1 = `postgres://${conn1.db_user}:${pwd1}@${conn1.db_host}:${conn1.db_port}/${conn1.db_name}?sslmode=require`;

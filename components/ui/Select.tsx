@@ -126,12 +126,18 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
           }, [open]);
 
           const rect = anchorRect ?? (open && buttonRef.current ? buttonRef.current.getBoundingClientRect() : null);
-          const canOpenDown = !rect || (typeof window !== "undefined" && rect.top + rect.height + 8 + PANEL_MAX_HEIGHT <= window.innerHeight - 16);
+          const spaceBelow = typeof window !== "undefined" && rect ? window.innerHeight - (rect.top + rect.height) - 16 : PANEL_MAX_HEIGHT;
+          const canOpenDown = !rect || spaceBelow >= 80;
           const panelTop = rect
             ? canOpenDown
               ? rect.top + rect.height + 8
               : Math.max(16, rect.top - PANEL_MAX_HEIGHT - 8)
             : 0;
+          const panelMaxHeight = rect && typeof window !== "undefined"
+            ? (canOpenDown
+                ? Math.min(PANEL_MAX_HEIGHT, Math.max(120, spaceBelow - 8))
+                : Math.min(PANEL_MAX_HEIGHT, Math.max(120, rect.top - 24)))
+            : PANEL_MAX_HEIGHT;
 
           const filteredOptions = searchable && searchQuery.trim()
             ? options.filter((o: SelectOption) => o.label.toLowerCase().includes(searchQuery.trim().toLowerCase()))
@@ -159,7 +165,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                   width: rect ? rect.width : buttonWidth || undefined,
                   minWidth: 200,
                   maxWidth: 320,
-                  maxHeight: typeof window !== "undefined" ? window.innerHeight - 32 : PANEL_MAX_HEIGHT,
+                  maxHeight: Math.max(120, panelMaxHeight),
                   top: panelTop,
                   left: rect ? rect.left : 0,
                   borderColor: "var(--platform-border)",
@@ -186,7 +192,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                   </div>
                 )}
                 <div className={cn(searchable ? "max-h-[200px]" : "max-h-[220px]", "overflow-y-auto overflow-x-hidden rounded-xl -mx-1 px-1 py-2")} style={{ background: "var(--platform-bg)" }}>
-                  <div className="flex flex-col gap-0.5">
+                  <div className="flex flex-col gap-0.5 py-0.5">
                     {filteredOptions.length === 0 ? (
                       <div className="py-4 text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
                         {searchable && searchQuery.trim() ? "No hay resultados" : "Sin opciones"}
@@ -198,7 +204,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                         className={({ selected }) =>
                           cn(
                             "flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2.5 text-sm text-left transition-all",
-                            selected && "ring-2 ring-[var(--platform-accent)]",
+                            selected && "ring-2 ring-inset ring-[var(--platform-accent)]",
                             selected ? "bg-[var(--platform-accent-dim)] text-[var(--platform-accent)]" : "bg-transparent text-[var(--platform-fg)]",
                             optionClassName
                           )
