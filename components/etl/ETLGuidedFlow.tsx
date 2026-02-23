@@ -1360,7 +1360,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                     const defaultCols = mainCols.filter((c) => colNames.includes(c));
                                     setUnionRightItems((prev) => [
                                       ...prev,
-                                      { connectionId: unionRightConnectionId, table: unionRightTable, columns: defaultCols.length ? defaultCols : colNames, availableColumns: colNames.map((n: string) => ({ name: n })) },
+                                      { connectionId: unionRightConnectionId, table: unionRightTable, columns: defaultCols.length ? defaultCols : [], availableColumns: colNames.map((n: string) => ({ name: n })) },
                                     ]);
                                     setUnionRightTable(null);
                                   } catch {
@@ -1537,7 +1537,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   joinType,
                                   leftColumn: joinLeftColumn,
                                   rightColumn: joinRightColumn,
-                                  rightColumns: joinRightColumns.length > 0 ? [...joinRightColumns] : [],
+                                  rightColumns: [joinRightColumn],
                                   availableColumns: joinRightTableInfo?.columns ?? [],
                                 },
                               ]);
