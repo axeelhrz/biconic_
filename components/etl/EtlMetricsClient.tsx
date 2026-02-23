@@ -198,8 +198,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       }
       setData(json.data);
       setEtlData(buildEtlDataFromMetricsResponse(json.data));
-      if (Array.isArray(json.data?.rawRows)) setRawTableData(json.data.rawRows);
-      else if (sampleRows === 0) setRawTableData([]);
+      if (sampleRows > 0 && Array.isArray(json.data?.rawRows)) setRawTableData(json.data.rawRows);
     } catch (e) {
       toast.error("Error al cargar métricas");
     } finally {
@@ -212,10 +211,9 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   }, [fetchData]);
 
   useEffect(() => {
-    if (showForm && (data?.hasData ?? false) && (rawTableData.length <= 1 || (data?.rowCount ?? 0) === 0)) {
-      fetchData({ silent: true, sampleRows: 500 });
-    }
-  }, [showForm, data?.hasData, data?.rowCount, rawTableData.length, fetchData]);
+    if (!showForm || !(data?.hasData ?? false) || rawTableData.length > 1) return;
+    fetchData({ silent: true, sampleRows: 500 });
+  }, [showForm, data?.hasData, rawTableData.length, fetchData]);
 
   useEffect(() => {
     const allFields = data?.fields?.all ?? [];
