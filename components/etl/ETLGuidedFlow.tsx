@@ -192,12 +192,27 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
   const previewAbortRef = useRef<AbortController | null>(null);
 
-  const previewDisplayRows = useMemo(() => {
+  const previewRowsFilteredByExcluded = useMemo(() => {
     if (!previewRows || previewRows.length === 0) return previewRows ?? [];
-    if (!previewSortKey) return previewRows;
+    if (excludedValues.length === 0) return previewRows;
+    return previewRows.filter((row) => {
+      const r = row as Record<string, unknown>;
+      for (const { column, excluded } of excludedValues) {
+        if (excluded.length === 0) continue;
+        const key = Object.keys(r).find((k) => k.toLowerCase() === column.toLowerCase()) ?? column;
+        const val = String(r[key] ?? "").trim();
+        if (excluded.some((ex) => String(ex).trim() === val)) return false;
+      }
+      return true;
+    });
+  }, [previewRows, excludedValues]);
+
+  const previewDisplayRows = useMemo(() => {
+    if (!previewRowsFilteredByExcluded.length) return previewRowsFilteredByExcluded;
+    if (!previewSortKey) return previewRowsFilteredByExcluded;
     const key = previewSortKey;
     const dir = previewSortDir === "asc" ? 1 : -1;
-    return [...previewRows].sort((a, b) => {
+    return [...previewRowsFilteredByExcluded].sort((a, b) => {
       const va = (a as Record<string, unknown>)[key];
       const vb = (b as Record<string, unknown>)[key];
       const na = typeof va === "number" ? va : Number(va);
@@ -207,7 +222,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       const sb = String(vb ?? "");
       return sa.localeCompare(sb, undefined, { numeric: true }) * dir;
     });
-  }, [previewRows, previewSortKey, previewSortDir]);
+  }, [previewRowsFilteredByExcluded, previewSortKey, previewSortDir]);
 
   const handlePreviewSort = useCallback((key: string) => {
     setPreviewSortKey((prev) => {
