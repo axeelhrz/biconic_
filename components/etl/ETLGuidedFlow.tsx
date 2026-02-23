@@ -175,8 +175,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   const skipClearSelectedTableRef = useRef(false);
   const restoringFromConfigRef = useRef(false);
-  const distinctLoadFromConfigRef = useRef(false);
-
   // Restaurar estado desde configuración guardada (al editar un ETL ya ejecutado)
   useEffect(() => {
     const cfg = initialGuidedConfig as GuidedConfig | undefined | null;
@@ -299,16 +297,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (normalized) setSelectedTable(`${normalized.schema}.${normalized.name}`);
   }, [tables, selectedTable, selectedTableInfo]);
 
-  // Auto-cargar valores de "Excluir filas" cuando se restaura la config (columna + excluidos guardados) para no tener que pulsar "Cargar valores"
+  // Cargar valores distintos automáticamente al seleccionar la columna en "Excluir filas"
   useEffect(() => {
-    const cfg = initialGuidedConfig as GuidedConfig | undefined | null;
-    if (!cfg?.filter || distinctLoadFromConfigRef.current) return;
-    const f = cfg.filter as { excludeRowsColumn?: string; conditions?: Array<{ operator?: string }> };
-    const hasExclude = f.excludeRowsColumn || (Array.isArray(f.conditions) && f.conditions.some((c) => c.operator === "not in"));
-    if (!hasExclude || !distinctColumn || !connectionId || !selectedTable) return;
-    if (distinctValuesList.length > 0 || loadingDistinct) return;
-    distinctLoadFromConfigRef.current = true;
+    if (!distinctColumn || !connectionId || !selectedTable) return;
     setLoadingDistinct(true);
+    setDistinctValuesList([]);
     fetch("/api/connection/distinct-values", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -317,9 +310,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       .then((res) => res.json())
       .then((data) => {
         if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
+        else if (data?.error) toast.error(data.error);
       })
+      .catch(() => toast.error("Error al cargar valores"))
       .finally(() => setLoadingDistinct(false));
-  }, [initialGuidedConfig, distinctColumn, connectionId, selectedTable, distinctValuesList.length, loadingDistinct]);
+  }, [distinctColumn, connectionId, selectedTable]);
 
   const hasColumns = (selectedTableInfo?.columns?.length ?? 0) > 0;
 
@@ -1577,7 +1572,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
                   <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                    Elegí una columna, cargá los valores que tiene la tabla y marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado.
+                    Elegí una columna; se cargarán automáticamente los valores. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado.
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
                     <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</span>
@@ -1597,39 +1592,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         <option key={col.name} value={col.name}>{col.name}</option>
                       ))}
                     </select>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="rounded-lg"
-                      style={{ borderColor: "var(--platform-border)" }}
-                      disabled={!distinctColumn || !connectionId || loadingDistinct}
-                      onClick={async () => {
-                        if (!distinctColumn || !connectionId || !selectedTable) return;
-                        setLoadingDistinct(true);
-                        setDistinctValuesList([]);
-                        try {
-                          const res = await fetch("/api/connection/distinct-values", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              connectionId,
-                              table: selectedTable,
-                              column: distinctColumn,
-                            }),
-                          });
-                          const data = await res.json();
-                          if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
-                          else toast.error(data?.error || "No se pudieron cargar los valores");
-                        } catch (e: unknown) {
-                          toast.error(e instanceof Error ? e.message : "Error al cargar");
-                        } finally {
-                          setLoadingDistinct(false);
-                        }
-                      }}
-                    >
-                      {loadingDistinct ? "Cargando…" : "Cargar valores"}
-                    </Button>
+                    {loadingDistinct && distinctColumn && (
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores…</span>
+                    )}
                   </div>
                   {distinctValuesList.length > 0 && distinctColumn && (
                     <>
