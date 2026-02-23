@@ -2027,49 +2027,66 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   {previewError}
                 </p>
               )}
-              {!previewError && previewRows && previewRows.length > 0 && (
-                <div className="overflow-auto rounded-lg border" style={{ maxHeight: 320, borderColor: "var(--platform-border)" }}>
-                  <table className="w-full text-sm border-collapse" style={{ color: "var(--platform-fg)" }}>
-                    <thead>
-                      <tr style={{ background: "var(--platform-bg-elevated)", borderBottom: "1px solid var(--platform-border)" }}>
-                        {Object.keys(previewRows[0]).map((key) => (
-                          <th
-                            key={key}
-                            role="columnheader"
-                            className="text-left font-medium py-2 px-3 whitespace-nowrap sticky top-0 z-10 cursor-pointer select-none hover:bg-[var(--platform-surface-hover)] transition-colors"
-                            style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}
-                            onClick={() => handlePreviewSort(key)}
-                          >
-                            <span className="inline-flex items-center gap-1">
-                              {key}
-                              {previewSortKey === key ? (
-                                previewSortDir === "asc" ? (
-                                  <ArrowUp className="h-3.5 w-3.5 opacity-80" />
-                                ) : (
-                                  <ArrowDown className="h-3.5 w-3.5 opacity-80" />
-                                )
-                              ) : (
-                                <ArrowUpDown className="h-3.5 w-3.5 opacity-50" aria-hidden />
-                              )}
-                            </span>
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {previewDisplayRows.map((row, idx) => (
-                        <tr key={idx} className="border-b border-b-[var(--platform-border)] hover:bg-[var(--platform-surface-hover)]">
-                          {Object.keys(previewRows[0]).map((key) => (
-                            <td key={key} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={String((row as Record<string, unknown>)[key] ?? "")}>
-                              {String((row as Record<string, unknown>)[key] ?? "")}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              {!previewError && previewRows && previewRows.length > 0 && (() => {
+                const rowKeys = Object.keys(previewRows[0] as Record<string, unknown>);
+                const keyByLower: Record<string, string> = Object.fromEntries(rowKeys.map((k: string) => [k.toLowerCase(), k]));
+                const mapped = columns.length > 0 ? columns.map((c: string) => (keyByLower[c.toLowerCase()] != null ? keyByLower[c.toLowerCase()] : c)) : [];
+                const displayKeys = mapped.filter((k: string) => rowKeys.includes(k) || rowKeys.some((r: string) => r.toLowerCase() === k.toLowerCase()));
+                const keysToShow = columns.length > 0 ? (displayKeys.length > 0 ? displayKeys : rowKeys) : [];
+                const showNoColumnsMessage = columns.length === 0;
+                return (
+                  <div className="space-y-2">
+                    {showNoColumnsMessage && (
+                      <p className="text-sm py-2 px-3 rounded-lg" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }}>
+                        Seleccioná al menos una columna en “Columnas a incluir” para ver la previsualización.
+                      </p>
+                    )}
+                    {keysToShow.length > 0 && (
+                      <div className="overflow-auto rounded-lg border" style={{ maxHeight: 320, borderColor: "var(--platform-border)" }}>
+                        <table className="w-full text-sm border-collapse" style={{ color: "var(--platform-fg)" }}>
+                          <thead>
+                            <tr style={{ background: "var(--platform-bg-elevated)", borderBottom: "1px solid var(--platform-border)" }}>
+                              {keysToShow.map((key: string) => (
+                                <th
+                                  key={key}
+                                  role="columnheader"
+                                  className="text-left font-medium py-2 px-3 whitespace-nowrap sticky top-0 z-10 cursor-pointer select-none hover:bg-[var(--platform-surface-hover)] transition-colors"
+                                  style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}
+                                  onClick={() => handlePreviewSort(key)}
+                                >
+                                  <span className="inline-flex items-center gap-1">
+                                    {key}
+                                    {previewSortKey === key ? (
+                                      previewSortDir === "asc" ? (
+                                        <ArrowUp className="h-3.5 w-3.5 opacity-80" />
+                                      ) : (
+                                        <ArrowDown className="h-3.5 w-3.5 opacity-80" />
+                                      )
+                                    ) : (
+                                      <ArrowUpDown className="h-3.5 w-3.5 opacity-50" aria-hidden />
+                                    )}
+                                  </span>
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {previewDisplayRows.map((row, idx) => (
+                              <tr key={idx} className="border-b border-b-[var(--platform-border)] hover:bg-[var(--platform-surface-hover)]">
+                                {keysToShow.map((key: string) => (
+                                  <td key={key} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={String((row as Record<string, unknown>)[key] ?? "")}>
+                                    {String((row as Record<string, unknown>)[key] ?? "")}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {!previewError && !previewLoading && (!previewRows || previewRows.length === 0) && connectionId && selectedTable && (
                 <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
                   Completá conexión y tabla para ver la vista previa. Se actualiza automáticamente al cambiar filtros o transformaciones.
