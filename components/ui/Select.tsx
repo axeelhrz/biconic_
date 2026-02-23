@@ -138,7 +138,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                 style={{
                   zIndex: 9999,
                   minWidth: rect ? rect.width : buttonWidth || undefined,
-                  top: rect ? rect.bottom + 8 : 0,
+                  top: rect ? rect.top + rect.height + 8 : 0,
                   left: rect ? rect.left : 0,
                   borderColor: "var(--platform-border)",
                   background: "var(--platform-surface)",
