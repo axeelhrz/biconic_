@@ -136,7 +136,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
             () =>
               !searchQuery.trim()
                 ? options
-                : options.filter((o) => o.label.toLowerCase().includes(searchQuery.trim().toLowerCase())),
+                : options.filter((o: SelectOption) => o.label.toLowerCase().includes(searchQuery.trim().toLowerCase())),
             [options, searchQuery]
           );
 
