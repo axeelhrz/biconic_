@@ -287,20 +287,38 @@ export async function POST(req: NextRequest) {
             password: password || "",
             lowercase_keys: false,
           };
-          return new Promise((resolve, reject) => {
+          const PREVIEW_FIREBIRD_TIMEOUT_MS = 25000;
+          return new Promise<Record<string, any>[]>((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+              reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s)."));
+            }, PREVIEW_FIREBIRD_TIMEOUT_MS);
+            const finish = (err: Error | null, data?: Record<string, any>[]) => {
+              clearTimeout(timeoutId);
+              if (err) reject(err);
+              else if (data !== undefined) resolve(data);
+            };
             Firebird.attach(opts, (err: Error | null, db: any) => {
-              if (err) return reject(err);
+              if (err) return finish(err);
+              const doDetach = (done: () => void) => {
+                if (!db || typeof db.detach !== "function") return done();
+                try {
+                  db.detach((detachErr: Error | null) => { done(); });
+                } catch (_) {
+                  done();
+                }
+              };
               const sql = `SELECT FIRST ${limit} ${cols} FROM ${tablePart} ${clauseInlined}`.trim();
               db.query(sql, [], (qerr: Error | null, rows: any[]) => {
-                const detach = () => { if (db?.detach) db.detach(() => {}); };
-                if (qerr) { detach(); return reject(qerr); }
+                if (qerr) {
+                  doDetach(() => finish(qerr));
+                  return;
+                }
                 const normalized = (rows || []).map((row: Record<string, any>) => {
                   const out: Record<string, any> = {};
                   for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
                   return out;
                 });
-                detach();
-                resolve(normalized);
+                doDetach(() => finish(null, normalized));
               });
             });
           });
