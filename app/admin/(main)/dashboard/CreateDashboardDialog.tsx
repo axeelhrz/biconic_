@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Check } from "lucide-react";
+import { Loader2, Check, Building2, Database, ChevronRight } from "lucide-react";
 import { searchClients, searchEtls, createDashboardAdmin } from "./actions";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -27,9 +27,7 @@ interface CreateDashboardDialogProps {
 export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: CreateDashboardDialogProps) {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [clients, setClients] = useState<{ id: string; name: string | null }[]>(
-    []
-  );
+  const [clients, setClients] = useState<{ id: string; name: string | null }[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [etlQuery, setEtlQuery] = useState("");
@@ -93,157 +91,175 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
     }
   };
 
+  const selectedClient = clients.find((c) => c.id === selectedClientId);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-[425px] border"
+        className="sm:max-w-[560px] p-0 gap-0 border overflow-hidden"
         style={{
           background: "var(--platform-surface)",
           borderColor: "var(--platform-border)",
+          boxShadow: "0 24px 48px rgba(0,0,0,0.12)",
         }}
       >
-        <DialogHeader>
-          <DialogTitle style={{ color: "var(--platform-fg)" }}>
-            Crear Nuevo Dashboard
+        <DialogHeader className="px-6 pt-6 pb-4 border-b" style={{ borderColor: "var(--platform-border)" }}>
+          <DialogTitle className="text-xl font-bold flex items-center gap-3" style={{ color: "var(--platform-fg)" }}>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}>
+              <Database className="h-5 w-5" />
+            </span>
+            Crear nuevo dashboard
           </DialogTitle>
+          <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
+            Asigná un cliente y elegí las fuentes de datos. Podés agregar más ETLs después en el editor.
+          </p>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4 py-4">
-          <div className="flex flex-col gap-2">
-            <Label style={{ color: "var(--platform-fg-muted)" }}>Asignar a Cliente</Label>
+        <div className="flex flex-col gap-6 px-6 py-5 overflow-y-auto max-h-[60vh]">
+          {/* Cliente */}
+          <div className="space-y-3">
+            <Label className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--platform-fg)" }}>
+              <Building2 className="h-4 w-4" style={{ color: "var(--platform-accent)" }} />
+              Asignar a cliente
+            </Label>
             <Input
               placeholder="Buscar cliente..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="border bg-transparent"
-              style={{
-                borderColor: "var(--platform-border)",
-                color: "var(--platform-fg)",
-              }}
+              className="h-11 rounded-xl border-0 bg-[var(--platform-bg)] pl-4 text-sm placeholder:opacity-70"
+              style={{ color: "var(--platform-fg)" }}
             />
             <div
-              className="mt-2 max-h-[200px] overflow-y-auto rounded-md border p-2"
-              style={{
-                borderColor: "var(--platform-border)",
-                background: "var(--platform-bg-elevated)",
-              }}
+              className="rounded-xl border overflow-hidden"
+              style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
             >
-              {loadingClients ? (
-                <div className="flex items-center justify-center p-4">
-                  <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--platform-fg-muted)" }} />
-                </div>
-              ) : clients.length === 0 ? (
-                <p className="text-center text-sm p-2" style={{ color: "var(--platform-fg-muted)" }}>
-                  No se encontraron clientes
-                </p>
-              ) : (
-                <div className="flex flex-col gap-1">
-                  {clients.map((client) => (
-                    <div
-                      key={client.id}
-                      onClick={() => setSelectedClientId(client.id)}
-                      className={cn(
-                        "flex cursor-pointer items-center justify-between rounded px-3 py-2 text-sm transition-colors",
-                        selectedClientId === client.id && "font-medium"
-                      )}
-                      style={{
-                        background: selectedClientId === client.id ? "var(--platform-accent-dim)" : "transparent",
-                        color: selectedClientId === client.id ? "var(--platform-accent)" : "var(--platform-fg)",
-                      }}
-                    >
-                      <span>{client.name || "Sin nombre"}</span>
-                      {selectedClientId === client.id && (
-                        <Check className="h-4 w-4" />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div className="max-h-[180px] overflow-y-auto p-1">
+                {loadingClients ? (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="h-6 w-6 animate-spin" style={{ color: "var(--platform-accent)" }} />
+                  </div>
+                ) : clients.length === 0 ? (
+                  <p className="text-center text-sm py-6" style={{ color: "var(--platform-fg-muted)" }}>
+                    {query ? "No se encontraron clientes" : "Escribí para buscar"}
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-0.5">
+                    {clients.map((client) => {
+                      const selected = selectedClientId === client.id;
+                      return (
+                        <button
+                          key={client.id}
+                          type="button"
+                          onClick={() => setSelectedClientId(client.id)}
+                          className={cn(
+                            "w-full flex items-center justify-between rounded-lg px-4 py-3 text-left text-sm font-medium transition-all",
+                            selected && "ring-2 ring-[var(--platform-accent)]"
+                          )}
+                          style={{
+                            background: selected ? "var(--platform-accent-dim)" : "transparent",
+                            color: selected ? "var(--platform-accent)" : "var(--platform-fg)",
+                          }}
+                        >
+                          <span>{client.name || "Sin nombre"}</span>
+                          {selected && <Check className="h-5 w-5 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
+            {selectedClient && (
+              <p className="text-xs flex items-center gap-1" style={{ color: "var(--platform-fg-muted)" }}>
+                <Check className="h-3.5 w-3.5 text-green-500" />
+                Cliente seleccionado: <strong style={{ color: "var(--platform-fg)" }}>{selectedClient.name}</strong>
+              </p>
+            )}
           </div>
-          <div className="flex flex-col gap-2">
-            <Label style={{ color: "var(--platform-fg-muted)" }}>
-              Fuentes de datos (ETLs) — podés elegir varias: ventas, clientes, productos, etc.
+
+          {/* Fuentes de datos (ETLs) */}
+          <div className="space-y-3">
+            <Label className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--platform-fg)" }}>
+              <Database className="h-4 w-4" style={{ color: "var(--platform-accent)" }} />
+              Fuentes de datos (ETLs)
             </Label>
+            <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+              Ventas, clientes, productos, etc. Podés elegir varias; en el editor asignás qué fuente usa cada gráfico.
+            </p>
             <Input
               placeholder="Buscar ETL..."
               value={etlQuery}
               onChange={(e) => setEtlQuery(e.target.value)}
-              className="border bg-transparent"
-              style={{
-                borderColor: "var(--platform-border)",
-                color: "var(--platform-fg)",
-              }}
+              className="h-11 rounded-xl border-0 bg-[var(--platform-bg)] pl-4 text-sm placeholder:opacity-70"
+              style={{ color: "var(--platform-fg)" }}
             />
             <div
-              className="mt-2 max-h-[200px] overflow-y-auto rounded-md border p-2"
-              style={{
-                borderColor: "var(--platform-border)",
-                background: "var(--platform-bg-elevated)",
-              }}
+              className="rounded-xl border overflow-hidden"
+              style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
             >
-              {loadingEtls ? (
-                <div className="flex items-center justify-center p-4">
-                  <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--platform-fg-muted)" }} />
-                </div>
-              ) : etls.length === 0 ? (
-                <p className="text-center text-sm p-2" style={{ color: "var(--platform-fg-muted)" }}>
-                  Buscá ETLs o dejá vacío para asociar después
-                </p>
-              ) : (
-                <div className="flex flex-col gap-1">
-                  {etls.map((etl) => {
-                    const selected = selectedEtlIds.includes(etl.id);
-                    return (
-                      <div
-                        key={etl.id}
-                        onClick={() => toggleEtl(etl.id)}
-                        className={cn(
-                          "flex cursor-pointer items-center justify-between rounded px-3 py-2 text-sm transition-colors",
-                          selected && "font-medium"
-                        )}
-                        style={{
-                          background: selected ? "var(--platform-accent-dim)" : "transparent",
-                          color: selected ? "var(--platform-accent)" : "var(--platform-fg)",
-                        }}
-                      >
-                        <span>{etl.title || "Sin título"}</span>
-                        {selected && <Check className="h-4 w-4" />}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <div className="max-h-[180px] overflow-y-auto p-1">
+                {loadingEtls ? (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="h-6 w-6 animate-spin" style={{ color: "var(--platform-accent)" }} />
+                  </div>
+                ) : etls.length === 0 ? (
+                  <p className="text-center text-sm py-6" style={{ color: "var(--platform-fg-muted)" }}>
+                    {etlQuery ? "No se encontraron ETLs" : "Buscá ETLs o dejá vacío para asociar después"}
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-0.5">
+                    {etls.map((etl) => {
+                      const selected = selectedEtlIds.includes(etl.id);
+                      return (
+                        <button
+                          key={etl.id}
+                          type="button"
+                          onClick={() => toggleEtl(etl.id)}
+                          className={cn(
+                            "w-full flex items-center justify-between rounded-lg px-4 py-3 text-left text-sm font-medium transition-all",
+                            selected && "ring-2 ring-[var(--platform-accent)]"
+                          )}
+                          style={{
+                            background: selected ? "var(--platform-accent-dim)" : "transparent",
+                            color: selected ? "var(--platform-accent)" : "var(--platform-fg)",
+                          }}
+                        >
+                          <span>{etl.title || "Sin título"}</span>
+                          {selected ? <Check className="h-5 w-5 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0 opacity-50" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
             {selectedEtlIds.length > 0 && (
-              <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                {selectedEtlIds.length} fuente(s) seleccionada(s). En el editor podés elegir qué fuente usa cada widget.
+              <p className="text-xs flex items-center gap-1" style={{ color: "var(--platform-fg-muted)" }}>
+                <Check className="h-3.5 w-3.5 text-green-500" />
+                {selectedEtlIds.length} fuente{selectedEtlIds.length !== 1 ? "s" : ""} seleccionada{selectedEtlIds.length !== 1 ? "s" : ""}. En el editor elegís qué fuente usa cada widget.
               </p>
             )}
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="px-6 py-4 border-t gap-3 flex-row justify-end" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={creating}
-            className="border hover:opacity-90"
-            style={{
-              borderColor: "var(--platform-border)",
-              color: "var(--platform-fg)",
-            }}
+            className="rounded-xl h-11 px-5 font-medium"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
           >
             Cancelar
           </Button>
           <Button
             onClick={handleCreate}
             disabled={!selectedClientId || creating}
-            className="text-[#08080b] font-medium hover:opacity-90"
-            style={{ background: "var(--platform-accent)" }}
+            className="rounded-xl h-11 px-6 font-semibold gap-2"
+            style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
           >
-            {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Crear y Continuar
+            {creating && <Loader2 className="h-4 w-4 animate-spin" />}
+            Crear y abrir editor
           </Button>
         </DialogFooter>
       </DialogContent>

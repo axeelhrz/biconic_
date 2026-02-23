@@ -74,7 +74,7 @@ export function ClientFilter({ onSelect }: ClientFilterProps) {
     <div className="relative" ref={containerRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex h-[42px] items-center justify-between gap-2 rounded-full border px-4 py-2 text-sm focus:outline-none focus:ring-2 w-[200px]"
+        className="flex h-11 items-center justify-between gap-2 rounded-xl border px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)] w-[200px]"
         style={{
           borderColor: "var(--platform-border)",
           background: "var(--platform-surface)",

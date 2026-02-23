@@ -56,6 +56,12 @@ type DashboardRow = {
   clientId: string;
 };
 
+type AdminOverviewPanelProps = {
+  statsCounts: StatsCounts;
+  /** Lista de dashboards cargada en el servidor para que Publicados/Borradores y modales muestren datos correctos */
+  initialAllDashboards?: DashboardRow[];
+};
+
 const CHART_COLORS = [
   "#0d9488",
   "#1e3a5f",
@@ -64,15 +70,21 @@ const CHART_COLORS = [
   "#a855f7",
 ];
 
-export default function AdminOverviewPanel({ statsCounts }: { statsCounts: StatsCounts }) {
+export default function AdminOverviewPanel({ statsCounts, initialAllDashboards = [] }: AdminOverviewPanelProps) {
   const router = useRouter();
   const [clients, setClients] = useState<ClientWithCounts[]>([]);
-  const [allDashboards, setAllDashboards] = useState<DashboardRow[]>([]);
+  const [allDashboards, setAllDashboards] = useState<DashboardRow[]>(initialAllDashboards);
   const [loading, setLoading] = useState(true);
   const [modalClient, setModalClient] = useState<ClientWithCounts | null>(null);
   const [clientDashboards, setClientDashboards] = useState<DashboardRow[]>([]);
   const [loadingClientDashboards, setLoadingClientDashboards] = useState(false);
   const [modalAllDashboards, setModalAllDashboards] = useState(false);
+
+  useEffect(() => {
+    if (initialAllDashboards.length > 0) {
+      setAllDashboards(initialAllDashboards);
+    }
+  }, [initialAllDashboards]);
 
   useEffect(() => {
     let active = true;
@@ -105,21 +117,23 @@ export default function AdminOverviewPanel({ statsCounts }: { statsCounts: Stats
       }));
       setClients(mapped);
 
-      const { data: dashData, error: dashErr } = await supabase
-        .from("dashboard")
-        .select("id, title, published, client_id, clients(company_name)")
-        .order("created_at", { ascending: false });
+      if (initialAllDashboards.length === 0) {
+        const { data: dashData, error: dashErr } = await supabase
+          .from("dashboard")
+          .select("id, title, published, client_id, clients(company_name)")
+          .order("created_at", { ascending: false });
 
-      if (!dashErr && dashData && active) {
-        setAllDashboards(
-          dashData.map((d: any) => ({
-            id: d.id,
-            title: d.title ?? "Sin título",
-            published: !!d.published,
-            clientName: d.clients?.company_name ?? "—",
-            clientId: d.client_id != null ? String(d.client_id) : "",
-          }))
-        );
+        if (!dashErr && dashData && active) {
+          setAllDashboards(
+            dashData.map((d: any) => ({
+              id: d.id,
+              title: d.title ?? "Sin título",
+              published: !!d.published,
+              clientName: d.clients?.company_name ?? "—",
+              clientId: d.client_id != null ? String(d.client_id) : "",
+            }))
+          );
+        }
       }
       if (active) setLoading(false);
     }

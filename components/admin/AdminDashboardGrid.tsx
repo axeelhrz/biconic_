@@ -195,48 +195,6 @@ export default function AdminDashboardGrid({
 
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {/* Card fija que dirige a /tableau-dashboard - Mostrar solo si no hay filtro de cliente (o si el cliente coincide, pero es hardcoded) */}
-      {!clientId && (
-      <>
-      <DashboardCard
-        key="tableau-dashboard-fixed"
-        dashboard={{
-          id: "tableau-dashboard",
-          title: "Tableau Dashboard",
-          imageUrl: "/Image.svg",
-          status: "Publicado",
-          description: "Explora tu tablero de Tableau",
-          views: 0,
-        }}
-        href="/admin/tableau-dashboard"
-      />
-      <DashboardCard
-        key="tableau-dashboard-fixed-2"
-        dashboard={{
-          id: "tableau-dashboard",
-          title: "Tableau Dashboard 2",
-          imageUrl: "/Image.svg",
-          status: "Publicado",
-          description: "Explora tu tablero de Tableau",
-          views: 0,
-        }}
-        href="/admin/tableau-dashboard-2"
-      />
-      <DashboardCard
-        key="tableau-dashboard-fixed-3"
-        dashboard={{
-          id: "tableau-dashboard",
-          title: "Tableau Dashboard 3",
-          imageUrl: "/Image.svg",
-          status: "Publicado",
-          description: "Explora tu tablero de Tableau",
-          views: 0,
-        }}
-        href="/admin/tableau-dashboard-3"
-      />
-      </>
-      )}
-
       {(filtered.length > 0 ? filtered : []).map((dashboard) => (
         <DashboardCard
           key={dashboard.id}
