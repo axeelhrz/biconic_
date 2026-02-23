@@ -2,6 +2,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { Listbox, Transition } from "@headlessui/react";
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -70,9 +71,10 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
       }
     };
 
-    // Measure trigger width so the options panel can be at least that wide
     const buttonRef = React.useRef<HTMLButtonElement | null>(null);
     const [buttonWidth, setButtonWidth] = React.useState<number>(0);
+    const [anchorRect, setAnchorRect] = React.useState<{ top: number; left: number; width: number; height: number } | null>(null);
+    const [listboxOpen, setListboxOpen] = React.useState(false);
 
     React.useEffect(() => {
       const updateSize = () => {
@@ -85,42 +87,39 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
       return () => window.removeEventListener("resize", updateSize);
     }, []);
 
+    const updateAnchorRect = React.useCallback(() => {
+      if (buttonRef.current) {
+        setAnchorRect(buttonRef.current.getBoundingClientRect());
+      }
+    }, []);
+
+    React.useEffect(() => {
+      if (!listboxOpen) {
+        setAnchorRect(null);
+        return;
+      }
+      updateAnchorRect();
+      window.addEventListener("scroll", updateAnchorRect, true);
+      window.addEventListener("resize", updateAnchorRect);
+      return () => {
+        window.removeEventListener("scroll", updateAnchorRect, true);
+        window.removeEventListener("resize", updateAnchorRect);
+      };
+    }, [listboxOpen, updateAnchorRect]);
+
     return (
       <Listbox
         value={internalValue}
         onChange={handleChange}
         disabled={disabled}
       >
-        {({ open }) => (
-          <div className={cn("relative w-full", className)}>
-            <Listbox.Button
-              ref={(el) => {
-                if (typeof ref === "function") ref(el as any);
-                else if (ref)
-                  (
-                    ref as React.MutableRefObject<HTMLButtonElement | null>
-                  ).current = el;
-                buttonRef.current = el;
-              }}
-              name={name}
-              className={cn(
-                "flex h-11 w-full items-center justify-between gap-2 rounded-xl border px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]",
-                disabled && "opacity-50 cursor-not-allowed",
-                buttonClassName
-              )}
-              style={{
-                borderColor: "var(--platform-border)",
-                background: "var(--platform-surface)",
-                color: "var(--platform-fg-muted)",
-              }}
-              {...rest}
-            >
-              <span className="truncate">
-                {selectedOption ? selectedOption.label : placeholder}
-              </span>
-              <ChevronDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
-            </Listbox.Button>
+        {({ open }) => {
+          React.useEffect(() => {
+            setListboxOpen(open);
+          }, [open]);
 
+          const rect = anchorRect ?? (open && buttonRef.current ? buttonRef.current.getBoundingClientRect() : null);
+          const optionsPanel = (
             <Transition
               show={open}
               enter="transition ease-out duration-100"
@@ -131,12 +130,16 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
               leaveTo="transform opacity-0 scale-95"
             >
               <Listbox.Options
+                static
                 className={cn(
-                  "absolute left-0 top-full z-50 mt-2 w-full overflow-auto rounded-2xl border p-3 focus:outline-none",
+                  "fixed mt-2 w-full overflow-auto rounded-2xl border p-3 focus:outline-none",
                   optionsClassName
                 )}
                 style={{
-                  minWidth: buttonWidth || undefined,
+                  zIndex: 9999,
+                  minWidth: rect ? rect.width : buttonWidth || undefined,
+                  top: rect ? rect.bottom + 8 : 0,
+                  left: rect ? rect.left : 0,
                   borderColor: "var(--platform-border)",
                   background: "var(--platform-surface)",
                   boxShadow: "0 10px 40px rgba(0,0,0,0.08)",
@@ -169,8 +172,42 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                 </div>
               </Listbox.Options>
             </Transition>
-          </div>
-        )}
+          );
+
+          return (
+            <div className={cn("relative w-full", className)}>
+              <Listbox.Button
+                ref={(el) => {
+                  if (typeof ref === "function") ref(el as any);
+                  else if (ref)
+                    (
+                      ref as React.MutableRefObject<HTMLButtonElement | null>
+                    ).current = el;
+                  buttonRef.current = el;
+                }}
+                name={name}
+                className={cn(
+                  "flex h-11 w-full items-center justify-between gap-2 rounded-xl border px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]",
+                  disabled && "opacity-50 cursor-not-allowed",
+                  buttonClassName
+                )}
+                style={{
+                  borderColor: "var(--platform-border)",
+                  background: "var(--platform-surface)",
+                  color: "var(--platform-fg-muted)",
+                }}
+                {...rest}
+              >
+                <span className="truncate">
+                  {selectedOption ? selectedOption.label : placeholder}
+                </span>
+                <ChevronDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
+              </Listbox.Button>
+
+              {typeof document !== "undefined" && createPortal(optionsPanel, document.body)}
+            </div>
+          );
+        }}
       </Listbox>
     );
   }
