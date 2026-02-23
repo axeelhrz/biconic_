@@ -246,10 +246,11 @@ export async function POST(req: NextRequest) {
           const password = (conn as any).db_password_encrypted
             ? decryptConnectionPassword((conn as any).db_password_encrypted)
             : (conn as any).db_password ?? "";
-          // Firebird: siempre entrecomillar; usar solo nombre de tabla (sin esquema) para evitar -104 en col.33 con "schema"."table"
+          // Firebird: esquema.tabla sin comillas (MAYUS) para evitar -104 con el punto; así se apunta a la tabla correcta y -206 desaparece
+          const tablePart = tableQ.includes(".")
+            ? tableQ.split(".", 2).map((p) => (p || "").trim().toUpperCase()).filter(Boolean).join(".")
+            : (tableQ || "").trim().toUpperCase();
           const quoteFb = (s: string) => (s == null || String(s).trim() === "" ? "" : `"${String(s).trim().replace(/"/g, '""')}"`);
-          const tableNameOnly = tableQ.includes(".") ? tableQ.split(".").pop()!.trim() : tableQ;
-          const tablePart = quoteFb(tableNameOnly);
           // Firebird: usar SELECT * para evitar -104 (Token unknown) con nombres de columna que contienen punto
           const cols = "*";
           const rawConditions = (src.filter?.conditions || []).filter(
