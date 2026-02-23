@@ -238,6 +238,25 @@ export async function POST(req: NextRequest) {
           });
         };
 
+        const runUnionOnePg = async (client: PgClient, leftSrc: typeof left, rightSrc: typeof right, leftTableQ: string, rightTableQ: string) => {
+          const { clause: leftClause, params: leftParams } = buildWhereClausePg(leftSrc.filter?.conditions || []);
+          const { clause: rightClause, params: rightParams } = buildWhereClausePg(rightSrc.filter?.conditions || []);
+          const rightClauseOffset = rightParams.length
+            ? rightClause.replace(/\$(\d+)/g, (_: string, n: string) => `$${Number(n) + leftParams.length}`)
+            : rightClause;
+          const leftSel = leftSrc.filter?.columns?.length ? leftSrc.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
+          const rightSel = rightSrc.filter?.columns?.length ? rightSrc.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
+          const leftQ = `SELECT ${leftSel} FROM ${quoteQualified(leftTableQ)} ${leftClause}`;
+          const rightQ = `SELECT ${rightSel} FROM ${quoteQualified(rightTableQ)} ${rightClauseOffset}`;
+          const unionSql = `(${leftQ}) UNION ALL (${rightQ}) ORDER BY 1 ASC LIMIT ${PREVIEW_LIMIT}`;
+          const res = await client.query(unionSql, [...leftParams, ...rightParams]);
+          return (res.rows || []).map((r: Record<string, any>) => {
+            const out: Record<string, any> = {};
+            for (const k in r) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = r[k];
+            return out;
+          });
+        };
+
         const runOneFirebird = async (
           conn: { db_host?: string | null; db_port?: number | null; db_name?: string | null; db_user?: string | null; db_password_encrypted?: string | null },
           src: typeof left,
@@ -292,33 +311,22 @@ export async function POST(req: NextRequest) {
             const timeoutId = setTimeout(() => {
               reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s)."));
             }, PREVIEW_FIREBIRD_TIMEOUT_MS);
-            const finish = (err: Error | null, data?: Record<string, any>[]) => {
-              clearTimeout(timeoutId);
-              if (err) reject(err);
-              else if (data !== undefined) resolve(data);
-            };
             Firebird.attach(opts, (err: Error | null, db: any) => {
-              if (err) return finish(err);
-              const doDetach = (done: () => void) => {
-                if (!db || typeof db.detach !== "function") return done();
-                try {
-                  db.detach((detachErr: Error | null) => { done(); });
-                } catch (_) {
-                  done();
-                }
-              };
+              if (err) {
+                clearTimeout(timeoutId);
+                return reject(err);
+              }
               const sql = `SELECT FIRST ${limit} ${cols} FROM ${tablePart} ${clauseInlined}`.trim();
               db.query(sql, [], (qerr: Error | null, rows: any[]) => {
-                if (qerr) {
-                  doDetach(() => finish(qerr));
-                  return;
-                }
+                clearTimeout(timeoutId);
+                if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                if (qerr) return reject(qerr);
                 const normalized = (rows || []).map((row: Record<string, any>) => {
                   const out: Record<string, any> = {};
                   for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
                   return out;
                 });
-                doDetach(() => finish(null, normalized));
+                resolve(normalized);
               });
             });
           });
@@ -344,20 +352,18 @@ export async function POST(req: NextRequest) {
           if (leftType === "firebird") {
             leftRows = await runOneFirebird(leftConn, left, leftTable);
             rightRows = await runOneFirebird(rightConn, right, rightTable);
+            const result = collectUnionRows(leftRows, rightRows);
+            if (result) yield result;
           } else if (dbUrlUnion) {
             const client = new PgClient({ connectionString: dbUrlUnion });
             await client.connect();
             try {
-              leftRows = await runOne(client, left, leftTable);
-              rightRows = await runOne(client, right, rightTable);
+              const combined = await runUnionOnePg(client, left, right, leftTable, rightTable);
+              if (combined.length) yield { rows: combined, query: `UNION (${leftTable} + ${rightTable})` };
             } finally {
               await client.end();
             }
-          } else {
-            return;
           }
-          const result = collectUnionRows(leftRows, rightRows);
-          if (result) yield result;
           return;
         }
 
