@@ -246,7 +246,7 @@ export async function POST(req: NextRequest) {
           const password = (conn as any).db_password_encrypted
             ? decryptConnectionPassword((conn as any).db_password_encrypted)
             : (conn as any).db_password ?? "";
-          // Firebird: siempre entrecomillar identificadores para evitar "Token unknown" con palabras reservadas (VALUE, YEAR, DATE, etc.)
+          // Firebird: siempre entrecomillar identificadores para evitar -104 (Token unknown)
           const quoteFb = (s: string) => (s == null || String(s).trim() === "" ? "" : `"${String(s).trim().replace(/"/g, '""')}"`);
           const tablePart = tableQ.includes(".")
             ? tableQ.split(".", 2).map((p) => quoteFb(p)).filter(Boolean).join(".")
@@ -263,11 +263,14 @@ export async function POST(req: NextRequest) {
           );
           const { clause, params } = buildWhereClauseFirebird(rawConditions);
           if (!tablePart) return Promise.reject(new Error("Nombre de tabla vacío para Firebird."));
-          // Interpolar parámetros en la cláusula para evitar errores -104 (Token unknown) con node-firebird
+          // Interpolar parámetros; evitar punto en literales numéricos (puede causar -104 en algunos entornos Firebird)
           const escapeFbLiteral = (v: any): string => {
             if (v == null) return "NULL";
-            if (typeof v === "number" && !Number.isNaN(v)) return String(v);
             if (typeof v === "boolean") return v ? "1" : "0";
+            if (typeof v === "number" && !Number.isNaN(v)) {
+              if (Number.isInteger(v)) return String(v);
+              return `CAST('${String(v)}' AS DOUBLE PRECISION)`;
+            }
             const s = String(v);
             return `'${s.replace(/'/g, "''")}'`;
           };
