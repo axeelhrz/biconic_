@@ -32,6 +32,17 @@ const STEPS = [
 
 type StepId = (typeof STEPS)[number]["id"];
 
+const NORMALIZE_OPTIONS = [
+  { value: "", label: "(ninguna)" },
+  { value: "trim", label: "Recortar espacios" },
+  { value: "upper", label: "Mayúsculas" },
+  { value: "lower", label: "Minúsculas" },
+  { value: "normalize_spaces", label: "Espacios múltiples → uno" },
+  { value: "strip_invisible", label: "Quitar caracteres invisibles" },
+  { value: "utf8_normalize", label: "Normalizar UTF-8" },
+  { value: "replace", label: "Reemplazar texto" },
+];
+
 async function fetchMetadata(connectionId: string | number, tableName?: string): Promise<Response> {
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), 35000);
@@ -135,6 +146,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   } | null>(null);
   const defaultNullPatterns = ["NA", "-", ".", ""];
   const [cleanTransforms, setCleanTransforms] = useState<Array<{ column: string; op: string; find?: string; replaceWith?: string }>>([]);
+  const [bulkNormalizeOp, setBulkNormalizeOp] = useState("");
   const [dataFixes, setDataFixes] = useState<Array<{ column: string; find: string; replaceWith: string }>>([]);
   const [dedupe, setDedupe] = useState<{ keyColumns: string[]; keep: "first" | "last" } | null>(null);
 
@@ -145,7 +157,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [unionAll, setUnionAll] = useState(true);
   const [unionRightTables, setUnionRightTables] = useState<{ schema: string; name: string; columns?: { name: string }[] }[]>([]);
   const [loadingUnionMeta, setLoadingUnionMeta] = useState(false);
-  const [unionTableSearch, setUnionTableSearch] = useState("");
   /** Lista de tablas añadidas para UNION: cada una con connectionId, table y columnas a traer */
   const [unionRightItems, setUnionRightItems] = useState<Array<{ connectionId: string | number; table: string; columns: string[]; availableColumns?: { name: string }[] }>>([]);
 
@@ -159,7 +170,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [joinRightTables, setJoinRightTables] = useState<{ schema: string; name: string; columns?: { name: string }[] }[]>([]);
   const [joinRightColumns, setJoinRightColumns] = useState<string[]>([]);
   const [loadingJoinMeta, setLoadingJoinMeta] = useState(false);
-  const [joinTableSearch, setJoinTableSearch] = useState("");
   /** Lista de tablas añadidas para JOIN: cada una con connectionId, table, joinType, leftColumn, rightColumn, rightColumns */
   const [joinItems, setJoinItems] = useState<Array<{
     id: string;
@@ -963,15 +973,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           });
                         }}
                       />
-                      <select
-                        className="rounded-lg border px-3 py-2 text-sm"
-                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                        value={nullCleanup?.action ?? "null"}
-                        onChange={(e) => setNullCleanup((prev) => prev ? { ...prev, action: e.target.value as "null" | "replace" } : { patterns: defaultNullPatterns, action: e.target.value as "null" | "replace", replacement: undefined, columns: effectiveColumns })}
-                      >
-                        <option value="null">Convertir a NULL</option>
-                        <option value="replace">Reemplazar por valor</option>
-                      </select>
+                      <div className="min-w-[180px]">
+                        <Select
+                          value={nullCleanup?.action ?? "null"}
+                          onChange={(v: string) => setNullCleanup((prev) => prev ? { ...prev, action: v as "null" | "replace" } : { patterns: defaultNullPatterns, action: v as "null" | "replace", replacement: undefined, columns: effectiveColumns })}
+                          options={[
+                            { value: "null", label: "Convertir a NULL" },
+                            { value: "replace", label: "Reemplazar por valor" },
+                          ]}
+                          placeholder="Acción"
+                        />
+                      </div>
                       {nullCleanup?.action === "replace" && (
                         <input
                           type="text"
@@ -996,9 +1008,45 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   </div>
 
                   {/* Normalización de texto por columna */}
-                  <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Normalización de texto por columna</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una operación por columna (opcional).</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una operación por columna (opcional). Podés aplicar la misma operación a todas de una vez.</p>
+                    <div className="flex flex-wrap items-end gap-2 p-3 rounded-xl border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                      <span className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Aplicar a todas las columnas:</span>
+                      <div className="flex-1 min-w-[200px] max-w-[240px]">
+                        <Select
+                          value={bulkNormalizeOp}
+                          onChange={(v: string) => setBulkNormalizeOp(v)}
+                          options={NORMALIZE_OPTIONS.filter((o) => o.value && o.value !== "replace")}
+                          placeholder="Elegir operación"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="rounded-xl"
+                        style={{ borderColor: "var(--platform-border)" }}
+                        disabled={!bulkNormalizeOp}
+                        onClick={() => {
+                          if (!bulkNormalizeOp) return;
+                          setCleanTransforms((prev) => {
+                            const rest = prev.filter((x) => x.op === "replace");
+                            return [
+                              ...effectiveColumns.map((col) =>
+                                bulkNormalizeOp === "replace"
+                                  ? { column: col, op: "replace" as const, find: "", replaceWith: "" }
+                                  : { column: col, op: bulkNormalizeOp }
+                              ),
+                              ...rest,
+                            ];
+                          });
+                          toast.success(`Aplicado a ${effectiveColumns.length} columnas`);
+                        }}
+                      >
+                        Aplicar a todas
+                      </Button>
+                    </div>
                     <div className="space-y-2 max-h-48 overflow-y-auto">
                       {effectiveColumns.map((colName) => {
                         const t = cleanTransforms.find((t) => t.column === colName);
@@ -1006,33 +1054,27 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         return (
                           <div key={colName} className="flex gap-2 items-center flex-wrap">
                             <span className="text-sm w-32 truncate" style={{ color: "var(--platform-fg-muted)" }}>{colName}</span>
-                            <select
-                              className="rounded-lg border px-2 py-1.5 text-sm flex-1 min-w-[140px]"
-                              style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                              value={op}
-                              onChange={(e) => {
-                                const newOp = e.target.value;
-                                setCleanTransforms((prev) => {
-                                  const rest = prev.filter((x) => x.column !== colName);
-                                  if (!newOp) return rest;
-                                  if (newOp === "replace") return [...rest, { column: colName, op: "replace", find: "", replaceWith: "" }];
-                                  return [...rest, { column: colName, op: newOp }];
-                                });
-                              }}
-                            >
-                              <option value="">(ninguna)</option>
-                              <option value="trim">Recortar espacios</option>
-                              <option value="upper">Mayúsculas</option>
-                              <option value="lower">Minúsculas</option>
-                              <option value="normalize_spaces">Espacios múltiples → uno</option>
-                              <option value="strip_invisible">Quitar caracteres invisibles</option>
-                              <option value="utf8_normalize">Normalizar UTF-8</option>
-                            </select>
+                            <div className="flex-1 min-w-[180px]">
+                              <Select
+                                value={op}
+                                onChange={(v: string) => {
+                                  setCleanTransforms((prev) => {
+                                    const rest = prev.filter((x) => x.column !== colName);
+                                    if (!v) return rest;
+                                    if (v === "replace") return [...rest, { column: colName, op: "replace", find: "", replaceWith: "" }];
+                                    return [...rest, { column: colName, op: v }];
+                                  });
+                                }}
+                                options={NORMALIZE_OPTIONS}
+                                placeholder="(ninguna)"
+                              />
+                            </div>
                             {op === "replace" && (
                               <>
                                 <input
                                   type="text"
-                                  className="rounded border px-1.5 py-1 text-xs w-24"
+                                  className="rounded-xl border px-2 py-1.5 text-xs w-24"
+                                  style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
                                   placeholder="Buscar"
                                   value={t?.find ?? ""}
                                   onChange={(ev) =>
@@ -1047,7 +1089,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 />
                                 <input
                                   type="text"
-                                  className="rounded border px-1.5 py-1 text-xs w-24"
+                                  className="rounded-xl border px-2 py-1.5 text-xs w-24"
+                                  style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
                                   placeholder="Reemplazar"
                                   value={t?.replaceWith ?? ""}
                                   onChange={(ev) =>
@@ -1075,18 +1118,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <div className="space-y-2 max-h-36 overflow-y-auto">
                       {dataFixes.map((fix, idx) => (
                         <div key={idx} className="flex gap-2 items-center flex-wrap">
-                          <select
-                            className="rounded border px-2 py-1 text-sm"
-                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            value={fix.column}
-                            onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, column: e.target.value }; return n; })}
-                          >
-                            {effectiveColumns.map((c) => (<option key={c} value={c}>{c}</option>))}
-                          </select>
-                          <input type="text" className="rounded border px-2 py-1 text-sm w-28" placeholder="Incorrecto" value={fix.find} onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, find: e.target.value }; return n; })} />
+                          <div className="min-w-[140px]">
+                            <Select
+                              value={fix.column}
+                              onChange={(v: string) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, column: v }; return n; })}
+                              options={effectiveColumns.map((c) => ({ value: c, label: c }))}
+                              placeholder="Columna"
+                            />
+                          </div>
+                          <input type="text" className="rounded-xl border px-2 py-1.5 text-sm w-28" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }} placeholder="Incorrecto" value={fix.find} onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, find: e.target.value }; return n; })} />
                           <span style={{ color: "var(--platform-fg-muted)" }}>→</span>
-                          <input type="text" className="rounded border px-2 py-1 text-sm w-28" placeholder="Correcto" value={fix.replaceWith} onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, replaceWith: e.target.value }; return n; })} />
-                          <button type="button" className="text-red-500 hover:bg-red-50 rounded p-1" onClick={() => setDataFixes((prev) => prev.filter((_, i) => i !== idx))}>×</button>
+                          <input type="text" className="rounded-xl border px-2 py-1.5 text-sm w-28" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }} placeholder="Correcto" value={fix.replaceWith} onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, replaceWith: e.target.value }; return n; })} />
+                          <button type="button" className="text-red-500 hover:bg-red-50 rounded-lg p-1.5" onClick={() => setDataFixes((prev) => prev.filter((_, i) => i !== idx))} aria-label="Quitar">×</button>
                         </div>
                       ))}
                     </div>
@@ -1099,29 +1142,29 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Duplicados</Label>
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas clave para identificar duplicados. Se conserva una fila por clave.</p>
-                    <div className="flex flex-wrap gap-2 items-center">
-                      <select
-                        className="rounded-lg border px-3 py-2 text-sm"
-                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                        value="__add__"
-                        onChange={(e) => {
-                          const col = e.target.value;
-                          if (col === "__add__") return;
-                          setDedupe((prev) => ({ keyColumns: [...(prev?.keyColumns ?? []), col], keep: prev?.keep ?? "first" }));
-                        }}
-                      >
-                        <option value="__add__">Añadir columna clave</option>
-                        {effectiveColumns.filter((c) => !dedupe?.keyColumns.includes(c)).map((c) => (<option key={c} value={c}>{c}</option>))}
-                      </select>
-                      <select
-                        className="rounded-lg border px-3 py-2 text-sm"
-                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                        value={dedupe?.keep ?? "first"}
-                        onChange={(e) => setDedupe((prev) => ({ keyColumns: prev?.keyColumns ?? [], keep: e.target.value as "first" | "last" }))}
-                      >
-                        <option value="first">Mantener primera</option>
-                        <option value="last">Mantener última</option>
-                      </select>
+                    <div className="flex flex-wrap gap-4 items-end">
+                      <div className="min-w-[180px]">
+                        <Select
+                          value=""
+                          onChange={(v: string) => {
+                            if (!v) return;
+                            setDedupe((prev) => ({ keyColumns: [...(prev?.keyColumns ?? []), v], keep: prev?.keep ?? "first" }));
+                          }}
+                          options={effectiveColumns.filter((c) => !dedupe?.keyColumns.includes(c)).map((c) => ({ value: c, label: c }))}
+                          placeholder="Añadir columna clave"
+                        />
+                      </div>
+                      <div className="min-w-[160px]">
+                        <Select
+                          value={dedupe?.keep ?? "first"}
+                          onChange={(v: string) => setDedupe((prev) => ({ keyColumns: prev?.keyColumns ?? [], keep: (v || "first") as "first" | "last" }))}
+                          options={[
+                            { value: "first", label: "Mantener primera" },
+                            { value: "last", label: "Mantener última" },
+                          ]}
+                          placeholder="Al duplicado"
+                        />
+                      </div>
                     </div>
                     {dedupe?.keyColumns?.length ? (
                       <div className="flex flex-wrap gap-1">
@@ -1153,72 +1196,64 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     </div>
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Apilar filas de otras tablas con las mismas columnas. Elegí una o más tablas y qué columnas traer de cada una.</p>
                     {useUnion && (
-                      <div className="space-y-3 pt-2">
-                        <div className="flex flex-wrap gap-2 items-center">
-                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
-                          <select
-                            className="rounded-lg border px-3 py-2 text-sm"
-                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            value={unionRightConnectionId ?? ""}
-                            onChange={(e) => setUnionRightConnectionId(e.target.value ? e.target.value : null)}
-                          >
-                            <option value="">Elegir conexión</option>
-                            {connections.map((c) => (
-                              <option key={c.id} value={c.id}>{c.title}{String(c.id) === String(connectionId) ? " (principal)" : ""}</option>
-                            ))}
-                          </select>
-                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
-                          {unionRightTables.length > 0 && (
-                            <input
-                              type="text"
-                              placeholder="Buscar tabla…"
-                              value={unionTableSearch}
-                              onChange={(e) => setUnionTableSearch(e.target.value)}
-                              className="rounded-lg border px-3 py-2 text-sm w-full max-w-[200px]"
-                              style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            />
-                          )}
-                          <select
-                            className="rounded-lg border px-3 py-2 text-sm"
-                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            value={unionRightTable ?? ""}
-                            onChange={(e) => setUnionRightTable(e.target.value || null)}
-                            disabled={!unionRightConnectionId || loadingUnionMeta}
-                          >
-                            <option value="">Elegir tabla</option>
-                            {unionRightTables
-                              .filter((t) => !unionTableSearch.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(unionTableSearch.trim().toLowerCase()))
-                              .map((t) => (
-                                <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</option>
-                              ))}
-                          </select>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="rounded-lg text-sm"
-                            style={{ borderColor: "var(--platform-border)" }}
-                            disabled={!unionRightConnectionId || !unionRightTable || unionRightItems.some((it) => it.table === unionRightTable)}
-                            onClick={async () => {
-                              if (!unionRightConnectionId || !unionRightTable) return;
-                              try {
-                                const res = await fetchMetadata(unionRightConnectionId, unionRightTable);
-                                const data = await res.json();
-                                const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
-                                const mainCols = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
-                                const defaultCols = mainCols.filter((c) => colNames.includes(c));
-                                setUnionRightItems((prev) => [
-                                  ...prev,
-                                  { connectionId: unionRightConnectionId, table: unionRightTable, columns: defaultCols.length ? defaultCols : colNames, availableColumns: colNames.map((n: string) => ({ name: n })) },
-                                ]);
-                                setUnionRightTable(null);
-                              } catch {
-                                toast.error("No se pudieron cargar las columnas de la tabla");
-                              }
-                            }}
-                          >
-                            Agregar tabla
-                          </Button>
+                      <div className="space-y-4 pt-2">
+                        <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                          <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Agregar tabla a apilar</Label>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                            <div>
+                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
+                              <Select
+                                value={unionRightConnectionId != null ? String(unionRightConnectionId) : ""}
+                                onChange={(v: string) => setUnionRightConnectionId(v ? v : null)}
+                                options={connections.map((c) => ({
+                                  value: String(c.id),
+                                  label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
+                                }))}
+                                placeholder="Elegir conexión"
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
+                              <Select
+                                value={unionRightTable ?? ""}
+                                onChange={(v: string) => setUnionRightTable(v || null)}
+                                options={unionRightTables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
+                                placeholder="Elegir tabla"
+                                searchable
+                                searchPlaceholder="Buscar tabla…"
+                                disabled={!unionRightConnectionId || loadingUnionMeta}
+                              />
+                            </div>
+                            <div className="sm:col-span-2 lg:col-span-1 flex items-end">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="rounded-xl w-full sm:w-auto"
+                                style={{ borderColor: "var(--platform-border)" }}
+                                disabled={!unionRightConnectionId || !unionRightTable || unionRightItems.some((it) => it.table === unionRightTable)}
+                                onClick={async () => {
+                                  if (!unionRightConnectionId || !unionRightTable) return;
+                                  try {
+                                    const res = await fetchMetadata(unionRightConnectionId, unionRightTable);
+                                    const data = await res.json();
+                                    const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
+                                    const mainCols = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
+                                    const defaultCols = mainCols.filter((c) => colNames.includes(c));
+                                    setUnionRightItems((prev) => [
+                                      ...prev,
+                                      { connectionId: unionRightConnectionId, table: unionRightTable, columns: defaultCols.length ? defaultCols : colNames, availableColumns: colNames.map((n: string) => ({ name: n })) },
+                                    ]);
+                                    setUnionRightTable(null);
+                                  } catch {
+                                    toast.error("No se pudieron cargar las columnas de la tabla");
+                                  }
+                                }}
+                              >
+                                Agregar tabla
+                              </Button>
+                            </div>
+                          </div>
                         </div>
                         <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
                           <input type="checkbox" checked={unionAll} onChange={(e) => setUnionAll(e.target.checked)} />
@@ -1298,80 +1333,75 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     </div>
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Unir por una columna en común. Elegí una o más tablas secundarias, columnas de enlace y qué columnas traer de cada una.</p>
                     {useJoin && (
-                      <div className="space-y-3 pt-2">
-                        <div className="flex flex-wrap gap-2 items-center">
-                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
-                          <select
-                            className="rounded-lg border px-3 py-2 text-sm"
-                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            value={joinSecondaryConnectionId ?? ""}
-                            onChange={(e) => { setJoinSecondaryConnectionId(e.target.value ? e.target.value : null); setJoinSecondaryTable(null); setJoinLeftColumn(""); setJoinRightColumn(""); }}
-                          >
-                            <option value="">Elegir conexión</option>
-                            {connections.map((c) => (
-                              <option key={c.id} value={c.id}>{c.title}{String(c.id) === String(connectionId) ? " (principal)" : ""}</option>
-                            ))}
-                          </select>
-                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
-                          {joinRightTables.length > 0 && (
-                            <input
-                              type="text"
-                              placeholder="Buscar tabla…"
-                              value={joinTableSearch}
-                              onChange={(e) => setJoinTableSearch(e.target.value)}
-                              className="rounded-lg border px-3 py-2 text-sm w-full max-w-[200px]"
-                              style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            />
-                          )}
-                          <select
-                            className="rounded-lg border px-3 py-2 text-sm"
-                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            value={joinSecondaryTable ?? ""}
-                            onChange={(e) => { setJoinSecondaryTable(e.target.value || null); setJoinRightColumn(""); }}
-                            disabled={!joinSecondaryConnectionId || loadingJoinMeta}
-                          >
-                            <option value="">Elegir tabla</option>
-                            {joinRightTables
-                              .filter((t) => !joinTableSearch.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(joinTableSearch.trim().toLowerCase()))
-                              .map((t) => (
-                                <option key={`${t.schema}.${t.name}`} value={`${t.schema}.${t.name}`}>{t.schema}.{t.name}</option>
-                              ))}
-                          </select>
-                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Tipo</Label>
-                          <select
-                            className="rounded-lg border px-3 py-2 text-sm"
-                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            value={joinType}
-                            onChange={(e) => setJoinType(e.target.value as "INNER" | "LEFT" | "RIGHT" | "FULL")}
-                          >
-                            <option value="INNER">INNER</option>
-                            <option value="LEFT">LEFT</option>
-                            <option value="RIGHT">RIGHT</option>
-                            <option value="FULL">FULL</option>
-                          </select>
+                      <div className="space-y-4 pt-2">
+                        <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                          <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Tabla secundaria y tipo de JOIN</Label>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                            <div>
+                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
+                              <Select
+                                value={joinSecondaryConnectionId != null ? String(joinSecondaryConnectionId) : ""}
+                                onChange={(v: string) => {
+                                  setJoinSecondaryConnectionId(v ? v : null);
+                                  setJoinSecondaryTable(null);
+                                  setJoinLeftColumn("");
+                                  setJoinRightColumn("");
+                                }}
+                                options={connections.map((c) => ({
+                                  value: String(c.id),
+                                  label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
+                                }))}
+                                placeholder="Elegir conexión"
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
+                              <Select
+                                value={joinSecondaryTable ?? ""}
+                                onChange={(v: string) => { setJoinSecondaryTable(v || null); setJoinRightColumn(""); }}
+                                options={joinRightTables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
+                                placeholder="Elegir tabla"
+                                searchable
+                                searchPlaceholder="Buscar tabla…"
+                                disabled={!joinSecondaryConnectionId || loadingJoinMeta}
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tipo</Label>
+                              <Select
+                                value={joinType}
+                                onChange={(v: string) => setJoinType(v as "INNER" | "LEFT" | "RIGHT" | "FULL")}
+                                options={[
+                                  { value: "INNER", label: "INNER" },
+                                  { value: "LEFT", label: "LEFT" },
+                                  { value: "RIGHT", label: "RIGHT" },
+                                  { value: "FULL", label: "FULL" },
+                                ]}
+                                placeholder="Tipo"
+                              />
+                            </div>
                         </div>
-                        <div className="flex flex-wrap gap-2 items-center">
-                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla principal</Label>
-                          <select
-                            className="rounded-lg border px-3 py-2 text-sm"
-                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            value={joinLeftColumn}
-                            onChange={(e) => setJoinLeftColumn(e.target.value)}
-                          >
-                            <option value="">Elegir columna</option>
-                            {effectiveColumns.map((c) => (<option key={c} value={c}>{c}</option>))}
-                          </select>
-                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla secundaria</Label>
-                          <select
-                            className="rounded-lg border px-3 py-2 text-sm"
-                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                            value={joinRightColumn}
-                            onChange={(e) => setJoinRightColumn(e.target.value)}
-                          >
-                            <option value="">Elegir columna</option>
-                            {joinRightColumns.map((c) => (<option key={c} value={c}>{c}</option>))}
-                          </select>
-                          <Button
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                          <div>
+                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla principal</Label>
+                            <Select
+                              value={joinLeftColumn}
+                              onChange={(v: string) => setJoinLeftColumn(v)}
+                              options={effectiveColumns.map((c) => ({ value: c, label: c }))}
+                              placeholder="Elegir columna"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla secundaria</Label>
+                            <Select
+                              value={joinRightColumn}
+                              onChange={(v: string) => setJoinRightColumn(v)}
+                              options={joinRightColumns.map((c) => ({ value: c, label: c }))}
+                              placeholder="Elegir columna"
+                            />
+                          </div>
+                          <div className="lg:col-span-2 flex items-end">
+                            <Button
                             type="button"
                             variant="outline"
                             size="sm"
@@ -1400,7 +1430,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             }}
                           >
                             Agregar tabla
-                          </Button>
+                            </Button>
+                          </div>
                         </div>
                         {joinItems.length > 0 && (
                           <div className="space-y-2 border-t pt-3" style={{ borderColor: "var(--platform-border)" }}>
@@ -1455,6 +1486,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             ))}
                           </div>
                         )}
+                        </div>
                       </div>
                     )}
                   </div>
