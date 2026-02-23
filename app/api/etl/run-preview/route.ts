@@ -267,7 +267,7 @@ export async function POST(req: NextRequest) {
             : (conn as any).db_password ?? "";
           const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(String(s).trim()) ? String(s).trim().toUpperCase() : `"${String(s).trim().replace(/"/g, '""')}"`);
           const tablePart = tableQ.includes(".")
-            ? tableQ.split(".", 2).map((p) => safePart(p)).filter(Boolean).join(".")
+            ? `"${tableQ.trim().replace(/"/g, '""')}"`
             : safePart(tableQ);
           const colList = (src.filter?.columns || [])
             .map((c: string) => (c != null ? String(c).trim() : ""))
@@ -544,7 +544,7 @@ export async function POST(req: NextRequest) {
               : (conn as any).db_password ?? "";
             const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(String(s).trim()) ? String(s).trim().toUpperCase() : `"${String(s).trim().replace(/"/g, '""')}"`);
             const tablePart = tableToQuery.includes(".")
-              ? tableToQuery.split(".", 2).map((p) => safePart(p)).filter(Boolean).join(".")
+              ? `"${tableToQuery.trim().replace(/"/g, '""')}"`
               : safePart(tableToQuery);
             const colList = (filter?.columns || [])
               .map((c: string) => (c != null ? String(c).trim() : ""))
