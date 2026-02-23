@@ -2,13 +2,11 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   Users,
   Workflow,
   Link2,
-  Plus,
   ChevronRight,
   X,
   BarChart3,
@@ -27,6 +25,7 @@ import {
   Tooltip,
   Legend,
 } from "chart.js";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 
@@ -58,11 +57,11 @@ type DashboardRow = {
 };
 
 const CHART_COLORS = [
-  "hsl(var(--chart-1, 173 58% 39%))",
-  "hsl(var(--chart-2, 197 37% 24%))",
-  "hsl(var(--chart-3, 43 74% 49%))",
-  "hsl(var(--chart-4, 27 87% 55%))",
-  "hsl(var(--chart-5, 280 65% 60%))",
+  "#0d9488",
+  "#1e3a5f",
+  "#eab308",
+  "#ea580c",
+  "#a855f7",
 ];
 
 export default function AdminOverviewPanel({ statsCounts }: { statsCounts: StatsCounts }) {
@@ -118,7 +117,7 @@ export default function AdminOverviewPanel({ statsCounts }: { statsCounts: Stats
             title: d.title ?? "Sin título",
             published: !!d.published,
             clientName: d.clients?.company_name ?? "—",
-            clientId: d.client_id ?? "",
+            clientId: d.client_id != null ? String(d.client_id) : "",
           }))
         );
       }
@@ -130,10 +129,11 @@ export default function AdminOverviewPanel({ statsCounts }: { statsCounts: Stats
     };
   }, []);
 
-  const openClientModal = async (client: ClientWithCounts) => {
+  const openClientModal = (client: ClientWithCounts) => {
     setModalClient(client);
     setLoadingClientDashboards(true);
-    const dashboardsForClient = allDashboards.filter((d) => d.clientId === client.id);
+    const clientIdNorm = String(client.id);
+    const dashboardsForClient = allDashboards.filter((d) => String(d.clientId || "") === clientIdNorm);
     setClientDashboards(dashboardsForClient);
     setLoadingClientDashboards(false);
   };
@@ -186,23 +186,13 @@ export default function AdminOverviewPanel({ statsCounts }: { statsCounts: Stats
           boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
         }}
       >
-        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" style={{ color: "var(--platform-fg)" }}>
-              Resumen de la plataforma
-            </h1>
-            <p className="mt-2 text-sm sm:text-base max-w-xl" style={{ color: "var(--platform-fg-muted)" }}>
-              Vista general de clientes, dashboards, ETLs y conexiones. Integrá datos, construí reportes y entregálos con branding propio.
-            </p>
-          </div>
-          <Button
-            onClick={() => router.push("/admin/dashboard/new")}
-            className="rounded-xl font-medium gap-2 shrink-0"
-            style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
-          >
-            <Plus className="h-4 w-4" />
-            Nuevo proyecto
-          </Button>
+        <div className="relative z-10">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" style={{ color: "var(--platform-fg)" }}>
+            Resumen de la plataforma
+          </h1>
+          <p className="mt-2 text-sm sm:text-base max-w-xl" style={{ color: "var(--platform-fg-muted)" }}>
+            Vista general de clientes, dashboards, ETLs y conexiones. Integrá datos, construí reportes y entregálos con branding propio.
+          </p>
         </div>
       </section>
 
@@ -253,16 +243,27 @@ export default function AdminOverviewPanel({ statsCounts }: { statsCounts: Stats
               <Loader2 className="h-8 w-8 animate-spin" />
             </div>
           ) : (
-            <div className="h-[240px]">
+            <div className="h-[240px] min-w-0 w-full">
               <Bar
                 data={barData}
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
-                  plugins: { legend: { position: "top" } },
+                  plugins: {
+                    legend: {
+                      position: "top",
+                      labels: { color: "#374151", font: { size: 12 }, useBorderRadius: true },
+                    },
+                  },
                   scales: {
-                    x: { grid: { display: false }, ticks: { maxRotation: 45, color: "var(--platform-fg-muted)", font: { size: 11 } } },
-                    y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } },
+                    x: {
+                      grid: { display: false },
+                      ticks: { maxRotation: 45, color: "#6b7280", font: { size: 11 } },
+                    },
+                    y: {
+                      grid: { color: "#e5e7eb" },
+                      ticks: { color: "#6b7280", font: { size: 11 } },
+                    },
                   },
                 }}
               />
@@ -277,13 +278,18 @@ export default function AdminOverviewPanel({ statsCounts }: { statsCounts: Stats
             <PieChartIcon className="h-5 w-5" style={{ color: "var(--platform-accent)" }} />
             <h2 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>Distribución de la plataforma</h2>
           </div>
-          <div className="h-[240px] flex items-center justify-center">
+          <div className="h-[240px] min-w-0 w-full flex items-center justify-center">
             <Doughnut
               data={doughnutData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { position: "right" } },
+                plugins: {
+                  legend: {
+                    position: "right",
+                    labels: { color: "#374151", font: { size: 12 }, padding: 12 },
+                  },
+                },
                 cutout: "60%",
               }}
             />

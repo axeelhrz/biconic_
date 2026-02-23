@@ -159,6 +159,10 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   const [transformCompare, setTransformCompare] = useState<"none" | "mom" | "yoy">("none");
   const [showDataLabels, setShowDataLabels] = useState(false);
   const [chartColorScheme, setChartColorScheme] = useState("auto");
+  const [metricsDistinctColumn, setMetricsDistinctColumn] = useState<string | null>(null);
+  const [metricsDistinctValues, setMetricsDistinctValues] = useState<string[]>([]);
+  const [metricsDistinctLoading, setMetricsDistinctLoading] = useState(false);
+  const [metricsDistinctSearch, setMetricsDistinctSearch] = useState("");
 
   const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
     A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Avanzado", "Publicar"],
@@ -976,6 +980,86 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                       ))}
                     </div>
                   )}
+
+                  <div className="mt-6 rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Ver valores de una columna</Label>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                      Elegí una columna y cargá los valores que tiene la tabla. Sirve para revisar opciones al definir filtros (igual que en Columnas y filtros del ETL).
+                    </p>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</span>
+                      <select
+                        className="rounded-lg border px-3 py-2 text-sm min-w-[140px]"
+                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                        value={metricsDistinctColumn ?? ""}
+                        onChange={(e) => {
+                          const col = e.target.value || null;
+                          setMetricsDistinctColumn(col);
+                          setMetricsDistinctValues([]);
+                          setMetricsDistinctSearch("");
+                        }}
+                      >
+                        <option value="">Elegir columna</option>
+                        {fields.map((col) => (
+                          <option key={col} value={col}>{col}</option>
+                        ))}
+                      </select>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="rounded-lg"
+                        style={{ borderColor: "var(--platform-border)" }}
+                        disabled={!metricsDistinctColumn || metricsDistinctLoading}
+                        onClick={async () => {
+                          if (!metricsDistinctColumn) return;
+                          setMetricsDistinctLoading(true);
+                          setMetricsDistinctValues([]);
+                          try {
+                            const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(metricsDistinctColumn)}`);
+                            const data = await res.json();
+                            if (data.ok && Array.isArray(data.values)) setMetricsDistinctValues(data.values);
+                            else toast.error(data?.error || "No se pudieron cargar los valores");
+                          } catch (e: unknown) {
+                            toast.error(e instanceof Error ? e.message : "Error al cargar");
+                          } finally {
+                            setMetricsDistinctLoading(false);
+                          }
+                        }}
+                      >
+                        {metricsDistinctLoading ? "Cargando…" : "Cargar valores"}
+                      </Button>
+                    </div>
+                    {metricsDistinctValues.length > 0 && metricsDistinctColumn && (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="Buscar valor…"
+                          value={metricsDistinctSearch}
+                          onChange={(e) => setMetricsDistinctSearch(e.target.value)}
+                          className="w-full rounded-lg border px-3 py-2 text-sm"
+                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                        />
+                        <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
+                          {metricsDistinctValues
+                            .filter((v) => !metricsDistinctSearch.trim() || String(v).toLowerCase().includes(metricsDistinctSearch.trim().toLowerCase()))
+                            .map((val) => (
+                              <div
+                                key={String(val)}
+                                className="py-1.5 px-2 rounded text-sm"
+                                style={{ color: "var(--platform-fg)" }}
+                              >
+                                {String(val)}
+                              </div>
+                            ))}
+                        </div>
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                          {metricsDistinctValues.length} valor{metricsDistinctValues.length !== 1 ? "es" : ""} en esta columna.
+                        </p>
+                      </>
+                    )}
+                  </div>
+
                   <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Preview</Button>
@@ -1113,6 +1197,33 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                       <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Límite (filas)</Label>
                       <Input type="number" min={1} max={1000} value={formLimit ?? ""} onChange={(e) => setFormLimit(e.target.value ? parseInt(e.target.value, 10) : undefined)} className="max-w-[120px] h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} placeholder="100" />
                     </div>
+                  </div>
+                  <div className="rounded-xl border p-4 space-y-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Ver valores de una columna</Label>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una columna y cargá los valores para revisar opciones al definir filtros.</p>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <select
+                        className="rounded-lg border px-3 py-2 text-sm min-w-[140px]"
+                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                        value={metricsDistinctColumn ?? ""}
+                        onChange={(e) => { const col = e.target.value || null; setMetricsDistinctColumn(col); setMetricsDistinctValues([]); setMetricsDistinctSearch(""); }}
+                      >
+                        <option value="">Elegir columna</option>
+                        {fields.map((col) => (<option key={col} value={col}>{col}</option>))}
+                      </select>
+                      <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} disabled={!metricsDistinctColumn || metricsDistinctLoading} onClick={async () => { if (!metricsDistinctColumn) return; setMetricsDistinctLoading(true); setMetricsDistinctValues([]); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(metricsDistinctColumn)}`); const data = await res.json(); if (data.ok && Array.isArray(data.values)) setMetricsDistinctValues(data.values); else toast.error(data?.error || "No se pudieron cargar los valores"); } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Error al cargar"); } finally { setMetricsDistinctLoading(false); } }}>
+                        {metricsDistinctLoading ? "Cargando…" : "Cargar valores"}
+                      </Button>
+                    </div>
+                    {metricsDistinctValues.length > 0 && metricsDistinctColumn && (
+                      <>
+                        <input type="text" placeholder="Buscar valor…" value={metricsDistinctSearch} onChange={(e) => setMetricsDistinctSearch(e.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }} />
+                        <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
+                          {metricsDistinctValues.filter((v) => !metricsDistinctSearch.trim() || String(v).toLowerCase().includes(metricsDistinctSearch.trim().toLowerCase())).map((val) => (<div key={String(val)} className="py-1.5 px-2 rounded text-sm" style={{ color: "var(--platform-fg)" }}>{String(val)}</div>))}
+                        </div>
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{metricsDistinctValues.length} valor{metricsDistinctValues.length !== 1 ? "es" : ""} en esta columna.</p>
+                      </>
+                    )}
                   </div>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
