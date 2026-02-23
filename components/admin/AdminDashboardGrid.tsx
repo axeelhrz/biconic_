@@ -4,6 +4,7 @@ import DashboardCard, { Dashboard } from "@/components/dashboard/DashboardCard";
 // @ts-ignore
 import { createClient } from "@/lib/supabase/client";
 import { DeleteDashboardDialog } from "./dashboard/DeleteDashboardDialog";
+import { SearchX, LayoutDashboard } from "lucide-react";
 
 // Shape for mapping Supabase rows
 type SupabaseDashboardRow = {
@@ -211,13 +212,47 @@ export default function AdminDashboardGrid({
         onSuccess={handleDeleteSuccess}
       />
       {filtered.length === 0 && dashboards.length > 0 && (
-        <div className="col-span-full rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
-          No hay resultados para los filtros aplicados.
+        <div
+          className="col-span-full flex flex-col items-center justify-center rounded-2xl border py-16 px-6 text-center"
+          style={{
+            borderColor: "var(--platform-border)",
+            background: "var(--platform-surface)",
+          }}
+        >
+          <div
+            className="flex h-16 w-16 items-center justify-center rounded-2xl mb-4"
+            style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}
+          >
+            <SearchX className="h-8 w-8" />
+          </div>
+          <h3 className="text-lg font-semibold mb-1" style={{ color: "var(--platform-fg)" }}>
+            Sin resultados
+          </h3>
+          <p className="text-sm max-w-sm" style={{ color: "var(--platform-fg-muted)" }}>
+            No hay dashboards que coincidan con los filtros o la búsqueda. Probá otros términos o quitá filtros.
+          </p>
         </div>
       )}
       {filtered.length === 0 && dashboards.length === 0 && (
-        <div className="col-span-full rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
-          No tienes dashboards aún.
+        <div
+          className="col-span-full flex flex-col items-center justify-center rounded-2xl border py-16 px-6 text-center"
+          style={{
+            borderColor: "var(--platform-border)",
+            background: "var(--platform-surface)",
+          }}
+        >
+          <div
+            className="flex h-16 w-16 items-center justify-center rounded-2xl mb-4"
+            style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
+          >
+            <LayoutDashboard className="h-8 w-8" />
+          </div>
+          <h3 className="text-lg font-semibold mb-1" style={{ color: "var(--platform-fg)" }}>
+            Aún no hay dashboards
+          </h3>
+          <p className="text-sm max-w-sm" style={{ color: "var(--platform-fg-muted)" }}>
+            Creá tu primer dashboard con el botón «Crear dashboard» arriba. Asignalo a un cliente y elegí las fuentes de datos.
+          </p>
         </div>
       )}
     </div>

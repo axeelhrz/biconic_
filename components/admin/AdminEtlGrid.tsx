@@ -2,7 +2,11 @@
 import { useCallback, useEffect, useState } from "react";
 import EtlCard, { Etl } from "@/components/etl/EtlCard";
 import { createClient } from "@/lib/supabase/client";
-import { getEtlsAdmin } from "@/app/admin/(main)/etl/actions";
+import { getEtlsAdmin, deleteEtlAdmin } from "@/app/admin/(main)/etl/actions";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
+import { Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 
 // Optional shape to help with mapping Supabase rows to the Etl UI type
 type SupabaseEtlRow = {
@@ -66,6 +70,8 @@ export default function AdminEtlGrid({
   const [etls, setEtls] = useState<Etl[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const loadFromClient = useCallback(async (): Promise<Etl[]> => {
     const supabase = createClient();
@@ -261,6 +267,42 @@ export default function AdminEtlGrid({
     return matchesQuery && matchesFilter && matchesClient;
   });
 
+  const selectedSet = new Set(selectedIds);
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+  const selectAllFiltered = () => {
+    const ids = filtered.map((e) => e.id);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+  };
+  const clearSelection = () => setSelectedIds([]);
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    const msg =
+      selectedIds.length === 1
+        ? "¿Eliminar este ETL? Esta acción no se puede deshacer."
+        : `¿Eliminar los ${selectedIds.length} ETLs seleccionados? Esta acción no se puede deshacer.`;
+    if (!confirm(msg)) return;
+    setBulkDeleting(true);
+    let ok = 0;
+    let fail = 0;
+    for (const id of selectedIds) {
+      const res = await deleteEtlAdmin(id);
+      if (res.ok) ok++; else fail++;
+    }
+    setBulkDeleting(false);
+    setSelectedIds([]);
+    loadEtls();
+    if (fail > 0) toast.error(`${fail} no se pudieron eliminar.`);
+    if (ok > 0) toast.success(ok === 1 ? "ETL eliminado." : `${ok} ETLs eliminados.`);
+  };
+
   if (etls.length === 0) {
     return (
       <div
@@ -277,29 +319,92 @@ export default function AdminEtlGrid({
   }
 
   return (
-    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {(filtered.length > 0 ? filtered : []).map((etl) => (
-        <EtlCard
-          key={etl.id}
-          etl={etl}
-          basePath="/admin/etl"
-          onDeleted={loadEtls}
-          onSaved={loadEtls}
-          useAdminDelete
-        />
-      ))}
-      {filtered.length === 0 && (
+    <>
+      {selectedIds.length > 0 && (
         <div
-          className="col-span-full rounded-xl border p-6 text-center text-sm"
+          className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 mb-4"
           style={{
             borderColor: "var(--platform-border)",
-            background: "var(--platform-surface)",
-            color: "var(--platform-fg-muted)",
+            background: "var(--platform-accent-dim)",
           }}
         >
-          No hay resultados para los filtros aplicados.
+          <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
+            {selectedIds.length} seleccionado{selectedIds.length !== 1 ? "s" : ""}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="rounded-lg h-9"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            onClick={selectAllFiltered}
+          >
+            Seleccionar todos los visibles
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="rounded-lg h-9 gap-1.5"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            onClick={clearSelection}
+          >
+            <X className="h-4 w-4" />
+            Quitar selección
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="rounded-lg h-9 gap-1.5"
+            style={{ background: "var(--platform-danger)", color: "#fff" }}
+            onClick={handleBulkDelete}
+            disabled={bulkDeleting}
+          >
+            <Trash2 className="h-4 w-4" />
+            {bulkDeleting ? "Eliminando…" : "Eliminar seleccionados"}
+          </Button>
         </div>
       )}
-    </div>
+
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {(filtered.length > 0 ? filtered : []).map((etl) => (
+          <div key={etl.id} className="relative">
+            <div
+              className="absolute left-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm"
+              style={{
+                background: "var(--platform-surface)",
+                borderColor: "var(--platform-border)",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Checkbox
+                checked={selectedSet.has(etl.id)}
+                onCheckedChange={() => toggleSelect(etl.id)}
+                className="h-5 w-5 rounded border-2 data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:border-[var(--platform-accent)]"
+              />
+            </div>
+            <EtlCard
+              etl={etl}
+              basePath="/admin/etl"
+              onDeleted={loadEtls}
+              onSaved={loadEtls}
+              useAdminDelete
+            />
+          </div>
+        ))}
+        {filtered.length === 0 && (
+          <div
+            className="col-span-full rounded-xl border p-6 text-center text-sm"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg-muted)",
+            }}
+          >
+            No hay resultados para los filtros aplicados.
+          </div>
+        )}
+      </div>
+    </>
   );
 }
