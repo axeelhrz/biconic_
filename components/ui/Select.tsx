@@ -129,12 +129,14 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
               <Listbox.Options
                 static
                 className={cn(
-                  "fixed mt-2 w-full overflow-auto rounded-2xl border p-3 focus:outline-none",
+                  "fixed mt-2 overflow-auto rounded-2xl border p-3 focus:outline-none",
                   optionsClassName
                 )}
                 style={{
                   zIndex: 9999,
-                  minWidth: rect ? rect.width : buttonWidth || undefined,
+                  width: rect ? rect.width : buttonWidth || undefined,
+                  minWidth: 200,
+                  maxWidth: 320,
                   top: rect ? rect.top + rect.height + 8 : 0,
                   left: rect ? rect.left : 0,
                   borderColor: "var(--platform-border)",
@@ -142,7 +144,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                   boxShadow: "0 10px 40px rgba(0,0,0,0.08)",
                 }}
               >
-                <div className="max-h-[220px] overflow-y-auto rounded-xl -mx-1 px-1" style={{ background: "var(--platform-bg)" }}>
+                <div className="max-h-[220px] overflow-y-auto overflow-x-hidden rounded-xl -mx-1 px-1 py-2" style={{ background: "var(--platform-bg)" }}>
                   <div className="flex flex-col gap-0.5">
                     {options.map((option: SelectOption) => (
                       <Listbox.Option
