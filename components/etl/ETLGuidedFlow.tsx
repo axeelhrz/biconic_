@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useImperativeHandle, forwardRef, useRef } from "react";
+import { useState, useEffect, useCallback, useImperativeHandle, forwardRef, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,9 @@ import {
   Loader2,
   Sparkles,
   Link2,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { Connection as ServerConnection } from "@/components/connections/ConnectionsCard";
 import { Select } from "@/components/ui/Select";
@@ -185,7 +188,37 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewRows, setPreviewRows] = useState<Record<string, unknown>[] | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewSortKey, setPreviewSortKey] = useState<string | null>(null);
+  const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
   const previewAbortRef = useRef<AbortController | null>(null);
+
+  const previewDisplayRows = useMemo(() => {
+    if (!previewRows || previewRows.length === 0) return previewRows ?? [];
+    if (!previewSortKey) return previewRows;
+    const key = previewSortKey;
+    const dir = previewSortDir === "asc" ? 1 : -1;
+    return [...previewRows].sort((a, b) => {
+      const va = (a as Record<string, unknown>)[key];
+      const vb = (b as Record<string, unknown>)[key];
+      const na = typeof va === "number" ? va : Number(va);
+      const nb = typeof vb === "number" ? vb : Number(vb);
+      if (!Number.isNaN(na) && !Number.isNaN(nb)) return (na - nb) * dir;
+      const sa = String(va ?? "");
+      const sb = String(vb ?? "");
+      return sa.localeCompare(sb, undefined, { numeric: true }) * dir;
+    });
+  }, [previewRows, previewSortKey, previewSortDir]);
+
+  const handlePreviewSort = useCallback((key: string) => {
+    setPreviewSortKey((prev) => {
+      if (prev === key) {
+        setPreviewSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return key;
+      }
+      setPreviewSortDir("asc");
+      return key;
+    });
+  }, []);
 
   const skipClearSelectedTableRef = useRef(false);
   const restoringFromConfigRef = useRef(false);
@@ -2000,14 +2033,31 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <thead>
                       <tr style={{ background: "var(--platform-bg-elevated)", borderBottom: "1px solid var(--platform-border)" }}>
                         {Object.keys(previewRows[0]).map((key) => (
-                          <th key={key} className="text-left font-medium py-2 px-3 whitespace-nowrap sticky top-0 z-10" style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}>
-                            {key}
+                          <th
+                            key={key}
+                            role="columnheader"
+                            className="text-left font-medium py-2 px-3 whitespace-nowrap sticky top-0 z-10 cursor-pointer select-none hover:bg-[var(--platform-surface-hover)] transition-colors"
+                            style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}
+                            onClick={() => handlePreviewSort(key)}
+                          >
+                            <span className="inline-flex items-center gap-1">
+                              {key}
+                              {previewSortKey === key ? (
+                                previewSortDir === "asc" ? (
+                                  <ArrowUp className="h-3.5 w-3.5 opacity-80" />
+                                ) : (
+                                  <ArrowDown className="h-3.5 w-3.5 opacity-80" />
+                                )
+                              ) : (
+                                <ArrowUpDown className="h-3.5 w-3.5 opacity-50" aria-hidden />
+                              )}
+                            </span>
                           </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {previewRows.map((row, idx) => (
+                      {previewDisplayRows.map((row, idx) => (
                         <tr key={idx} className="border-b border-b-[var(--platform-border)] hover:bg-[var(--platform-surface-hover)]">
                           {Object.keys(previewRows[0]).map((key) => (
                             <td key={key} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={String((row as Record<string, unknown>)[key] ?? "")}>

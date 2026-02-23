@@ -269,8 +269,13 @@ export async function POST(req: NextRequest) {
           const tableNameOnly = (tableQ || "").trim().split(".").pop() || (tableQ || "").trim();
           const tablePart = tableNameOnly.toUpperCase();
           const quoteFb = (s: string) => (s == null || String(s).trim() === "" ? "" : `"${String(s).trim().replace(/"/g, '""')}"`);
-          // Firebird: usar SELECT * para evitar -104 (Token unknown) con nombres de columna que contienen punto
-          const cols = "*";
+          const colList = (src.filter?.columns || [])
+            .map((c: string) => (c != null ? String(c).trim() : ""))
+            .filter((c: string) => c !== "" && c !== "." && !/^\.+$/.test(c));
+          const colListLimited = colList.length > 150 ? colList.slice(0, 150) : colList;
+          const cols = colListLimited.length > 0
+            ? colListLimited.map((c: string) => quoteFb(c)).join(", ")
+            : "*";
           const rawConditions = (src.filter?.conditions || []).filter(
             (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
           );
@@ -539,6 +544,14 @@ export async function POST(req: NextRequest) {
               : (conn as any).db_password ?? "";
             const tableNameOnly = (tableToQuery || "").trim().split(".").pop() || tableToQuery.trim();
             const tablePart = tableNameOnly.toUpperCase();
+            const quoteFb = (s: string) => (s == null || String(s).trim() === "" ? "" : `"${String(s).trim().replace(/"/g, '""')}"`);
+            const colList = (filter?.columns || [])
+              .map((c: string) => (c != null ? String(c).trim() : ""))
+              .filter((c: string) => c !== "" && c !== "." && !/^\.+$/.test(c));
+            const colListLimited = colList.length > 150 ? colList.slice(0, 150) : colList;
+            const colsFirebird = colListLimited.length > 0
+              ? colListLimited.map((c: string) => quoteFb(c)).join(", ")
+              : "*";
             const rawConditions = (filter?.conditions || []).filter(
               (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
             );
@@ -569,7 +582,7 @@ export async function POST(req: NextRequest) {
               password: password || "",
               lowercase_keys: false,
             };
-            const baseQuery = `SELECT FIRST ${limit} * FROM ${tablePart} ${clauseInlined}`.trim();
+            const baseQuery = `SELECT FIRST ${limit} ${colsFirebird} FROM ${tablePart} ${clauseInlined}`.trim();
             const rows = await new Promise<Record<string, any>[]>((resolve, reject) => {
               const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
               Firebird.attach(opts, (err: Error | null, db: any) => {
