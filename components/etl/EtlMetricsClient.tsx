@@ -212,17 +212,18 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   }, [fetchData]);
 
   useEffect(() => {
-    if (showForm && hasData && data?.rowCount && data.rowCount > 0 && rawTableData.length <= 1) {
+    if (showForm && (data?.hasData ?? false) && data?.rowCount && data.rowCount > 0 && rawTableData.length <= 1) {
       fetchData({ silent: true, sampleRows: 200 });
     }
-  }, [showForm, hasData, data?.rowCount, fetchData]);
+  }, [showForm, data?.hasData, data?.rowCount, fetchData]);
 
   useEffect(() => {
-    if (fields.length > 0 && Object.keys(columnRoles).length === 0) {
+    const allFields = data?.fields?.all ?? [];
+    if (allFields.length > 0 && Object.keys(columnRoles).length === 0) {
       const numeric = new Set(data?.fields?.numeric ?? []);
       const date = new Set(data?.fields?.date ?? []);
       const initial: Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }> = {};
-      fields.forEach((f) => {
+      allFields.forEach((f) => {
         let role: ColumnRole = "dimension";
         let aggregation = "—";
         if (date.has(f)) role = "time";
@@ -231,11 +232,12 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       });
       setColumnRoles(initial);
     }
-  }, [fields, data?.fields?.numeric, data?.fields?.date]);
+  }, [data?.fields?.all, data?.fields?.numeric, data?.fields?.date]);
 
   useEffect(() => {
-    if (fields.length > 0 && !timeColumn) setTimeColumn(fields[0]);
-  }, [fields, timeColumn]);
+    const allFields = data?.fields?.all ?? [];
+    if (allFields.length > 0 && !timeColumn) setTimeColumn(allFields[0]);
+  }, [data?.fields?.all, timeColumn]);
 
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
   const hasData = data?.hasData ?? false;
