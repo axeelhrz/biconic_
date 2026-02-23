@@ -246,14 +246,19 @@ export async function POST(req: NextRequest) {
           const password = (conn as any).db_password_encrypted
             ? decryptConnectionPassword((conn as any).db_password_encrypted)
             : (conn as any).db_password ?? "";
-          const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(s) ? s.toUpperCase() : `"${s.replace(/"/g, '""')}"`);
+          // Firebird: siempre entrecomillar identificadores para evitar "Token unknown" con palabras reservadas (VALUE, YEAR, DATE, etc.)
+          const quoteFb = (s: string) => (s == null || String(s).trim() === "" ? "" : `"${String(s).trim().replace(/"/g, '""')}"`);
           const tablePart = tableQ.includes(".")
-            ? tableQ.split(".", 2).map((p) => safePart(p.trim())).join(".")
-            : safePart(tableQ);
-          const cols = src.filter?.columns?.length
-            ? src.filter.columns.map((c: string) => safePart((c || "").trim())).join(", ")
+            ? tableQ.split(".", 2).map((p) => quoteFb(p)).filter(Boolean).join(".")
+            : quoteFb(tableQ);
+          const colList = (src.filter?.columns || [])
+            .map((c: string) => (c != null ? String(c).trim() : ""))
+            .filter((c: string) => c !== "" && c !== ".");
+          const cols = colList.length > 0
+            ? colList.map((c: string) => quoteFb(c)).join(", ")
             : "*";
           const { clause, params } = buildWhereClauseFirebird(src.filter?.conditions || []);
+          if (!tablePart) return Promise.reject(new Error("Nombre de tabla vacío para Firebird."));
           const limit = Math.floor(PREVIEW_LIMIT / 2);
           const Firebird = require("node-firebird");
           const opts = {
