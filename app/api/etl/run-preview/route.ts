@@ -253,12 +253,32 @@ export async function POST(req: NextRequest) {
             : quoteFb(tableQ);
           const colList = (src.filter?.columns || [])
             .map((c: string) => (c != null ? String(c).trim() : ""))
-            .filter((c: string) => c !== "" && c !== ".");
-          const cols = colList.length > 0
-            ? colList.map((c: string) => quoteFb(c)).join(", ")
+            .filter((c: string) => c !== "" && c !== "." && !/^\.+$/.test(c));
+          const colListLimited = colList.length > 100 ? colList.slice(0, 100) : colList;
+          const cols = colListLimited.length > 0
+            ? colListLimited.map((c: string) => quoteFb(c)).join(", ")
             : "*";
-          const { clause, params } = buildWhereClauseFirebird(src.filter?.conditions || []);
+          const rawConditions = (src.filter?.conditions || []).filter(
+            (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
+          );
+          const { clause, params } = buildWhereClauseFirebird(rawConditions);
           if (!tablePart) return Promise.reject(new Error("Nombre de tabla vacío para Firebird."));
+          // Interpolar parámetros en la cláusula para evitar errores -104 (Token unknown) con node-firebird
+          const escapeFbLiteral = (v: any): string => {
+            if (v == null) return "NULL";
+            if (typeof v === "number" && !Number.isNaN(v)) return String(v);
+            if (typeof v === "boolean") return v ? "1" : "0";
+            const s = String(v);
+            return `'${s.replace(/'/g, "''")}'`;
+          };
+          let clauseInlined = clause;
+          let idx = 0;
+          for (const p of params) {
+            const pos = clauseInlined.indexOf("?");
+            if (pos === -1) break;
+            clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
+            idx++;
+          }
           const limit = Math.floor(PREVIEW_LIMIT / 2);
           const Firebird = require("node-firebird");
           const opts = {
@@ -272,8 +292,8 @@ export async function POST(req: NextRequest) {
           return new Promise((resolve, reject) => {
             Firebird.attach(opts, (err: Error | null, db: any) => {
               if (err) return reject(err);
-              const sql = `SELECT FIRST ${limit} ${cols} FROM ${tablePart} ${clause}`.trim();
-              db.query(sql, params, (qerr: Error | null, rows: any[]) => {
+              const sql = `SELECT FIRST ${limit} ${cols} FROM ${tablePart} ${clauseInlined}`.trim();
+              db.query(sql, [], (qerr: Error | null, rows: any[]) => {
                 const detach = () => { if (db?.detach) db.detach(() => {}); };
                 if (qerr) { detach(); return reject(qerr); }
                 const normalized = (rows || []).map((row: Record<string, any>) => {
