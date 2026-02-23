@@ -1,9 +1,22 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles } from "lucide-react";
+import { Bar, Line, Pie, Doughnut } from "react-chartjs-2";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  ArcElement,
+  Tooltip,
+  Legend,
+  Filler,
+} from "chart.js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +25,18 @@ import { toast } from "sonner";
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import type { SavedMetricForm, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  ArcElement,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 const AGG_FUNCS = [
   { value: "SUM", label: "Suma" },
@@ -116,6 +141,32 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   });
   const [previewData, setPreviewData] = useState<Record<string, unknown>[] | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [wizard, setWizard] = useState<"A" | "B" | "C" | "D">("A");
+  const [wizardStep, setWizardStep] = useState(0);
+
+  const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
+    A: ["Dataset"],
+    B: ["Identidad", "Cálculo", "Filtros base"],
+    C: ["Dimensiones", "Orden y límite", "Vista previa"],
+    D: ["Tipo visual", "Mapeo", "Guardar"],
+  };
+
+  const currentStepLabel = WIZARD_STEPS[wizard][wizardStep];
+  const totalStepsInWizard = WIZARD_STEPS[wizard].length;
+  const canPrev = wizard !== "A" || wizardStep > 0;
+  const canNext = wizardStep < totalStepsInWizard - 1 || wizard !== "D";
+  const goNext = () => {
+    if (wizardStep < totalStepsInWizard - 1) setWizardStep((s) => s + 1);
+    else if (wizard === "A") { setWizard("B"); setWizardStep(0); }
+    else if (wizard === "B") { setWizard("C"); setWizardStep(0); }
+    else if (wizard === "C") { setWizard("D"); setWizardStep(0); }
+  };
+  const goPrev = () => {
+    if (wizardStep > 0) setWizardStep((s) => s - 1);
+    else if (wizard === "B") { setWizard("A"); setWizardStep(0); }
+    else if (wizard === "C") { setWizard("B"); setWizardStep(WIZARD_STEPS.B.length - 1); }
+    else if (wizard === "D") { setWizard("C"); setWizardStep(WIZARD_STEPS.C.length - 1); }
+  };
 
   const fetchData = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -155,6 +206,8 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     setFormLimit(100);
     setFormMetric({ id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: fields[0] ?? "valor" });
     setPreviewData(null);
+    setWizard("A");
+    setWizardStep(0);
     setShowForm(true);
   };
 
@@ -250,9 +303,40 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     return "Elegí dimensión y al menos una métrica para ver recomendaciones.";
   })();
 
+  const previewChartConfig = useMemo(() => {
+    if (!previewData || previewData.length === 0) return null;
+    const first = previewData[0] as Record<string, unknown>;
+    const keys = Object.keys(first);
+    const dimKey = formDimension && keys.includes(formDimension) ? formDimension : keys[0];
+    let valueKeys = formMetrics
+      .map((m) => m.alias || m.field || "")
+      .filter(Boolean)
+      .filter((k) => keys.includes(k));
+    if (valueKeys.length === 0) valueKeys = keys.filter((k) => k !== dimKey);
+    if (valueKeys.length === 0) return null;
+    const labels = previewData.map((r) => String((r as Record<string, unknown>)[dimKey] ?? ""));
+    const palette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
+    const datasets = valueKeys.map((alias, idx) => ({
+      label: alias,
+      data: previewData.map((r) => Number((r as Record<string, unknown>)[alias] ?? 0)),
+      backgroundColor: palette[idx % palette.length] + "99",
+      borderColor: palette[idx % palette.length],
+      borderWidth: 1,
+    }));
+    return { labels, datasets };
+  }, [previewData, formDimension, formMetrics]);
+
+  const previewKpiValue = useMemo(() => {
+    if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
+    const firstNum = previewChartConfig.datasets[0]?.data?.[0];
+    return firstNum != null ? firstNum : undefined;
+  }, [previewData, previewChartConfig]);
+
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
+    setWizard("A");
+    setWizardStep(0);
   };
 
   const saveMetric = async () => {
@@ -424,281 +508,368 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       )}
 
       {showForm && hasData && (
-        <div className="space-y-6">
-          {/* Nombre (solo; el tipo de gráfico se elige al final) */}
-          <section
-            className="rounded-2xl border p-6 shadow-sm"
-            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
-          >
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: "var(--platform-fg)" }}>
-              <BarChart2 className="h-5 w-5" style={{ color: "var(--platform-accent)" }} />
-              {editingId ? "Editar métrica" : "Nueva métrica"}
-            </h2>
-            <div>
-              <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
-                Nombre (para reutilizar en dashboards)
-              </Label>
-              <Input
-                value={formName}
-                onChange={(e) => setFormName(e.target.value)}
-                placeholder="Ej. Ventas totales"
-                className="rounded-xl border-0 shadow-sm max-w-md"
-                style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
-              />
+        <div className="flex gap-6 rounded-2xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", minHeight: "480px" }}>
+          {/* Sidebar: Wizards A, B, C, D */}
+          <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+            <div className="p-4 border-b" style={{ borderColor: "var(--platform-border)" }}>
+              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--platform-fg-muted)" }}>Setup</p>
+              <button type="button" onClick={() => { setWizard("A"); setWizardStep(0); }} className="flex items-center gap-2 w-full mt-2 px-3 py-2 rounded-lg text-left text-sm font-medium transition-colors" style={{ color: wizard === "A" ? "var(--platform-accent)" : "var(--platform-fg-muted)", background: wizard === "A" ? "var(--platform-accent-dim)" : "transparent" }}>
+                <span>🗄️</span> Wizard A: Dataset
+                <span className="ml-auto text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>1</span>
+              </button>
             </div>
-          </section>
+            <div className="p-4 border-b" style={{ borderColor: "var(--platform-border)" }}>
+              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--platform-fg-muted)" }}>Métricas & Análisis</p>
+              <button type="button" onClick={() => { setWizard("B"); setWizardStep(0); }} className="flex items-center gap-2 w-full mt-2 px-3 py-2 rounded-lg text-left text-sm font-medium transition-colors" style={{ color: wizard === "B" ? "var(--platform-accent)" : "var(--platform-fg-muted)", background: wizard === "B" ? "var(--platform-accent-dim)" : "transparent" }}>
+                <span>📐</span> Wizard B: Métrica
+                <span className="ml-auto text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>3</span>
+              </button>
+              <button type="button" onClick={() => { setWizard("C"); setWizardStep(0); }} className="flex items-center gap-2 w-full mt-1 px-3 py-2 rounded-lg text-left text-sm font-medium transition-colors" style={{ color: wizard === "C" ? "var(--platform-accent)" : "var(--platform-fg-muted)", background: wizard === "C" ? "var(--platform-accent-dim)" : "transparent" }}>
+                <span>🔍</span> Wizard C: Análisis
+                <span className="ml-auto text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>3</span>
+              </button>
+              <button type="button" onClick={() => { setWizard("D"); setWizardStep(0); }} className="flex items-center gap-2 w-full mt-1 px-3 py-2 rounded-lg text-left text-sm font-medium transition-colors" style={{ color: wizard === "D" ? "var(--platform-accent)" : "var(--platform-fg-muted)", background: wizard === "D" ? "var(--platform-accent-dim)" : "transparent" }}>
+                <span>📊</span> Wizard D: Gráfico
+                <span className="ml-auto text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>3</span>
+              </button>
+            </div>
+          </aside>
 
-          {/* Agregación: dimensiones opcionales y métricas */}
-          <section
-            className="rounded-2xl border p-6 shadow-sm"
-            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
-          >
-            <h3 className="text-base font-semibold mb-4" style={{ color: "var(--platform-fg)" }}>
-              Agregación de datos
-            </h3>
-            <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
-              Definí las métricas y, si querés, dimensiones para agrupar. Las dimensiones son opcionales (por ejemplo para un KPI total no hace falta).
-            </p>
-            <div className="space-y-4">
-              <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
-                  Agrupar por (dimensión, opcional)
-                </Label>
-                <AdminFieldSelector
-                  label=""
-                  value={formDimension}
-                  onChange={setFormDimension}
-                  etlData={etlData}
-                  fieldType="all"
-                  placeholder="Campo..."
-                  className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]"
-                />
-              </div>
-              <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>
-                  Segunda dimensión (opcional)
-                </Label>
-                <AdminFieldSelector
-                  label=""
-                  value={formDimension2}
-                  onChange={setFormDimension2}
-                  etlData={etlData}
-                  fieldType="all"
-                  placeholder="Ninguna..."
-                  className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]"
-                />
-              </div>
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Top bar: breadcrumb + step title + actions */}
+            <div className="flex items-center justify-between gap-4 px-4 py-3 border-b flex-shrink-0" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
-                    Métricas
-                  </Label>
-                  <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" onClick={() => setFormMetrics((m) => [...m, { id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: "valor" }])}>
-                    + Añadir métrica
-                  </Button>
-                </div>
-                <div className="space-y-3">
-                  {formMetrics.map((m, i) => (
-                    <div key={m.id} className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                      <div className="flex gap-2 items-center">
-                        <select
-                          value={m.func}
-                          onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: e.target.value } : mm))}
-                          className="flex-1 h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                        >
-                          {AGG_FUNCS.map((f) => (
-                            <option key={f.value} value={f.value}>{f.label}</option>
-                          ))}
-                        </select>
-                        {formMetrics.length > 1 && (
-                          <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormMetrics((prev) => prev.filter((_, ii) => ii !== i))}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </div>
-                      {m.func !== "FORMULA" && (
-                        <AdminFieldSelector label="Campo" value={m.field} onChange={(v) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, field: v } : mm))} etlData={etlData} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." className="[&_button]:!bg-[var(--platform-bg)] [&_button]:!border-[var(--platform-border)] [&_button]:!text-[var(--platform-fg)]" />
-                      )}
-                      {m.func === "FORMULA" && (
-                        <div className="space-y-2">
-                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Fórmula (metric_0, metric_1…)</Label>
-                          <div className="flex flex-wrap gap-1 mb-2">
-                            {FORMULA_QUICKS.map(({ label, expr }) => (
-                              <button key={label} type="button" onClick={() => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: expr } : mm))} className="px-2 py-1 rounded text-xs border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>
-                                {label}
-                              </button>
-                            ))}
-                          </div>
-                          <Input value={m.formula ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: e.target.value } : mm))} placeholder="Ej. metric_0 / NULLIF(metric_1, 0)" className="font-mono text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                        </div>
-                      )}
-                      <div>
-                        <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias</Label>
-                        <Input value={m.alias} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, alias: e.target.value } : mm))} placeholder="Ej. total_ventas" className="h-8 text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Wizard {wizard} — {WIZARD_STEPS[wizard][wizardStep]}</p>
+                <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>{wizard === "A" ? "Dataset" : wizard === "B" ? "Métrica" : wizard === "C" ? "Análisis" : "Gráfico"}</h2>
               </div>
-              <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Ordenar por</Label>
-                    <select
-                      value={formOrderBy?.field ?? ""}
-                      onChange={(e) => setFormOrderBy((prev) => ({ field: e.target.value, direction: prev?.direction ?? "DESC" }))}
-                      className="w-full h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer"
-                      style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                    >
-                      <option value="">—</option>
-                      {[...(formDimension ? [formDimension] : []), ...(formDimension2 ? [formDimension2] : []), ...fields].filter(Boolean).map((f) => (
-                        <option key={f} value={f}>{f}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Sentido</Label>
-                    <select
-                      value={formOrderBy?.direction ?? "DESC"}
-                      onChange={(e) => setFormOrderBy((prev) => prev ? { ...prev, direction: e.target.value as "ASC" | "DESC" } : { field: "", direction: "DESC" })}
-                      className="w-full h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer"
-                      style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                    >
-                      <option value="DESC">Descendente</option>
-                      <option value="ASC">Ascendente</option>
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Límite (filas)</Label>
-                  <Input type="number" min={1} max={1000} value={formLimit ?? ""} onChange={(e) => setFormLimit(e.target.value ? parseInt(e.target.value, 10) : undefined)} className="max-w-[120px] h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} placeholder="100" />
-                </div>
-              </div>
-              <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                <div className="flex items-center justify-between mb-2">
-                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Filtros (opcional)</Label>
-                  <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} onClick={() => setFormFilters((f) => [...f, { id: `f-${Date.now()}`, field: fields[0] ?? "", operator: "=", value: "" }])}>
-                    + Añadir filtro
-                  </Button>
-                </div>
-                {formFilters.length > 0 && (
-                  <div className="space-y-2">
-                    {formFilters.map((f, i) => (
-                      <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <select value={f.field} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs min-w-[100px] appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                          {fields.map((name) => (<option key={name} value={name}>{name}</option>))}
-                        </select>
-                        <select value={f.operator} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs w-20 appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                          {["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => (<option key={op} value={op}>{op}</option>))}
-                        </select>
-                        <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                        <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
-                      </div>
-                    ))}
-                  </div>
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={closeForm}>Cancelar</Button>
+                {canPrev && <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>}
+                {wizard === "D" && wizardStep === 2 ? (
+                  <Button type="button" size="sm" className="rounded-lg" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {editingId ? "Guardar cambios" : "Crear métrica"}</Button>
+                ) : (
+                  canNext && <Button type="button" size="sm" className="rounded-lg" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente →</Button>
                 )}
               </div>
             </div>
-          </section>
 
-          {/* Vista previa: mismos datos agregados que usará el gráfico */}
-          <section
-            className="rounded-2xl border p-6 shadow-sm"
-            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
-          >
-            <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>
-              Vista previa
-            </h3>
-            <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
-              Datos agregados con la misma configuración que el gráfico (dimensión, métricas, filtros, orden y límite).
-            </p>
-            <div className="flex flex-wrap items-center gap-2 mb-4">
-              <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
-                {previewLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-                Actualizar vista previa
-              </Button>
-              <Button type="button" variant="ghost" size="sm" className="rounded-xl text-xs" style={{ color: "var(--platform-fg-muted)" }} onClick={() => fetchData()} disabled={loading}>
-                Recargar datos del ETL
-              </Button>
-            </div>
-            {previewData && (
-              <div className="overflow-hidden rounded-xl border shadow-sm" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                <div className="overflow-auto max-h-[400px]">
-                  <table className="w-full text-sm" style={{ color: "var(--platform-fg)" }}>
-                    <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)", color: "var(--platform-fg)", borderBottom: "1px solid var(--platform-border)" }}>
-                      <tr>
-                        {previewData.length > 0 && Object.keys(previewData[0]).map((k) => (
-                          <th key={k} className="text-left px-4 py-3 font-medium whitespace-nowrap">{k}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody style={{ background: "var(--platform-bg-elevated)" }}>
-                      {previewData.map((row, idx) => (
-                        <tr key={idx} className="border-b border-[var(--platform-border)] last:border-b-0 hover:opacity-90" style={{ borderColor: "var(--platform-border)" }}>
-                          {Object.values(row).map((v, i) => (
-                            <td key={i} className="px-4 py-2.5 whitespace-nowrap" style={{ color: "var(--platform-fg)" }}>{String(v ?? "")}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="text-xs px-4 py-2.5 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-surface)" }}>
-                  {previewData.length} {previewData.length === 1 ? "fila" : "filas"} (mismo resultado que el gráfico)
-                </p>
-              </div>
-            )}
-          </section>
-
-          {/* Vista previa de visualización: solo para ver cómo podría verse; el tipo de gráfico se elige al usar la métrica en el dashboard */}
-          <section
-            className="rounded-2xl border p-6 shadow-sm"
-            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
-          >
-            <h3 className="text-base font-semibold mb-2 flex items-center gap-2" style={{ color: "var(--platform-fg)" }}>
-              Vista previa de visualización
-            </h3>
-            <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
-              Probá distintos tipos de gráfico para ver cómo se verían los datos. Esto no se guarda con la métrica: cuando uses esta métrica en un dashboard, ahí elegís el tipo de gráfico que querés.
-            </p>
-            <section
-              className="rounded-xl border p-4 mb-4"
-              style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)", color: "var(--platform-fg)" }}
-            >
-              <div className="flex items-start gap-2">
-                <Sparkles className="h-5 w-5 shrink-0 mt-0.5" style={{ color: "var(--platform-accent)" }} />
-                <p className="text-sm" dangerouslySetInnerHTML={{ __html: recommendationText.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
-              </div>
-            </section>
-            <div className="flex flex-wrap gap-2">
-              {CHART_TYPES.map(({ value, label, icon: Icon }) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setFormChartType(value)}
-                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
-                  style={{
-                    background: formChartType === value ? "var(--platform-accent)" : "var(--platform-surface-hover)",
-                    color: formChartType === value ? "var(--platform-bg)" : "var(--platform-fg-muted)",
-                  }}
-                >
-                  <Icon className="h-4 w-4" />
-                  {label}
+            {/* Stepper (steps within current wizard) */}
+            <div className="flex gap-1 px-4 py-2 border-b flex-shrink-0" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+              {WIZARD_STEPS[wizard].map((label, i) => (
+                <button key={i} type="button" onClick={() => setWizardStep(i)} className="flex-1 min-w-0 py-2 px-2 rounded-lg text-center text-xs font-medium transition-colors" style={{ color: wizardStep === i ? "var(--platform-accent)" : "var(--platform-fg-muted)", background: wizardStep === i ? "var(--platform-accent-dim)" : "transparent" }}>
+                  <span className="w-6 h-6 rounded-full mx-auto mb-1 flex items-center justify-center text-xs" style={{ background: wizardStep === i ? "var(--platform-accent)" : "var(--platform-surface)", color: wizardStep === i ? "var(--platform-bg)" : "var(--platform-fg-muted)" }}>{i + 1}</span>
+                  <span className="truncate block">{label}</span>
                 </button>
               ))}
             </div>
-          </section>
 
-          {/* Acciones */}
-          <div className="flex flex-wrap gap-3">
-            <Button type="button" disabled={saving} className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric}>
-              {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              {editingId ? "Guardar cambios" : "Crear métrica"}
-            </Button>
-            <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={closeForm}>
-              Cancelar
-            </Button>
+            {/* Panel content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {/* Wizard A: Dataset */}
+              {wizard === "A" && wizardStep === 0 && (
+                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Dataset — Datos del ETL</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Confirmá que usás la tabla y columnas correctas para esta métrica.</p>
+                  <div className="grid gap-4 sm:grid-cols-2 mb-4">
+                    <div><p className="text-xs font-medium uppercase" style={{ color: "var(--platform-fg-muted)" }}>ETL</p><p className="font-medium" style={{ color: "var(--platform-fg)" }}>{etlTitle}</p></div>
+                    <div><p className="text-xs font-medium uppercase" style={{ color: "var(--platform-fg-muted)" }}>Tabla</p><p className="font-mono text-sm" style={{ color: "var(--platform-fg)" }}>{data?.schema}.{data?.tableName}</p></div>
+                    <div><p className="text-xs font-medium uppercase" style={{ color: "var(--platform-fg-muted)" }}>Filas</p><p className="font-medium" style={{ color: "var(--platform-fg)" }}>{data?.rowCount ?? 0}</p></div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase mb-2" style={{ color: "var(--platform-fg-muted)" }}>Columnas disponibles</p>
+                    <div className="flex flex-wrap gap-2">
+                      {fields.map((f) => (
+                        <span key={f} className="px-2 py-1 rounded text-xs" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)", border: "1px solid var(--platform-border)" }}>{f}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-6 flex justify-end">
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Métrica →</Button>
+                  </div>
+                </section>
+              )}
+
+              {/* Wizard B: Identidad */}
+              {wizard === "B" && wizardStep === 0 && (
+                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Identidad — Nombre de la métrica</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Nombre único para reutilizar en dashboards.</p>
+                  <div>
+                    <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Nombre *</Label>
+                    <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Ej. Ventas totales" className="rounded-xl max-w-md" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }} />
+                  </div>
+                  <div className="mt-6 flex justify-between">
+                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente →</Button>
+                  </div>
+                </section>
+              )}
+
+              {/* Wizard B: Cálculo (métricas) - reuse existing metrics UI */}
+              {wizard === "B" && wizardStep === 1 && (
+                <section className="rounded-xl border p-6 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Cálculo — Métricas y agregaciones</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Definí las métricas (campo, función, alias) o fórmulas.</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Métricas</Label>
+                    <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" onClick={() => setFormMetrics((m) => [...m, { id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: "valor" }])}>+ Añadir métrica</Button>
+                  </div>
+                  <div className="space-y-3">
+                    {formMetrics.map((m, i) => (
+                      <div key={m.id} className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <div className="flex gap-2 items-center">
+                          <select value={m.func} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: e.target.value } : mm))} className="flex-1 h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                            {AGG_FUNCS.map((f) => (<option key={f.value} value={f.value}>{f.label}</option>))}
+                          </select>
+                          {formMetrics.length > 1 && (
+                            <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormMetrics((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
+                          )}
+                        </div>
+                        {m.func !== "FORMULA" && (
+                          <AdminFieldSelector label="Campo" value={m.field} onChange={(v) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, field: v } : mm))} etlData={etlData} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." className="[&_button]:!bg-[var(--platform-bg)] [&_button]:!border-[var(--platform-border)] [&_button]:!text-[var(--platform-fg)]" />
+                        )}
+                        {m.func === "FORMULA" && (
+                          <div className="space-y-2">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Fórmula (metric_0, metric_1…)</Label>
+                            <div className="flex flex-wrap gap-1 mb-2">
+                              {FORMULA_QUICKS.map(({ label, expr }) => (
+                                <button key={label} type="button" onClick={() => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: expr } : mm))} className="px-2 py-1 rounded text-xs border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{label}</button>
+                              ))}
+                            </div>
+                            <Input value={m.formula ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: e.target.value } : mm))} placeholder="Ej. metric_0 / NULLIF(metric_1, 0)" className="font-mono text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          </div>
+                        )}
+                        <div>
+                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias</Label>
+                          <Input value={m.alias} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, alias: e.target.value } : mm))} placeholder="Ej. total_ventas" className="h-8 text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-6 flex justify-between">
+                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente →</Button>
+                  </div>
+                </section>
+              )}
+
+              {/* Wizard B: Filtros base */}
+              {wizard === "B" && wizardStep === 2 && (
+                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Filtros base (opcional)</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Filtros que se aplican siempre a esta métrica.</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Filtros</Label>
+                    <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} onClick={() => setFormFilters((f) => [...f, { id: `f-${Date.now()}`, field: fields[0] ?? "", operator: "=", value: "" }])}>+ Añadir filtro</Button>
+                  </div>
+                  {formFilters.length > 0 && (
+                    <div className="space-y-2">
+                      {formFilters.map((f, i) => (
+                        <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                          <select value={f.field} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs min-w-[100px] appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>{fields.map((name) => (<option key={name} value={name}>{name}</option>))}</select>
+                          <select value={f.operator} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs w-20 appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>{["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => (<option key={op} value={op}>{op}</option>))}</select>
+                          <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-6 flex justify-between">
+                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Análisis →</Button>
+                  </div>
+                </section>
+              )}
+
+              {/* Wizard C: Dimensiones */}
+              {wizard === "C" && wizardStep === 0 && (
+                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Dimensiones (opcional)</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Agrupar por una o dos dimensiones. Para un KPI total podés dejar vacío.</p>
+                  <div className="space-y-4">
+                    <div>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Agrupar por (dimensión)</Label>
+                      <AdminFieldSelector label="" value={formDimension} onChange={setFormDimension} etlData={etlData} fieldType="all" placeholder="Ninguna..." className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]" />
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Segunda dimensión (opcional)</Label>
+                      <AdminFieldSelector label="" value={formDimension2} onChange={setFormDimension2} etlData={etlData} fieldType="all" placeholder="Ninguna..." className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]" />
+                    </div>
+                  </div>
+                  <div className="mt-6 flex justify-between">
+                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente →</Button>
+                  </div>
+                </section>
+              )}
+
+              {/* Wizard C: Orden y límite */}
+              {wizard === "C" && wizardStep === 1 && (
+                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Orden y límite</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Ordenar por y límite de filas del resultado.</p>
+                  <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Ordenar por</Label>
+                        <select value={formOrderBy?.field ?? ""} onChange={(e) => setFormOrderBy((prev) => ({ field: e.target.value, direction: prev?.direction ?? "DESC" }))} className="w-full h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                          <option value="">—</option>
+                          {[...(formDimension ? [formDimension] : []), ...(formDimension2 ? [formDimension2] : []), ...fields].filter(Boolean).map((f) => (<option key={f} value={f}>{f}</option>))}
+                        </select>
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Sentido</Label>
+                        <select value={formOrderBy?.direction ?? "DESC"} onChange={(e) => setFormOrderBy((prev) => prev ? { ...prev, direction: e.target.value as "ASC" | "DESC" } : { field: "", direction: "DESC" })} className="w-full h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                          <option value="DESC">Descendente</option>
+                          <option value="ASC">Ascendente</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Límite (filas)</Label>
+                      <Input type="number" min={1} max={1000} value={formLimit ?? ""} onChange={(e) => setFormLimit(e.target.value ? parseInt(e.target.value, 10) : undefined)} className="max-w-[120px] h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} placeholder="100" />
+                    </div>
+                  </div>
+                  <div className="mt-6 flex justify-between">
+                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente →</Button>
+                  </div>
+                </section>
+              )}
+
+              {/* Wizard C: Vista previa (tabla) */}
+              {wizard === "C" && wizardStep === 2 && (
+                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Vista previa de datos</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Datos agregados con la configuración actual (dimensión, métricas, filtros, orden y límite).</p>
+                  <div className="flex flex-wrap items-center gap-2 mb-4">
+                    <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
+                      {previewLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                      Actualizar vista previa
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" className="rounded-xl text-xs" style={{ color: "var(--platform-fg-muted)" }} onClick={() => fetchData()} disabled={loading}>Recargar datos del ETL</Button>
+                  </div>
+                  {previewData && previewData.length > 0 && (
+                    <div className="overflow-hidden rounded-xl border shadow-sm mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                      <div className="overflow-auto max-h-[300px]">
+                        <table className="w-full text-sm" style={{ color: "var(--platform-fg)" }}>
+                          <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
+                            <tr>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left px-4 py-2 font-medium whitespace-nowrap">{k}</th>))}</tr>
+                          </thead>
+                          <tbody style={{ background: "var(--platform-bg-elevated)" }}>
+                            {previewData.map((row, idx) => (
+                              <tr key={idx} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
+                                {Object.values(row).map((v, i) => (<td key={i} className="px-4 py-2 whitespace-nowrap">{String(v ?? "")}</td>))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <p className="text-xs px-4 py-2 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-surface)" }}>{previewData.length} filas</p>
+                    </div>
+                  )}
+                  <div className="mt-6 flex justify-between">
+                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Gráfico →</Button>
+                  </div>
+                </section>
+              )}
+
+              {/* Wizard D: Tipo visual */}
+              {wizard === "D" && wizardStep === 0 && (
+                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Tipo de visual</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Elegí cómo ver la métrica. Se elige al usarla en el dashboard; esto es solo vista previa.</p>
+                  <section className="rounded-xl border p-4 mb-4" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
+                    <div className="flex items-start gap-2">
+                      <Sparkles className="h-5 w-5 shrink-0 mt-0.5" style={{ color: "var(--platform-accent)" }} />
+                      <p className="text-sm" dangerouslySetInnerHTML={{ __html: recommendationText.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
+                    </div>
+                  </section>
+                  <div className="flex flex-wrap gap-2">
+                    {CHART_TYPES.map(({ value, label, icon: Icon }) => (
+                      <button key={value} type="button" onClick={() => setFormChartType(value)} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all" style={{ background: formChartType === value ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: formChartType === value ? "var(--platform-bg)" : "var(--platform-fg-muted)" }}>
+                        <Icon className="h-4 w-4" /> {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-6 flex justify-between">
+                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente →</Button>
+                  </div>
+                </section>
+              )}
+
+              {/* Wizard D: Mapeo (resumen) */}
+              {wizard === "D" && wizardStep === 1 && (
+                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Mapeo de campos</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Resumen: qué columnas se usan como dimensión y métricas.</p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <p className="text-xs font-medium uppercase mb-1" style={{ color: "var(--platform-fg-muted)" }}>Dimensión / Eje X</p>
+                      <p className="font-medium" style={{ color: "var(--platform-fg)" }}>{formDimension || "— (KPI)"}</p>
+                      {formDimension2 && <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>2ª: {formDimension2}</p>}
+                    </div>
+                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <p className="text-xs font-medium uppercase mb-1" style={{ color: "var(--platform-fg-muted)" }}>Métricas / Eje Y</p>
+                      <p className="font-medium" style={{ color: "var(--platform-fg)" }}>{formMetrics.map((m) => m.alias || m.field || "—").join(", ") || "—"}</p>
+                    </div>
+                  </div>
+                  <div className="mt-6 flex justify-between">
+                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente →</Button>
+                  </div>
+                </section>
+              )}
+
+              {/* Wizard D: Vista previa gráfico + Guardar */}
+              {wizard === "D" && wizardStep === 2 && (
+                <section className="rounded-xl border p-6 space-y-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Vista previa y guardar</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Vista previa del gráfico con los datos actuales. Guardá la métrica para usarla en dashboards.</p>
+                  {previewData && previewData.length > 0 && (
+                    <>
+                      <div className="rounded-xl border p-4 shadow-sm" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Gráfico (vista previa)</p>
+                        {formChartType === "kpi" && previewKpiValue != null && (
+                          <div className="flex items-center justify-center min-h-[100px]">
+                            <span className="text-3xl font-bold tabular-nums" style={{ color: "var(--platform-fg)" }}>{previewKpiValue}</span>
+                          </div>
+                        )}
+                        {formChartType === "table" && (
+                          <div className="overflow-auto max-h-[200px] text-sm">
+                            <table className="w-full">
+                              <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left py-2 px-3 font-medium">{k}</th>))}</tr></thead>
+                              <tbody style={{ color: "var(--platform-fg)" }}>{previewData.slice(0, 5).map((row, idx) => (
+                                <tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{Object.values(row).map((v, i) => (<td key={i} className="py-2 px-3">{String(v ?? "")}</td>))}</tr>
+                              ))}</tbody>
+                            </table>
+                          </div>
+                        )}
+                        {previewChartConfig && formChartType !== "kpi" && formChartType !== "table" && (
+                          <div className="h-[240px] w-full" style={{ color: "var(--platform-fg)" }}>
+                            {formChartType === "bar" && <Bar data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } } } }} />}
+                            {formChartType === "horizontalBar" && <Bar data={previewChartConfig} options={{ indexAxis: "y" as const, responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 12 } } } }} />}
+                            {formChartType === "line" && <Line data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } } } }} />}
+                            {formChartType === "pie" && <Pie data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: "right" } } }} />}
+                            {formChartType === "doughnut" && <Doughnut data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: "right" } } }} />}
+                            {(formChartType === "combo" || !["bar", "horizontalBar", "line", "pie", "doughnut", "kpi", "table"].includes(formChartType)) && <Bar data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } } } }} />}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                  <div className="flex justify-between items-center">
+                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
+                    <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>
+                      {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                      {editingId ? "Guardar cambios" : "Crear métrica"}
+                    </Button>
+                  </div>
+                </section>
+              )}
+            </div>
           </div>
         </div>
       )}
