@@ -458,8 +458,148 @@ export async function POST(req: NextRequest) {
 
           const conn1Type = (conn1.type || "").toLowerCase();
           const conn2Type = (conn2.type || "").toLowerCase();
-          if (conn1Type === "firebird" || conn2Type === "firebird") {
-            throw new Error("Vista previa JOIN con Firebird no disponible. Usá dos conexiones Postgres para previsualizar el JOIN.");
+          const useInMemoryJoin = conn1Type === "firebird" || conn2Type === "firebird";
+
+          if (useInMemoryJoin) {
+            // Vista previa JOIN en memoria: traer filas de cada conexión (Firebird o Postgres) y unir en Node
+            const { leftTable, rightTable } = joinConf;
+            const jc = joinConf.joinConditions?.[0];
+            const leftCol = jc?.leftColumn ?? "";
+            const rightCol = jc?.rightColumn ?? "";
+            const joinType = (jc?.joinType || "INNER").toUpperCase();
+            const leftConditions = (body.filter?.conditions || [])
+              .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
+              .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^primary\./i, "").trim() }));
+            const rightConditions = (body.filter?.conditions || [])
+              .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
+              .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
+
+            const fetchFromConn = async (
+              conn: any,
+              tableName: string,
+              columns: string[] | undefined,
+              conditions: FilterCondition[]
+            ): Promise<Record<string, any>[]> => {
+              const connType = (conn.type || "").toLowerCase();
+              const limit = Math.min(PREVIEW_LIMIT, 500);
+              const normalize = (row: Record<string, any>) => {
+                const out: Record<string, any> = {};
+                for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
+                return out;
+              };
+              if (connType === "firebird") {
+                const password = conn.db_password_encrypted ? decryptConnectionPassword(conn.db_password_encrypted) : conn.db_password ?? "";
+                const tablePart = tableName.includes(".") ? (tableName.split(".").pop() || tableName.trim()).trim().toUpperCase() : tableName.trim().toUpperCase();
+                const { clause, params } = buildWhereClauseFirebird(conditions.filter((c) => (c.column ?? "").trim() !== ""));
+                const escapeFbLiteral = (v: any): string => {
+                  if (v == null) return "NULL";
+                  if (typeof v === "boolean") return v ? "1" : "0";
+                  if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${String(v)}' AS DOUBLE PRECISION)`;
+                  return `'${String(v).replace(/'/g, "''")}'`;
+                };
+                let clauseInlined = clause;
+                for (const p of params) {
+                  const pos = clauseInlined.indexOf("?");
+                  if (pos === -1) break;
+                  clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
+                }
+                const Firebird = require("node-firebird");
+                const opts = { host: conn.db_host || "localhost", port: conn.db_port ?? 15421, database: conn.db_name, user: conn.db_user, password: password || "", lowercase_keys: false };
+                return new Promise((resolve, reject) => {
+                  const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
+                  Firebird.attach(opts, (err: Error | null, db: any) => {
+                    if (err) { clearTimeout(t); return reject(err); }
+                    db.query(`SELECT FIRST ${limit} * FROM ${tablePart} ${clauseInlined}`.trim(), [], (qerr: Error | null, rows: any[]) => {
+                      clearTimeout(t);
+                      if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                      if (qerr) return reject(qerr);
+                      resolve((rows || []).map(normalize));
+                    });
+                  });
+                });
+              }
+              const pwd = await getPasswordFromSecret(conn.db_password_secret_id);
+              const dbUrl = `postgres://${conn.db_user}:${pwd}@${conn.db_host}:${conn.db_port}/${conn.db_name}?sslmode=require`;
+              const client = new PgClient({ connectionString: dbUrl });
+              await client.connect();
+              try {
+                const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
+                const { clause, params } = buildWhereClausePg(conditions);
+                const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause} ORDER BY 1 ASC LIMIT ${limit}`;
+                const res = await client.query(q, params);
+                return (res.rows || []).map(normalize);
+              } finally {
+                await client.end();
+              }
+            };
+
+            const leftRows = await fetchFromConn(conn1, leftTable, joinConf.leftColumns, leftConditions);
+            const rightRows = await fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions);
+
+            const findKey = (row: Record<string, any>, col: string) => {
+              const c = col.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+              if (row[c] !== undefined) return c;
+              for (const k of Object.keys(row)) if (k.toLowerCase() === c) return k;
+              return undefined;
+            };
+            const getVal = (row: Record<string, any>, col: string) => {
+              const k = findKey(row, col);
+              return k === undefined ? undefined : row[k];
+            };
+
+            const rightMap = new Map<string, Record<string, any>[]>();
+            for (const r of rightRows) {
+              const key = String(getVal(r, rightCol) ?? "");
+              if (!rightMap.has(key)) rightMap.set(key, []);
+              rightMap.get(key)!.push(r);
+            }
+
+            const leftCols = joinConf.leftColumns?.length ? joinConf.leftColumns : (leftRows[0] ? Object.keys(leftRows[0]) : []);
+            const rightCols = joinConf.rightColumns?.length ? joinConf.rightColumns : (rightRows[0] ? Object.keys(rightRows[0]) : []);
+
+            const prefixLeft = (row: Record<string, any>) => {
+              const out: Record<string, any> = {};
+              for (const col of leftCols) {
+                const k = findKey(row, col);
+                if (k !== undefined) out["primary_" + col] = row[k];
+              }
+              return out;
+            };
+            const prefixRight = (row: Record<string, any>) => {
+              const out: Record<string, any> = {};
+              for (const col of rightCols) {
+                const k = findKey(row, col);
+                if (k !== undefined) out["join_0_" + col] = row[k];
+              }
+              return out;
+            };
+
+            const joined: Record<string, any>[] = [];
+            for (const leftRow of leftRows) {
+              const leftKey = String(getVal(leftRow, leftCol) ?? "");
+              const matches = rightMap.get(leftKey) ?? [];
+              if (matches.length > 0) {
+                for (const rightRow of matches) joined.push({ ...prefixLeft(leftRow), ...prefixRight(rightRow) });
+              } else if (joinType === "LEFT" || joinType === "FULL") {
+                const rightNulls: Record<string, any> = {};
+                for (const col of rightCols) rightNulls["join_0_" + col] = null;
+                joined.push({ ...prefixLeft(leftRow), ...rightNulls });
+              }
+            }
+            if (joinType === "RIGHT" || joinType === "FULL") {
+              const matchedRightKeys = new Set<string>();
+              for (const leftRow of leftRows) matchedRightKeys.add(String(getVal(leftRow, leftCol) ?? ""));
+              for (const rightRow of rightRows) {
+                const rightKey = String(getVal(rightRow, rightCol) ?? "");
+                if (matchedRightKeys.has(rightKey)) continue;
+                const leftNulls: Record<string, any> = {};
+                for (const col of leftCols) leftNulls["primary_" + col] = null;
+                joined.push({ ...leftNulls, ...prefixRight(rightRow) });
+              }
+            }
+
+            if (joined.length) yield { rows: joined.slice(0, PREVIEW_LIMIT), query: `JOIN (${leftTable} + ${rightTable}) en memoria` };
+            return;
           }
 
           const pwd1 = await getPasswordFromSecret(conn1.db_password_secret_id);
