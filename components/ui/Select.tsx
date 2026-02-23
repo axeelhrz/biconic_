@@ -94,10 +94,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
     }, []);
 
     React.useEffect(() => {
-      if (!listboxOpen) {
-        setAnchorRect(null);
-        return;
-      }
+      if (!listboxOpen) return;
       updateAnchorRect();
       window.addEventListener("scroll", updateAnchorRect, true);
       window.addEventListener("resize", updateAnchorRect);
