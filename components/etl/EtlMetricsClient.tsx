@@ -219,6 +219,24 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     fetchData({ silent: true, sampleRows: 500 });
   }, [showForm, data?.hasData, rawTableData.length, fetchData]);
 
+  // Refrescar datos del ETL al entrar al paso Profiling (Dataset) para mostrar filas/columnas actualizadas
+  useEffect(() => {
+    if (wizard === "A" && wizardStep === 0 && showForm) {
+      fetchData({ silent: true, sampleRows: 500 });
+    }
+  }, [wizard, wizardStep, showForm, fetchData]);
+
+  // Refrescar al volver a la pestaña (p. ej. después de ejecutar el ETL en otra pestaña)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        fetchData({ silent: true, sampleRows: 500 });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [fetchData]);
+
   useEffect(() => {
     const allFields = data?.fields?.all ?? [];
     if (allFields.length > 0 && Object.keys(columnRoles).length === 0) {
