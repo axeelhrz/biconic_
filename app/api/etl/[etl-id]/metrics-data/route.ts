@@ -292,6 +292,25 @@ export async function GET(
       });
     }
 
+    const serviceClient = process.env.SUPABASE_SERVICE_ROLE_KEY ? createServiceRoleClient() : null;
+    // Si la resolución devolvió 0 filas (p. ej. por RLS en etl_output), reconsultar con service role para obtener conteo y muestra reales
+    if (resolved.rowCount === 0 && serviceClient) {
+      try {
+        const schemaForRepair = resolved.schema as "public" | "etl_output";
+        const schemaClientRepair = serviceClient.schema(schemaForRepair) as any;
+        const { count, error: countErr } = await schemaClientRepair
+          .from(resolved.tableName)
+          .select("*", { count: "exact", head: true });
+        if (!countErr && count != null && count > 0) {
+          resolved.rowCount = count;
+          const { data } = await schemaClientRepair.from(resolved.tableName).select("*").limit(500);
+          resolved.sampleData = data ?? [];
+        }
+      } catch {
+        // Mantener resolved como está
+      }
+    }
+
     let fields = deriveFieldsFromSample(resolved.sampleData);
     if (fields.all.length === 0 && (resolved as any).columnsFromConfig?.length) {
       const cols = (resolved as any).columnsFromConfig as string[];
@@ -308,9 +327,6 @@ export async function GET(
     const limitRows = sampleRows > 0 ? sampleRows : Math.max(1, 500);
 
     try {
-      const serviceClient = process.env.SUPABASE_SERVICE_ROLE_KEY
-        ? createServiceRoleClient()
-        : null;
       const clientToUse = serviceClient ?? supabase;
       const schemaClient = clientToUse.schema(schemaName) as any;
       const { count: realCount, error: countError } = await schemaClient
