@@ -768,11 +768,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: { ok?: boolean; error?: string; runId?: string; message?: string };
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { ok: false, error: text || `Error del servidor (${res.status})` };
+      }
       if (!res.ok || !data.ok) {
         throw new Error(data?.error || "Error al ejecutar ETL");
       }
-      setRunId(data.runId);
+      setRunId(data.runId ?? null);
       setRunSuccess(true);
       setRunning(false);
       toast.success("ETL completado. Redirigiendo a métricas…");

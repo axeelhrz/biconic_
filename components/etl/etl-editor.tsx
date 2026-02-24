@@ -8466,7 +8466,13 @@ function EndRunButton({
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data: { ok?: boolean; error?: string; runId?: string; message?: string };
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { ok: false, error: text || `Error del servidor (${res.status})` };
+      }
       if (!res.ok || !data.ok) {
         throw new Error(data?.error || "Error al ejecutar flujo");
       }
