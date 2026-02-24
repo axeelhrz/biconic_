@@ -717,6 +717,40 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     joinItems,
   ]);
 
+  const saveGuidedConfigToServer = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
+    let guidedConfig = buildGuidedConfigBody();
+    if (!guidedConfig) {
+      if (!options?.silent) toast.error("Completá al menos la conexión para guardar.");
+      return false;
+    }
+    // Persistir siempre la tabla seleccionada desde el estado
+    const tableToSave = (selectedTable ?? "")?.trim() || undefined;
+    if (tableToSave && typeof guidedConfig.filter === "object" && guidedConfig.filter !== null) {
+      guidedConfig = {
+        ...guidedConfig,
+        filter: { ...(guidedConfig.filter as Record<string, unknown>), table: tableToSave },
+      };
+    }
+    try {
+      const res = await fetch("/api/etl/save-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ etlId, guidedConfig }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        toast.error(data?.error || "Error al guardar");
+        return false;
+      }
+      if (!options?.silent) toast.success("Configuración guardada.");
+      return true;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Error al guardar";
+      toast.error(msg);
+      return false;
+    }
+  }, [etlId, buildGuidedConfigBody, selectedTable]);
+
   const handleRun = useCallback(async () => {
     if (!canRun || !connectionId || !selectedTable) return;
     setRunning(true);
@@ -752,40 +786,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const stepIndex = STEPS.findIndex((s) => s.id === step);
   const connectionName =
     connections.find((c) => String(c.id) === String(connectionId))?.title ?? "";
-
-  const saveGuidedConfigToServer = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
-    let guidedConfig = buildGuidedConfigBody();
-    if (!guidedConfig) {
-      if (!options?.silent) toast.error("Completá al menos la conexión para guardar.");
-      return false;
-    }
-    // Persistir siempre la tabla seleccionada desde el estado
-    const tableToSave = (selectedTable ?? "")?.trim() || undefined;
-    if (tableToSave && typeof guidedConfig.filter === "object" && guidedConfig.filter !== null) {
-      guidedConfig = {
-        ...guidedConfig,
-        filter: { ...(guidedConfig.filter as Record<string, unknown>), table: tableToSave },
-      };
-    }
-    try {
-      const res = await fetch("/api/etl/save-config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ etlId, guidedConfig }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        toast.error(data?.error || "Error al guardar");
-        return false;
-      }
-      if (!options?.silent) toast.success("Configuración guardada.");
-      return true;
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Error al guardar";
-      toast.error(msg);
-      return false;
-    }
-  }, [etlId, buildGuidedConfigBody, selectedTable]);
 
   /** Avanza al paso siguiente y guarda la configuración actual en el ETL (sin toast). Espera el guardado para que se persista el estado actual (tabla, columnas, etc.). */
   const goToStepAndSave = useCallback(
