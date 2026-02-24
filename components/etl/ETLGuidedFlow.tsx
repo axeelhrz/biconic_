@@ -725,6 +725,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setRunning(false);
       return;
     }
+    // Guardar toda la configuración antes de ejecutar para que layout tenga conexión, tabla, columnas, filtros, join/union, destino, etc.
+    await saveGuidedConfigToServer({ silent: true });
     const body = { etlId, ...guidedBody, waitForCompletion: true };
     try {
       const res = await fetch("/api/etl/run", {
@@ -745,7 +747,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       toast.error(e instanceof Error ? e.message : "Error al ejecutar");
       setRunning(false);
     }
-  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, etlId, router]);
+  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, saveGuidedConfigToServer, etlId, router]);
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
   const connectionName =
