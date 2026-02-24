@@ -335,7 +335,9 @@ async function executeEtlPipeline(
 
     let rowsProcessed = 0;
     const pageSize = 5000;
-    const INSERT_CHUNK_SIZE = 1000;
+    const INSERT_CHUNK_SIZE_DEFAULT = 1000;
+    /** Postgres limita ~65535 parámetros por query. chunkSize * numColumnas debe quedar por debajo. */
+    const MAX_PARAMS_PER_QUERY = 60000;
     let tableCreated = false;
 
     // Global count state
@@ -484,9 +486,15 @@ async function executeEtlPipeline(
       if (!dbUrlInsert) throw new Error("SUPABASE_DB_URL no encontrada.");
       const sqlInsert = postgres(dbUrlInsert);
 
+      const numColumns = batchToInsert[0] ? Object.keys(batchToInsert[0]).length : 1;
+      const insertChunkSize = Math.min(
+        INSERT_CHUNK_SIZE_DEFAULT,
+        Math.max(1, Math.floor(MAX_PARAMS_PER_QUERY / numColumns))
+      );
+
       try {
-        for (let i = 0; i < batchToInsert.length; i += INSERT_CHUNK_SIZE) {
-          const chunk = batchToInsert.slice(i, i + INSERT_CHUNK_SIZE);
+        for (let i = 0; i < batchToInsert.length; i += insertChunkSize) {
+          const chunk = batchToInsert.slice(i, i + insertChunkSize);
           if (chunk.length > 0) {
             await withRetry(
               () => sqlInsert`INSERT INTO etl_output.${sqlInsert(newTableName)} ${sqlInsert(chunk)}`,
