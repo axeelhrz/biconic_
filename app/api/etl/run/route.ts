@@ -613,16 +613,19 @@ async function executeEtlPipeline(
           (conn as any).db_password_encrypted
             ? decryptConnectionPassword((conn as any).db_password_encrypted)
             : (conn as any).db_password ?? "";
-        // Firebird: identificadores solo en mayúsculas/numéricos sin comillas evitan "Procedure unknown" / "Token unknown"
+        // Firebird: solo nombre de tabla (sin esquema en FROM evita -104 Token unknown en algunos entornos); SELECT * evita puntos en "primary.COL"
         const safePart = (s: string) => /^[A-Z0-9_]+$/i.test(s) ? s.toUpperCase() : `"${s.replace(/"/g, '""')}"`;
         const tablePart = tableToQuery.includes(".")
-          ? tableToQuery.split(".", 2).map((p) => safePart(p.trim())).join(".")
+          ? (tableToQuery.split(".").pop() || tableToQuery).trim().toUpperCase()
           : safePart(tableToQuery);
-        const cols =
-          body!.filter?.columns && body!.filter.columns.length
-            ? body!.filter.columns.map((c) => safePart((c || "").trim())).join(", ")
-            : "*";
-        const { clause, params } = buildWhereClauseFirebird(body!.filter?.conditions || []);
+        const cols = "*";
+        const firebirdConditions = (body!.filter?.conditions || [])
+          .map((c) => ({
+            ...c,
+            column: (c.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim(),
+          }))
+          .filter((c) => (c.column ?? "").length > 0);
+        const { clause, params } = buildWhereClauseFirebird(firebirdConditions);
         const Firebird = require("node-firebird");
         const opts = {
           host: conn.db_host || "localhost",
