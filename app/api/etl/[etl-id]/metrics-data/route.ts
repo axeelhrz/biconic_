@@ -64,7 +64,8 @@ function deriveFieldsFromSample(sampleData: any[]): FieldsInfo {
 
 async function resolveEtlToTableAndFields(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  etlId: string
+  etlId: string,
+  tableReader: Awaited<ReturnType<typeof createClient>> | Awaited<ReturnType<typeof createServiceRoleClient>> | null
 ): Promise<{
   schema: string;
   tableName: string;
@@ -103,7 +104,8 @@ async function resolveEtlToTableAndFields(
 
   const schema = latestRun.destination_schema || "etl_output";
   const tableName = latestRun.destination_table_name;
-  const schemaClient = supabase.schema(schema as "public" | "etl_output") as any;
+  const client = (schema === "etl_output" && tableReader) ? tableReader : supabase;
+  const schemaClient = client.schema(schema as "public" | "etl_output") as any;
   const { count, error: countError } = await schemaClient
     .from(tableName)
     .select("*", { count: "exact", head: true });
@@ -111,7 +113,7 @@ async function resolveEtlToTableAndFields(
   const rowCount = count ?? 0;
   let sampleData: any[] = [];
   if (rowCount > 0) {
-    const { data } = await schemaClient.from(tableName).select("*").limit(1);
+    const { data } = await schemaClient.from(tableName).select("*").limit(500);
     sampleData = data || [];
   }
   return {
@@ -126,7 +128,8 @@ async function resolveEtlToTableAndFields(
 /** Usa la tabla configurada en layout.guided_config.end.target.table */
 async function resolveFromGuidedConfig(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  layout: Record<string, unknown> | null
+  layout: Record<string, unknown> | null,
+  tableReader: Awaited<ReturnType<typeof createClient>> | Awaited<ReturnType<typeof createServiceRoleClient>> | null
 ): Promise<{
   schema: string;
   tableName: string;
@@ -135,25 +138,21 @@ async function resolveFromGuidedConfig(
   rowCount: number;
   columnsFromConfig?: string[];
 } | null> {
-  const end = layout?.guided_config && typeof layout.guided_config === "object"
-    ? (layout.guided_config as Record<string, unknown>).end as Record<string, unknown> | undefined
-    : undefined;
-  const target = end?.target && typeof end.target === "object"
-    ? end.target as Record<string, unknown>
-    : undefined;
+  const guided = layout?.guided_config && typeof layout.guided_config === "object" ? layout.guided_config as Record<string, unknown> : undefined;
+  const end = guided?.end && typeof guided.end === "object" ? guided.end as Record<string, unknown> : undefined;
+  const target = end?.target && typeof end.target === "object" ? end.target as Record<string, unknown> : undefined;
   const rawTable = target?.table;
   if (typeof rawTable !== "string" || !rawTable.trim()) return null;
   const tableName = rawTable.trim().replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
   if (!tableName) return null;
 
-  const filter = layout?.guided_config && typeof layout.guided_config === "object"
-    ? (layout.guided_config as Record<string, unknown>).filter as Record<string, unknown> | undefined
-    : undefined;
+  const filter = guided?.filter && typeof guided.filter === "object" ? guided.filter as Record<string, unknown> : undefined;
   const columnsFromConfig = Array.isArray(filter?.columns) ? (filter.columns as string[]) : undefined;
 
   for (const schemaName of ["etl_output", "public"]) {
     try {
-      const schemaClient = supabase.schema(schemaName as "public" | "etl_output") as any;
+      const client = (schemaName === "etl_output" && tableReader) ? tableReader : supabase;
+      const schemaClient = client.schema(schemaName as "public" | "etl_output") as any;
       const { count, error: countErr } = await schemaClient
         .from(tableName)
         .select("*", { count: "exact", head: true });
@@ -161,7 +160,7 @@ async function resolveFromGuidedConfig(
       const rowCount = count ?? 0;
       let sampleData: any[] = [];
       if (rowCount > 0) {
-        const { data } = await schemaClient.from(tableName).select("*").limit(1);
+        const { data } = await schemaClient.from(tableName).select("*").limit(500);
         sampleData = data || [];
       }
       return {
@@ -182,7 +181,8 @@ async function resolveFromGuidedConfig(
 /** Usa etl.output_table (tabla real creada en la última ejecución exitosa) */
 async function resolveFromOutputTable(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  outputTable: string
+  outputTable: string,
+  tableReader: Awaited<ReturnType<typeof createClient>> | Awaited<ReturnType<typeof createServiceRoleClient>> | null
 ): Promise<{
   schema: string;
   tableName: string;
@@ -194,7 +194,8 @@ async function resolveFromOutputTable(
   if (!tableName) return null;
   for (const schemaName of ["etl_output", "public"]) {
     try {
-      const schemaClient = supabase.schema(schemaName as "public" | "etl_output") as any;
+      const client = (schemaName === "etl_output" && tableReader) ? tableReader : supabase;
+      const schemaClient = client.schema(schemaName as "public" | "etl_output") as any;
       const { count, error: countErr } = await schemaClient
         .from(tableName)
         .select("*", { count: "exact", head: true });
@@ -202,7 +203,7 @@ async function resolveFromOutputTable(
       const rowCount = count ?? 0;
       let sampleData: any[] = [];
       if (rowCount > 0) {
-        const { data } = await schemaClient.from(tableName).select("*").limit(1);
+        const { data } = await schemaClient.from(tableName).select("*").limit(500);
         sampleData = data || [];
       }
       return {
@@ -260,16 +261,25 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "ETL no encontrado" }, { status: 404 });
     }
 
-    let resolved = await resolveEtlToTableAndFields(supabase, etlId);
+    let serviceClient: Awaited<ReturnType<typeof createServiceRoleClient>> | null = null;
+    try {
+      if (process.env.SUPABASE_SERVICE_ROLE_KEY) serviceClient = createServiceRoleClient();
+    } catch (_) {
+      // En Vercel/edge puede fallar si la key no está disponible
+    }
+    const tableReader = serviceClient;
+
+    let resolved = await resolveEtlToTableAndFields(supabase, etlId, tableReader);
     if (!resolved && (etlRow as { output_table?: string | null }).output_table) {
       resolved = await resolveFromOutputTable(
         supabase,
-        (etlRow as { output_table: string }).output_table
+        (etlRow as { output_table: string }).output_table,
+        tableReader
       );
     }
     if (!resolved) {
       const layout = (etlRow as { layout?: Record<string, unknown> }).layout;
-      resolved = await resolveFromGuidedConfig(supabase, layout ?? null);
+      resolved = await resolveFromGuidedConfig(supabase, layout ?? null, tableReader);
     }
 
     const etlInfo = { id: etlRow.id, title: (etlRow as any).title, name: (etlRow as any).name };
@@ -292,8 +302,7 @@ export async function GET(
       });
     }
 
-    const serviceClient = process.env.SUPABASE_SERVICE_ROLE_KEY ? createServiceRoleClient() : null;
-    // Si la resolución devolvió 0 filas (p. ej. por RLS en etl_output), reconsultar con service role para obtener conteo y muestra reales
+    // Si aun así hay 0 filas (p. ej. service role no disponible en edge), reconsultar con service role por las dudas
     if (resolved.rowCount === 0 && serviceClient) {
       try {
         const schemaForRepair = resolved.schema as "public" | "etl_output";
@@ -356,6 +365,31 @@ export async function GET(
           rawRows = resolved.sampleData;
         }
       }
+    }
+
+    // Normalizar claves de rawRows para que coincidan con fields.all (ej. primary_RAZONSOCIAL -> primary.RAZONSOCIAL) y la UI muestre los valores
+    const columnsFromConfig = (resolved as any).columnsFromConfig as string[] | undefined;
+    if (columnsFromConfig?.length && rawRows.length > 0 && fields.all.length > 0) {
+      const keyVariants = (col: string) => {
+        const withUnderscore = col.replace(/\./g, "_");
+        return [col, withUnderscore, withUnderscore.toLowerCase(), withUnderscore.toUpperCase()];
+      };
+      rawRows = rawRows.map((row: Record<string, unknown>) => {
+        const out: Record<string, unknown> = {};
+        for (const col of fields.all) {
+          let val: unknown = undefined;
+          for (const key of keyVariants(col)) {
+            if (row[key] !== undefined) { val = row[key]; break; }
+          }
+          if (val === undefined && typeof row === "object" && row !== null) {
+            for (const k of Object.keys(row)) {
+              if (k.replace(/\./g, "_").toLowerCase() === col.replace(/\./g, "_").toLowerCase()) { val = (row as any)[k]; break; }
+            }
+          }
+          out[col] = val ?? (row as any)[col];
+        }
+        return out;
+      });
     }
 
     return NextResponse.json({
