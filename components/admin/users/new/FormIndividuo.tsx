@@ -80,6 +80,7 @@ export function FormIndividuo({
                   { label: "Pasaporte", value: "pasaporte" },
                 ]}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -87,16 +88,24 @@ export function FormIndividuo({
         <Field label="Número de identificación">
           <Input
             placeholder="Ingrese"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("identificationNumber")}
           />
         </Field>
         <Field label="Nombre del cliente">
           <Input
             placeholder="Ingrese"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("individualFullName")}
           />
         </Field>
@@ -114,14 +123,14 @@ export function FormIndividuo({
                 value={value as any}
                 onChange={(val: string) => {
                     onChange(val);
-                    // Reset province when country changes
-                    setValue("province", ""); 
+                    setValue("province", "");
                     fetchProvinces(val);
                 }}
                 placeholder="Seleccione"
                 options={countries.map((c: any) => ({ label: c.name, value: c.id }))}
                 disabled={loadingCountries}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -139,6 +148,7 @@ export function FormIndividuo({
                 options={provinces.map((p: any) => ({ label: p.name, value: p.id }))}
                 disabled={!watchedCountry || loadingProvinces}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -146,26 +156,32 @@ export function FormIndividuo({
         <Field label="Capital / Ciudad">
           <Input
             placeholder="Ingrese ciudad"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("capital")}
           />
         </Field>
       </div>
 
-      {/* Dirección */}
       <div className="w-full">
         <Field label="Dirección">
           <Input
             placeholder="Ingrese"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("address")}
           />
         </Field>
       </div>
 
-      {/* Empresa a la cual pertenece + Email + Password */}
       <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-3">
         <Field label="Empresa a la cual pertenece">
           <Controller
@@ -178,6 +194,7 @@ export function FormIndividuo({
                 options={companyOptions}
                 disabled={loadingCompanies}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -185,8 +202,12 @@ export function FormIndividuo({
         <Field label="Email" error={errors.userEmail?.message as string}>
           <Input
             placeholder="Ingrese"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             type="email"
             {...register("userEmail", { required: "El email es requerido" })}
           />
@@ -197,8 +218,12 @@ export function FormIndividuo({
         >
           <PasswordInput
             placeholder="Digite la contraseña"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("userPassword", {
               required: "La contraseña es requerida",
             })}
