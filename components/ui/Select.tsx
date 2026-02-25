@@ -159,18 +159,20 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
               <Listbox.Options
                 static
                 className={cn(
-                  "fixed overflow-auto rounded-2xl border p-3 focus:outline-none",
-                  !canOpenDown ? "mb-2" : "mt-2",
+                  "overflow-auto rounded-2xl border p-3 focus:outline-none",
+                  disablePortal ? "absolute left-0 right-0 mt-2" : "fixed",
+                  !disablePortal && (!canOpenDown ? "mb-2" : "mt-2"),
                   optionsClassName
                 )}
                 style={{
                   zIndex: 9999,
-                  width: rect ? rect.width : buttonWidth || undefined,
+                  width: disablePortal ? undefined : (rect ? rect.width : buttonWidth || undefined),
                   minWidth: 200,
-                  maxWidth: 320,
-                  maxHeight: Math.max(120, panelMaxHeight),
-                  top: panelTop,
-                  left: rect ? rect.left : 0,
+                  maxWidth: disablePortal ? undefined : 320,
+                  maxHeight: disablePortal ? PANEL_MAX_HEIGHT : Math.max(120, panelMaxHeight),
+                  ...(disablePortal
+                    ? { top: "100%" }
+                    : { top: panelTop, left: rect ? rect.left : 0 }),
                   borderColor: "var(--platform-border)",
                   background: "var(--platform-surface)",
                   boxShadow: "0 10px 40px rgba(0,0,0,0.08)",
