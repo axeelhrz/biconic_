@@ -1088,8 +1088,16 @@ export async function POST(req: NextRequest) {
 
   } catch (err: any) {
     console.error("Error en Preview:", err);
+    let message = err?.message || "Error generando vista previa";
+    if (
+      typeof message === "string" &&
+      (message.includes("I/O error") || message.includes("trying to open file") || message.includes("open file"))
+    ) {
+      message =
+        "No se pudo abrir la base Firebird. Usá la ruta completa del archivo en el servidor (ej. /var/lib/firebird/data/fbcdistribuciones.fdb o C:\\datos\\fbcdistribuciones.fdb) o un alias configurado en el servidor Firebird. Revisá el campo «Path / Nombre de base» en la conexión.";
+    }
     return NextResponse.json(
-      { ok: false, error: err?.message || "Error generando vista previa" },
+      { ok: false, error: message },
       { status: 500 }
     );
   }

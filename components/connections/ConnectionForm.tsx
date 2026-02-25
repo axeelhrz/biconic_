@@ -340,7 +340,7 @@ export default function ConnectionForm({
                 <Input
                   type="text"
                   id="database"
-                  placeholder={isFirebird ? "Ej. fbcdistribuciones" : "Ingrese"}
+                  placeholder={isFirebird ? "Ruta en servidor: /ruta/a/base.fdb o alias" : "Ingrese"}
                   className="w-full h-10 px-[15px] bg-white border border-[#D9DCE3] rounded-full text-[16px] font-light text-[#555555] placeholder:font-light placeholder:text-[#555555] focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
                   {...register("database", {
                     required: "Ingrese la base de datos",

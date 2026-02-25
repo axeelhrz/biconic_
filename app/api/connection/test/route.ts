@@ -66,6 +66,8 @@ export async function POST(req: NextRequest) {
               friendly = "No se pudo conectar al servidor. Revisá que el host y el puerto sean correctos y que el servidor Firebird esté encendido y accesible.";
             } else if (msg.includes("EHOSTUNREACH") || msg.includes("ENETUNREACH")) {
               friendly = "No hay ruta hasta el servidor (red inalcanzable). Revisá que el Host sea exactamente: mngservicios.flexxus.com.ar (y no el path de la base). Si estás en una red local, el servidor Flexxus debe ser accesible desde tu red o VPN.";
+            } else if (msg.includes("I/O error") || msg.includes("trying to open file") || msg.includes("open file")) {
+              friendly = "No se pudo abrir la base Firebird. Usá la ruta completa del archivo en el servidor (ej. /var/lib/firebird/data/fbcdistribuciones.fdb o C:\\datos\\fbcdistribuciones.fdb) o un alias configurado en el servidor Firebird.";
             }
             resolve(
               NextResponse.json({ ok: false, error: friendly })
