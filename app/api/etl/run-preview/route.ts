@@ -670,19 +670,34 @@ export async function POST(req: NextRequest) {
           }
 
         } else if (body.connectionId) {
-          const { data: conn, error: connError } = await supabaseService
+          const connectionIdStr = String(body.connectionId);
+          let { data: conn, error: connError } = await supabaseAdmin
             .from("connections")
             .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
-            .eq("id", body.connectionId)
+            .eq("id", connectionIdStr)
             .single();
-          
+          const isFirebird = (conn as any)?.type === "firebird";
+          const missingFirebirdCreds = isFirebird && (!(conn as any)?.db_user?.trim() || (conn as any)?.db_password_encrypted == null);
+          if (!conn || missingFirebirdCreds) {
+            try {
+              const res = await supabaseService
+                .from("connections")
+                .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+                .eq("id", connectionIdStr)
+                .single();
+              if (res.data) {
+                conn = res.data;
+                connError = res.error ?? connError;
+              }
+            } catch (_) {
+              // service role no disponible o key no definida; seguir con conn del usuario
+            }
+          }
           if (conn) {
                console.log("[Preview] Connection found:", conn.id);
           }
-          
           if (connError) console.error("[Preview] Connection fetch error:", connError);
-  
-          if (!conn) throw new Error(`Conexión no encontrada: ${body.connectionId}`);
+          if (!conn) throw new Error(`Conexión no encontrada: ${connectionIdStr}`);
 
         let dbUrl: string;
         let tableToQuery = body.filter?.table;
@@ -748,8 +763,8 @@ export async function POST(req: NextRequest) {
             }
             const limit = Math.min(PREVIEW_LIMIT, 1000);
             const Firebird = require("node-firebird");
-            const fbUser = (conn as any).db_user ?? "";
-            if (!fbUser) throw new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión (usuario y contraseña).");
+            const fbUser = String((conn as any).db_user ?? "").trim();
+            if (!fbUser) throw new Error("La conexión Firebird no tiene usuario definido. Revisá que la conexión tenga usuario guardado. Si la creaste con usuario y contraseña, asegurate de que ENCRYPTION_KEY en el servidor sea la misma que cuando se creó.");
             const opts = {
               host: conn.db_host || "localhost",
               port: conn.db_port ? Number(conn.db_port) : 15421,
