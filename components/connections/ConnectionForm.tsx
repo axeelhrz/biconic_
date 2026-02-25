@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Building2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { DialogClose } from "../ui/dialog";
@@ -55,6 +55,11 @@ type ConnectionFormProps = {
   isProcessing?: boolean;
   currentImportId?: string | null;
   onProcessFinished?: () => void;
+  // Selector de cliente (admin): se muestra dentro del modal
+  clientOptions?: SelectOption[];
+  selectedClientId?: string;
+  onClientIdChange?: (clientId: string) => void;
+  clientsLoading?: boolean;
 };
 
 export default function ConnectionForm({
@@ -66,6 +71,10 @@ export default function ConnectionForm({
   isProcessing,
   currentImportId,
   onProcessFinished,
+  clientOptions,
+  selectedClientId = "",
+  onClientIdChange,
+  clientsLoading = false,
 }: ConnectionFormProps) {
   const {
     register,
@@ -186,6 +195,26 @@ export default function ConnectionForm({
         onSubmit={handleSubmit(onSubmitHandler)}
       >
         <div className="px-8 py-6 space-y-5">
+          {clientOptions && onClientIdChange && (
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                <Building2 className="h-4 w-4" />
+                Asignar a cliente
+              </label>
+              {clientsLoading ? (
+                <p className="text-sm py-2" style={{ color: "var(--platform-muted)" }}>Cargando clientes…</p>
+              ) : (
+                <Select
+                  value={selectedClientId}
+                  onChange={onClientIdChange}
+                  options={clientOptions}
+                  placeholder="Seleccionar cliente"
+                  disablePortal
+                />
+              )}
+            </div>
+          )}
+
           <div className="grid gap-5 sm:grid-cols-2">
             <div>
               <label htmlFor="type" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>

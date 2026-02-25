@@ -10,8 +10,7 @@ import ShareConnectionModal from "@/components/connection/ShareConnectionModal";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
-import { Select, type SelectOption } from "@/components/ui/Select";
-import { Building2 } from "lucide-react";
+import type { SelectOption } from "@/components/ui/Select";
 
 type ClientOption = { id: string; company_name: string };
 
@@ -496,30 +495,6 @@ export default function AdminNewConnectionDialog({
           {isProcessing ? "Procesando Conexión" : "Nueva Conexión"}
         </DialogTitle>
 
-        <div
-          className="rounded-xl border p-4 mb-4"
-          style={{
-            background: "var(--platform-bg-elevated)",
-            borderColor: "var(--platform-border)",
-          }}
-        >
-          <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>
-            <Building2 className="h-4 w-4" />
-            Asignar a cliente
-          </label>
-          {clientsLoading ? (
-            <p className="text-sm py-2" style={{ color: "var(--platform-muted)" }}>Cargando clientes…</p>
-          ) : (
-            <Select
-              value={selectedClientId}
-              onChange={setSelectedClientId}
-              options={clientOptions}
-              placeholder="Seleccionar cliente"
-              disablePortal
-            />
-          )}
-        </div>
-
         <ConnectionForm
           onExcelUpload={handleExcelUpload}
           isProcessing={isProcessing}
@@ -527,6 +502,10 @@ export default function AdminNewConnectionDialog({
           onProcessFinished={handleProcessFinished}
           onSubmit={handleSubmit}
           onTestConnection={handleTest}
+          clientOptions={clientOptions}
+          selectedClientId={selectedClientId}
+          onClientIdChange={setSelectedClientId}
+          clientsLoading={clientsLoading}
         />
         
       </DialogContent>
