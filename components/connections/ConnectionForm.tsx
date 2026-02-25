@@ -126,16 +126,16 @@ export default function ConnectionForm({
   }, [connectionType]);
 
   const inputClass =
-    "w-full h-11 px-4 bg-white border border-[#D9DCE3] rounded-lg text-[15px] text-[#1a1a1a] placeholder:text-[#94a3b8] focus:outline-none focus:ring-2 focus:ring-[#0F5F4C]/30 focus:border-[#0F5F4C] transition-colors";
+    "w-full h-11 px-4 bg-white border border-[#D9DCE3] rounded-lg text-[15px] text-[#555555] placeholder:text-[#9C9EA9] focus:outline-none focus:ring-2 focus:ring-[#0F5F4C]/25 focus:border-[#0F5F4C] transition-colors";
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-[#e2e8f0] w-full max-w-[640px] mx-auto overflow-hidden">
-      <div className="px-8 pt-8 pb-6 border-b border-[#e2e8f0] flex justify-between items-start gap-4">
+    <div className="bg-white rounded-xl shadow-sm border border-[#D9DCE3] w-full max-w-[640px] mx-auto overflow-hidden">
+      <div className="px-8 pt-8 pb-6 border-b border-[#D9DCE3] flex justify-between items-start gap-4 bg-[#fafbfc]">
         <div>
-          <h2 className="text-xl font-semibold text-[#0F172a] tracking-tight">
+          <h2 className="text-xl font-semibold text-[#0F5F4C] tracking-tight">
             Nueva conexión
           </h2>
-          <p className="mt-1 text-sm text-[#64748b]">
+          <p className="mt-1 text-sm text-[#66687E]">
             Configurá el tipo de base de datos y los datos de acceso.
           </p>
         </div>
@@ -143,7 +143,7 @@ export default function ConnectionForm({
           <button
             type="button"
             aria-label="Cerrar"
-            className="shrink-0 p-2 rounded-lg text-[#64748b] hover:bg-[#f1f5f9] hover:text-[#0F172a] transition-colors"
+            className="shrink-0 p-2 rounded-lg text-[#035664] hover:bg-[#0F5F4C]/10 hover:text-[#0F5F4C] transition-colors"
           >
             <svg width="18" height="18" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M1.5 13.5L13.5 1.5M1.5 1.5L13.5 13.5" />
@@ -159,7 +159,7 @@ export default function ConnectionForm({
         <div className="px-8 py-6 space-y-5">
           <div className="grid gap-5 sm:grid-cols-2">
             <div>
-              <label htmlFor="type" className="block text-sm font-medium text-[#334155] mb-1.5">
+              <label htmlFor="type" className="block text-sm font-medium text-[#66687E] mb-1.5">
                 Tipo
               </label>
               <div className="relative">
@@ -175,7 +175,7 @@ export default function ConnectionForm({
                   <option value="excel">Archivo Excel/CSV</option>
                 </select>
                 <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
-                  <svg className="h-5 w-5 text-[#94a3b8]" viewBox="0 0 20 20" fill="currentColor">
+                  <svg className="h-5 w-5 text-[#9C9EA9]" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
                   </svg>
                 </div>
@@ -185,7 +185,7 @@ export default function ConnectionForm({
               )}
             </div>
             <div>
-              <label htmlFor="connection-name" className="block text-sm font-medium text-[#334155] mb-1.5">
+              <label htmlFor="connection-name" className="block text-sm font-medium text-[#66687E] mb-1.5">
                 Nombre de la conexión
               </label>
               <Input
@@ -202,7 +202,7 @@ export default function ConnectionForm({
           </div>
 
         {isExcelMode && (
-          <div className="border-2 border-dashed border-[#e2e8f0] rounded-lg p-6 bg-[#f8fafc]">
+          <div className="border-2 border-dashed border-[#D9DCE3] rounded-lg p-6 bg-[#f5f7f9]">
             <div className="text-center">
               {isProcessing && currentImportId && onProcessFinished ? (
                 <ImportStatus
@@ -263,13 +263,13 @@ export default function ConnectionForm({
 
         {!isExcelMode && (
           <>
-            <div className="pt-2 border-t border-[#e2e8f0]">
-              <p className="text-xs font-medium text-[#64748b] uppercase tracking-wider mb-4">
+            <div className="pt-2 border-t border-[#D9DCE3]">
+              <p className="text-xs font-medium text-[#66687E] uppercase tracking-wider mb-4">
                 Datos del servidor
               </p>
               <div className="grid gap-5 sm:grid-cols-[1fr_120px]">
                 <div>
-                  <label htmlFor="host" className="block text-sm font-medium text-[#334155] mb-1.5">
+                  <label htmlFor="host" className="block text-sm font-medium text-[#66687E] mb-1.5">
                     Host
                   </label>
                   <Input
@@ -284,7 +284,7 @@ export default function ConnectionForm({
                   )}
                 </div>
                 <div>
-                  <label htmlFor="port" className="block text-sm font-medium text-[#334155] mb-1.5">
+                  <label htmlFor="port" className="block text-sm font-medium text-[#66687E] mb-1.5">
                     Puerto
                   </label>
                   <Input
@@ -307,7 +307,7 @@ export default function ConnectionForm({
 
             <div className="grid gap-5 sm:grid-cols-2">
               <div>
-                <label htmlFor="database" className="block text-sm font-medium text-[#334155] mb-1.5">
+                <label htmlFor="database" className="block text-sm font-medium text-[#66687E] mb-1.5">
                   {isFirebird ? "Path / Nombre de base" : "Base de datos"}
                 </label>
                 <Input
@@ -322,7 +322,7 @@ export default function ConnectionForm({
                 )}
               </div>
               <div>
-                <label htmlFor="user" className="block text-sm font-medium text-[#334155] mb-1.5">
+                <label htmlFor="user" className="block text-sm font-medium text-[#66687E] mb-1.5">
                   Usuario
                 </label>
                 <Input
@@ -339,7 +339,7 @@ export default function ConnectionForm({
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-[#334155] mb-1.5">
+              <label htmlFor="password" className="block text-sm font-medium text-[#66687E] mb-1.5">
                 Contraseña
               </label>
               <Input
@@ -359,11 +359,11 @@ export default function ConnectionForm({
 
         {/* Los botones ahora se ocultan durante el procesamiento del backend */}
         {!isProcessing && (
-          <div className="px-8 py-6 border-t border-[#e2e8f0] bg-[#f8fafc] flex flex-col-reverse sm:flex-row sm:justify-end sm:items-center gap-3">
+          <div className="px-8 py-6 border-t border-[#D9DCE3] bg-[#f5f7f9] flex flex-col-reverse sm:flex-row sm:justify-end sm:items-center gap-3">
             <DialogClose asChild>
               <button
                 type="button"
-                className="h-10 px-5 rounded-lg text-sm font-medium text-[#475569] bg-white border border-[#e2e8f0] hover:bg-[#f1f5f9] transition-colors"
+                className="h-10 px-5 rounded-lg text-sm font-medium text-[#035664] bg-white border border-[#D9DCE3] hover:bg-white hover:border-[#035664] transition-colors"
               >
                 Cancelar
               </button>
@@ -373,14 +373,14 @@ export default function ConnectionForm({
                 <button
                   type="button"
                   onClick={onTestHandler}
-                  className="h-10 px-5 rounded-lg text-sm font-medium text-[#0F5F4C] bg-white border border-[#0F5F4C] hover:bg-[#0F5F4C]/5 transition-colors"
+                  className="h-10 px-5 rounded-lg text-sm font-medium text-[#0F5F4C] bg-white border border-[#0F5F4C] hover:bg-[#0F5F4C]/10 transition-colors"
                 >
                   Probar conexión
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="h-10 px-6 rounded-lg text-sm font-medium text-white bg-[#0F5F4C] hover:bg-[#0d5343] disabled:opacity-70 transition-colors"
+                  className="h-10 px-6 rounded-lg text-sm font-medium text-white bg-[#19A180] hover:bg-[#0F5F4C] disabled:opacity-70 transition-colors"
                 >
                   {isSubmitting ? "Guardando..." : "Guardar"}
                 </button>
@@ -390,7 +390,7 @@ export default function ConnectionForm({
                 type="button"
                 onClick={handleExcelUpload}
                 disabled={!selectedFile || isUploading}
-                className="h-10 px-6 rounded-lg text-sm font-medium text-white bg-[#0F5F4C] hover:bg-[#0d5343] disabled:opacity-70 transition-colors"
+                className="h-10 px-6 rounded-lg text-sm font-medium text-white bg-[#19A180] hover:bg-[#0F5F4C] disabled:opacity-70 transition-colors"
               >
                 {isUploading ? "Subiendo..." : "Procesar archivo"}
               </button>
