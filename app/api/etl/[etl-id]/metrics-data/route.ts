@@ -82,7 +82,7 @@ async function fetchFromEtlOutputViaPostgres(
     const rowCount = Array.isArray(countRes) && countRes[0]?.c != null ? Number(countRes[0].c) : 0;
     if (rowCount === 0) return { rowCount: 0, rows: [] };
     const rowsRes = await sql.unsafe(
-      `SELECT * FROM etl_output."${safeTable}" LIMIT ${Math.min(500, Math.max(1, limit))}`
+      `SELECT * FROM etl_output."${safeTable}" LIMIT ${Math.min(200, Math.max(1, limit))}`
     );
     const rows = Array.isArray(rowsRes) ? rowsRes : [];
     return { rowCount, rows };
@@ -353,7 +353,7 @@ export async function GET(
 
     // etl_output suele no estar expuesto en la API de Supabase: leer vía Postgres directo si seguimos con 0 filas
     if (resolved.schema === "etl_output" && (resolved.rowCount === 0 || resolved.sampleData.length === 0)) {
-      const pgResult = await fetchFromEtlOutputViaPostgres(resolved.tableName, 500);
+      const pgResult = await fetchFromEtlOutputViaPostgres(resolved.tableName, 200);
       if (pgResult.rowCount > 0 || pgResult.rows.length > 0) {
         resolved.rowCount = pgResult.rowCount;
         resolved.sampleData = pgResult.rows;
@@ -373,7 +373,7 @@ export async function GET(
 
     const schemaName = resolved.schema as "public" | "etl_output";
     const tableName = resolved.tableName;
-    const limitRows = sampleRows > 0 ? sampleRows : Math.max(1, 500);
+    const limitRows = sampleRows > 0 ? Math.min(200, sampleRows) : 200;
 
     try {
       if (schemaName === "etl_output") {
