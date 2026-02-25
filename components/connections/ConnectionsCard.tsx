@@ -105,10 +105,20 @@ export interface Connection {
   };
 }
 
-const InfoField = ({ label, value }: { label: string; value: string }) => (
-  <div className="flex w-full flex-col items-start self-stretch gap-0.5">
-    <p className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--platform-muted)" }}>{label}</p>
-    <p className="text-sm font-medium truncate w-full" style={{ color: "var(--platform-fg)" }}>{value}</p>
+// Tipo con color por tecnología
+const typeStyle: Record<string, { bg: string; text: string }> = {
+  Firebird: { bg: "rgba(8, 205, 239, 0.18)", text: "#08CDEF" },
+  MySQL: { bg: "var(--platform-accent-dim)", text: "var(--platform-accent)" },
+  PostgreSQL: { bg: "rgba(100, 116, 139, 0.25)", text: "#94a3b8" },
+  Excel: { bg: "rgba(34, 197, 94, 0.2)", text: "#22c55e" },
+};
+const getTypeStyle = (t: string) => typeStyle[t] ?? { bg: "var(--platform-surface-hover)", text: "var(--platform-fg-muted)" };
+
+// Fila de detalle con label + valor
+const DetailRow = ({ label, value }: { label: string; value: string }) => (
+  <div className="flex flex-col gap-0.5">
+    <span className="text-[11px] font-medium uppercase tracking-widest opacity-70" style={{ color: "var(--platform-fg-muted)" }}>{label}</span>
+    <span className="truncate text-sm font-medium" style={{ color: "var(--platform-fg)" }} title={value}>{value}</span>
   </div>
 );
 
@@ -133,154 +143,167 @@ export default function ConnectionsCard({
   const supabase = createClient();
   const isFirebird = type === "Firebird";
 
-
-  const statusConfig: Record<Connection["status"], { bg: string; text: string }> = {
-    Conectado: { bg: "var(--platform-success-dim)", text: "var(--platform-success)" },
-    Desconectado: { bg: "var(--platform-surface-hover)", text: "var(--platform-fg-muted)" },
-    Error: { bg: "rgba(248,113,113,0.15)", text: "var(--platform-danger)" },
-    Procesando: { bg: "var(--platform-warning)/20", text: "var(--platform-warning)" },
+  const statusConfig: Record<Connection["status"], { bg: string; text: string; dot?: string }> = {
+    Conectado: { bg: "var(--platform-success-dim)", text: "var(--platform-success)", dot: "var(--platform-success)" },
+    Desconectado: { bg: "var(--platform-surface-hover)", text: "var(--platform-fg-muted)", dot: "var(--platform-muted)" },
+    Error: { bg: "rgba(248,113,113,0.15)", text: "var(--platform-danger)", dot: "var(--platform-danger)" },
+    Procesando: { bg: "rgba(251,191,36,0.2)", text: "var(--platform-warning)", dot: "var(--platform-warning)" },
   };
 
   const currentStatus = statusConfig[status] || statusConfig.Desconectado;
+  const typeStyling = getTypeStyle(type);
   const isProcessing = status === "Procesando" && !!dataTableId;
 
   return (
     <div
-      className="flex h-auto w-full flex-col items-start gap-5 rounded-2xl border p-5 transition-all duration-200 hover:shadow-lg"
+      className="group flex h-auto w-full flex-col overflow-hidden rounded-2xl border transition-all duration-200"
       style={{
         background: "var(--platform-surface)",
         borderColor: "var(--platform-border)",
-        boxShadow: "0 2px 12px rgba(0,0,0,0.15)",
+        boxShadow: "0 2px 16px rgba(0,0,0,0.12)",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "rgba(35, 227, 180, 0.35)";
-        e.currentTarget.style.boxShadow = "0 8px 28px rgba(0,0,0,0.25)";
+        e.currentTarget.style.borderColor = "rgba(35, 227, 180, 0.3)";
+        e.currentTarget.style.boxShadow = "0 12px 32px rgba(0,0,0,0.2)";
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.borderColor = "var(--platform-border)";
-        e.currentTarget.style.boxShadow = "0 2px 12px rgba(0,0,0,0.15)";
+        e.currentTarget.style.boxShadow = "0 2px 16px rgba(0,0,0,0.12)";
       }}
     >
-      <div className="flex w-full flex-row items-start gap-3 self-stretch">
-        <div
-          className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl"
-          style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}
-        >
-          <DatabaseIcon className="h-5 w-5" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h3 className="truncate text-base font-semibold" style={{ color: "var(--platform-fg)" }}>
-            {title}
-          </h3>
-          <p className="mt-0.5 text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-            {type}
-          </p>
-        </div>
-      </div>
+      {/* Barra superior de acento */}
+      <div className="h-1 w-full" style={{ background: "var(--platform-gradient)" }} />
 
-      <div className="flex w-full flex-col gap-2">
-        <div className="flex items-center gap-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-          <User className="h-3.5 w-3.5" />
-          <span className="font-medium">Creador:</span>
-          <span className="truncate">{connection.creator?.fullName || "Desconocido"}</span>
-        </div>
-
-        <div className="flex items-center gap-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-          <Building2 className="h-3.5 w-3.5" />
-          <span className="font-medium">Cliente:</span>
-          {connection.client ? (
-            <button
-              onClick={() => setAssignClientOpen(true)}
-              className="truncate text-left hover:underline"
-              style={{ color: "var(--platform-accent)" }}
+      <div className="flex flex-col gap-5 p-5">
+        {/* Header: título + tipo + estado */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl"
+              style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}
             >
-              {connection.client.companyName}
-            </button>
-          ) : (
-            <button
-              onClick={() => setAssignClientOpen(true)}
-              className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium hover:opacity-90"
-              style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
-            >
-              <Plus className="h-3 w-3" />
-              Asignar
-            </button>
-          )}
-        </div>
-      </div>
-
-      <span
-        className="inline-flex items-center rounded-lg px-2 py-1 text-xs font-medium"
-        style={{ background: currentStatus.bg, color: currentStatus.text }}
-      >
-        {status}
-      </span>
-
-      {/* Sección de detalles o PROGRESO */}
-      {isProcessing ? (
-          <div className="flex w-full flex-col items-start gap-4 self-stretch min-h-[100px] justify-center">
-             <ImportStatus 
-                dataTableId={dataTableId!} 
-                compact 
-                importStartedAt={connection.dataTableUpdatedAt}
-                onProcessFinished={() => onRefreshConnections?.()} 
-             />
+              <DatabaseIcon className="h-6 w-6" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="truncate text-lg font-semibold leading-tight" style={{ color: "var(--platform-fg)" }}>
+                {title}
+              </h3>
+              <span
+                className="mt-1.5 inline-block rounded-md px-2 py-0.5 text-xs font-medium"
+                style={{ background: typeStyling.bg, color: typeStyling.text }}
+              >
+                {type}
+              </span>
+            </div>
           </div>
-      ) : (
-        <div className="flex w-full flex-col items-start gap-4 self-stretch">
-            <InfoField label="Host" value={host} />
-            <InfoField label="Base de datos" value={databaseName} />
-            <InfoField label="Última sincronización" value={lastSync} />
+          <span
+            className="flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+            style={{ background: currentStatus.bg, color: currentStatus.text }}
+          >
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: currentStatus.dot ?? currentStatus.text }} />
+            {status}
+          </span>
         </div>
-      )}
 
-      <div className="mt-auto flex w-full flex-row items-center gap-2 self-stretch pt-2">
-        <button
-          type="button"
-          aria-label="Compartir conexión"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--platform-surface-hover)] disabled:opacity-30"
-          style={{ color: "var(--platform-fg-muted)" }}
-          onClick={() => setShareModalOpen(true)}
-          disabled={isProcessing}
-        >
-          <ShareIcon className="h-4 w-4" />
-        </button>
-        {isFirebird && (
+        {/* Creador + Cliente en una fila compacta */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <div className="flex items-center gap-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+            <User className="h-3.5 w-3.5 shrink-0 opacity-80" />
+            <span className="truncate">{connection.creator?.fullName || "—"}</span>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <Building2 className="h-3.5 w-3.5 shrink-0 opacity-80" style={{ color: "var(--platform-fg-muted)" }} />
+            {connection.client ? (
+              <button
+                onClick={() => setAssignClientOpen(true)}
+                className="truncate text-left font-medium transition-opacity hover:opacity-80"
+                style={{ color: "var(--platform-accent)" }}
+              >
+                {connection.client.companyName}
+              </button>
+            ) : (
+              <button
+                onClick={() => setAssignClientOpen(true)}
+                className="flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-opacity hover:opacity-90"
+                style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
+              >
+                <Plus className="h-3 w-3" />
+                Asignar cliente
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Bloque de detalles (Host, Base, Última sync) */}
+        {isProcessing ? (
+          <div className="min-h-[100px]">
+            <ImportStatus
+              dataTableId={dataTableId!}
+              compact
+              importStartedAt={connection.dataTableUpdatedAt}
+              onProcessFinished={() => onRefreshConnections?.()}
+            />
+          </div>
+        ) : (
+          <div
+            className="rounded-xl border p-4 space-y-4"
+            style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}
+          >
+            <DetailRow label="Host" value={host} />
+            <DetailRow label="Base de datos" value={databaseName} />
+            <DetailRow label="Última sincronización" value={lastSync} />
+          </div>
+        )}
+
+        {/* Acciones */}
+        <div className="flex items-center gap-2 border-t pt-4" style={{ borderColor: "var(--platform-border)" }}>
           <button
             type="button"
-            aria-label="Configurar tablas para ETL"
-            disabled={isProcessing}
+            aria-label="Compartir conexión"
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--platform-surface-hover)] disabled:opacity-30"
             style={{ color: "var(--platform-fg-muted)" }}
-            onClick={() => setTablesDialogOpen(true)}
-            title="Tablas para ETL"
+            onClick={() => setShareModalOpen(true)}
+            disabled={isProcessing}
           >
-            <Table2 className="h-4 w-4" />
+            <ShareIcon className="h-4 w-4" />
           </button>
-        )}
-        <button
-          type="button"
-          disabled={isProcessing}
-          className="flex h-9 flex-1 items-center justify-center rounded-xl border px-4 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]/30"
-          style={{
-            borderColor: "var(--platform-accent)",
-            color: "var(--platform-accent)",
-            background: "transparent",
-          }}
-          onClick={() => onConfigure?.(connection.id)}
-        >
-          Configurar
-        </button>
-        <button
-          type="button"
-          aria-label="Eliminar conexión"
-          disabled={isProcessing}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[rgba(248,113,113,0.12)] disabled:opacity-30"
-          style={{ color: "var(--platform-fg-muted)" }}
-          onClick={() => onDelete?.(connection.id, connection.title)}
-        >
-          <TrashIcon className="h-4 w-4" />
-        </button>
+          {isFirebird && (
+            <button
+              type="button"
+              aria-label="Configurar tablas para ETL"
+              disabled={isProcessing}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--platform-surface-hover)] disabled:opacity-30"
+              style={{ color: "var(--platform-fg-muted)" }}
+              onClick={() => setTablesDialogOpen(true)}
+              title="Tablas para ETL"
+            >
+              <Table2 className="h-4 w-4" />
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={isProcessing}
+            className="flex h-9 flex-1 items-center justify-center rounded-xl border px-4 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]/30"
+            style={{
+              borderColor: "var(--platform-accent)",
+              color: "var(--platform-accent)",
+              background: "transparent",
+            }}
+            onClick={() => onConfigure?.(connection.id)}
+          >
+            Configurar
+          </button>
+          <button
+            type="button"
+            aria-label="Eliminar conexión"
+            disabled={isProcessing}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[rgba(248,113,113,0.12)] disabled:opacity-30"
+            style={{ color: "var(--platform-fg-muted)" }}
+            onClick={() => onDelete?.(connection.id, connection.title)}
+          >
+            <TrashIcon className="h-4 w-4" />
+          </button>
+        </div>
       </div>
       <ConnectionTablesDialog
         open={tablesDialogOpen}
