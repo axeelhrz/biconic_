@@ -708,7 +708,7 @@ export async function POST(req: NextRequest) {
             const { data: meta } = await supabaseAdmin
               .from("data_tables")
               .select("physical_schema_name, physical_table_name")
-              .eq("connection_id", conn.id)
+              .eq("connection_id", String(conn.id ?? ""))
               .single();
             
             console.log("[Preview] Excel metadata:", meta);
