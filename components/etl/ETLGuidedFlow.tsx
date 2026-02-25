@@ -175,6 +175,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [outputMode, setOutputMode] = useState<"overwrite" | "append">("overwrite");
   const [loadingMeta, setLoadingMeta] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState<string | null>(null);
+  const [inferringTypes, setInferringTypes] = useState(false);
   const [running, setRunning] = useState(false);
   const [, setRunId] = useState<string | null>(null);
   const [runSuccess, setRunSuccess] = useState(false);
@@ -497,6 +498,49 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   useEffect(() => {
     if (selectedTable && !hasColumns && !loadingColumns) loadColumnsForTable();
   }, [selectedTable, hasColumns, loadColumnsForTable, loadingColumns]);
+
+  // Al entrar en "Columnas y tipos", inferir tipos desde los datos si hay columnas (por si se cargaron sin inferencia, p. ej. al editar ETL)
+  const didInferOnColumnasTiposRef = useRef<{ connectionId: string | number; table: string } | null>(null);
+  useEffect(() => {
+    if (step !== "columnas_tipos") {
+      didInferOnColumnasTiposRef.current = null;
+      return;
+    }
+    if (!connectionId || !selectedTable || !selectedTableInfo?.columns?.length) return;
+    const key = { connectionId: connectionId as string | number, table: selectedTable };
+    if (didInferOnColumnasTiposRef.current?.connectionId === key.connectionId && didInferOnColumnasTiposRef.current?.table === key.table) return;
+    const tableColumns = selectedTableInfo.columns as { name: string; dataType?: string; inferredType?: string }[];
+    const hasInferred = tableColumns.some((c) => c.inferredType != null);
+    if (hasInferred) {
+      didInferOnColumnasTiposRef.current = key;
+      return;
+    }
+    didInferOnColumnasTiposRef.current = key;
+    setInferringTypes(true);
+    fetch("/api/connection/infer-column-types", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionId, tableName: selectedTable }),
+    })
+      .then((res) => res.json())
+      .then((inferJson) => {
+        if (!inferJson.ok || !inferJson.columnTypes || typeof inferJson.columnTypes !== "object") return;
+        const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
+        const getInferred = (colName: string) =>
+          ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
+        const columnsWithInferred = tableColumns.map((c) => ({
+          ...c,
+          inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
+        }));
+        setTables((prev) =>
+          prev.map((t) =>
+            `${t.schema}.${t.name}` === selectedTable ? { ...t, columns: columnsWithInferred } : t
+          )
+        );
+      })
+      .catch((err) => console.warn("[ETL] Inferencia de tipos al entrar al paso:", err))
+      .finally(() => setInferringTypes(false));
+  }, [step, connectionId, selectedTable, selectedTableInfo?.columns, selectedTableInfo?.columns?.length]);
 
   // Reset transformación al cambiar conexión o tabla (no cuando acabamos de restaurar desde config)
   useEffect(() => {
@@ -1155,17 +1199,69 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         <section id="seccion-columnas-tipos" className={isEditorMode ? "mb-10 pb-8 border-b" : ""} style={isEditorMode ? { borderColor: "var(--platform-border)" } : undefined}>
         {(step === "columnas_tipos" || isEditorMode) && (
           <div className="space-y-6 max-w-4xl">
-            <div>
-              <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
-                2b. Columnas y tipos
-              </h3>
-              <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                Todas las columnas con su tipo inferido desde los datos (Fecha, Número, Texto). Definí nombre para mostrar y formato (como en Excel: fecha, número, moneda, porcentaje, texto) para que sea más legible.
-              </p>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
+                  2b. Columnas y tipos
+                </h3>
+                <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                  Todas las columnas con su tipo inferido desde los datos (Fecha, Número, Texto). Definí nombre para mostrar y formato (como en Excel: fecha, número, moneda, porcentaje, texto) para que sea más legible.
+                </p>
+              </div>
+              {(selectedTableInfo?.columns?.length ?? 0) > 0 && !loadingColumns && !inferringTypes && connectionId && selectedTable && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg"
+                  style={{ borderColor: "var(--platform-border)" }}
+                  onClick={() => {
+                    didInferOnColumnasTiposRef.current = null;
+                    setInferringTypes(true);
+                    fetch("/api/connection/infer-column-types", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ connectionId, tableName: selectedTable }),
+                    })
+                      .then((res) => res.json())
+                      .then((inferJson) => {
+                        if (!inferJson.ok || !inferJson.columnTypes || typeof inferJson.columnTypes !== "object") {
+                          toast.error(inferJson?.error ?? "No se pudieron inferir los tipos");
+                          return;
+                        }
+                        const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
+                        const getInferred = (colName: string) =>
+                          ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
+                        const tableColumns = selectedTableInfo!.columns as { name: string; dataType?: string; inferredType?: string }[];
+                        const columnsWithInferred = tableColumns.map((c) => ({
+                          ...c,
+                          inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
+                        }));
+                        setTables((prev) =>
+                          prev.map((t) =>
+                            `${t.schema}.${t.name}` === selectedTable ? { ...t, columns: columnsWithInferred } : t
+                          )
+                        );
+                        toast.success("Tipos actualizados desde los datos");
+                      })
+                      .catch((err) => {
+                        console.warn("[ETL] Refrescar tipos:", err);
+                        toast.error("Error al inferir tipos. Revisá la consola.");
+                      })
+                      .finally(() => setInferringTypes(false));
+                  }}
+                >
+                  <RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Refrescar tipos
+                </Button>
+              )}
             </div>
             {loadingColumns === selectedTable ? (
               <div className="flex items-center gap-2 text-sm rounded-xl border px-4 py-3" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
                 <Loader2 className="h-4 w-4 animate-spin" /> Cargando columnas…
+              </div>
+            ) : inferringTypes ? (
+              <div className="flex items-center gap-2 text-sm rounded-xl border px-4 py-3" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                <Loader2 className="h-4 w-4 animate-spin" /> Inferiendo tipos desde los datos…
               </div>
             ) : (selectedTableInfo?.columns?.length ?? 0) > 0 ? (
               <div className="rounded-xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
