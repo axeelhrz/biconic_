@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
+import { Table2 } from "lucide-react";
 
 const CONNECTION_TYPE_OPTIONS: SelectOption[] = [
   { value: "mysql", label: "MySQL" },
@@ -27,6 +28,8 @@ type ConnectionConfigDialogProps = {
   connectionId: string | null;
   mode?: "view" | "edit";
   onSaved?: () => void;
+  /** Al hacer clic en "Editar tablas", abre el diálogo de tablas (el padre cierra este y abre ese) */
+  onOpenTables?: (connectionId: string, connectionTitle: string, connectionType: string) => void;
 };
 
 type ConnectionRow = {
@@ -37,6 +40,7 @@ type ConnectionRow = {
   db_name: string | null;
   db_user: string | null;
   db_port: number | null;
+  connection_tables: string[] | null;
   updated_at: string;
   original_file_name?: string | null;
 };
@@ -59,6 +63,7 @@ export default function ConnectionConfigDialog({
   connectionId,
   mode = "edit",
   onSaved,
+  onOpenTables,
 }: ConnectionConfigDialogProps) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -95,7 +100,7 @@ export default function ConnectionConfigDialog({
     const supabase = createClient();
     supabase
       .from("connections")
-      .select("id, name, type, db_host, db_name, db_user, db_port, updated_at, original_file_name")
+      .select("id, name, type, db_host, db_name, db_user, db_port, connection_tables, updated_at, original_file_name")
       .eq("id", connectionId)
       .single()
       .then(({ data, error: err }) => {
@@ -310,6 +315,49 @@ export default function ConnectionConfigDialog({
                     Archivo
                   </label>
                   <p className="py-2.5 text-sm truncate" style={{ color: "var(--platform-fg)" }}>{conn.original_file_name}</p>
+                </div>
+              )}
+
+              {/* Tablas seleccionadas para ETL */}
+              {(conn.type === "firebird" || conn.type === "mysql" || conn.type === "postgres" || conn.type === "postgresql") && (
+                <div
+                  className="rounded-xl border p-4 space-y-3"
+                  style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}
+                >
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <h4 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--platform-fg)" }}>
+                      <Table2 className="h-4 w-4" style={{ color: "var(--platform-accent)" }} />
+                      Tablas para ETL
+                    </h4>
+                    {onOpenTables && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onOpenChange(false);
+                          onOpenTables(connectionId!, conn.name, conn.type);
+                        }}
+                        className="text-sm font-medium rounded-lg px-3 py-1.5 transition-opacity hover:opacity-90"
+                        style={{
+                          border: "1px solid var(--platform-accent)",
+                          color: "var(--platform-accent)",
+                          background: "transparent",
+                        }}
+                      >
+                        Editar tablas
+                      </button>
+                    )}
+                  </div>
+                  {Array.isArray(conn.connection_tables) && conn.connection_tables.length > 0 ? (
+                    <ul className="max-h-40 overflow-y-auto space-y-1 text-sm font-mono rounded-lg py-1" style={{ color: "var(--platform-fg-muted)" }}>
+                      {conn.connection_tables.map((t, i) => (
+                        <li key={i} className="truncate py-0.5" title={String(t)}>{String(t)}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm py-1" style={{ color: "var(--platform-fg-muted)" }}>
+                      Ninguna tabla seleccionada. En el ETL se listarán todas las disponibles. Usá &quot;Editar tablas&quot; para elegir cuáles incluir.
+                    </p>
+                  )}
                 </div>
               )}
 

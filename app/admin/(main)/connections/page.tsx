@@ -5,6 +5,7 @@ import AdminConnectionsGrid from "@/components/admin/AdminConnectionsGrid";
 import { Search, Plus } from "lucide-react";
 import AdminNewConnectionDialog from "@/components/admin/AdminNewConnectionDialog";
 import ConnectionConfigDialog from "@/components/admin/ConnectionConfigDialog";
+import ConnectionTablesDialog from "@/components/connections/ConnectionTablesDialog";
 import DeleteConnectionDialog from "@/components/connections/DeleteConnectionDialog";
 
 export default function AdminConnectionsPage() {
@@ -12,6 +13,10 @@ export default function AdminConnectionsPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [configDialogConnectionId, setConfigDialogConnectionId] = useState<string | null>(null);
   const [configDialogMode, setConfigDialogMode] = useState<"view" | "edit">("edit");
+  const [tablesDialogOpen, setTablesDialogOpen] = useState(false);
+  const [tablesDialogConnectionId, setTablesDialogConnectionId] = useState<string | null>(null);
+  const [tablesDialogTitle, setTablesDialogTitle] = useState("");
+  const [tablesDialogType, setTablesDialogType] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteTitle, setDeleteTitle] = useState<string | null>(null);
@@ -105,6 +110,25 @@ export default function AdminConnectionsPage() {
         mode={configDialogMode}
         onSaved={() => {
           setConfigDialogConnectionId(null);
+          window.location.reload();
+        }}
+        onOpenTables={(id, title, type) => {
+          setConfigDialogConnectionId(null);
+          setTablesDialogConnectionId(id);
+          setTablesDialogTitle(title);
+          setTablesDialogType(type);
+          setTablesDialogOpen(true);
+        }}
+      />
+
+      <ConnectionTablesDialog
+        open={tablesDialogOpen}
+        onOpenChange={setTablesDialogOpen}
+        connectionId={tablesDialogConnectionId}
+        connectionTitle={tablesDialogTitle}
+        connectionType={tablesDialogType}
+        onSaved={() => {
+          setTablesDialogOpen(false);
           window.location.reload();
         }}
       />

@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
       user: dbUser,
       password,
       port,
+      client_id: clientIdFromBody,
     } = body || {};
 
     if (!type || !connectionName || !host || !database || !dbUser) {
@@ -53,7 +54,9 @@ export async function POST(req: NextRequest) {
       portNum = normalizedType === "firebird" ? 15421 : 5432;
     }
 
-    const activeClientId = await getActiveClientId(supabase, currentUser.id);
+    const activeClientId = clientIdFromBody != null && clientIdFromBody !== ""
+      ? clientIdFromBody
+      : await getActiveClientId(supabase, currentUser.id);
     const passwordPlain = typeof password === "string" ? password : "";
     let db_password_encrypted: string | null = null;
     if (passwordPlain) {

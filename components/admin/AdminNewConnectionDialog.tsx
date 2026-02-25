@@ -10,6 +10,10 @@ import ShareConnectionModal from "@/components/connection/ShareConnectionModal";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
+import { Select, type SelectOption } from "@/components/ui/Select";
+import { Building2 } from "lucide-react";
+
+type ClientOption = { id: string; company_name: string };
 
 type AdminNewConnectionDialogProps = {
   open: boolean;
@@ -37,6 +41,28 @@ export default function AdminNewConnectionDialog({
   const [loadingTables, setLoadingTables] = useState(false);
   const [selectedTableKeys, setSelectedTableKeys] = useState<Set<string>>(new Set());
   const [tableSearchQuery, setTableSearchQuery] = useState("");
+  const [clients, setClients] = useState<ClientOption[]>([]);
+  const [clientsLoading, setClientsLoading] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState<string>("");
+
+  useEffect(() => {
+    if (!open) return;
+    setClientsLoading(true);
+    const supabase = createClient();
+    supabase
+      .from("clients")
+      .select("id, company_name")
+      .order("company_name", { ascending: true })
+      .then(({ data, error }) => {
+        if (!error && data) setClients(data as ClientOption[]);
+        setClientsLoading(false);
+      });
+  }, [open]);
+
+  const clientOptions: SelectOption[] = [
+    { value: "", label: "Ninguno" },
+    ...clients.map((c) => ({ value: c.id, label: c.company_name })),
+  ];
 
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
@@ -59,6 +85,7 @@ export default function AdminNewConnectionDialog({
           setTableSearchQuery("");
           setSavingTables(false);
           setConnectionNameCreated("");
+          setSelectedClientId("");
         }, 300);
       }
       onOpenChange(isOpen);
@@ -97,6 +124,7 @@ export default function AdminNewConnectionDialog({
           user: values.user.trim(),
           password: values.password || "",
           port: values.port != null ? Number(values.port) : undefined,
+          client_id: selectedClientId.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -188,7 +216,7 @@ export default function AdminNewConnectionDialog({
         );
       }
 
-      const activeClientId = await getActiveClientId(supabase, user.id);
+      const activeClientId = selectedClientId.trim() || (await getActiveClientId(supabase, user.id));
       const filePath = `${user.id}/${new Date().getTime()}.${fileExt}`;
 
       toast.info("Subiendo archivo de forma segura...");
@@ -467,6 +495,30 @@ export default function AdminNewConnectionDialog({
         <DialogTitle className="sr-only">
           {isProcessing ? "Procesando Conexión" : "Nueva Conexión"}
         </DialogTitle>
+
+        <div
+          className="rounded-xl border p-4 mb-4"
+          style={{
+            background: "var(--platform-bg-elevated)",
+            borderColor: "var(--platform-border)",
+          }}
+        >
+          <label className="flex items-center gap-2 text-sm font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>
+            <Building2 className="h-4 w-4" />
+            Asignar a cliente
+          </label>
+          {clientsLoading ? (
+            <p className="text-sm py-2" style={{ color: "var(--platform-muted)" }}>Cargando clientes…</p>
+          ) : (
+            <Select
+              value={selectedClientId}
+              onChange={setSelectedClientId}
+              options={clientOptions}
+              placeholder="Seleccionar cliente"
+              disablePortal
+            />
+          )}
+        </div>
 
         <ConnectionForm
           onExcelUpload={handleExcelUpload}

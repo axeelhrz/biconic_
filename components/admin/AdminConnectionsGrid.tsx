@@ -136,8 +136,6 @@ export default function AdminConnectionsGrid({
 
         const mapStatus = (importStatus?: string): Connection["status"] => {
           switch (importStatus) {
-            case "completed":
-            case "success": return "Conectado";
             case "failed":
             case "error": return "Error";
             case "pending":
@@ -146,7 +144,9 @@ export default function AdminConnectionsGrid({
             case "creating_table":
             case "inserting_rows":
               return "Procesando";
-            default: return "Desconectado";
+            default:
+              // Sin error ni en proceso = conexión disponible (usada en ETL, etc.)
+              return "Conectado";
           }
         };
 
