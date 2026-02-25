@@ -15,8 +15,8 @@ function FormFieldError({ message }: { message?: string }) {
       className="mt-1.5 flex items-center gap-2 rounded-lg border py-2 px-3 text-sm"
       style={{
         color: "var(--platform-danger)",
-        borderColor: "rgba(248, 113, 113, 0.35)",
-        background: "rgba(248, 113, 113, 0.08)",
+        borderColor: "rgba(248, 113, 113, 0.25)",
+        background: "var(--platform-surface)",
       }}
       role="alert"
     >
