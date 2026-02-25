@@ -40,12 +40,12 @@ const STEPS = [
 
 type StepId = (typeof STEPS)[number]["id"];
 
-/** Mapea data_type de BD a etiqueta legible para la UI. */
+/** Mapea data_type de BD o tipo inferido a etiqueta legible para la UI. */
 function dataTypeToLabel(dataType: string | undefined): "Fecha" | "Número" | "Texto" {
   if (!dataType) return "Texto";
   const d = String(dataType).toLowerCase();
-  if (["date", "timestamp", "timestamptz", "datetime", "time"].some((t) => d.includes(t))) return "Fecha";
-  if (["int", "integer", "bigint", "smallint", "numeric", "decimal", "float", "double", "real"].some((t) => d.includes(t))) return "Número";
+  if (d === "fecha" || ["date", "timestamp", "timestamptz", "datetime", "time"].some((t) => d.includes(t))) return "Fecha";
+  if (d === "número" || d === "numero" || ["int", "integer", "bigint", "smallint", "numeric", "decimal", "float", "double", "real"].some((t) => d.includes(t))) return "Número";
   return "Texto";
 }
 
@@ -56,6 +56,19 @@ const DATE_FORMAT_OPTIONS = [
   { value: "YYYY-MM-DD", label: "YYYY-MM-DD (ISO)" },
   { value: "DD-MM-YYYY", label: "DD-MM-YYYY" },
   { value: "DD MMM YYYY", label: "DD MMM YYYY" },
+];
+
+const NUMBER_FORMAT_OPTIONS = [
+  { value: "", label: "(por defecto)" },
+  { value: "general", label: "General" },
+  { value: "number", label: "Número" },
+  { value: "currency", label: "Moneda" },
+  { value: "percent", label: "Porcentaje" },
+];
+
+const TEXT_FORMAT_OPTIONS = [
+  { value: "", label: "(por defecto)" },
+  { value: "text", label: "Texto" },
 ];
 
 const NORMALIZE_OPTIONS = [
@@ -434,7 +447,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     setLoadingColumns(selectedTable);
     fetchMetadata(connectionId, selectedTable)
       .then((res) => res.json())
-      .then((data) => {
+      .then(async (data) => {
         if (!data.ok || !data.metadata?.tables?.length) {
           setLoadingColumns(null);
           return;
@@ -448,10 +461,28 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           return;
         }
         const cols = tableColumns.map((c: { name: string }) => c.name);
+        let columnsWithInferred = tableColumns as { name: string; dataType?: string; inferredType?: "Fecha" | "Número" | "Texto" }[];
+        try {
+          const inferRes = await fetch("/api/connection/infer-column-types", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ connectionId, tableName: selectedTable }),
+          });
+          const inferJson = await inferRes.json();
+          if (inferJson.ok && inferJson.columnTypes && typeof inferJson.columnTypes === "object") {
+            const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
+            columnsWithInferred = tableColumns.map((c: { name: string; dataType?: string }) => ({
+              ...c,
+              inferredType: ct[c.name] ?? (dataTypeToLabel(c.dataType) as "Fecha" | "Número" | "Texto"),
+            }));
+          }
+        } catch {
+          // Si falla la inferencia, se usa solo el tipo del esquema
+        }
         setTables((prev) =>
           prev.map((t) =>
             `${t.schema}.${t.name}` === selectedTable
-              ? { ...t, columns: tableColumns }
+              ? { ...t, columns: columnsWithInferred }
               : t
           )
         );
@@ -1126,7 +1157,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 2b. Columnas y tipos
               </h3>
               <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                Todas las columnas de la tabla con su tipo (Fecha, Número, Texto). Opcionalmente definí un nombre para mostrar y el formato de fechas para que sea más legible.
+                Todas las columnas con su tipo inferido desde los datos (Fecha, Número, Texto). Definí nombre para mostrar y formato (como en Excel: fecha, número, moneda, porcentaje, texto) para que sea más legible.
               </p>
             </div>
             {loadingColumns === selectedTable ? (
@@ -1142,17 +1173,20 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         <th className="text-left py-2 px-3 font-medium" style={{ color: "var(--platform-fg-muted)" }}>Columna</th>
                         <th className="text-left py-2 px-3 font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tipo</th>
                         <th className="text-left py-2 px-3 font-medium" style={{ color: "var(--platform-fg-muted)" }}>Nombre para mostrar</th>
-                        <th className="text-left py-2 px-3 font-medium" style={{ color: "var(--platform-fg-muted)" }}>Formato (fechas)</th>
+                        <th className="text-left py-2 px-3 font-medium" style={{ color: "var(--platform-fg-muted)" }}>Formato</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(selectedTableInfo?.columns ?? []).map((c: { name: string; dataType?: string }) => {
+                      {(selectedTableInfo?.columns ?? []).map((c: { name: string; dataType?: string; inferredType?: "Fecha" | "Número" | "Texto" }) => {
                         const disp = columnDisplay[c.name] ?? { label: "", format: "" };
-                        const isDate = dataTypeToLabel(c.dataType) === "Fecha";
+                        const tipo = dataTypeToLabel((c as { inferredType?: string }).inferredType ?? c.dataType);
+                        const isDate = tipo === "Fecha";
+                        const isNumber = tipo === "Número";
+                        const formatOptions = isDate ? DATE_FORMAT_OPTIONS : isNumber ? NUMBER_FORMAT_OPTIONS : TEXT_FORMAT_OPTIONS;
                         return (
                           <tr key={c.name} style={{ borderBottom: "1px solid var(--platform-border)" }}>
                             <td className="py-2 px-3 font-mono text-xs" style={{ color: "var(--platform-fg)" }}>{c.name}</td>
-                            <td className="py-2 px-3" style={{ color: "var(--platform-fg-muted)" }}>{dataTypeToLabel(c.dataType)}</td>
+                            <td className="py-2 px-3" style={{ color: "var(--platform-fg-muted)" }}>{tipo}</td>
                             <td className="py-1 px-2">
                               <Input
                                 value={disp.label}
@@ -1163,18 +1197,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               />
                             </td>
                             <td className="py-1 px-2">
-                              {isDate ? (
-                                <Select
-                                  value={disp.format}
-                                  onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), format: v } }))}
-                                  options={DATE_FORMAT_OPTIONS}
-                                  placeholder="Formato"
-                                  className="min-w-[140px]"
-                                  buttonClassName="h-8 text-sm rounded-lg"
-                                />
-                              ) : (
-                                <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>—</span>
-                              )}
+                              <Select
+                                value={disp.format}
+                                onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), format: v } }))}
+                                options={formatOptions}
+                                placeholder="Formato"
+                                className="min-w-[140px]"
+                                buttonClassName="h-8 text-sm rounded-lg"
+                              />
                             </td>
                           </tr>
                         );
