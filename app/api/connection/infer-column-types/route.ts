@@ -123,9 +123,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (!tableName) {
         return NextResponse.json({ ok: false, error: "tableName requerido para Firebird" }, { status: 400 });
       }
-      const tablePart = tableName.includes(".")
-        ? tableName.split(".", 2).map((s) => `"${s.replace(/"/g, '""')}"`).join(".")
-        : `"${tableName.replace(/"/g, '""')}"`;
+      // Firebird: usar solo el nombre de la relación (sin esquema) para evitar -204 "Table/Procedure unknown"
+      const tableNameOnly = tableName.includes(".") ? tableName.split(".").pop()!.trim() : tableName;
+      const relationName = /^[A-Z0-9_]+$/i.test(tableNameOnly) ? tableNameOnly.toUpperCase() : `"${tableNameOnly.replace(/"/g, '""')}"`;
       const Firebird = require("node-firebird");
       rows = await new Promise<Record<string, unknown>[]>((resolve, reject) => {
         const opts = {
@@ -141,7 +141,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             reject(errAttach);
             return;
           }
-          const sql = `SELECT * FROM ${tablePart} FETCH FIRST ? ROWS ONLY`;
+          const sql = `SELECT * FROM ${relationName} FETCH FIRST ? ROWS ONLY`;
           db.query(sql, [SAMPLE_LIMIT], (errQ: Error | null, r: any[]) => {
             if (db?.detach) db.detach(() => {});
             if (errQ) reject(errQ);
