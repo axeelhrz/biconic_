@@ -656,13 +656,22 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                             </tr>
                           </thead>
                           <tbody style={{ background: "var(--platform-bg)" }}>
-                            {(rawTableData.length > 0 ? rawTableData : []).map((row, idx) => (
-                              <tr key={idx} className="border-b last:border-b-0 hover:opacity-90" style={{ borderColor: "var(--platform-border)" }}>
-                                {fields.map((col) => (
-                                  <td key={col} className="px-3 py-1.5 whitespace-nowrap border-r last:border-r-0 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>{String((row as Record<string, unknown>)[col] ?? "")}</td>
-                                ))}
-                              </tr>
-                            ))}
+                            {(rawTableData.length > 0 ? rawTableData : []).map((row, idx) => {
+                              const r = row as Record<string, unknown>;
+                              const getCell = (col: string) => {
+                                if (r[col] !== undefined && r[col] !== null) return r[col];
+                                const colLower = col.toLowerCase();
+                                const key = Object.keys(r).find((k) => k.toLowerCase() === colLower);
+                                return key !== undefined ? r[key] : undefined;
+                              };
+                              return (
+                                <tr key={idx} className="border-b last:border-b-0 hover:opacity-90" style={{ borderColor: "var(--platform-border)" }}>
+                                  {fields.map((col) => (
+                                    <td key={col} className="px-3 py-1.5 whitespace-nowrap border-r last:border-r-0 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>{String(getCell(col) ?? "")}</td>
+                                  ))}
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>

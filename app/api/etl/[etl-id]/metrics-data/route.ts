@@ -463,11 +463,15 @@ export async function GET(
       fields = deriveFieldsFromSample(rawRows);
       if (fields.all.length === 0) fields = { all: selectedColumns, numeric: selectedColumns, string: selectedColumns, date: [] };
     } else {
-      // Normalizar claves de rawRows para que coincidan con fields.all (ej. primary_RAZONSOCIAL -> primary.RAZONSOCIAL)
       const columnsFromConfig = (resolved as any).columnsFromConfig as string[] | undefined;
       if (columnsFromConfig?.length && rawRows.length > 0 && fields.all.length > 0) {
         rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, fields.all));
       }
+    }
+
+    // Siempre normalizar claves de rawRows a fields.all para que la UI muestre valores (p. ej. Postgres devuelve minúsculas y fields puede ser mayúsculas)
+    if (fields.all.length > 0 && rawRows.length > 0) {
+      rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, fields.all));
     }
 
     return NextResponse.json({
