@@ -66,25 +66,43 @@ export default function AdminMetricsPage() {
   const etlsWithMetrics = etls.filter((e) => (e.savedMetrics?.length ?? 0) > 0);
 
   return (
-    <div className="flex w-full flex-col gap-8 p-8">
-      <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-[32px] font-semibold leading-[48px]" style={{ color: "var(--platform-fg)" }}>
-            Métricas (Admin)
-          </h1>
-          <p className="text-base font-normal leading-6" style={{ color: "var(--platform-fg-muted)" }}>
-            Gestioná métricas reutilizables por ETL y usalas como gráficos en los dashboards.
-          </p>
+    <div className="flex w-full flex-col min-h-0">
+      {/* Hero: mismo estilo que /admin/dashboard */}
+      <section
+        className="rounded-3xl border px-6 py-8 sm:px-8 sm:py-10 mb-8"
+        style={{
+          background: "linear-gradient(135deg, var(--platform-bg-elevated) 0%, var(--platform-surface) 50%)",
+          borderColor: "var(--platform-border)",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.04)",
+        }}
+      >
+        <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-4">
+            <div
+              className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl"
+              style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
+            >
+              <BarChart3 className="h-7 w-7" />
+            </div>
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" style={{ color: "var(--platform-fg)" }}>
+                Métricas
+              </h1>
+              <p className="mt-1 text-sm sm:text-base max-w-xl" style={{ color: "var(--platform-fg-muted)" }}>
+                Gestioná métricas reutilizables por ETL y usalas como gráficos en los dashboards.
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={() => setCreateOpen(true)}
+            className="shrink-0 rounded-xl font-semibold gap-2 h-12 px-6 shadow-lg hover:shadow-xl transition-all"
+            style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
+          >
+            <Plus className="h-5 w-5" />
+            Crear métrica
+          </Button>
         </div>
-        <Button
-          onClick={() => setCreateOpen(true)}
-          className="flex items-center gap-2 rounded-full px-6 font-medium hover:opacity-90"
-          style={{ color: "var(--platform-accent-fg)", background: "var(--platform-accent)" }}
-        >
-          <Plus className="h-5 w-5" />
-          Crear métrica
-        </Button>
-      </div>
+      </section>
 
       {createOpen && (
         <div
