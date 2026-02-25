@@ -906,7 +906,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                         <div className="flex gap-2 items-center">
                           <Select
                             value={m.func}
-                            onChange={(val) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: val } : mm))}
+                            onChange={(val: string) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: val } : mm))}
                             options={AGG_FUNCS}
                             placeholder="Función"
                             className="flex-1"
