@@ -43,6 +43,8 @@ function isDateLike(v: unknown): boolean {
   if (typeof v !== "string") return false;
   const s = String(v).trim();
   if (!s) return false;
+  // Códigos/IDs numéricos (solo dígitos y más de 4 caracteres) no son fechas
+  if (/^\d{5,}$/.test(s)) return false;
   // Solo considerar fecha si el string parece una fecha (evita "RIO NORTE 1", "CBA SUR", etc.)
   const looksLikeDateString =
     /^\d/.test(s) ||

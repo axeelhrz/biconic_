@@ -71,6 +71,12 @@ const TEXT_FORMAT_OPTIONS = [
   { value: "text", label: "Texto" },
 ];
 
+const TIPO_OPTIONS: { value: "Fecha" | "Número" | "Texto"; label: string }[] = [
+  { value: "Fecha", label: "Fecha" },
+  { value: "Número", label: "Número" },
+  { value: "Texto", label: "Texto" },
+];
+
 const NORMALIZE_OPTIONS = [
   { value: "", label: "(ninguna)" },
   { value: "trim", label: "Recortar espacios" },
@@ -118,8 +124,8 @@ export type GuidedConfig = {
     conditions?: Array<{ column: string; operator: string; value?: string }>;
     /** Columna usada en "Excluir filas" para cargar valores y marcar excluidos */
     excludeRowsColumn?: string;
-    /** Nombres para mostrar y formato por columna (ej. fecha: DD/MM/YYYY) */
-    columnDisplay?: Record<string, { label?: string; format?: string }>;
+    /** Nombres para mostrar, formato y tipo override por columna (ej. fecha: DD/MM/YYYY; type: Fecha|Número|Texto). */
+    columnDisplay?: Record<string, { label?: string; format?: string; type?: "Fecha" | "Número" | "Texto" }>;
   };
   union?: {
     left?: { connectionId?: string | number; filter?: { table?: string; columns?: string[]; conditions?: unknown[] } };
@@ -162,8 +168,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [tables, setTables] = useState<{ schema: string; name: string; columns: { name: string }[] }[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
-  /** Por cada columna: nombre para mostrar (alias) y formato de visualización (ej. DD/MM/YYYY para fechas). */
-  const [columnDisplay, setColumnDisplay] = useState<Record<string, { label: string; format: string }>>({});
+  /** Por cada columna: nombre para mostrar, formato y tipo (override manual). */
+  const [columnDisplay, setColumnDisplay] = useState<Record<string, { label: string; format: string; type?: "Fecha" | "Número" | "Texto" }>>({});
   const [conditions, setConditions] = useState<Array<{ column: string; operator: string; value?: string }>>([]);
   /** Excluir filas por valores: por cada columna, lista de valores a excluir (NOT IN) */
   const [excludedValues, setExcludedValues] = useState<Array<{ column: string; excluded: string[] }>>([]);
@@ -316,12 +322,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (notInConds.length > 0) setExcludedValues(notInConds.map((c: { column: string; value?: string }) => ({ column: c.column, excluded: (c.value ?? "").split(",").filter(Boolean) })));
     const excludeRowsCol = (filter as { excludeRowsColumn?: string })?.excludeRowsColumn ?? notInConds[0]?.column;
     if (excludeRowsCol && typeof excludeRowsCol === "string") setDistinctColumn(excludeRowsCol.trim());
-    const colDisp = (filter as { columnDisplay?: Record<string, { label?: string; format?: string }> })?.columnDisplay;
+    const colDisp = (filter as { columnDisplay?: Record<string, { label?: string; format?: string; type?: string }> })?.columnDisplay;
     if (colDisp && typeof colDisp === "object") {
-      const next: Record<string, { label: string; format: string }> = {};
+      const next: Record<string, { label: string; format: string; type?: "Fecha" | "Número" | "Texto" }> = {};
+      const validTypes = ["Fecha", "Número", "Texto"] as const;
       for (const [k, v] of Object.entries(colDisp)) {
-        if (v && (v.label !== undefined || v.format !== undefined))
-          next[k] = { label: v.label ?? "", format: v.format ?? "" };
+        if (v && (v.label !== undefined || v.format !== undefined || v.type !== undefined))
+          next[k] = {
+            label: v.label ?? "",
+            format: v.format ?? "",
+            ...(v.type && (validTypes as readonly string[]).includes(v.type) ? { type: v.type as "Fecha" | "Número" | "Texto" } : {}),
+          };
       }
       setColumnDisplay(next);
     }
@@ -710,9 +721,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       conditions: filterConditions.length > 0 ? filterConditions : [],
     };
     if (distinctColumn) filterPayload.excludeRowsColumn = distinctColumn;
-    const colDisplayFiltered: Record<string, { label?: string; format?: string }> = {};
+    const colDisplayFiltered: Record<string, { label?: string; format?: string; type?: "Fecha" | "Número" | "Texto" }> = {};
     for (const [k, v] of Object.entries(columnDisplay)) {
-      if (v && (v.label?.trim() || v.format?.trim())) colDisplayFiltered[k] = { label: v.label?.trim() || undefined, format: v.format?.trim() || undefined };
+      if (v && (v.label?.trim() || v.format?.trim() || v.type)) colDisplayFiltered[k] = { label: v.label?.trim() || undefined, format: v.format?.trim() || undefined, type: v.type };
     }
     if (Object.keys(colDisplayFiltered).length > 0) {
       (filterPayload as Record<string, unknown>).columnDisplay = colDisplayFiltered;
@@ -1278,14 +1289,24 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <tbody>
                       {(selectedTableInfo?.columns ?? []).map((c: { name: string; dataType?: string; inferredType?: "Fecha" | "Número" | "Texto" }) => {
                         const disp = columnDisplay[c.name] ?? { label: "", format: "" };
-                        const tipo = dataTypeToLabel((c as { inferredType?: string }).inferredType ?? c.dataType);
+                        const tipoInferido = dataTypeToLabel((c as { inferredType?: string }).inferredType ?? c.dataType);
+                        const tipo = (disp.type as "Fecha" | "Número" | "Texto") ?? tipoInferido;
                         const isDate = tipo === "Fecha";
                         const isNumber = tipo === "Número";
                         const formatOptions = isDate ? DATE_FORMAT_OPTIONS : isNumber ? NUMBER_FORMAT_OPTIONS : TEXT_FORMAT_OPTIONS;
                         return (
                           <tr key={c.name} style={{ borderBottom: "1px solid var(--platform-border)" }}>
                             <td className="py-2 px-3 font-mono text-xs" style={{ color: "var(--platform-fg)" }}>{c.name}</td>
-                            <td className="py-2 px-3" style={{ color: "var(--platform-fg-muted)" }}>{tipo}</td>
+                            <td className="py-1 px-2">
+                              <Select
+                                value={tipo}
+                                onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), type: v as "Fecha" | "Número" | "Texto" } }))}
+                                options={TIPO_OPTIONS}
+                                placeholder="Tipo"
+                                className="min-w-[100px]"
+                                buttonClassName="h-8 text-sm rounded-lg"
+                              />
+                            </td>
                             <td className="py-1 px-2">
                               <Input
                                 value={disp.label}
@@ -1298,7 +1319,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             <td className="py-1 px-2">
                               <Select
                                 value={disp.format}
-                                onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), format: v } }))}
+                                onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), format: v, type: (prev[c.name] as { type?: "Fecha" | "Número" | "Texto" })?.type } }))}
                                 options={formatOptions}
                                 placeholder="Formato"
                                 className="min-w-[140px]"
