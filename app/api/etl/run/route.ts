@@ -339,6 +339,8 @@ async function executeEtlPipeline(
     /** Postgres limita ~65535 parámetros por query. chunkSize * numColumnas debe quedar por debajo. */
     const MAX_PARAMS_PER_QUERY = 60000;
     let tableCreated = false;
+    /** Columnas de la tabla destino; al insertar solo se usan estas para evitar "column X does not exist". */
+    let tableColumnNames: string[] | null = null;
 
     // Global count state
     const globalCountMap = new Map<string, number>();
@@ -445,6 +447,14 @@ async function executeEtlPipeline(
             const createTableQuery = `CREATE TABLE etl_output."${newTableName}" (${columnParts.join(", ")});`;
             await sql.unsafe(createTableQuery);
             tableCreated = true;
+            tableColumnNames = Object.keys(columnsDefinition).map((k) => k.replace(/^"|"$/g, ""));
+          }
+          if (mode === "append" && tableCreated && !tableColumnNames) {
+            const colsRes = await sql.unsafe(
+              `SELECT column_name FROM information_schema.columns WHERE table_schema = 'etl_output' AND table_name = $1 ORDER BY ordinal_position`,
+              [newTableName]
+            );
+            tableColumnNames = Array.isArray(colsRes) ? colsRes.map((r: { column_name: string }) => r.column_name) : [];
           }
         } finally {
           await sql.end();
@@ -470,11 +480,16 @@ async function executeEtlPipeline(
       }
 
       // --- INSERT TO DB ---
+      const allowedKeys = tableColumnNames && tableColumnNames.length > 0
+        ? new Set(tableColumnNames.map((c) => c.toLowerCase()))
+        : null;
       const batchToInsert = batch.map((row) => {
         const saneRow: Record<string, any> = {};
         for (const key in row) {
           const saneKey = key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-          saneRow[saneKey] = row[key];
+          if (allowedKeys === null || allowedKeys.has(saneKey)) {
+            saneRow[saneKey] = row[key];
+          }
         }
         if (body?.etlId) {
           saneRow["etl_id"] = body.etlId;
