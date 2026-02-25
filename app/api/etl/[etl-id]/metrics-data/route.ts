@@ -53,17 +53,82 @@ function deriveFieldsFromSample(sampleData: any[]): FieldsInfo {
     }
     return nonNull > 0 && stringCount / nonNull >= 0.6;
   });
+  const isDateLike = (v: any): boolean => {
+    if (v == null) return false;
+    if (typeof v === "string" && !isNaN(Date.parse(v))) return true;
+    if (v instanceof Date && !isNaN(v.getTime())) return true;
+    if (typeof v === "number" && v > 1e10) return true; // timestamp ms
+    return false;
+  };
   const dateFields = availableFields.filter((field) => {
     let nonNull = 0, dateCount = 0;
     for (const row of sampleData) {
       const v = (row as any)[field];
       if (v === null || v === undefined) continue;
       nonNull++;
-      if (typeof v === "string" && !isNaN(Date.parse(v))) dateCount++;
+      if (isDateLike(v)) dateCount++;
     }
     return nonNull > 0 && dateCount / nonNull >= 0.6;
   });
   return { all: availableFields, numeric: numericFields, string: stringFields, date: dateFields };
+}
+
+const PERIODICITY_OPTIONS = ["Diaria", "Semanal", "Mensual", "Anual", "Irregular"] as const;
+type PeriodicityLabel = (typeof PERIODICITY_OPTIONS)[number];
+
+/** Infiere la periodicidad natural de una columna de fecha a partir de los intervalos entre valores únicos ordenados. */
+function inferNaturalPeriodicity(
+  rawRows: Record<string, unknown>[],
+  dateColumn: string
+): PeriodicityLabel {
+  const getVal = (row: Record<string, unknown>): unknown => {
+    const v = row[dateColumn];
+    if (v !== undefined && v !== null) return v;
+    const key = Object.keys(row).find((k) => k.toLowerCase() === dateColumn.toLowerCase());
+    return key !== undefined ? row[key] : undefined;
+  };
+  const timestamps: number[] = [];
+  for (const row of rawRows) {
+    const v = getVal(row);
+    if (v === undefined || v === null) continue;
+    let ms: number;
+    if (typeof v === "number" && v > 1e10) ms = v;
+    else if (typeof v === "number") ms = v * 1000;
+    else if (v instanceof Date) ms = v.getTime();
+    else if (typeof v === "string" && !isNaN(Date.parse(v))) ms = new Date(v).getTime();
+    else continue;
+    if (Number.isFinite(ms)) timestamps.push(ms);
+  }
+  if (timestamps.length < 2) return "Irregular";
+  const uniq = [...new Set(timestamps)].sort((a, b) => a - b);
+  const diffsDays: number[] = [];
+  for (let i = 1; i < uniq.length; i++) {
+    diffsDays.push((uniq[i] - uniq[i - 1]) / (24 * 60 * 60 * 1000));
+  }
+  if (diffsDays.length === 0) return "Irregular";
+  const median = (arr: number[]) => {
+    const s = [...arr].sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+  };
+  const med = median(diffsDays);
+  if (med >= 300 && med <= 400) return "Anual";
+  if (med >= 25 && med <= 35) return "Mensual";
+  if (med >= 5 && med <= 10) return "Semanal";
+  if (med >= 0.5 && med <= 1.5) return "Diaria";
+  return "Irregular";
+}
+
+/** Calcula periodicidad inferida para cada columna de tipo fecha. */
+function computeDateColumnPeriodicity(
+  rawRows: Record<string, unknown>[],
+  dateColumns: string[]
+): Record<string, PeriodicityLabel> {
+  const out: Record<string, PeriodicityLabel> = {};
+  for (const col of dateColumns) {
+    out[col] = inferNaturalPeriodicity(rawRows, col);
+  }
+  return out;
 }
 
 /** Lee count y filas de etl_output vía Postgres directo (el esquema suele no estar expuesto en la API Supabase). */
@@ -479,6 +544,11 @@ export async function GET(
       rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, fields.all));
     }
 
+    const dateColumnPeriodicity =
+      fields.date.length > 0 && rawRows.length > 0
+        ? computeDateColumnPeriodicity(rawRows, fields.date)
+        : undefined;
+
     return NextResponse.json({
       ok: true,
       data: {
@@ -490,6 +560,7 @@ export async function GET(
         rowCount,
         savedMetrics,
         rawRows,
+        dateColumnPeriodicity,
       },
     });
   } catch (error: unknown) {

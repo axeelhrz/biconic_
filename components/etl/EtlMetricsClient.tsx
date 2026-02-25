@@ -82,6 +82,8 @@ type MetricsDataResponse = {
     rowCount: number;
     savedMetrics: SavedMetricForm[];
     rawRows?: Record<string, unknown>[];
+    /** Periodicidad natural inferida por columna de fecha (Diaria, Semanal, Mensual, Anual, Irregular). El admin puede editarla en la UI. */
+    dateColumnPeriodicity?: Record<string, string>;
   };
 };
 
@@ -260,10 +262,15 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     }
   }, [data?.fields?.all, data?.fields?.numeric, data?.fields?.date]);
 
+  const dateFields = data?.fields?.date ?? [];
   useEffect(() => {
-    const allFields = data?.fields?.all ?? [];
-    if (allFields.length > 0 && !timeColumn) setTimeColumn(allFields[0]);
-  }, [data?.fields?.all, timeColumn]);
+    if (dateFields.length > 0 && !timeColumn) {
+      const first = dateFields[0];
+      setTimeColumn(first);
+      const inferred = data?.dateColumnPeriodicity?.[first];
+      if (inferred) setPeriodicity(inferred);
+    }
+  }, [dateFields.length, timeColumn, data?.dateColumnPeriodicity]);
 
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
   const hasData = data?.hasData ?? false;
@@ -800,15 +807,39 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     <div className="grid gap-4 sm:grid-cols-2 mb-4">
                       <div>
                         <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Columna temporal</Label>
-                        <select value={timeColumn || fields[0]} onChange={(e) => setTimeColumn(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                          {fields.map((f) => (<option key={f} value={f}>{f}</option>))}
-                        </select>
+                        <Select
+                          value={timeColumn || dateFields[0] || ""}
+                          onChange={(val: string) => {
+                            setTimeColumn(val);
+                            const inferred = data?.dateColumnPeriodicity?.[val];
+                            if (inferred) setPeriodicity(inferred);
+                          }}
+                          options={dateFields.map((f) => ({ label: f, value: f }))}
+                          placeholder={dateFields.length === 0 ? "No hay columnas de fecha" : "Seleccionar columna"}
+                          className="w-full"
+                          buttonClassName="w-full h-9 rounded-lg border px-3 text-sm"
+                        />
+                        {dateFields.length === 0 && (
+                          <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Solo se muestran columnas con tipo de datos fecha.</p>
+                        )}
                       </div>
                       <div>
                         <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Periodicidad natural</Label>
-                        <select value={periodicity} onChange={(e) => setPeriodicity(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                          {["Diaria", "Semanal", "Mensual", "Anual", "Irregular"].map((p) => (<option key={p} value={p}>{p}</option>))}
-                        </select>
+                        <Select
+                          value={periodicity}
+                          onChange={(val: string) => setPeriodicity(val)}
+                          options={[
+                            { label: "Diaria", value: "Diaria" },
+                            { label: "Semanal", value: "Semanal" },
+                            { label: "Mensual", value: "Mensual" },
+                            { label: "Anual", value: "Anual" },
+                            { label: "Irregular", value: "Irregular" },
+                          ]}
+                          placeholder="Seleccionar periodicidad"
+                          className="w-full"
+                          buttonClassName="w-full h-9 rounded-lg border px-3 text-sm"
+                        />
+                        <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Inferida del dato; podés corregir irregularidades.</p>
                       </div>
                     </div>
                   )}
@@ -918,7 +949,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tabla: {data?.schema}.{data?.tableName}</li>
                     <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Columnas: {fields.length}</li>
                     {grainOption && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Grain: {grainOption === "_custom" ? (grainCustomColumns.length > 0 ? grainCustomColumns.join(" + ") : "Personalizado") : grainOption}</li>}
-                    {datasetHasTime && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tiempo: {timeColumn || fields[0]} · {periodicity}</li>}
+                    {datasetHasTime && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tiempo: {timeColumn || dateFields[0] || "—"} · {periodicity}</li>}
                   </ul>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
