@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { Table2, Database, Server, User, Hash, FileText, Loader2, Pencil } from "lucide-react";
+import { Table2, Database, Server, User, Hash, FileText, Loader2, Pencil, Building2 } from "lucide-react";
 
 const CONNECTION_TYPE_OPTIONS: SelectOption[] = [
   { value: "mysql", label: "MySQL" },
@@ -35,6 +35,7 @@ type ConnectionRow = {
   id: string;
   name: string;
   type: string;
+  client_id: string | null;
   db_host: string | null;
   db_name: string | null;
   db_user: string | null;
@@ -47,11 +48,14 @@ type ConnectionRow = {
 type FormValues = {
   name: string;
   type: string;
+  client_id: string;
   db_host: string;
   db_name: string;
   db_user: string;
   db_port: string;
 };
+
+type ClientOption = { id: string; company_name: string };
 
 const inputClass =
   "w-full h-11 px-4 rounded-xl text-sm border bg-[var(--platform-surface)] border-[var(--platform-border)] text-[var(--platform-fg)] placeholder:text-[var(--platform-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]/30 focus:border-[var(--platform-accent)]";
@@ -102,6 +106,7 @@ export default function ConnectionConfigDialog({
   const [conn, setConn] = useState<ConnectionRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tableSearch, setTableSearch] = useState("");
+  const [clients, setClients] = useState<ClientOption[]>([]);
 
   const isView = mode === "view";
 
@@ -115,6 +120,7 @@ export default function ConnectionConfigDialog({
     defaultValues: {
       name: "",
       type: "",
+      client_id: "",
       db_host: "",
       db_name: "",
       db_user: "",
@@ -132,31 +138,35 @@ export default function ConnectionConfigDialog({
     let cancelled = false;
     setLoading(true);
     const supabase = createClient();
-    supabase
-      .from("connections")
-      .select("id, name, type, db_host, db_name, db_user, db_port, connection_tables, updated_at, original_file_name")
-      .eq("id", connectionId)
-      .single()
-      .then(({ data, error: err }) => {
-        if (cancelled) return;
-        setLoading(false);
-        if (err) {
-          setError(err.message);
-          setConn(null);
-          return;
-        }
-        const row = data as ConnectionRow;
-        setConn(row);
-        setError(null);
-        reset({
-          name: row.name ?? "",
-          type: row.type ?? "",
-          db_host: row.db_host ?? "",
-          db_name: row.db_name ?? "",
-          db_user: row.db_user ?? "",
-          db_port: row.db_port != null ? String(row.db_port) : "",
-        });
+    Promise.all([
+      supabase
+        .from("connections")
+        .select("id, name, type, client_id, db_host, db_name, db_user, db_port, connection_tables, updated_at, original_file_name")
+        .eq("id", connectionId)
+        .single(),
+      supabase.from("clients").select("id, company_name").order("company_name", { ascending: true }),
+    ]).then(([connRes, clientsRes]) => {
+      if (cancelled) return;
+      setLoading(false);
+      if (connRes.error) {
+        setError(connRes.error.message);
+        setConn(null);
+        return;
+      }
+      const row = connRes.data as ConnectionRow;
+      setConn(row);
+      setError(null);
+      if (clientsRes.data) setClients(clientsRes.data as ClientOption[]);
+      reset({
+        name: row.name ?? "",
+        type: row.type ?? "",
+        client_id: row.client_id ?? "",
+        db_host: row.db_host ?? "",
+        db_name: row.db_name ?? "",
+        db_user: row.db_user ?? "",
+        db_port: row.db_port != null ? String(row.db_port) : "",
       });
+    });
     return () => {
       cancelled = true;
     };
@@ -173,6 +183,7 @@ export default function ConnectionConfigDialog({
         .update({
           name: values.name.trim(),
           type: values.type,
+          client_id: values.client_id.trim() || null,
           db_host: values.db_host.trim() || null,
           db_name: values.db_name.trim() || null,
           db_user: values.db_user.trim() || null,
@@ -273,6 +284,11 @@ export default function ConnectionConfigDialog({
                   <div className="space-y-0 divide-y" style={{ borderColor: "var(--platform-border)" }}>
                     <FieldRow icon={Database} label="Nombre" value={conn.name} />
                     <FieldRow icon={FileText} label="Tipo" value={conn.type} />
+                    <FieldRow
+                      icon={Building2}
+                      label="Cliente"
+                      value={clients.find((c) => c.id === conn.client_id)?.company_name ?? (conn.client_id ? "—" : "Sin asignar")}
+                    />
                     {!isExcel && (
                       <>
                         <FieldRow icon={Server} label="Host" value={conn.db_host ?? undefined} />
@@ -315,6 +331,28 @@ export default function ConnectionConfigDialog({
                             onBlur={field.onBlur}
                             options={CONNECTION_TYPE_OPTIONS}
                             placeholder="Tipo"
+                            disablePortal
+                          />
+                        )}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium uppercase tracking-wider mb-1.5" style={{ color: "var(--platform-muted)" }}>
+                        Cliente
+                      </label>
+                      <Controller
+                        name="client_id"
+                        control={control}
+                        render={({ field }) => (
+                          <Select
+                            value={field.value}
+                            onChange={field.onChange}
+                            onBlur={field.onBlur}
+                            options={[
+                              { value: "", label: "Ninguno" },
+                              ...clients.map((c) => ({ value: c.id, label: c.company_name })),
+                            ]}
+                            placeholder="Asignar a cliente"
                             disablePortal
                           />
                         )}
