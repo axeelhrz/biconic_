@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import postgres from "postgres";
 
 type FieldsInfo = {
   all: string[];
@@ -60,6 +61,33 @@ function deriveFieldsFromSample(sampleData: any[]): FieldsInfo {
     return nonNull > 0 && dateCount / nonNull >= 0.6;
   });
   return { all: availableFields, numeric: numericFields, string: stringFields, date: dateFields };
+}
+
+/** Lee count y filas de etl_output vía Postgres directo (el esquema suele no estar expuesto en la API Supabase). */
+async function fetchFromEtlOutputViaPostgres(
+  tableName: string,
+  limit: number
+): Promise<{ rowCount: number; rows: any[] }> {
+  const dbUrl = process.env.SUPABASE_DB_URL;
+  if (!dbUrl) return { rowCount: 0, rows: [] };
+  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
+  const sql = postgres(dbUrl);
+  try {
+    const countRes = await sql.unsafe(
+      `SELECT count(*)::int AS c FROM etl_output."${safeTable}"`
+    );
+    const rowCount = Array.isArray(countRes) && countRes[0]?.c != null ? Number(countRes[0].c) : 0;
+    if (rowCount === 0) return { rowCount: 0, rows: [] };
+    const rowsRes = await sql.unsafe(
+      `SELECT * FROM etl_output."${safeTable}" LIMIT ${Math.min(500, Math.max(1, limit))}`
+    );
+    const rows = Array.isArray(rowsRes) ? rowsRes : [];
+    return { rowCount, rows };
+  } catch {
+    return { rowCount: 0, rows: [] };
+  } finally {
+    await sql.end();
+  }
 }
 
 async function resolveEtlToTableAndFields(
@@ -320,6 +348,15 @@ export async function GET(
       }
     }
 
+    // etl_output suele no estar expuesto en la API de Supabase: leer vía Postgres directo si seguimos con 0 filas
+    if (resolved.schema === "etl_output" && (resolved.rowCount === 0 || resolved.sampleData.length === 0)) {
+      const pgResult = await fetchFromEtlOutputViaPostgres(resolved.tableName, 500);
+      if (pgResult.rowCount > 0 || pgResult.rows.length > 0) {
+        resolved.rowCount = pgResult.rowCount;
+        resolved.sampleData = pgResult.rows;
+      }
+    }
+
     let fields = deriveFieldsFromSample(resolved.sampleData);
     if (fields.all.length === 0 && (resolved as any).columnsFromConfig?.length) {
       const cols = (resolved as any).columnsFromConfig as string[];
@@ -336,27 +373,47 @@ export async function GET(
     const limitRows = sampleRows > 0 ? sampleRows : Math.max(1, 500);
 
     try {
-      const clientToUse = serviceClient ?? supabase;
-      const schemaClient = clientToUse.schema(schemaName) as any;
-      const { count: realCount, error: countError } = await schemaClient
-        .from(tableName)
-        .select("*", { count: "exact", head: true });
-      if (!countError && realCount != null) rowCount = realCount;
+      if (schemaName === "etl_output") {
+        const pgResult = await fetchFromEtlOutputViaPostgres(tableName, limitRows);
+        rowCount = pgResult.rowCount;
+        if (pgResult.rows.length > 0) {
+          rawRows = pgResult.rows;
+          if (fields.all.length === 0) {
+            const derived = deriveFieldsFromSample(pgResult.rows.slice(0, 1));
+            if (derived.all.length > 0) fields = derived;
+          }
+        }
+      } else {
+        const clientToUse = serviceClient ?? supabase;
+        const schemaClient = clientToUse.schema(schemaName) as any;
+        const { count: realCount, error: countError } = await schemaClient
+          .from(tableName)
+          .select("*", { count: "exact", head: true });
+        if (!countError && realCount != null) rowCount = realCount;
 
-      const { data: rows } = await schemaClient
-        .from(tableName)
-        .select("*")
-        .limit(limitRows);
-      const fetchedRows = rows ?? [];
-      if (fetchedRows.length > 0) {
-        rawRows = fetchedRows;
-        if (fields.all.length === 0) {
-          const derived = deriveFieldsFromSample(fetchedRows.slice(0, 1));
-          if (derived.all.length > 0) fields = derived;
+        const { data: rows } = await schemaClient
+          .from(tableName)
+          .select("*")
+          .limit(limitRows);
+        const fetchedRows = rows ?? [];
+        if (fetchedRows.length > 0) {
+          rawRows = fetchedRows;
+          if (fields.all.length === 0) {
+            const derived = deriveFieldsFromSample(fetchedRows.slice(0, 1));
+            if (derived.all.length > 0) fields = derived;
+          }
         }
       }
     } catch {
-      if (sampleRows > 0) {
+      if (schemaName === "etl_output") {
+        const pgResult = await fetchFromEtlOutputViaPostgres(tableName, limitRows);
+        if (pgResult.rows.length > 0) {
+          rawRows = pgResult.rows;
+          rowCount = pgResult.rowCount;
+        } else {
+          rawRows = resolved.sampleData;
+        }
+      } else if (sampleRows > 0) {
         try {
           const schemaClient = supabase.schema(schemaName) as any;
           const { data: rows } = await schemaClient.from(tableName).select("*").limit(sampleRows);
