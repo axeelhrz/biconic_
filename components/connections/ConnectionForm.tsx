@@ -1,11 +1,30 @@
 "use client";
 
+import { AlertCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { DialogClose } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Select, type SelectOption } from "../ui/Select";
 import ImportStatus from "./importStatus"; // Importamos el componente de estado
+
+function FormFieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return (
+    <div
+      className="mt-1.5 flex items-center gap-2 rounded-lg border py-2 px-3 text-sm"
+      style={{
+        color: "var(--platform-danger)",
+        borderColor: "rgba(248, 113, 113, 0.35)",
+        background: "rgba(248, 113, 113, 0.08)",
+      }}
+      role="alert"
+    >
+      <AlertCircle className="h-4 w-4 shrink-0" strokeWidth={2} />
+      <span>{message}</span>
+    </div>
+  );
+}
 
 const CONNECTION_TYPE_OPTIONS: SelectOption[] = [
   { value: "mysql", label: "MySQL" },
@@ -175,7 +194,7 @@ export default function ConnectionForm({
               <Controller
                 name="type"
                 control={control}
-                rules={{ required: "Seleccione un tipo" }}
+                rules={{ required: "Completá el tipo de conexión" }}
                 render={({ field }) => (
                   <Select
                     id="type"
@@ -190,9 +209,7 @@ export default function ConnectionForm({
                   />
                 )}
               />
-              {errors.type && (
-                <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.type.message}</p>
-              )}
+              <FormFieldError message={errors.type?.message} />
             </div>
             <div>
               <label htmlFor="connection-name" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
@@ -203,11 +220,9 @@ export default function ConnectionForm({
                 id="connection-name"
                 placeholder="Ej. Ventas 2025"
                 className={inputClass}
-                {...register("connectionName", { required: "Ingrese un nombre" })}
+                {...register("connectionName", { required: "Completá el nombre de la conexión" })}
               />
-              {errors.connectionName && (
-                <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.connectionName.message}</p>
-              )}
+              <FormFieldError message={errors.connectionName?.message} />
             </div>
           </div>
 
@@ -287,11 +302,9 @@ export default function ConnectionForm({
                     id="host"
                     placeholder={isFirebird ? "Ej. mngservicios.flexxus.com.ar" : "Ej. localhost o IP"}
                     className={inputClass}
-                    {...register("host", { required: "Ingrese el host" })}
+                    {...register("host", { required: "Completá el host" })}
                   />
-                  {errors.host && (
-                    <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.host.message}</p>
-                  )}
+                  <FormFieldError message={errors.host?.message} />
                 </div>
                 <div>
                   <label htmlFor="port" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
@@ -304,13 +317,11 @@ export default function ConnectionForm({
                     className={inputClass}
                     {...register("port", {
                       valueAsNumber: true,
-                      min: { value: 1, message: "Puerto inválido" },
-                      max: { value: 65535, message: "Puerto inválido" },
+                      min: { value: 1, message: "Completá un puerto válido (1-65535)" },
+                      max: { value: 65535, message: "Completá un puerto válido (1-65535)" },
                     })}
                   />
-                  {errors.port && (
-                    <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.port.message}</p>
-                  )}
+                  <FormFieldError message={errors.port?.message} />
                 </div>
               </div>
             </div>
@@ -325,11 +336,9 @@ export default function ConnectionForm({
                   id="database"
                   placeholder={isFirebird ? "/ruta/a/base.fdb o alias" : "Nombre de la base"}
                   className={inputClass}
-                  {...register("database", { required: "Ingrese la base de datos" })}
+                  {...register("database", { required: "Completá la base de datos" })}
                 />
-                {errors.database && (
-                  <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.database.message}</p>
-                )}
+                <FormFieldError message={errors.database?.message} />
               </div>
               <div>
                 <label htmlFor="user" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
@@ -340,11 +349,9 @@ export default function ConnectionForm({
                   id="user"
                   placeholder="Usuario de la base"
                   className={inputClass}
-                  {...register("user", { required: "Ingrese el usuario" })}
+                  {...register("user", { required: "Completá el usuario" })}
                 />
-                {errors.user && (
-                  <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.user.message}</p>
-                )}
+                <FormFieldError message={errors.user?.message} />
               </div>
             </div>
 
@@ -357,11 +364,9 @@ export default function ConnectionForm({
                 id="password"
                 placeholder="Contraseña de acceso"
                 className={inputClass}
-                {...register("password", { required: "Ingrese la contraseña" })}
+                {...register("password", { required: "Completá la contraseña" })}
               />
-              {errors.password && (
-                <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.password.message}</p>
-              )}
+              <FormFieldError message={errors.password?.message} />
             </div>
           </>
         )}
