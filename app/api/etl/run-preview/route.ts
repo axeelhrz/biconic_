@@ -795,13 +795,13 @@ export async function POST(req: NextRequest) {
             return;
         } else {
             // Lógica para Postgres externo
-            const password = await getPasswordFromSecret(conn.db_password_secret_id);
+            const password = await getPasswordFromSecret(conn.db_password_secret_id as string | null);
             const dbConfig = {
-                host: conn.db_host,
-                user: conn.db_user,
+                host: conn.db_host as string | undefined,
+                user: conn.db_user as string | undefined,
                 password: password,
-                port: conn.db_port,
-                database: conn.db_name
+                port: conn.db_port as number | undefined,
+                database: conn.db_name as string | undefined
             };
             if (!dbConfig.host || !dbConfig.user || !dbConfig.database) {
                  throw new Error(`Configuración de conexión incompleta para ID: ${body.connectionId}`);
