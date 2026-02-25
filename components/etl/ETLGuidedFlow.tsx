@@ -471,12 +471,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           const inferJson = await inferRes.json();
           if (inferJson.ok && inferJson.columnTypes && typeof inferJson.columnTypes === "object") {
             const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
+            const getInferred = (colName: string) =>
+              ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
             columnsWithInferred = tableColumns.map((c: { name: string; dataType?: string }) => ({
               ...c,
-              inferredType: ct[c.name] ?? (dataTypeToLabel(c.dataType) as "Fecha" | "Número" | "Texto"),
+              inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
             }));
           }
-        } catch {
+        } catch (err) {
+          console.warn("[ETL] Inferencia de tipos fallida:", err);
           // Si falla la inferencia, se usa solo el tipo del esquema
         }
         setTables((prev) =>

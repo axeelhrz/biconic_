@@ -42,23 +42,37 @@ function isDateLike(v: unknown): boolean {
   return false;
 }
 
+function getRowVal(row: Record<string, unknown>, field: string): unknown {
+  if (row[field] !== undefined && row[field] !== null) return row[field];
+  const lower = field.toLowerCase();
+  const key = Object.keys(row).find((k) => k.toLowerCase() === lower);
+  return key !== undefined ? row[key] : undefined;
+}
+
 /**
  * Dada una muestra de filas (array de objetos), devuelve un mapa columna -> tipo inferido.
  * Prioridad: si la mayoría de valores no nulos parecen fecha -> Fecha; si número -> Número; sino Texto.
+ * Las claves del resultado respetan el nombre de la primera aparición de cada columna (primer row).
  */
 export function deriveColumnTypesFromSample(sampleData: unknown[]): Record<string, InferredColumnType> {
   const result: Record<string, InferredColumnType> = {};
   if (sampleData.length === 0) return result;
   const sampleRow = sampleData[0] as Record<string, unknown> | null;
   if (!sampleRow || typeof sampleRow !== "object") return result;
-  const availableFields = Object.keys(sampleRow);
+  const keySet = new Set<string>(Object.keys(sampleRow));
+  for (const row of sampleData.slice(1)) {
+    if (row && typeof row === "object") Object.keys(row as object).forEach((k) => keySet.add(k));
+  }
+  const availableFields = Array.from(keySet);
 
   for (const field of availableFields) {
     let nonNull = 0;
     let dateCount = 0;
     let numericCount = 0;
     for (const row of sampleData) {
-      const val = (row as Record<string, unknown>)?.[field];
+      const r = row as Record<string, unknown> | null;
+      if (!r || typeof r !== "object") continue;
+      const val = getRowVal(r, field);
       if (val === null || val === undefined) continue;
       nonNull++;
       if (isDateLike(val)) dateCount++;

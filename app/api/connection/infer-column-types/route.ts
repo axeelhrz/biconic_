@@ -30,7 +30,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: false, error: "Conexión no encontrada" }, { status: 404 });
     }
 
-    const type = (conn as any).type === "excel_file" || (conn as any).type === "excel" ? "excel" : (conn as any).type;
+    let type = (conn as any).type === "excel_file" || (conn as any).type === "excel" ? "excel" : (conn as any).type;
+    if (type === "postgresql") type = "postgres";
     let host = (conn as any).db_host;
     let database = (conn as any).db_name;
     let userDb = (conn as any).db_user;
