@@ -1095,6 +1095,12 @@ export async function POST(req: NextRequest) {
     ) {
       message =
         "No se pudo abrir la base Firebird. Si antes conectaba, puede que en el servidor Firebird se haya reiniciado el servicio, se haya movido el archivo o el alias ya no exista. Probá de nuevo con la ruta completa en el servidor (ej. /var/lib/firebird/data/fbcdistribuciones.fdb) o pedí al administrador del servidor que confirme el path o el alias. Revisá el campo «Path / Nombre de base» en la conexión.";
+    } else if (
+      typeof message === "string" &&
+      (message.includes("No permission") || message.includes("read/select access") || message.includes("permission for"))
+    ) {
+      message =
+        "El usuario de la base de datos no tiene permiso de lectura (SELECT) sobre esa tabla. Pedí al administrador del servidor Firebird que otorgue el permiso, por ejemplo: GRANT SELECT ON TABLE nombre_tabla TO usuario_conexion;";
     }
     return NextResponse.json(
       { ok: false, error: message },
