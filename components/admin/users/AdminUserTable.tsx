@@ -520,7 +520,7 @@ function Th({
 }: {
   className?: string;
   style?: React.CSSProperties;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   return (
     <th className={cn("whitespace-nowrap px-4 py-2", className)} style={style}>{children}</th>
