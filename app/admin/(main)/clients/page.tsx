@@ -40,7 +40,7 @@ export default function AdminClientsPage() {
             </div>
           </div>
           <Button
-            onClick={() => router.push("/admin/users/new")}
+            onClick={() => router.push("/admin/clients/new")}
             className="shrink-0 rounded-xl font-semibold gap-2 h-12 px-6 shadow-lg hover:shadow-xl transition-all"
             style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
           >
