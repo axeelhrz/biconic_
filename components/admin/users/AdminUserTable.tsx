@@ -363,14 +363,14 @@ export default function AdminUserTable({ search, filter }: Props) {
                   <Td style={{ borderColor: "var(--platform-border)" }}>
                     <Select
                       value={u.status}
-                      onChange={async (next) => {
-                        const prev = u.status;
-                        setRows((r) =>
-                          r.map((x) =>
-                            x.id === u.id ? { ...x, status: next as "activo" | "inactivo" } : x
-                          )
-                        );
-                        const res = await setUserStatus(u.id, next);
+onChange={async (next: string) => {
+                          const prev = u.status;
+                          setRows((r) =>
+                            r.map((x) =>
+                              x.id === u.id ? { ...x, status: next as "activo" | "inactivo" } : x
+                            )
+                          );
+                          const res = await setUserStatus(u.id, next as "activo" | "inactivo");
                         if (!res.ok) {
                           setRows((r) =>
                             r.map((x) =>
@@ -394,7 +394,7 @@ export default function AdminUserTable({ search, filter }: Props) {
                   <Td style={{ borderColor: "var(--platform-border)" }}>
                     <Select
                       value={u.app_role || ""}
-                      onChange={async (nextRole) => {
+                      onChange={async (nextRole: string) => {
                         const prevRole = u.app_role;
                         setRows((r) =>
                           r.map((x) =>
