@@ -9,7 +9,7 @@ import { ClientFilter } from "@/components/admin/dashboard/ClientFilter";
 
 export default function AdminEtlPage() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [filter, setFilter] = useState<"todos" | "publicados" | "borradores">("todos");
+  const filter = "todos" as const;
   const [clientId, setClientId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -55,25 +55,6 @@ export default function AdminEtlPage() {
           </div>
 
           <ClientFilter onSelect={(id) => setClientId(id)} />
-
-          <div
-            className="flex items-center gap-1 rounded-xl border p-1"
-            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
-          >
-            {(["todos", "publicados", "borradores"] as const).map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className="rounded-lg px-4 py-2 text-sm font-medium transition-all"
-                style={{
-                  background: filter === f ? "var(--platform-accent)" : "transparent",
-                  color: filter === f ? "var(--platform-accent-fg)" : "var(--platform-fg-muted)",
-                }}
-              >
-                {f === "todos" ? "Todos" : f === "publicados" ? "Publicados" : "Borradores"}
-              </button>
-            ))}
-          </div>
 
           <Button
             variant="outline"

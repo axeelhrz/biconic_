@@ -70,8 +70,7 @@ export default function EtlCard({
     createdAt,
   } = etl;
 
-  const isPublished = status === "Conectado" || status === "Publicado";
-  const isDraft = status === "Borrador";
+  // Status ya no se muestra en la tarjeta (lo que se publica es el dashboard, no el ETL)
 
   const handleDelete = async () => {
     setIsDeleting(true);
@@ -112,27 +111,10 @@ export default function EtlCard({
       }}
     >
       <div className="flex flex-1 flex-col p-6">
-        {/* Header: badge + título */}
+        {/* Header: título */}
         <div className="mb-4">
-          <span
-            className="inline-flex rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide"
-            style={{
-              background: isPublished
-                ? "rgba(34, 197, 94, 0.18)"
-                : isDraft
-                  ? "rgba(234, 179, 8, 0.18)"
-                  : "rgba(255,255,255,0.08)",
-              color: isPublished
-                ? "#4ade80"
-                : isDraft
-                  ? "#facc15"
-                  : "rgba(255,255,255,0.6)",
-            }}
-          >
-            {status}
-          </span>
           <h3
-            className="mt-4 line-clamp-2 text-xl font-semibold leading-tight"
+            className="line-clamp-2 text-xl font-semibold leading-tight"
             style={{ color: "rgba(255,255,255,0.95)" }}
           >
             {title}

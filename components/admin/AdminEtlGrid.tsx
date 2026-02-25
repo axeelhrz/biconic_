@@ -328,51 +328,54 @@ export default function AdminEtlGrid({
 
   return (
     <>
-      {selectedIds.length > 0 && (
-        <div
-          className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 mb-4"
-          style={{
-            borderColor: "var(--platform-border)",
-            background: "var(--platform-accent-dim)",
-          }}
+      {/* Barra superior: seleccionar todo, quitar todo, cantidad seleccionados, eliminar */}
+      <div
+        className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 mb-4"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+        }}
+      >
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-lg h-9"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={selectAllFiltered}
         >
-          <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
-            {selectedIds.length} seleccionado{selectedIds.length !== 1 ? "s" : ""}
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="rounded-lg h-9"
-            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-            onClick={selectAllFiltered}
-          >
-            Seleccionar todos los visibles
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="rounded-lg h-9 gap-1.5"
-            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-            onClick={clearSelection}
-          >
-            <X className="h-4 w-4" />
-            Quitar selección
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            className="rounded-lg h-9 gap-1.5"
-            style={{ background: "var(--platform-danger)", color: "#fff" }}
-            onClick={openBulkDeleteModal}
-            disabled={bulkDeleting}
-          >
-            <Trash2 className="h-4 w-4" />
-            {bulkDeleting ? "Eliminando…" : "Eliminar seleccionados"}
-          </Button>
-        </div>
-      )}
+          Seleccionar todo
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-lg h-9 gap-1.5"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={clearSelection}
+        >
+          <X className="h-4 w-4" />
+          Quitar todo
+        </Button>
+        {selectedIds.length > 0 && (
+          <>
+            <span className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+              {selectedIds.length} seleccionado{selectedIds.length !== 1 ? "s" : ""}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              className="rounded-lg h-9 gap-1.5 ml-auto"
+              style={{ background: "var(--platform-danger)", color: "#fff" }}
+              onClick={openBulkDeleteModal}
+              disabled={bulkDeleting}
+            >
+              <Trash2 className="h-4 w-4" />
+              {bulkDeleting ? "Eliminando…" : "Eliminar seleccionados"}
+            </Button>
+          </>
+        )}
+      </div>
 
       <Dialog open={bulkDeleteModalOpen} onOpenChange={setBulkDeleteModalOpen}>
         <DialogContent
@@ -421,7 +424,7 @@ export default function AdminEtlGrid({
         {(filtered.length > 0 ? filtered : []).map((etl) => (
           <div key={etl.id} className="relative">
             <div
-              className="absolute left-2.5 top-2.5 z-10"
+              className="absolute right-2.5 top-2.5 z-10"
               onClick={(e) => e.stopPropagation()}
             >
               <Checkbox
