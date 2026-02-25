@@ -424,6 +424,49 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     (t) => `${t.schema}.${t.name}` === selectedTable
   );
 
+  /** Tipo efectivo por columna (override manual o inferido) para formatear la vista previa. */
+  const getColumnType = useCallback((key: string): "Fecha" | "Número" | "Texto" => {
+    const disp = columnDisplay[key];
+    if (disp?.type) return disp.type;
+    const col = selectedTableInfo?.columns?.find((c: { name: string }) => c.name.toLowerCase() === key.toLowerCase());
+    return dataTypeToLabel((col as { inferredType?: string; dataType?: string })?.inferredType ?? (col as { dataType?: string })?.dataType);
+  }, [columnDisplay, selectedTableInfo?.columns]);
+
+  /** Formatea un valor de celda para la vista previa según tipo y formato de la columna. */
+  const formatPreviewCell = useCallback((key: string, value: unknown): string => {
+    const disp = columnDisplay[key];
+    const format = disp?.format?.trim();
+    const tipo = getColumnType(key);
+    if (value === null || value === undefined) return "";
+    if (tipo === "Fecha" && format) {
+      let date: Date | null = null;
+      if (value instanceof Date) date = value;
+      else if (typeof value === "number") date = value > 1e10 ? new Date(value) : new Date(1899, 11, 30 + (value | 0));
+      else if (typeof value === "string") date = new Date(value);
+      if (date && !isNaN(date.getTime())) {
+        const d = date.getDate();
+        const m = date.getMonth() + 1;
+        const y = date.getFullYear();
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const months = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+        if (format === "DD/MM/YYYY") return `${pad(d)}/${pad(m)}/${y}`;
+        if (format === "MM/DD/YYYY") return `${pad(m)}/${pad(d)}/${y}`;
+        if (format === "YYYY-MM-DD") return `${y}-${pad(m)}-${pad(d)}`;
+        if (format === "DD-MM-YYYY") return `${pad(d)}-${pad(m)}-${y}`;
+        if (format === "DD MMM YYYY") return `${pad(d)} ${months[date.getMonth()]} ${y}`;
+      }
+    }
+    if (tipo === "Número" && (typeof value === "number" || (typeof value === "string" && /^-?\d+([.,]\d+)?$/.test(String(value).trim())))) {
+      const num = typeof value === "number" ? value : parseFloat(String(value).replace(",", "."));
+      if (!Number.isNaN(num)) {
+        if (format === "currency") return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" }).format(num);
+        if (format === "percent") return new Intl.NumberFormat("es-AR", { style: "percent", minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(num / 100);
+        if (format === "number") return new Intl.NumberFormat("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(num);
+      }
+    }
+    return String(value);
+  }, [columnDisplay, getColumnType]);
+
   // Normalizar selectedTable cuando viene de config guardada: si la lista de tablas usa otro casing (ej. public.clientes vs PUBLIC.CLIENTES), usar la clave real para que el <select> muestre la tabla y selectedTableInfo exista
   useEffect(() => {
     if (!selectedTable || tables.length === 0 || selectedTableInfo) return;
@@ -2546,7 +2589,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   onClick={() => handlePreviewSort(key)}
                                 >
                                   <span className="inline-flex items-center gap-1">
-                                    {key}
+                                    {(columnDisplay[key]?.label?.trim() || key)}
                                     {previewSortKey === key ? (
                                       previewSortDir === "asc" ? (
                                         <ArrowUp className="h-3.5 w-3.5 opacity-80" />
@@ -2564,11 +2607,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           <tbody>
                             {previewDisplayRows.map((row, idx) => (
                               <tr key={idx} className="border-b border-b-[var(--platform-border)] hover:bg-[var(--platform-surface-hover)]">
-                                {keysToShow.map((key: string) => (
-                                  <td key={key} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={String((row as Record<string, unknown>)[key] ?? "")}>
-                                    {String((row as Record<string, unknown>)[key] ?? "")}
-                                  </td>
-                                ))}
+                                {keysToShow.map((key: string) => {
+                                  const raw = (row as Record<string, unknown>)[key];
+                                  const formatted = formatPreviewCell(key, raw);
+                                  return (
+                                    <td key={key} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={formatted}>
+                                      {formatted}
+                                    </td>
+                                  );
+                                })}
                               </tr>
                             ))}
                           </tbody>
