@@ -761,7 +761,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     }
     // Guardar toda la configuración antes de ejecutar para que layout tenga conexión, tabla, columnas, filtros, join/union, destino, etc.
     await saveGuidedConfigToServer({ silent: true });
-    const body = { etlId, ...guidedBody, waitForCompletion: true };
+    // waitForCompletion: false evita FUNCTION_INVOCATION_TIMEOUT en Vercel; el ETL corre en segundo plano
+    const body = { etlId, ...guidedBody, waitForCompletion: false };
     try {
       const res = await fetch("/api/etl/run", {
         method: "POST",
@@ -781,7 +782,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setRunId(data.runId ?? null);
       setRunSuccess(true);
       setRunning(false);
-      toast.success("ETL completado. Redirigiendo a métricas…");
+      toast.success("ETL iniciado en segundo plano. Redirigiendo a métricas…");
       router.push(`/admin/etl/${etlId}/metrics`);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Error al ejecutar");
