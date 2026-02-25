@@ -140,7 +140,9 @@ async function resolveEtlToTableAndFields(
   const { count, error: countError } = await schemaClient
     .from(tableName)
     .select("*", { count: "exact", head: true });
-  if (countError) return null;
+  // Si el esquema es etl_output, la API de Supabase suele no exponerlo: no devolver null;
+  // el GET usará fetchFromEtlOutputViaPostgres para leer los datos.
+  if (countError && schema !== "etl_output") return null;
   const rowCount = count ?? 0;
   let sampleData: any[] = [];
   if (rowCount > 0) {

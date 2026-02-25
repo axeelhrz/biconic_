@@ -192,8 +192,9 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   const fetchData = useCallback(async (opts?: { silent?: boolean; sampleRows?: number }) => {
     if (!opts?.silent) setLoading(true);
     try {
-      const sampleRows = opts?.sampleRows ?? 0;
-      const url = sampleRows > 0 ? `/api/etl/${etlId}/metrics-data?sampleRows=${Math.min(500, Math.max(0, sampleRows))}` : `/api/etl/${etlId}/metrics-data`;
+      // Pedir muestra siempre para que Profiling tenga filas/columnas (tablas en etl_output se leen con sampleRows)
+      const sampleRows = opts?.sampleRows ?? 500;
+      const url = `/api/etl/${etlId}/metrics-data?sampleRows=${Math.min(500, Math.max(0, sampleRows))}`;
       const res = await fetch(url);
       const json: MetricsDataResponse = await res.json();
       if (!res.ok || !json.ok || !json.data) {
