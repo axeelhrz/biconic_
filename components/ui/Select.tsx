@@ -251,7 +251,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                 style={{
                   borderColor: "var(--platform-border)",
                   background: "var(--platform-surface)",
-                  color: "var(--platform-fg-muted)",
+                  color: "var(--platform-fg)",
                 }}
                 {...rest}
               >

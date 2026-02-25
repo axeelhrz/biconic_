@@ -57,6 +57,7 @@ export function FormEmpresa({
                   { label: "Pasaporte", value: "pasaporte" },
                 ]}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -64,16 +65,24 @@ export function FormEmpresa({
         <Field label="Número de identificación">
           <Input
             placeholder="Ingrese"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("identificationNumber")}
           />
         </Field>
         <Field label="Nombre de la empresa">
           <Input
             placeholder="Ingrese"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("companyName")}
           />
         </Field>
@@ -97,6 +106,7 @@ export function FormEmpresa({
                 options={countries.map((c: any) => ({ label: c.name, value: c.id }))}
                 disabled={loadingCountries}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -114,6 +124,7 @@ export function FormEmpresa({
                 options={provinces.map((p: any) => ({ label: p.name, value: p.id }))}
                 disabled={!watchedCountry || loadingProvinces}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -121,8 +132,12 @@ export function FormEmpresa({
         <Field label="Capital / Ciudad">
           <Input
             placeholder="Ingrese ciudad"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("capital")}
           />
         </Field>
@@ -132,8 +147,12 @@ export function FormEmpresa({
         <Field label="Dirección">
           <Input
             placeholder="Ingrese dirección física"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("address")}
           />
         </Field>
@@ -143,8 +162,12 @@ export function FormEmpresa({
         >
           <Input
             placeholder="ej: contabilidad@empresa.com"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             type="email"
             {...register("email")}
           />
@@ -175,6 +198,7 @@ export function FormEmpresa({
                 options={planOptions}
                 disabled={loadingPlans}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -194,6 +218,7 @@ export function FormEmpresa({
                   { label: "Inactivo", value: "inactivo" },
                 ]}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -209,8 +234,12 @@ export function FormEmpresa({
         <Field label="Nombre del usuario" error={(errors as FieldErrors<FieldValues>).userName?.message as string}>
           <Input
             placeholder="Nombre completo del admin"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("userName", { required: "El nombre del usuario es requerido" })}
           />
         </Field>
@@ -229,6 +258,7 @@ export function FormEmpresa({
                   { label: "Admin", value: "admin" },
                 ]}
                 className="w-full rounded-xl"
+                style={{ color: "var(--platform-fg)" }}
               />
             )}
           />
@@ -239,8 +269,12 @@ export function FormEmpresa({
         >
           <Input
             placeholder="usuario@empresa.com"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             type="email"
             {...register("userEmail", { required: "El email de acceso es requerido" })}
           />
@@ -251,8 +285,12 @@ export function FormEmpresa({
         >
           <PasswordInput
             placeholder="Digite la contraseña"
-            className="rounded-xl border h-11"
-            style={{ borderColor: "var(--platform-border)" }}
+            className="rounded-xl border h-11 placeholder:opacity-70"
+            style={{
+              borderColor: "var(--platform-border)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-fg)",
+            }}
             {...register("userPassword", { required: "La contraseña es requerida" })}
           />
         </Field>
