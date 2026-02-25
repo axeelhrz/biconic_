@@ -152,6 +152,8 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   const [timeColumn, setTimeColumn] = useState("");
   const [periodicity, setPeriodicity] = useState("Diaria");
   const [grainOption, setGrainOption] = useState<string>("");
+  /** Columnas elegidas cuando el grain es "Personalizado" (clave única = concatenación de estas columnas). */
+  const [grainCustomColumns, setGrainCustomColumns] = useState<string[]>([]);
   const [columnRoles, setColumnRoles] = useState<Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }>>({});
   const [calcType, setCalcType] = useState<"simple" | "count" | "ratio" | "formula">("simple");
   const [metricAdditivity, setMetricAdditivity] = useState<"additive" | "semi" | "non">("additive");
@@ -177,6 +179,8 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   const canPrev = wizard !== "A" || wizardStep > 0;
   const isLastStep = wizard === "D" && wizardStep === totalStepsInWizard - 1;
   const canNext = wizardStep < totalStepsInWizard - 1 || (wizard !== "D" || !isLastStep);
+  const isGrainStep = wizard === "A" && wizardStep === 1;
+  const hasValidGrain = (grainOption !== "" && grainOption !== "_custom") || (grainOption === "_custom" && grainCustomColumns.length > 0);
   const goNext = () => {
     if (wizardStep < totalStepsInWizard - 1) setWizardStep((s) => s + 1);
     else if (wizard === "A") { setWizard("B"); setWizardStep(0); }
@@ -277,6 +281,8 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     setFormLimit(100);
     setFormMetric({ id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: fields[0] ?? "valor" });
     setPreviewData(null);
+    setGrainOption("");
+    setGrainCustomColumns([]);
     setWizard("A");
     setWizardStep(0);
     setShowForm(true);
@@ -615,7 +621,21 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                 {(wizard === "D" && wizardStep === WIZARD_STEPS.D.length - 1) ? (
                   <Button type="button" size="sm" className="rounded-lg" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {editingId ? "Guardar cambios" : "Crear métrica"}</Button>
                 ) : (
-                  canNext && <Button type="button" size="sm" className="rounded-lg" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente</Button>
+                  canNext && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="rounded-lg"
+                      style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                      disabled={isGrainStep && !hasValidGrain}
+                      onClick={() => {
+                        if (isGrainStep && !hasValidGrain) toast.error("Elegí una columna o varias (Personalizado) como clave única para avanzar.");
+                        else goNext();
+                      }}
+                    >
+                      Siguiente
+                    </Button>
+                  )
                 )}
               </div>
             </div>
@@ -695,13 +715,15 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                 </section>
               )}
 
-              {/* Wizard A1: Grain */}
-              {wizard === "A" && wizardStep === 1 && (
+              {/* Wizard A1: Grain — obligatorio */}
+              {wizard === "A" && wizardStep === 1 && (() => {
+                const hasValidGrain = (grainOption !== "" && grainOption !== "_custom") || (grainOption === "_custom" && grainCustomColumns.length > 0);
+                return (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Grain técnico (clave única)</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>El grain es el set mínimo de columnas que identifica una fila. Opcional para esta métrica.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Elegí una columna o varias (concatenadas) que identifiquen de forma única cada fila. Es obligatorio para avanzar.</p>
                   <div className="space-y-2 mb-4">
-                    {fields.slice(0, 3).map((f) => (
+                    {fields.map((f) => (
                       <label key={f} className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors" style={{ borderColor: grainOption === f ? "var(--platform-accent)" : "var(--platform-border)", background: grainOption === f ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
                         <input type="radio" name="grain" checked={grainOption === f} onChange={() => setGrainOption(f)} className="rounded-full" />
                         <span className="font-medium" style={{ color: "var(--platform-fg)" }}>{f}</span>
@@ -710,15 +732,60 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     ))}
                     <label className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors" style={{ borderColor: grainOption === "_custom" ? "var(--platform-accent)" : "var(--platform-border)", background: grainOption === "_custom" ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
                       <input type="radio" name="grain" checked={grainOption === "_custom"} onChange={() => setGrainOption("_custom")} className="rounded-full" />
-                      <span style={{ color: "var(--platform-fg-muted)" }}>Personalizado — definir columnas manualmente</span>
+                      <span style={{ color: "var(--platform-fg)" }}>Personalizado — definir una o varias columnas (clave única = concatenación)</span>
                     </label>
                   </div>
+                  {grainOption === "_custom" && (
+                    <div className="rounded-xl border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <p className="text-xs font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná una o más columnas para formar la clave única:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {fields.map((col) => {
+                          const checked = grainCustomColumns.includes(col);
+                          return (
+                            <label
+                              key={col}
+                              className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors"
+                              style={{ borderColor: checked ? "var(--platform-accent)" : "var(--platform-border)", background: checked ? "var(--platform-accent-dim)" : "var(--platform-surface)" }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  if (e.target.checked) setGrainCustomColumns((prev) => [...prev, col]);
+                                  else setGrainCustomColumns((prev) => prev.filter((c) => c !== col));
+                                }}
+                                className="rounded"
+                              />
+                              <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{col}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {grainCustomColumns.length > 0 && (
+                        <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>
+                          Clave única = {grainCustomColumns.join(" + ")}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {!hasValidGrain && (grainOption === "_custom" && grainCustomColumns.length === 0) && (
+                    <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná al menos una columna en Personalizado para continuar.</p>
+                  )}
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Tiempo</Button>
+                    <Button
+                      type="button"
+                      className="rounded-xl"
+                      style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                      onClick={() => { if (hasValidGrain) goNext(); else toast.error("Elegí una columna o varias (Personalizado) como clave única para avanzar."); }}
+                      disabled={!hasValidGrain}
+                    >
+                      Siguiente: Tiempo
+                    </Button>
                   </div>
                 </section>
-              )}
+                );
+              })()}
 
               {/* Wizard A2: Tiempo */}
               {wizard === "A" && wizardStep === 2 && (
@@ -850,7 +917,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                   <ul className="space-y-2 mb-4">
                     <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tabla: {data?.schema}.{data?.tableName}</li>
                     <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Columnas: {fields.length}</li>
-                    {grainOption && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Grain: {grainOption === "_custom" ? "Personalizado" : grainOption}</li>}
+                    {grainOption && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Grain: {grainOption === "_custom" ? (grainCustomColumns.length > 0 ? grainCustomColumns.join(" + ") : "Personalizado") : grainOption}</li>}
                     {datasetHasTime && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tiempo: {timeColumn || fields[0]} · {periodicity}</li>}
                   </ul>
                   <div className="flex justify-between">
