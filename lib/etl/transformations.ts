@@ -349,7 +349,11 @@ function isNullLike(value: any, patterns: string[]): boolean {
   if (value == null) return true;
   const s = String(value).trim();
   if (s === "") return true;
-  return patterns.some((p) => p === s || (p === "" && s === ""));
+  return patterns.some((p) => {
+    const pTrim = String(p).trim();
+    if (pTrim === "" && s === "") return true;
+    return s === pTrim || s.toLowerCase() === pTrim.toLowerCase();
+  });
 }
 
 export function applyTransforms(

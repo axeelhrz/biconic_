@@ -19,6 +19,8 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  X,
+  Plus,
 } from "lucide-react";
 import { Connection as ServerConnection } from "@/components/connections/ConnectionsCard";
 import { Select } from "@/components/ui/Select";
@@ -148,6 +150,20 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     columns: string[];
   } | null>(null);
   const defaultNullPatterns = ["NA", "-", ".", ""];
+  /** Valores predefinidos que se pueden marcar como "vacíos". El value es el texto exacto a comparar (vacío = string vacío). */
+  const NULL_PRESET_OPTIONS: { value: string; label: string }[] = [
+    { value: "", label: "(vacío)" },
+    { value: "NA", label: "NA" },
+    { value: "N/A", label: "N/A" },
+    { value: "-", label: "-" },
+    { value: ".", label: "." },
+    { value: "n/d", label: "n/d" },
+    { value: "N/D", label: "N/D" },
+    { value: "null", label: "null" },
+    { value: "#N/A", label: "#N/A" },
+    { value: "ND", label: "ND" },
+  ];
+  const [customNullValue, setCustomNullValue] = useState("");
   const [cleanTransforms, setCleanTransforms] = useState<Array<{ column: string; op: string; find?: string; replaceWith?: string }>>([]);
   const [bulkNormalizeOp, setBulkNormalizeOp] = useState("");
   const [dataFixes, setDataFixes] = useState<Array<{ column: string; find: string; replaceWith: string }>>([]);
@@ -1080,27 +1096,136 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               return (
                 <div className="space-y-6">
                   {/* Valores nulos o vacíos */}
-                  <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Valores nulos o vacíos</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Valores a considerar vacíos (separados por coma).</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí qué valores se consideran vacíos en la tabla. Se detectan en todas las columnas y podés agregar personalizados.</p>
+
+                    <div>
+                      <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Valores predefinidos</p>
+                      <div className="flex flex-wrap gap-2">
+                        {NULL_PRESET_OPTIONS.map((opt) => {
+                          const patterns = nullCleanup?.patterns ?? defaultNullPatterns;
+                          const isSelected = patterns.some((p) => p === opt.value);
+                          return (
+                            <button
+                              key={opt.value === "" ? "__empty__" : opt.value}
+                              type="button"
+                              onClick={() => {
+                                const next = isSelected ? patterns.filter((p) => p !== opt.value) : [...patterns, opt.value];
+                                setNullCleanup({
+                                  patterns: next.length ? next : defaultNullPatterns,
+                                  action: nullCleanup?.action ?? "null",
+                                  replacement: nullCleanup?.replacement,
+                                  columns: nullCleanup?.columns ?? effectiveColumns,
+                                });
+                              }}
+                              className="rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors"
+                              style={{
+                                borderColor: isSelected ? "var(--platform-accent)" : "var(--platform-border)",
+                                background: isSelected ? "var(--platform-accent-dim)" : "var(--platform-surface)",
+                                color: isSelected ? "var(--platform-accent)" : "var(--platform-fg)",
+                              }}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Valores personalizados</p>
+                      <div className="flex flex-wrap gap-2 items-center">
+                        <Input
+                          type="text"
+                          placeholder="Ej. Sin dato, --, n/c"
+                          value={customNullValue}
+                          onChange={(e) => setCustomNullValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              const v = customNullValue.trim();
+                              if (v === "") return;
+                              const patterns = nullCleanup?.patterns ?? defaultNullPatterns;
+                              if (patterns.includes(v)) {
+                                toast.info("Ese valor ya está en la lista");
+                                return;
+                              }
+                              setNullCleanup({
+                                patterns: [...patterns, v],
+                                action: nullCleanup?.action ?? "null",
+                                replacement: nullCleanup?.replacement,
+                                columns: nullCleanup?.columns ?? effectiveColumns,
+                              });
+                              setCustomNullValue("");
+                            }
+                          }}
+                          className="max-w-[200px] h-9 rounded-lg text-sm"
+                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="rounded-lg h-9"
+                          style={{ borderColor: "var(--platform-border)" }}
+                          onClick={() => {
+                            const v = customNullValue.trim();
+                            if (v === "") return;
+                            const patterns = nullCleanup?.patterns ?? defaultNullPatterns;
+                            if (patterns.includes(v)) {
+                              toast.info("Ese valor ya está en la lista");
+                              return;
+                            }
+                            setNullCleanup({
+                              patterns: [...patterns, v],
+                              action: nullCleanup?.action ?? "null",
+                              replacement: nullCleanup?.replacement,
+                              columns: nullCleanup?.columns ?? effectiveColumns,
+                            });
+                            setCustomNullValue("");
+                          }}
+                        >
+                          <Plus className="h-4 w-4 mr-1" /> Agregar
+                        </Button>
+                      </div>
+                      {(nullCleanup?.patterns ?? defaultNullPatterns).filter((p) => !NULL_PRESET_OPTIONS.some((o) => o.value === p)).length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {(nullCleanup?.patterns ?? defaultNullPatterns)
+                            .filter((p) => !NULL_PRESET_OPTIONS.some((o) => o.value === p))
+                            .map((p) => (
+                              <span
+                                key={p}
+                                className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                                style={{ background: "var(--platform-surface)", color: "var(--platform-fg)", border: "1px solid var(--platform-border)" }}
+                              >
+                                {p || "(vacío)"}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const patterns = (nullCleanup?.patterns ?? defaultNullPatterns).filter((x) => x !== p);
+                                    setNullCleanup({
+                                      patterns: patterns.length ? patterns : defaultNullPatterns,
+                                      action: nullCleanup?.action ?? "null",
+                                      replacement: nullCleanup?.replacement,
+                                      columns: nullCleanup?.columns ?? effectiveColumns,
+                                    });
+                                  }}
+                                  className="rounded-full p-0.5 hover:opacity-80"
+                                  style={{ color: "var(--platform-fg-muted)" }}
+                                  aria-label="Quitar"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </span>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+
                     <div className="flex flex-wrap gap-2 items-center">
-                      <input
-                        type="text"
-                        className="flex-1 min-w-[180px] rounded-lg border px-3 py-2 text-sm"
-                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                        placeholder="NA, -, ., (vacío)"
-                        value={nullCleanup?.patterns?.join(", ") ?? defaultNullPatterns.join(", ")}
-                        onChange={(e) => {
-                          const patterns = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
-                          setNullCleanup({
-                            patterns: patterns.length ? patterns : defaultNullPatterns,
-                            action: nullCleanup?.action ?? "null",
-                            replacement: nullCleanup?.replacement,
-                            columns: effectiveColumns,
-                          });
-                        }}
-                      />
-                      <div className="min-w-[180px]">
+                      <span className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Acción:</span>
+                      <div className="min-w-[200px]">
                         <Select
                           value={nullCleanup?.action ?? "null"}
                           onChange={(v: string) => setNullCleanup((prev) => prev ? { ...prev, action: v as "null" | "replace" } : { patterns: defaultNullPatterns, action: v as "null" | "replace", replacement: undefined, columns: effectiveColumns })}
@@ -1109,26 +1234,33 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             { value: "replace", label: "Reemplazar por valor" },
                           ]}
                           placeholder="Acción"
+                          disablePortal
                         />
                       </div>
                       {nullCleanup?.action === "replace" && (
-                        <input
+                        <Input
                           type="text"
-                          className="w-28 rounded-lg border px-2 py-1.5 text-sm"
+                          className="w-32 h-9 rounded-lg text-sm"
                           style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                          placeholder="Valor"
+                          placeholder="Valor de reemplazo"
                           value={nullCleanup?.replacement ?? ""}
                           onChange={(e) => setNullCleanup((prev) => prev ? { ...prev, replacement: e.target.value || undefined } : null)}
                         />
                       )}
                     </div>
+
                     <Button
                       type="button"
                       size="sm"
                       variant="outline"
                       className="rounded-lg"
                       style={{ borderColor: "var(--platform-border)" }}
-                      onClick={() => setNullCleanup({ patterns: nullCleanup?.patterns ?? defaultNullPatterns, action: nullCleanup?.action ?? "null", replacement: nullCleanup?.replacement, columns: effectiveColumns })}
+                      onClick={() => setNullCleanup({
+                        patterns: nullCleanup?.patterns ?? defaultNullPatterns,
+                        action: nullCleanup?.action ?? "null",
+                        replacement: nullCleanup?.replacement,
+                        columns: effectiveColumns,
+                      })}
                     >
                       Activar en todas las columnas
                     </Button>
