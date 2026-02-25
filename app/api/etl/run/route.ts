@@ -1085,6 +1085,9 @@ export async function POST(req: NextRequest) {
       }
 
       pipelinePromise.catch(err => console.error("Unhandled background ETL error:", err));
+      // Mantener la ejecución del pipeline tras enviar la respuesta (Vercel/Next no corta el proceso)
+      const { after } = await import("next/server");
+      after(() => pipelinePromise);
       return NextResponse.json({
         ok: true,
         runId,
