@@ -43,6 +43,12 @@ function isDateLike(v: unknown): boolean {
   if (typeof v !== "string") return false;
   const s = String(v).trim();
   if (!s) return false;
+  // Solo considerar fecha si el string parece una fecha (evita "RIO NORTE 1", "CBA SUR", etc.)
+  const looksLikeDateString =
+    /^\d/.test(s) ||
+    /^\d{4}-\d{2}-\d{2}/.test(s) ||
+    /^\d{1,2}[\/\-\.]\d{1,2}/.test(s);
+  if (!looksLikeDateString) return false;
   if (!isNaN(Date.parse(s))) return true;
   const ddmmyy = /^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/;
   const m = s.match(ddmmyy);
