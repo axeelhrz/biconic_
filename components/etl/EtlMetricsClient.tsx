@@ -266,17 +266,74 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
 
   const dateFields = data?.fields?.date ?? [];
   useEffect(() => {
-    if (dateFields.length > 0 && !timeColumn) {
-      const first = dateFields[0];
-      setTimeColumn(first);
-      const inferred = data?.dateColumnPeriodicity?.[first];
-      if (inferred) setPeriodicity(inferred);
+    if (dateFields.length > 0) {
+      setDatasetHasTime(true);
+      if (!timeColumn) {
+        const first = dateFields[0];
+        setTimeColumn(first);
+        const inferred = data?.dateColumnPeriodicity?.[first];
+        if (inferred) setPeriodicity(inferred);
+      }
+    } else {
+      setDatasetHasTime(false);
     }
   }, [dateFields.length, timeColumn, data?.dateColumnPeriodicity]);
 
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
   const hasData = data?.hasData ?? false;
   const fields = data?.fields?.all ?? [];
+
+  const dateFieldSet = new Set(data?.fields?.date ?? []);
+  const numericFieldSet = new Set(data?.fields?.numeric ?? []);
+
+  const getColumnDisplayKey = (col: string): string => {
+    const cd = data?.columnDisplay;
+    if (!cd) return col;
+    if (cd[col] !== undefined) return col;
+    const found = Object.keys(cd).find((k) => k.toLowerCase() === col.toLowerCase());
+    return found ?? col;
+  };
+
+  const getSampleDisplayLabel = (col: string): string => {
+    const key = getColumnDisplayKey(col);
+    const label = data?.columnDisplay?.[key]?.label?.trim();
+    return label || col;
+  };
+
+  const formatSampleCell = (col: string, value: unknown): string => {
+    if (value === null || value === undefined) return "";
+    const key = getColumnDisplayKey(col);
+    const format = data?.columnDisplay?.[key]?.format?.trim();
+    const isDate = dateFieldSet.has(col) || [...dateFieldSet].some((f) => f.toLowerCase() === col.toLowerCase());
+    const isNumber = numericFieldSet.has(col) || [...numericFieldSet].some((f) => f.toLowerCase() === col.toLowerCase());
+    if (isDate && format) {
+      let date: Date | null = null;
+      if (value instanceof Date) date = value;
+      else if (typeof value === "string") date = new Date(value);
+      else if (typeof value === "number") date = value > 1e10 ? new Date(value) : new Date(1899, 11, 30 + (value | 0));
+      if (date && !isNaN(date.getTime())) {
+        const d = date.getDate();
+        const m = date.getMonth() + 1;
+        const y = date.getFullYear();
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+        if (format === "DD/MM/YYYY") return `${pad(d)}/${pad(m)}/${y}`;
+        if (format === "MM/DD/YYYY") return `${pad(m)}/${pad(d)}/${y}`;
+        if (format === "YYYY-MM-DD") return `${y}-${pad(m)}-${pad(d)}`;
+        if (format === "DD-MM-YYYY") return `${pad(d)}-${pad(m)}-${y}`;
+        if (format === "DD MMM YYYY") return `${pad(d)} ${months[date.getMonth()]} ${y}`;
+      }
+    }
+    if (isNumber && (typeof value === "number" || (typeof value === "string" && /^-?\d+([.,]\d+)?$/.test(String(value).trim())))) {
+      const num = typeof value === "number" ? value : parseFloat(String(value).replace(",", "."));
+      if (!Number.isNaN(num)) {
+        if (format === "currency") return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" }).format(num);
+        if (format === "percent") return new Intl.NumberFormat("es-AR", { style: "percent", minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(num / 100);
+        if (format === "number") return new Intl.NumberFormat("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(num);
+      }
+    }
+    return String(value);
+  };
 
   const openNew = () => {
     setEditingId(null);
@@ -680,7 +737,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                           <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
                             <tr>
                               {fields.map((k) => (
-                                <th key={k} className="text-left px-3 py-2 font-medium whitespace-nowrap border-r last:border-r-0" style={{ borderColor: "var(--platform-border)", fontSize: "11px", textTransform: "uppercase" }}>{k}</th>
+                                <th key={k} className="text-left px-3 py-2 font-medium whitespace-nowrap border-r last:border-r-0" style={{ borderColor: "var(--platform-border)", fontSize: "11px", textTransform: "uppercase" }}>{getSampleDisplayLabel(k)}</th>
                               ))}
                             </tr>
                           </thead>
@@ -698,9 +755,13 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                               };
                               return (
                                 <tr key={idx} className="border-b last:border-b-0 hover:opacity-90" style={{ borderColor: "var(--platform-border)" }}>
-                                  {fields.map((col, colIndex) => (
-                                    <td key={col} className="px-3 py-1.5 whitespace-nowrap border-r last:border-r-0 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>{String(getCell(col, colIndex) ?? "")}</td>
-                                  ))}
+                                  {fields.map((col, colIndex) => {
+                                    const raw = getCell(col, colIndex);
+                                    const formatted = formatSampleCell(col, raw);
+                                    return (
+                                      <td key={col} className="px-3 py-1.5 whitespace-nowrap border-r last:border-r-0 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }} title={formatted}>{formatted}</td>
+                                    );
+                                  })}
                                 </tr>
                               );
                             })}
@@ -796,55 +857,35 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                 );
               })()}
 
-              {/* Wizard A2: Tiempo */}
+              {/* Wizard A2: Tiempo — tabla fija de columnas fecha con periodicidad natural */}
               {wizard === "A" && wizardStep === 2 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Dimensión temporal</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Resolución temporal para análisis. Periodicidad natural = detalle mínimo disponible.</p>
-                  <div className="flex items-center gap-3 mb-4">
-                    <input type="checkbox" id="hasTime" checked={datasetHasTime} onChange={(e) => setDatasetHasTime(e.target.checked)} className="rounded" />
-                    <label htmlFor="hasTime" className="text-sm" style={{ color: "var(--platform-fg)" }}>Este dataset tiene dimensión temporal</label>
-                  </div>
-                  {datasetHasTime && (
-                    <div className="grid gap-4 sm:grid-cols-2 mb-4">
-                      <div>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Columna temporal</Label>
-                        <Select
-                          value={timeColumn || dateFields[0] || ""}
-                          onChange={(val: string) => {
-                            setTimeColumn(val);
-                            const inferred = data?.dateColumnPeriodicity?.[val];
-                            if (inferred) setPeriodicity(inferred);
-                          }}
-                          options={dateFields.map((f) => ({ label: (data?.columnDisplay?.[f]?.label?.trim() || f), value: f }))}
-                          placeholder={dateFields.length === 0 ? "No hay columnas de fecha" : "Seleccionar columna"}
-                          className="w-full"
-                          buttonClassName="w-full h-9 rounded-lg border px-3 text-sm"
-                        />
-                        {dateFields.length === 0 && (
-                          <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Solo se muestran columnas con tipo de datos fecha.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Columnas de tipo fecha y su periodicidad natural (inferida del dato).</p>
+                  <div className="overflow-hidden rounded-xl border mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <table className="w-full text-sm border-collapse">
+                      <thead style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
+                        <tr>
+                          <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna temporal</th>
+                          <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Periodicidad natural</th>
+                        </tr>
+                      </thead>
+                      <tbody style={{ color: "var(--platform-fg)" }}>
+                        {dateFields.length === 0 ? (
+                          <tr>
+                            <td colSpan={2} className="px-3 py-4 text-sm" style={{ color: "var(--platform-fg-muted)" }}>No hay columnas de tipo fecha en este dataset.</td>
+                          </tr>
+                        ) : (
+                          dateFields.map((f) => (
+                            <tr key={f} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
+                              <td className="px-3 py-2 font-medium" style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(f)}</td>
+                              <td className="px-3 py-2" style={{ color: "var(--platform-fg-muted)" }}>{data?.dateColumnPeriodicity?.[f] ?? "Irregular"}</td>
+                            </tr>
+                          ))
                         )}
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Periodicidad natural</Label>
-                        <Select
-                          value={periodicity}
-                          onChange={(val: string) => setPeriodicity(val)}
-                          options={[
-                            { label: "Diaria", value: "Diaria" },
-                            { label: "Semanal", value: "Semanal" },
-                            { label: "Mensual", value: "Mensual" },
-                            { label: "Anual", value: "Anual" },
-                            { label: "Irregular", value: "Irregular" },
-                          ]}
-                          placeholder="Seleccionar periodicidad"
-                          className="w-full"
-                          buttonClassName="w-full h-9 rounded-lg border px-3 text-sm"
-                        />
-                        <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Inferida del dato; podés corregir irregularidades.</p>
-                      </div>
-                    </div>
-                  )}
+                      </tbody>
+                    </table>
+                  </div>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Roles BI</Button>
