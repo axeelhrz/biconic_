@@ -9,7 +9,7 @@ export interface PasswordInputProps
   extends React.InputHTMLAttributes<HTMLInputElement> {}
 
 const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputProps>(
-  ({ className, ...props }, ref) => {
+  ({ className, style: styleProp, ...props }, ref) => {
     // --- PASO 1: Creamos el estado para controlar la visibilidad ---
     // Por defecto, la contraseña está oculta (false).
     const [showPassword, setShowPassword] = useState(false);
@@ -24,18 +24,23 @@ const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputProps>(
     return (
       <div
         className={cn(
-          "flex items-center gap-2.5 h-10 w-full px-4 bg-white border border-gray-200 rounded-lg focus-within:ring-2 focus-within:ring-blue-500",
+          "flex items-center gap-2.5 h-10 w-full px-4 border rounded-lg focus-within:ring-2 focus-within:ring-[var(--platform-accent)] focus-within:border-transparent",
           className
         )}
+        style={{
+          background: "var(--platform-surface)",
+          borderColor: "var(--platform-border)",
+        }}
       >
-        <Lock className="h-5 w-5 text-gray-400" />
+        <Lock className="h-5 w-5 shrink-0" style={{ color: "var(--platform-fg-muted)" }} />
 
         <input
-          // --- PASO 2: El tipo del input depende del estado ---
-          // Si showPassword es true -> type="text"
-          // Si showPassword es false -> type="password"
           type={showPassword ? "text" : "password"}
-          className="flex-grow h-full bg-transparent border-none focus:outline-none focus:ring-0"
+          className="flex-grow min-w-0 h-full bg-transparent border-none focus:outline-none focus:ring-0 placeholder:opacity-70"
+          style={{
+            color: "var(--platform-fg)",
+            ...(styleProp && typeof styleProp === "object" ? styleProp : {}),
+          }}
           ref={ref}
           {...props}
         />
