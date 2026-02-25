@@ -55,9 +55,23 @@ function deriveFieldsFromSample(sampleData: any[]): FieldsInfo {
   });
   const isDateLike = (v: any): boolean => {
     if (v == null) return false;
-    if (typeof v === "string" && !isNaN(Date.parse(v))) return true;
     if (v instanceof Date && !isNaN(v.getTime())) return true;
-    if (typeof v === "number" && v > 1e10) return true; // timestamp ms
+    if (typeof v === "number") {
+      if (v > 1e10) return true; // timestamp ms
+      if (v > 0 && v < 1e7) return true; // Excel serial (días desde 1899-12-30)
+    }
+    if (typeof v !== "string") return false;
+    const s = String(v).trim();
+    if (!s) return false;
+    if (!isNaN(Date.parse(s))) return true;
+    const ddmmyy = /^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/;
+    const m = s.match(ddmmyy);
+    if (m) {
+      const d = parseInt(m[1]!, 10), M = parseInt(m[2]!, 10) - 1, y = parseInt(m[3]!, 10);
+      const yr = y < 100 ? 2000 + y : y;
+      const dt = new Date(yr, M, d);
+      if (!isNaN(dt.getTime()) && dt.getDate() === d && dt.getMonth() === M) return true;
+    }
     return false;
   };
   const dateFields = availableFields.filter((field) => {
@@ -76,6 +90,36 @@ function deriveFieldsFromSample(sampleData: any[]): FieldsInfo {
 const PERIODICITY_OPTIONS = ["Diaria", "Semanal", "Mensual", "Anual", "Irregular"] as const;
 type PeriodicityLabel = (typeof PERIODICITY_OPTIONS)[number];
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const EXCEL_EPOCH_MS = new Date(1899, 11, 30).getTime();
+
+function valueToTimestamp(v: unknown): number | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "number") {
+    if (v > 1e10) return v;
+    if (v > 1e9 && v < 1e10) return v * 1000;
+    if (v > 0 && v < 1e7) return EXCEL_EPOCH_MS + v * MS_PER_DAY; // Excel serial
+    return null;
+  }
+  if (v instanceof Date) return !isNaN(v.getTime()) ? v.getTime() : null;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+    const parsed = Date.parse(s);
+    if (!isNaN(parsed)) return parsed;
+    const ddmmyy = /^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/;
+    const m = s.match(ddmmyy);
+    if (m) {
+      const d = parseInt(m[1]!, 10), M = parseInt(m[2]!, 10) - 1, y = parseInt(m[3]!, 10);
+      const yr = y < 100 ? 2000 + y : y;
+      const dt = new Date(yr, M, d);
+      if (!isNaN(dt.getTime())) return dt.getTime();
+    }
+    return null;
+  }
+  return null;
+}
+
 /** Infiere la periodicidad natural de una columna de fecha a partir de los intervalos entre valores únicos ordenados. */
 function inferNaturalPeriodicity(
   rawRows: Record<string, unknown>[],
@@ -90,20 +134,14 @@ function inferNaturalPeriodicity(
   const timestamps: number[] = [];
   for (const row of rawRows) {
     const v = getVal(row);
-    if (v === undefined || v === null) continue;
-    let ms: number;
-    if (typeof v === "number" && v > 1e10) ms = v;
-    else if (typeof v === "number") ms = v * 1000;
-    else if (v instanceof Date) ms = v.getTime();
-    else if (typeof v === "string" && !isNaN(Date.parse(v))) ms = new Date(v).getTime();
-    else continue;
-    if (Number.isFinite(ms)) timestamps.push(ms);
+    const ms = valueToTimestamp(v);
+    if (ms != null && Number.isFinite(ms)) timestamps.push(ms);
   }
   if (timestamps.length < 2) return "Irregular";
   const uniq = [...new Set(timestamps)].sort((a, b) => a - b);
   const diffsDays: number[] = [];
   for (let i = 1; i < uniq.length; i++) {
-    diffsDays.push((uniq[i] - uniq[i - 1]) / (24 * 60 * 60 * 1000));
+    diffsDays.push((uniq[i] - uniq[i - 1]) / MS_PER_DAY);
   }
   if (diffsDays.length === 0) return "Irregular";
   const median = (arr: number[]) => {
@@ -112,10 +150,10 @@ function inferNaturalPeriodicity(
     return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
   };
   const med = median(diffsDays);
-  if (med >= 300 && med <= 400) return "Anual";
-  if (med >= 25 && med <= 35) return "Mensual";
-  if (med >= 5 && med <= 10) return "Semanal";
-  if (med >= 0.5 && med <= 1.5) return "Diaria";
+  if (med >= 250 && med <= 400) return "Anual";
+  if (med >= 20 && med <= 45) return "Mensual";
+  if (med >= 3 && med <= 14) return "Semanal";
+  if (med >= 0.25 && med <= 2.5) return "Diaria";
   return "Irregular";
 }
 
@@ -129,6 +167,59 @@ function computeDateColumnPeriodicity(
     out[col] = inferNaturalPeriodicity(rawRows, col);
   }
   return out;
+}
+
+/** Tipos de PostgreSQL que se consideran fecha, número o texto para clasificación. */
+const PG_DATE_TYPES = new Set([
+  "date", "timestamp", "timestamp with time zone", "timestamp without time zone",
+  "timestamptz", "timetz", "time", "time with time zone", "time without time zone",
+]);
+const PG_NUMERIC_TYPES = new Set([
+  "smallint", "integer", "bigint", "numeric", "decimal", "real", "double precision",
+  "float4", "float8", "serial", "bigserial",
+]);
+
+/** Obtiene tipos de columnas desde information_schema (Postgres). Si falla, devuelve null. */
+async function fetchColumnTypesFromSchema(
+  schemaName: string,
+  tableName: string
+): Promise<FieldsInfo | null> {
+  const dbUrl = process.env.SUPABASE_DB_URL;
+  if (!dbUrl) return null;
+  const safeSchema = schemaName === "etl_output" ? "etl_output" : "public";
+  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
+  const sql = postgres(dbUrl);
+  try {
+    const rows = await sql.unsafe(
+      `SELECT column_name, data_type, udt_name
+       FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = $2
+       ORDER BY ordinal_position`,
+      [safeSchema, safeTable]
+    );
+    await sql.end();
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const all = rows.map((r: any) => String(r.column_name ?? ""));
+    const dataTypeMap = new Map<string, string>();
+    rows.forEach((r: any) => {
+      const col = String(r.column_name ?? "");
+      const dt = String((r.data_type ?? r.udt_name ?? "")).toLowerCase();
+      dataTypeMap.set(col, dt);
+    });
+    const date: string[] = [];
+    const numeric: string[] = [];
+    const string: string[] = [];
+    for (const col of all) {
+      const dt = dataTypeMap.get(col) ?? "";
+      if (PG_DATE_TYPES.has(dt)) date.push(col);
+      else if (PG_NUMERIC_TYPES.has(dt)) numeric.push(col);
+      else string.push(col);
+    }
+    return { all, numeric, string, date };
+  } catch {
+    try { await sql.end(); } catch { /* ignore */ }
+    return null;
+  }
 }
 
 /** Lee count y filas de etl_output vía Postgres directo (el esquema suele no estar expuesto en la API Supabase). */
@@ -434,7 +525,11 @@ export async function GET(
       }
     }
 
-    let fields = deriveFieldsFromSample(resolved.sampleData);
+    const schemaTypes = await fetchColumnTypesFromSchema(resolved.schema, resolved.tableName);
+    let fields: FieldsInfo =
+      schemaTypes && schemaTypes.all.length > 0
+        ? schemaTypes
+        : deriveFieldsFromSample(resolved.sampleData);
     if (fields.all.length === 0 && (resolved as any).columnsFromConfig?.length) {
       const cols = (resolved as any).columnsFromConfig as string[];
       fields = { all: cols, numeric: cols, string: cols, date: [] };
@@ -528,9 +623,19 @@ export async function GET(
     };
 
     // Restringir a las columnas elegidas en el ETL (Columnas a incluir) para que Profiling muestre lo mismo que la previsualización del ETL
+    const sameStr = (a: string, b: string) => a.toLowerCase().trim() === b.toLowerCase().trim();
     if (selectedColumns && selectedColumns.length > 0 && rawRows.length > 0) {
       rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, selectedColumns));
-      fields = deriveFieldsFromSample(rawRows);
+      if (schemaTypes && schemaTypes.all.length > 0) {
+        fields = {
+          all: selectedColumns,
+          date: selectedColumns.filter((c) => schemaTypes!.date.some((d) => sameStr(d, c))),
+          numeric: selectedColumns.filter((c) => schemaTypes!.numeric.some((n) => sameStr(n, c))),
+          string: selectedColumns.filter((c) => schemaTypes!.string.some((s) => sameStr(s, c))),
+        };
+      } else {
+        fields = deriveFieldsFromSample(rawRows);
+      }
       if (fields.all.length === 0) fields = { all: selectedColumns, numeric: selectedColumns, string: selectedColumns, date: [] };
     } else {
       const columnsFromConfig = (resolved as any).columnsFromConfig as string[] | undefined;
