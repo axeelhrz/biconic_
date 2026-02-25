@@ -10,7 +10,7 @@ import { useState } from "react";
 
 // --- Iconos necesarios para la tarjeta ---
 
-// Icono de la base de datos (placeholder)
+// Icono de la base de datos (hereda color con currentColor)
 const DatabaseIcon = ({ className }: { className?: string }) => (
   <svg
     className={className}
@@ -22,30 +22,30 @@ const DatabaseIcon = ({ className }: { className?: string }) => (
   >
     <path
       d="M8 7.33398C3.58167 7.33398 0 8.65332 0 10.334V14.334C0 16.0146 3.58167 17.334 8 17.334C12.4183 17.334 16 16.0146 16 14.334V10.334C16 8.65332 12.4183 7.33398 8 7.33398Z"
-      stroke="#181818"
+      stroke="currentColor"
       strokeWidth="1.5"
     />
     <path
       d="M16 4.33398C16 6.01465 12.4183 7.33398 8 7.33398C3.58167 7.33398 0 6.01465 0 4.33398C0 2.65332 3.58167 1.33398 8 1.33398C12.4183 1.33398 16 2.65332 16 4.33398Z"
-      stroke="#181818"
+      stroke="currentColor"
       strokeWidth="1.5"
     />
     <path
       d="M0 10.334V1.33398"
-      stroke="#181818"
+      stroke="currentColor"
       strokeWidth="1.5"
       strokeLinecap="round"
     />
     <path
       d="M16 10.334V1.33398"
-      stroke="#181818"
+      stroke="currentColor"
       strokeWidth="1.5"
       strokeLinecap="round"
     />
   </svg>
 );
 
-// Icono de la papelera
+// Icono de la papelera (hereda color)
 const TrashIcon = ({ className }: { className?: string }) => (
   <svg
     className={className}
@@ -57,7 +57,7 @@ const TrashIcon = ({ className }: { className?: string }) => (
   >
     <path
       d="M18.3334 4.16602H15.8334M1.66675 4.16602H4.16675M4.16675 4.16602V17.4993C4.16675 17.9591 4.35102 18.3983 4.68943 18.7233C5.02784 19.0483 5.48624 19.2327 5.96675 19.2327H14.0334C14.5139 19.2327 14.9723 19.0483 15.3107 18.7233C15.6491 18.3983 15.8334 17.9591 15.8334 17.4993V4.16602M4.16675 4.16602H15.8334M7.50008 8.33268V14.166M12.5001 8.33268V14.166M6.66675 4.16602L7.29175 1.50352C7.45663 0.852139 8.04683 0.403625 8.72929 0.403625H11.2709C11.9534 0.403625 12.5436 0.852139 12.7085 1.50352L13.3334 4.16602"
-      stroke="black"
+      stroke="currentColor"
       strokeWidth="1.5"
       strokeLinecap="round"
       strokeLinejoin="round"
@@ -106,9 +106,9 @@ export interface Connection {
 }
 
 const InfoField = ({ label, value }: { label: string; value: string }) => (
-  <div className="flex w-full flex-col items-start self-stretch">
-    <p className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>{label}</p>
-    <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{value}</p>
+  <div className="flex w-full flex-col items-start self-stretch gap-0.5">
+    <p className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--platform-muted)" }}>{label}</p>
+    <p className="text-sm font-medium truncate w-full" style={{ color: "var(--platform-fg)" }}>{value}</p>
   </div>
 );
 
@@ -146,25 +146,33 @@ export default function ConnectionsCard({
 
   return (
     <div
-      className="box-border flex h-auto w-full max-w-[310px] flex-col items-start gap-5 rounded-[25px] border p-5 transition-shadow hover:border-[var(--platform-accent)]"
+      className="flex h-auto w-full flex-col items-start gap-5 rounded-2xl border p-5 transition-all duration-200 hover:shadow-lg"
       style={{
         background: "var(--platform-surface)",
         borderColor: "var(--platform-border)",
-        boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
+        boxShadow: "0 2px 12px rgba(0,0,0,0.15)",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = "rgba(35, 227, 180, 0.35)";
+        e.currentTarget.style.boxShadow = "0 8px 28px rgba(0,0,0,0.25)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = "var(--platform-border)";
+        e.currentTarget.style.boxShadow = "0 2px 12px rgba(0,0,0,0.15)";
       }}
     >
-      <div className="flex w-full flex-row items-start gap-[15px] self-stretch">
+      <div className="flex w-full flex-row items-start gap-3 self-stretch">
         <div
-          className="flex h-[40px] w-[40px] flex-shrink-0 items-center justify-center rounded-full"
-          style={{ background: "var(--platform-bg-elevated)" }}
+          className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl"
+          style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}
         >
-          <DatabaseIcon className="[&_path]:stroke-[var(--platform-fg-muted)]" />
+          <DatabaseIcon className="h-5 w-5" />
         </div>
-        <div className="flex flex-col items-start">
-          <h3 className="text-base font-medium" style={{ color: "var(--platform-fg)" }}>
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-base font-semibold" style={{ color: "var(--platform-fg)" }}>
             {title}
           </h3>
-          <p className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+          <p className="mt-0.5 text-sm" style={{ color: "var(--platform-fg-muted)" }}>
             {type}
           </p>
         </div>
@@ -202,7 +210,7 @@ export default function ConnectionsCard({
       </div>
 
       <span
-        className="flex items-center justify-center rounded-[10px] px-1.5 py-0.5 text-[10px] font-medium"
+        className="inline-flex items-center rounded-lg px-2 py-1 text-xs font-medium"
         style={{ background: currentStatus.bg, color: currentStatus.text }}
       >
         {status}
@@ -226,37 +234,38 @@ export default function ConnectionsCard({
         </div>
       )}
 
-      <div className="mt-auto flex w-full flex-row items-center gap-2.5 self-stretch pt-2">
+      <div className="mt-auto flex w-full flex-row items-center gap-2 self-stretch pt-2">
         <button
           type="button"
           aria-label="Compartir conexión"
-          className="flex-shrink-0 p-1 transition-opacity hover:opacity-70 disabled:opacity-30"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--platform-surface-hover)] disabled:opacity-30"
           style={{ color: "var(--platform-fg-muted)" }}
           onClick={() => setShareModalOpen(true)}
           disabled={isProcessing}
         >
-          <ShareIcon className="h-5 w-5" />
+          <ShareIcon className="h-4 w-4" />
         </button>
         {isFirebird && (
           <button
             type="button"
             aria-label="Configurar tablas para ETL"
             disabled={isProcessing}
-            className="flex-shrink-0 p-1 transition-opacity hover:opacity-70 disabled:opacity-30"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--platform-surface-hover)] disabled:opacity-30"
             style={{ color: "var(--platform-fg-muted)" }}
             onClick={() => setTablesDialogOpen(true)}
             title="Tablas para ETL"
           >
-            <Table2 className="h-5 w-5" />
+            <Table2 className="h-4 w-4" />
           </button>
         )}
         <button
           type="button"
           disabled={isProcessing}
-          className={`box-border flex h-[34px] flex-grow flex-row flex-wrap content-center items-center justify-center gap-2 rounded-full border px-3 py-[7px] text-[13px] font-medium transition-colors ${isProcessing ? "cursor-not-allowed opacity-50" : "hover:opacity-90"}`}
+          className="flex h-9 flex-1 items-center justify-center rounded-xl border px-4 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]/30"
           style={{
-            borderColor: "var(--platform-border)",
-            color: "var(--platform-fg)",
+            borderColor: "var(--platform-accent)",
+            color: "var(--platform-accent)",
+            background: "transparent",
           }}
           onClick={() => onConfigure?.(connection.id)}
         >
@@ -266,11 +275,11 @@ export default function ConnectionsCard({
           type="button"
           aria-label="Eliminar conexión"
           disabled={isProcessing}
-          className="flex-shrink-0 p-1 transition-opacity hover:opacity-70 disabled:opacity-30"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[rgba(248,113,113,0.12)] disabled:opacity-30"
           style={{ color: "var(--platform-fg-muted)" }}
           onClick={() => onDelete?.(connection.id, connection.title)}
         >
-          <TrashIcon className="h-5 w-5" />
+          <TrashIcon className="h-4 w-4" />
         </button>
       </div>
       <ConnectionTablesDialog

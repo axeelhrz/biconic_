@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import DatabaseConnectionCard, { Connection } from "@/components/connections/ConnectionsCard";
 import { createClient } from "@/lib/supabase/client";
+import { AlertCircle, Database, Search } from "lucide-react";
 
 type SupabaseConnectionRow = {
   id: string;
@@ -197,32 +198,32 @@ export default function AdminConnectionsGrid({
 
   if (loading) {
     return (
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {Array.from({ length: 8 }).map((_, i) => (
           <div
             key={i}
-            className="box-border flex w-full max-w-[310px] animate-pulse flex-col gap-5 rounded-[25px] border p-5"
+            className="flex w-full flex-col gap-5 rounded-2xl border p-5"
             style={{
               background: "var(--platform-surface)",
               borderColor: "var(--platform-border)",
             }}
           >
-            <div className="flex items-center gap-[15px]">
-              <div className="h-10 w-10 flex-shrink-0 rounded-full" style={{ background: "var(--platform-surface-hover)" }} />
-              <div className="w-full space-y-2">
-                <div className="h-4 w-3/4 rounded" style={{ background: "var(--platform-surface-hover)" }} />
-                <div className="h-3 w-1/2 rounded" style={{ background: "var(--platform-surface-hover)" }} />
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 flex-shrink-0 rounded-xl" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="flex-1 space-y-2">
+                <div className="h-4 w-2/3 rounded-lg" style={{ background: "var(--platform-surface-hover)" }} />
+                <div className="h-3 w-1/2 rounded-lg" style={{ background: "var(--platform-surface-hover)" }} />
               </div>
             </div>
-            <div className="h-4 w-1/4 rounded-full" style={{ background: "var(--platform-surface-hover)" }} />
-            <div className="space-y-4">
-              <div className="h-8 w-full rounded" style={{ background: "var(--platform-surface-hover)" }} />
-              <div className="h-8 w-full rounded" style={{ background: "var(--platform-surface-hover)" }} />
-              <div className="h-8 w-full rounded" style={{ background: "var(--platform-surface-hover)" }} />
+            <div className="h-5 w-20 rounded-lg" style={{ background: "var(--platform-surface-hover)" }} />
+            <div className="space-y-3">
+              <div className="h-9 w-full rounded-lg" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="h-9 w-full rounded-lg" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="h-9 w-full rounded-lg" style={{ background: "var(--platform-surface-hover)" }} />
             </div>
-            <div className="mt-2 flex items-center gap-2.5">
-              <div className="h-8 flex-grow rounded-full" style={{ background: "var(--platform-surface-hover)" }} />
-              <div className="h-6 w-6 rounded" style={{ background: "var(--platform-surface-hover)" }} />
+            <div className="mt-auto flex items-center gap-2 pt-2">
+              <div className="h-9 flex-1 rounded-xl" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="h-9 w-9 rounded-lg" style={{ background: "var(--platform-surface-hover)" }} />
             </div>
           </div>
         ))}
@@ -233,14 +234,20 @@ export default function AdminConnectionsGrid({
   if (error) {
     return (
       <div
-        className="rounded-xl border p-4 text-sm"
+        className="flex items-center gap-3 rounded-xl border px-4 py-4 text-sm"
         style={{
-          borderColor: "var(--platform-danger)",
-          background: "rgba(248,113,113,0.1)",
+          borderColor: "rgba(248,113,113,0.3)",
+          background: "var(--platform-surface)",
           color: "var(--platform-danger)",
         }}
       >
-        Error: {error}
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(248,113,113,0.15)" }}>
+          <AlertCircle className="h-5 w-5" />
+        </div>
+        <div>
+          <p className="font-medium">Error al cargar las conexiones</p>
+          <p className="mt-0.5 opacity-90">{error}</p>
+        </div>
       </div>
     );
   }
@@ -258,41 +265,55 @@ export default function AdminConnectionsGrid({
   if (connections.length === 0) {
     return (
       <div
-        className="rounded-xl border p-6 text-center text-sm"
+        className="flex flex-col items-center justify-center rounded-2xl border py-16 px-6 text-center"
         style={{
           borderColor: "var(--platform-border)",
           background: "var(--platform-surface)",
-          color: "var(--platform-fg-muted)",
         }}
       >
-        No se encontraron conexiones (Array vacío). Revisa la consola.
+        <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl" style={{ background: "var(--platform-bg-elevated)" }}>
+          <Database className="h-8 w-8" style={{ color: "var(--platform-muted)" }} />
+        </div>
+        <h3 className="text-lg font-medium" style={{ color: "var(--platform-fg)" }}>
+          Aún no hay conexiones
+        </h3>
+        <p className="mt-1 max-w-sm text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+          Creá tu primera conexión a una base de datos o subí un archivo Excel para empezar.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {filteredConnections.map((connection) => (
-        <DatabaseConnectionCard
-          key={connection.id}
-          connection={connection}
-          onConfigure={onConfigure}
-          onDelete={onDelete}
-          onRefreshConnections={loadConnections}
-        />
-      ))}
+    <>
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {filteredConnections.map((connection) => (
+          <DatabaseConnectionCard
+            key={connection.id}
+            connection={connection}
+            onConfigure={onConfigure}
+            onDelete={onDelete}
+            onRefreshConnections={loadConnections}
+          />
+        ))}
+      </div>
       {filteredConnections.length === 0 && (
         <div
-          className="col-span-full rounded-xl border p-6 text-center text-sm"
+          className="flex flex-col items-center justify-center rounded-2xl border py-12 px-6 text-center"
           style={{
             borderColor: "var(--platform-border)",
             background: "var(--platform-surface)",
-            color: "var(--platform-fg-muted)",
           }}
         >
-          No se encontraron conexiones que coincidan con tu búsqueda.
+          <Search className="mb-3 h-10 w-10" style={{ color: "var(--platform-muted)" }} />
+          <h3 className="text-base font-medium" style={{ color: "var(--platform-fg)" }}>
+            Sin resultados
+          </h3>
+          <p className="mt-1 text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+            No hay conexiones que coincidan con tu búsqueda. Probá con otro término.
+          </p>
         </div>
       )}
-    </div>
+    </>
   );
 }
