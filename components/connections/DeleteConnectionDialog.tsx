@@ -3,6 +3,7 @@
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
+import { AlertTriangle } from "lucide-react";
 
 type DeleteConnectionDialogProps = {
   open: boolean;
@@ -23,7 +24,6 @@ export default function DeleteConnectionDialog({
     try {
       if (!connectionId) return;
       const supabase = createClient();
-      // Primero eliminar metadatos asociados, luego la conexión
       await supabase
         .from("data_tables")
         .delete()
@@ -44,28 +44,55 @@ export default function DeleteConnectionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px]">
-        <DialogTitle>Eliminar conexión</DialogTitle>
-        <p className="text-sm text-[#555]">
-          ¿Está seguro que desea eliminar la conexión
-          {connectionTitle ? ` "${connectionTitle}"` : ""}? Esta acción no se
-          puede deshacer.
-        </p>
-        <div className="mt-4 flex justify-end gap-3">
-          <button
-            type="button"
-            className="h-9 rounded-full border border-[#00030A] px-4 text-sm font-medium text-[#00030A]"
-            onClick={() => onOpenChange(false)}
+      <DialogContent
+        className="sm:max-w-[420px] p-0 gap-0 overflow-hidden border rounded-2xl"
+        showCloseButton
+        style={{
+          background: "var(--platform-bg-elevated)",
+          borderColor: "var(--platform-border)",
+        }}
+      >
+        <div className="p-6">
+          <div
+            className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl"
+            style={{ background: "rgba(248, 113, 113, 0.15)", color: "var(--platform-danger)" }}
           >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            className="h-9 rounded-full bg-red-600 px-4 text-sm font-medium text-white hover:bg-red-700"
-            onClick={handleConfirm}
-          >
-            Eliminar
-          </button>
+            <AlertTriangle className="h-6 w-6" strokeWidth={2} />
+          </div>
+          <DialogTitle className="text-lg font-semibold mb-1" style={{ color: "var(--platform-fg)" }}>
+            Eliminar conexión
+          </DialogTitle>
+          <p className="text-sm leading-relaxed" style={{ color: "var(--platform-fg-muted)" }}>
+            ¿Estás seguro de que querés eliminar la conexión
+            {connectionTitle ? (
+              <span className="font-medium" style={{ color: "var(--platform-fg)" }}> "{connectionTitle}"</span>
+            ) : (
+              ""
+            )}
+            ? Esta acción no se puede deshacer y se eliminarán los datos asociados.
+          </p>
+          <div className="mt-6 flex flex-row justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="h-10 px-4 rounded-xl text-sm font-medium transition-opacity hover:opacity-90"
+              style={{
+                color: "var(--platform-fg)",
+                border: "1px solid var(--platform-border)",
+                background: "var(--platform-bg)",
+              }}
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirm}
+              className="h-10 px-4 rounded-xl text-sm font-medium text-white transition-opacity hover:opacity-90"
+              style={{ background: "var(--platform-danger)" }}
+            >
+              Eliminar
+            </button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

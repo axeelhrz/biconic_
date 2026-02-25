@@ -5,47 +5,21 @@ import AdminConnectionsGrid from "@/components/admin/AdminConnectionsGrid";
 import { Search, Plus } from "lucide-react";
 import AdminNewConnectionDialog from "@/components/admin/AdminNewConnectionDialog";
 import ConnectionConfigDialog from "@/components/admin/ConnectionConfigDialog";
-import ConnectionTablesDialog from "@/components/connections/ConnectionTablesDialog";
-import { createClient } from "@/lib/supabase/client";
+import DeleteConnectionDialog from "@/components/connections/DeleteConnectionDialog";
 
 export default function AdminConnectionsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [configDialogConnectionId, setConfigDialogConnectionId] = useState<string | null>(null);
-  const [tablesDialogOpen, setTablesDialogOpen] = useState(false);
-  const [tablesDialogConnectionId, setTablesDialogConnectionId] = useState<string | null>(null);
-  const [tablesDialogTitle, setTablesDialogTitle] = useState("");
-  const [tablesDialogType, setTablesDialogType] = useState("");
+  const [configDialogMode, setConfigDialogMode] = useState<"view" | "edit">("edit");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteTitle, setDeleteTitle] = useState<string | null>(null);
 
-  const handleDelete = async (id: string, title?: string) => {
-    if (
-      !confirm(
-        `¿Estás seguro de que deseas eliminar la conexión "${
-          title || "Sin título"
-        }"?`
-      )
-    ) {
-      return;
-    }
-
-    try {
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("connections")
-        .delete()
-        .eq("id", id);
-
-      if (error) {
-        console.error("Error eliminando conexión:", error);
-        alert("Error al eliminar la conexión: " + error.message);
-        return;
-      }
-
-      window.location.reload();
-    } catch (err) {
-      console.error("Error inesperado:", err);
-      alert("Ocurrió un error inesperado al eliminar.");
-    }
+  const openDeleteConfirm = (id: string, title?: string) => {
+    setDeleteId(id);
+    setDeleteTitle(title ?? null);
+    setDeleteOpen(true);
   };
 
   return (
@@ -128,23 +102,22 @@ export default function AdminConnectionsPage() {
         open={!!configDialogConnectionId}
         onOpenChange={(open) => !open && setConfigDialogConnectionId(null)}
         connectionId={configDialogConnectionId}
-        onOpenTables={(id, title, type) => {
+        mode={configDialogMode}
+        onSaved={() => {
           setConfigDialogConnectionId(null);
-          setTablesDialogConnectionId(id);
-          setTablesDialogTitle(title);
-          setTablesDialogType(type);
-          setTablesDialogOpen(true);
+          window.location.reload();
         }}
       />
 
-      <ConnectionTablesDialog
-        open={tablesDialogOpen}
-        onOpenChange={setTablesDialogOpen}
-        connectionId={tablesDialogConnectionId}
-        connectionTitle={tablesDialogTitle}
-        connectionType={tablesDialogType}
-        onSaved={() => {
-          setTablesDialogOpen(false);
+      <DeleteConnectionDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        connectionId={deleteId}
+        connectionTitle={deleteTitle}
+        onDeleted={() => {
+          setDeleteOpen(false);
+          setDeleteId(null);
+          setDeleteTitle(null);
           window.location.reload();
         }}
       />
@@ -152,8 +125,15 @@ export default function AdminConnectionsPage() {
         {/* Grid de Conexiones */}
         <AdminConnectionsGrid
           searchQuery={searchQuery}
-          onConfigure={(id) => setConfigDialogConnectionId(id)}
-          onDelete={handleDelete}
+          onConfigure={(id) => {
+            setConfigDialogMode("edit");
+            setConfigDialogConnectionId(id);
+          }}
+          onPreview={(id) => {
+            setConfigDialogMode("view");
+            setConfigDialogConnectionId(id);
+          }}
+          onDelete={openDeleteConfirm}
         />
       </div>
     </div>

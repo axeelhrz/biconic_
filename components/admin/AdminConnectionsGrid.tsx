@@ -28,12 +28,14 @@ type DataTableMetaRow = {
 interface AdminConnectionsGridProps {
   searchQuery?: string;
   onConfigure?: (id: string) => void;
+  onPreview?: (id: string) => void;
   onDelete?: (id: string, title?: string) => void;
 }
 
 export default function AdminConnectionsGrid({
   searchQuery = "",
   onConfigure,
+  onPreview,
   onDelete,
 }: AdminConnectionsGridProps) {
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -288,13 +290,14 @@ export default function AdminConnectionsGrid({
     <>
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {filteredConnections.map((connection) => (
-          <DatabaseConnectionCard
-            key={connection.id}
-            connection={connection}
-            onConfigure={onConfigure}
-            onDelete={onDelete}
-            onRefreshConnections={loadConnections}
-          />
+        <DatabaseConnectionCard
+          key={connection.id}
+          connection={connection}
+          onConfigure={onConfigure}
+          onPreview={onPreview}
+          onDelete={onDelete}
+          onRefreshConnections={loadConnections}
+        />
         ))}
       </div>
       {filteredConnections.length === 0 && (

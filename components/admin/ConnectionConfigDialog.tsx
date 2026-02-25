@@ -8,16 +8,25 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
-import { Table2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Select, type SelectOption } from "@/components/ui/Select";
+import { Controller, useForm } from "react-hook-form";
+import { toast } from "sonner";
+
+const CONNECTION_TYPE_OPTIONS: SelectOption[] = [
+  { value: "mysql", label: "MySQL" },
+  { value: "postgres", label: "PostgreSQL" },
+  { value: "firebird", label: "Firebird (Flexxus)" },
+  { value: "excel", label: "Archivo Excel/CSV" },
+];
 
 type ConnectionConfigDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   connectionId: string | null;
-  /** Al hacer clic en "Editar tablas", se llama con (id, título, tipo) para abrir el diálogo de tablas desde la página */
-  onOpenTables?: (connectionId: string, connectionTitle: string, connectionType: string) => void;
+  mode?: "view" | "edit";
+  onSaved?: () => void;
 };
 
 type ConnectionRow = {
@@ -28,20 +37,52 @@ type ConnectionRow = {
   db_name: string | null;
   db_user: string | null;
   db_port: number | null;
-  connection_tables: string[] | null;
   updated_at: string;
   original_file_name?: string | null;
 };
+
+type FormValues = {
+  name: string;
+  type: string;
+  db_host: string;
+  db_name: string;
+  db_user: string;
+  db_port: string;
+};
+
+const inputClass =
+  "w-full h-11 px-4 rounded-xl text-sm border bg-[var(--platform-surface)] border-[var(--platform-border)] text-[var(--platform-fg)] placeholder:text-[var(--platform-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]/30 focus:border-[var(--platform-accent)]";
 
 export default function ConnectionConfigDialog({
   open,
   onOpenChange,
   connectionId,
-  onOpenTables,
+  mode = "edit",
+  onSaved,
 }: ConnectionConfigDialogProps) {
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [conn, setConn] = useState<ConnectionRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const isView = mode === "view";
+
+  const {
+    register,
+    control,
+    handleSubmit,
+    reset,
+    formState: { errors, isDirty },
+  } = useForm<FormValues>({
+    defaultValues: {
+      name: "",
+      type: "",
+      db_host: "",
+      db_name: "",
+      db_user: "",
+      db_port: "",
+    },
+  });
 
   useEffect(() => {
     if (!open || !connectionId) {
@@ -54,7 +95,7 @@ export default function ConnectionConfigDialog({
     const supabase = createClient();
     supabase
       .from("connections")
-      .select("id, name, type, db_host, db_name, db_user, db_port, connection_tables, updated_at, original_file_name")
+      .select("id, name, type, db_host, db_name, db_user, db_port, updated_at, original_file_name")
       .eq("id", connectionId)
       .single()
       .then(({ data, error: err }) => {
@@ -65,122 +106,249 @@ export default function ConnectionConfigDialog({
           setConn(null);
           return;
         }
-        setConn(data as ConnectionRow);
+        const row = data as ConnectionRow;
+        setConn(row);
         setError(null);
+        reset({
+          name: row.name ?? "",
+          type: row.type ?? "",
+          db_host: row.db_host ?? "",
+          db_name: row.db_name ?? "",
+          db_user: row.db_user ?? "",
+          db_port: row.db_port != null ? String(row.db_port) : "",
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [open, connectionId]);
+  }, [open, connectionId, reset]);
 
-  const tables = conn?.connection_tables ?? [];
-  const hasTables = Array.isArray(tables) && tables.length > 0;
+  const onSubmit = async (values: FormValues) => {
+    if (!connectionId) return;
+    setSaving(true);
+    try {
+      const supabase = createClient();
+      const portNum = values.db_port.trim() ? parseInt(values.db_port, 10) : null;
+      const { error: updateError } = await supabase
+        .from("connections")
+        .update({
+          name: values.name.trim(),
+          type: values.type,
+          db_host: values.db_host.trim() || null,
+          db_name: values.db_name.trim() || null,
+          db_user: values.db_user.trim() || null,
+          db_port: portNum,
+        })
+        .eq("id", connectionId);
+
+      if (updateError) throw updateError;
+      toast.success("Conexión actualizada");
+      onOpenChange(false);
+      onSaved?.();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Error al guardar");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isExcel = conn?.type === "excel" || conn?.type === "excel_file";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px]" showCloseButton>
-        <DialogHeader>
-          <DialogTitle style={{ color: "var(--platform-fg)" }}>
-            Configuración de la conexión
+      <DialogContent
+        className="sm:max-w-[520px] p-0 gap-0 overflow-hidden border rounded-2xl"
+        showCloseButton
+        style={{
+          background: "var(--platform-bg-elevated)",
+          borderColor: "var(--platform-border)",
+        }}
+      >
+        <DialogHeader className="px-6 pt-6 pb-4 border-b" style={{ borderColor: "var(--platform-border)" }}>
+          <DialogTitle className="text-xl font-semibold" style={{ color: "var(--platform-fg)" }}>
+            {isView ? "Vista previa de la conexión" : "Configurar conexión"}
           </DialogTitle>
           <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
-            Datos de la conexión y tablas seleccionadas para el ETL.
+            {isView
+              ? "Datos de la conexión (solo lectura)."
+              : "Editá los parámetros de la conexión y guardá los cambios."}
           </DialogDescription>
         </DialogHeader>
 
         {loading ? (
-          <p className="text-sm py-4" style={{ color: "var(--platform-fg-muted)" }}>
+          <div className="px-6 py-8 text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
             Cargando…
-          </p>
+          </div>
         ) : error ? (
-          <p className="text-sm py-4" style={{ color: "var(--platform-error, #dc2626)" }}>
+          <div
+            className="mx-6 mt-4 rounded-xl border px-4 py-3 text-sm"
+            style={{
+              borderColor: "rgba(248,113,113,0.3)",
+              background: "var(--platform-surface)",
+              color: "var(--platform-danger)",
+            }}
+          >
             {error}
-          </p>
+          </div>
         ) : conn ? (
-          <div className="space-y-5">
-            {/* Datos de la conexión */}
-            <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-              <h4 className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>
-                Datos de la conexión
-              </h4>
-              <dl className="grid gap-2 text-sm">
-                <div>
-                  <dt className="font-medium" style={{ color: "var(--platform-fg-muted)" }}>Nombre</dt>
-                  <dd style={{ color: "var(--platform-fg)" }}>{conn.name}</dd>
-                </div>
-                <div>
-                  <dt className="font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tipo</dt>
-                  <dd style={{ color: "var(--platform-fg)" }}>{conn.type}</dd>
-                </div>
-                {conn.db_host != null && (
-                  <div>
-                    <dt className="font-medium" style={{ color: "var(--platform-fg-muted)" }}>Host</dt>
-                    <dd style={{ color: "var(--platform-fg)" }}>{conn.db_host}</dd>
-                  </div>
+          <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col">
+            <div className="px-6 py-5 space-y-5 max-h-[60vh] overflow-y-auto">
+              {/* Nombre */}
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                  Nombre de la conexión
+                </label>
+                {isView ? (
+                  <p className="py-2.5 text-sm" style={{ color: "var(--platform-fg)" }}>{conn.name}</p>
+                ) : (
+                  <Input
+                    {...register("name", { required: "Completá el nombre" })}
+                    placeholder="Ej. Ventas 2025"
+                    className={inputClass}
+                  />
                 )}
-                {conn.db_name != null && (
-                  <div>
-                    <dt className="font-medium" style={{ color: "var(--platform-fg-muted)" }}>Base de datos</dt>
-                    <dd style={{ color: "var(--platform-fg)" }}>{conn.db_name}</dd>
-                  </div>
-                )}
-                {conn.db_user != null && (
-                  <div>
-                    <dt className="font-medium" style={{ color: "var(--platform-fg-muted)" }}>Usuario</dt>
-                    <dd style={{ color: "var(--platform-fg)" }}>{conn.db_user}</dd>
-                  </div>
-                )}
-                {conn.db_port != null && (
-                  <div>
-                    <dt className="font-medium" style={{ color: "var(--platform-fg-muted)" }}>Puerto</dt>
-                    <dd style={{ color: "var(--platform-fg)" }}>{conn.db_port}</dd>
-                  </div>
-                )}
-                {conn.original_file_name && (
-                  <div>
-                    <dt className="font-medium" style={{ color: "var(--platform-fg-muted)" }}>Archivo</dt>
-                    <dd style={{ color: "var(--platform-fg)" }} className="truncate">{conn.original_file_name}</dd>
-                  </div>
-                )}
-              </dl>
-            </div>
-
-            {/* Tablas seleccionadas */}
-            <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>
-                  Tablas seleccionadas para ETL
-                </h4>
-                {onOpenTables && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="rounded-lg"
-                    style={{ borderColor: "var(--platform-border)" }}
-                    onClick={() => {
-                      onOpenChange(false);
-                      onOpenTables(connectionId!, conn.name, conn.type);
-                    }}
-                  >
-                    <Table2 className="h-4 w-4 mr-1.5" />
-                    Editar tablas
-                  </Button>
+                {errors.name && (
+                  <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.name.message}</p>
                 )}
               </div>
-              {hasTables ? (
-                <ul className="max-h-48 overflow-y-auto space-y-1 text-sm font-mono" style={{ color: "var(--platform-fg)" }}>
-                  {tables.map((t, i) => (
-                    <li key={i} className="py-0.5">{t}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-                  Ninguna tabla configurada. En el ETL se listarán todas las tablas disponibles. Podés elegir tablas con &quot;Editar tablas&quot;.
-                </p>
+
+              {/* Tipo */}
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                  Tipo
+                </label>
+                {isView ? (
+                  <p className="py-2.5 text-sm capitalize" style={{ color: "var(--platform-fg)" }}>{conn.type}</p>
+                ) : (
+                  <Controller
+                    name="type"
+                    control={control}
+                    rules={{ required: "Seleccione un tipo" }}
+                    render={({ field }) => (
+                      <Select
+                        value={field.value}
+                        onChange={field.onChange}
+                        onBlur={field.onBlur}
+                        options={CONNECTION_TYPE_OPTIONS}
+                        placeholder="Tipo"
+                        disablePortal
+                      />
+                    )}
+                  />
+                )}
+              </div>
+
+              {!isExcel && (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                        Host
+                      </label>
+                      {isView ? (
+                        <p className="py-2.5 text-sm truncate" style={{ color: "var(--platform-fg)" }}>{conn.db_host || "—"}</p>
+                      ) : (
+                        <Input
+                          {...register("db_host")}
+                          placeholder="Ej. localhost"
+                          className={inputClass}
+                        />
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                        Puerto
+                      </label>
+                      {isView ? (
+                        <p className="py-2.5 text-sm" style={{ color: "var(--platform-fg)" }}>{conn.db_port ?? "—"}</p>
+                      ) : (
+                        <Input
+                          {...register("db_port")}
+                          type="number"
+                          placeholder="3306"
+                          className={inputClass}
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                      Base de datos
+                    </label>
+                    {isView ? (
+                      <p className="py-2.5 text-sm truncate" style={{ color: "var(--platform-fg)" }}>{conn.db_name || "—"}</p>
+                    ) : (
+                      <Input
+                        {...register("db_name")}
+                        placeholder="Nombre de la base"
+                        className={inputClass}
+                      />
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                      Usuario
+                    </label>
+                    {isView ? (
+                      <p className="py-2.5 text-sm" style={{ color: "var(--platform-fg)" }}>{conn.db_user || "—"}</p>
+                    ) : (
+                      <Input
+                        {...register("db_user")}
+                        placeholder="Usuario de la base"
+                        className={inputClass}
+                      />
+                    )}
+                  </div>
+                </>
+              )}
+
+              {isExcel && conn.original_file_name && (
+                <div>
+                  <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                    Archivo
+                  </label>
+                  <p className="py-2.5 text-sm truncate" style={{ color: "var(--platform-fg)" }}>{conn.original_file_name}</p>
+                </div>
+              )}
+
+              <div className="text-xs" style={{ color: "var(--platform-muted)" }}>
+                Última actualización: {conn.updated_at ? new Date(conn.updated_at).toLocaleString() : "—"}
+              </div>
+            </div>
+
+            <div
+              className="flex flex-row justify-end gap-3 px-6 py-4 mt-auto border-t"
+              style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+            >
+              <button
+                type="button"
+                onClick={() => onOpenChange(false)}
+                className="h-10 px-4 rounded-xl text-sm font-medium transition-opacity hover:opacity-90"
+                style={{
+                  color: "var(--platform-fg)",
+                  border: "1px solid var(--platform-border)",
+                  background: "var(--platform-bg)",
+                }}
+              >
+                {isView ? "Cerrar" : "Cancelar"}
+              </button>
+              {!isView && (
+                <button
+                  type="submit"
+                  disabled={saving || !isDirty}
+                  className="h-10 px-5 rounded-xl text-sm font-medium transition-opacity disabled:opacity-50 hover:opacity-90"
+                  style={{
+                    color: "var(--platform-accent-fg)",
+                    background: "var(--platform-accent)",
+                  }}
+                >
+                  {saving ? "Guardando…" : "Guardar"}
+                </button>
               )}
             </div>
-          </div>
+          </form>
         ) : null}
       </DialogContent>
     </Dialog>
