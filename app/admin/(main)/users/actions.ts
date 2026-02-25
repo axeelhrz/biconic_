@@ -331,6 +331,30 @@ export async function deleteProfile(userId: string) {
   }
 }
 
+/** Eliminar varios perfiles (solo para admin). */
+export async function deleteProfiles(userIds: string[]): Promise<{ ok: boolean; error?: string }> {
+  if (userIds.length === 0) return { ok: true };
+  try {
+    const supabase = await (
+      await import("@/lib/supabase/server")
+    ).createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { ok: false, error: "No autorizado" };
+
+    const { error } = await supabase
+      .from("profiles")
+      .delete()
+      .in("id", userIds);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true } as const;
+  } catch (err) {
+    console.error(err);
+    return { ok: false, error: "No se pudo eliminar los usuarios" } as const;
+  }
+}
+
 export interface UserForEdit {
   id: string;
   full_name: string | null;

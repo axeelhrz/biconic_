@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import {
@@ -10,11 +10,12 @@ import {
   setUserAppRole,
   setUserStatus,
   deleteProfile,
+  deleteProfiles,
 } from "@/app/admin/(main)/users/actions";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Eye, PencilLine, Trash2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Eye, PencilLine, Trash2, X, Loader2, Download } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -43,49 +44,253 @@ export default function AdminUserTable({ search, filter }: Props) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<AdminUser | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [singleDeleteOpen, setSingleDeleteOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<AdminUser | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const res = await getAdminUsers({ page, pageSize, search, filter });
-      setLoading(false);
-      if (res.ok && res.data) {
-        setRows(res.data.users);
-        setTotal(res.data.total);
-      } else if (!res.ok) {
-        toast.error(res.error ?? "No se pudieron cargar los usuarios");
-      }
-    })();
+  const loadPage = useCallback(async () => {
+    setLoading(true);
+    const res = await getAdminUsers({ page, pageSize, search, filter });
+    setLoading(false);
+    if (res.ok && res.data) {
+      setRows(res.data.users);
+      setTotal(res.data.total);
+    } else if (!res.ok) {
+      toast.error(res.error ?? "No se pudieron cargar los usuarios");
+    }
   }, [page, pageSize, search, filter]);
 
-  // Mantener la tabla pegada al diseño pero responsiva
+  useEffect(() => {
+    loadPage();
+  }, [loadPage]);
+
+  const selectedSet = new Set(selectedIds);
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+  const selectAllPage = () => {
+    const ids = rows.map((u) => u.id);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+  };
+  const clearSelection = () => setSelectedIds([]);
+  const exportCurrent = () => exportCSV(rows);
+  const exportSelected = () => {
+    const toExport = rows.filter((u) => selectedSet.has(u.id));
+    if (toExport.length === 0) {
+      toast.info("Seleccioná al menos un usuario para exportar");
+      return;
+    }
+    exportCSV(toExport);
+  };
+
+  const handleBulkDeleteConfirm = async () => {
+    if (selectedIds.length === 0) return;
+    setDeleting(true);
+    const res = await deleteProfiles(selectedIds);
+    setDeleting(false);
+    setBulkDeleteOpen(false);
+    setSelectedIds([]);
+    if (res.ok) {
+      toast.success(selectedIds.length === 1 ? "Usuario eliminado." : `${selectedIds.length} usuarios eliminados.`);
+      loadPage();
+    } else {
+      toast.error(res.error ?? "No se pudo eliminar");
+    }
+  };
+
+  const openSingleDelete = (u: AdminUser) => {
+    setUserToDelete(u);
+    setSingleDeleteOpen(true);
+  };
+  const handleSingleDeleteConfirm = async () => {
+    if (!userToDelete) return;
+    setDeleting(true);
+    const res = await deleteProfile(userToDelete.id);
+    setDeleting(false);
+    setSingleDeleteOpen(false);
+    setUserToDelete(null);
+    if (res.ok) {
+      toast.success("Usuario eliminado.");
+      setRows((r) => r.filter((x) => x.id !== userToDelete.id));
+      setTotal((t) => Math.max(0, t - 1));
+    } else {
+      toast.error(res.error ?? "No se pudo eliminar");
+    }
+  };
+
   return (
     <div className="flex w-full flex-col gap-5">
-      <div className="flex w-full items-center justify-between">
-        <h2 className="text-[20px] font-semibold" style={{ color: "var(--platform-fg)" }}>
-          Usuarios
-        </h2>
+      {/* Barra: seleccionar todo, quitar todo, cantidad, exportar, eliminar */}
+      <div
+        className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+        }}
+      >
         <Button
+          type="button"
           variant="outline"
-          className="h-[34px] rounded-full"
-          style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
-          onClick={() => exportCSV(rows)}
+          size="sm"
+          className="rounded-lg h-9"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={selectAllPage}
         >
-          Exportar
+          Seleccionar todo
         </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-lg h-9 gap-1.5"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={clearSelection}
+        >
+          <X className="h-4 w-4" />
+          Quitar todo
+        </Button>
+        {selectedIds.length > 0 && (
+          <span className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+            {selectedIds.length} seleccionado{selectedIds.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-lg h-9 gap-1.5"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={selectedIds.length > 0 ? exportSelected : exportCurrent}
+        >
+          <Download className="h-4 w-4" />
+          {selectedIds.length > 0 ? "Exportar selección" : "Exportar página"}
+        </Button>
+        {selectedIds.length > 0 && (
+          <Button
+            type="button"
+            size="sm"
+            className="rounded-lg h-9 gap-1.5 ml-auto"
+            style={{ background: "var(--platform-danger)", color: "#fff" }}
+            onClick={() => setBulkDeleteOpen(true)}
+            disabled={deleting}
+          >
+            <Trash2 className="h-4 w-4" />
+            {deleting ? "Eliminando…" : "Eliminar seleccionados"}
+          </Button>
+        )}
       </div>
 
+      {/* Modal eliminar varios */}
+      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <DialogContent
+          className="sm:max-w-[400px]"
+          style={{
+            background: "var(--platform-surface)",
+            borderColor: "var(--platform-border)",
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: "var(--platform-fg)" }}>
+              {selectedIds.length === 1 ? "Eliminar usuario" : "Eliminar usuarios seleccionados"}
+            </DialogTitle>
+            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
+              {selectedIds.length === 1
+                ? "¿Eliminar este usuario? Esta acción no se puede deshacer."
+                : `¿Eliminar los ${selectedIds.length} usuarios seleccionados? Esta acción no se puede deshacer.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setBulkDeleteOpen(false)}
+              disabled={deleting}
+              className="rounded-xl"
+              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              className="rounded-xl gap-2"
+              style={{ background: "var(--platform-danger)", color: "#fff" }}
+              onClick={handleBulkDeleteConfirm}
+              disabled={deleting}
+            >
+              {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {deleting ? "Eliminando…" : "Eliminar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal eliminar uno */}
+      <Dialog open={singleDeleteOpen} onOpenChange={setSingleDeleteOpen}>
+        <DialogContent
+          className="sm:max-w-[400px]"
+          style={{
+            background: "var(--platform-surface)",
+            borderColor: "var(--platform-border)",
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: "var(--platform-fg)" }}>Eliminar usuario</DialogTitle>
+            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
+              ¿Eliminar a {userToDelete?.name} ({userToDelete?.email})? Esta acción no se puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setSingleDeleteOpen(false)}
+              disabled={deleting}
+              className="rounded-xl"
+              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              className="rounded-xl gap-2"
+              style={{ background: "var(--platform-danger)", color: "#fff" }}
+              onClick={handleSingleDeleteConfirm}
+              disabled={deleting}
+            >
+              {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {deleting ? "Eliminando…" : "Eliminar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <div
+        className="w-full overflow-hidden rounded-xl border shadow-sm"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+        }}
+      >
       <div className="w-full overflow-x-auto">
         <table className="min-w-[800px] w-full table-fixed">
           <thead style={{ background: "var(--platform-bg-elevated)" }}>
             <tr className="text-left text-[12px] font-semibold" style={{ color: "var(--platform-fg-muted)" }}>
-              <Th className="w-[240px]">Usuario</Th>
-              <Th className="w-[240px]">Correo</Th>
-              <Th className="w-[160px]">Activo desde</Th>
-              <Th className="w-[260px]">Empresas</Th>
-              <Th className="w-[140px]">Estado</Th>
-              <Th className="w-[140px]">Rol</Th>
+              <Th className="w-12 px-2" />
+              <Th className="w-[220px]">Usuario</Th>
+              <Th className="w-[220px]">Correo</Th>
+              <Th className="w-[140px]">Activo desde</Th>
+              <Th className="w-[240px]">Empresas</Th>
+              <Th className="w-[120px]">Estado</Th>
+              <Th className="w-[120px]">Rol</Th>
               <Th className="w-[100px]">Acciones</Th>
             </tr>
           </thead>
@@ -94,7 +299,7 @@ export default function AdminUserTable({ search, filter }: Props) {
             {!loading && rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-4 py-8 text-center text-sm"
                   style={{ color: "var(--platform-fg-muted)" }}
                 >
@@ -109,6 +314,13 @@ export default function AdminUserTable({ search, filter }: Props) {
                   className="border-b text-sm"
                   style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                 >
+                  <Td className="px-2" style={{ borderColor: "var(--platform-border)" }}>
+                    <Checkbox
+                      checked={selectedSet.has(u.id)}
+                      onCheckedChange={() => toggleSelect(u.id)}
+                      className="h-4 w-4 rounded-md border-2 border-[var(--platform-fg-muted)] data-[state=checked]:border-[var(--platform-accent)] data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:text-white"
+                    />
+                  </Td>
                   <Td style={{ borderColor: "var(--platform-border)" }}>
                     <div className="flex items-center gap-2">
                       <div
@@ -237,10 +449,11 @@ export default function AdminUserTable({ search, filter }: Props) {
                           </IconButton>
                         </DialogTrigger>
                         <DialogContent
-                          className="border"
+                          className="sm:max-w-[440px] rounded-2xl border"
                           style={{
                             background: "var(--platform-surface)",
                             borderColor: "var(--platform-border)",
+                            boxShadow: "0 4px 24px rgba(0,0,0,0.08)",
                           }}
                         >
                           <DialogHeader>
@@ -249,34 +462,24 @@ export default function AdminUserTable({ search, filter }: Props) {
                               {u.name} — {u.email}
                             </DialogDescription>
                           </DialogHeader>
-                          <div className="mt-2 text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-                            <p>
-                              <strong>Rol:</strong> {u.app_role || "Sin rol"}
-                            </p>
-                            <p>
-                              <strong>Estado:</strong>{" "}
-                              {u.status === "activo" ? "Activo" : "Inactivo"}
-                            </p>
+                          <div className="mt-3 rounded-xl border p-4 text-sm" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-bg-elevated)" }}>
+                            <p><strong style={{ color: "var(--platform-fg)" }}>Rol:</strong> {u.app_role || "Sin rol"}</p>
+                            <p className="mt-1"><strong style={{ color: "var(--platform-fg)" }}>Estado:</strong> {u.status === "activo" ? "Activo" : "Inactivo"}</p>
                             <div className="mt-2">
-                                <strong>Empresas:</strong>
-                                <ul className="ml-4 mt-1 list-disc">
-                                {u.companies?.map(c => (
-                                    <li key={c.id}>
-                                        {c.name} ({c.role})
-                                    </li>
-                                )) || "Ninguna"}
-                                </ul>
+                              <strong style={{ color: "var(--platform-fg)" }}>Empresas:</strong>
+                              <ul className="ml-4 mt-1 list-disc">
+                                {u.companies?.length ? u.companies.map(c => (
+                                  <li key={c.id}>{c.name} ({c.role})</li>
+                                )) : <li>Ninguna</li>}
+                              </ul>
                             </div>
-                            <p className="mt-2">
-                              <strong>Activo desde:</strong>{" "}
-                              {formatDate(u.activeSince)}
-                            </p>
+                            <p className="mt-2"><strong style={{ color: "var(--platform-fg)" }}>Activo desde:</strong> {formatDate(u.activeSince)}</p>
                           </div>
                           <DialogFooter>
                             <Button
                               onClick={() => setSelected(null)}
-                              style={{ background: "var(--platform-accent)", color: "#08080b" }}
-                              className="hover:opacity-90"
+                              className="rounded-xl"
+                              style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
                             >
                               Cerrar
                             </Button>
@@ -286,23 +489,7 @@ export default function AdminUserTable({ search, filter }: Props) {
                       <IconButton label="Editar" onClick={() => router.push(`/admin/users/${u.id}/edit`)}>
                         <PencilLine className="h-5 w-5" />
                       </IconButton>
-                      <IconButton
-                        label="Eliminar"
-                        onClick={async () => {
-                          if (!confirm("¿Eliminar este usuario?")) return;
-                          const prev = rows;
-                          setRows((r) => r.filter((x) => x.id !== u.id));
-                          const res = await deleteProfile(u.id);
-                          if (!res.ok) {
-                            setRows(prev);
-                            toast.error(
-                              res.error ?? "No se pudo eliminar el usuario"
-                            );
-                          } else {
-                            toast.success("Usuario eliminado");
-                          }
-                        }}
-                      >
+                      <IconButton label="Eliminar" onClick={() => openSingleDelete(u)}>
                         <Trash2 className="h-5 w-5" />
                       </IconButton>
                     </div>
@@ -311,6 +498,7 @@ export default function AdminUserTable({ search, filter }: Props) {
               ))}
           </tbody>
         </table>
+      </div>
       </div>
 
       {/* Paginación */}
@@ -396,34 +584,43 @@ function Pagination({
   }, [page, totalPages]);
 
   return (
-    <div className="flex items-center justify-center gap-4">
+    <div className="flex items-center justify-center gap-4 py-2">
       <Button
-        variant="ghost"
-        className="h-[30px] rounded-xl text-[#33353B]"
+        variant="outline"
+        size="sm"
+        className="h-9 rounded-xl"
+        style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
         onClick={onPrev}
         disabled={page <= 1}
       >
         Anterior
       </Button>
-
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
         {numbers.map((n) => (
           <button
             key={n}
             onClick={() => onGo(n)}
             className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-xl text-[14px] font-semibold",
-              n === page ? "bg-[#282828] text-white" : "bg-white text-[#00030A]"
+              "flex h-9 w-9 items-center justify-center rounded-xl text-sm font-semibold transition-colors",
+              n === page
+                ? "bg-[var(--platform-accent)] text-[var(--platform-accent-fg)]"
+                : "border bg-transparent"
             )}
+            style={
+              n !== page
+                ? { borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }
+                : undefined
+            }
           >
             {n}
           </button>
         ))}
       </div>
-
       <Button
-        variant="ghost"
-        className="h-[30px] rounded-xl text-[#0F5F4C]"
+        variant="outline"
+        size="sm"
+        className="h-9 rounded-xl"
+        style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
         onClick={onNext}
         disabled={page >= totalPages}
       >
@@ -493,7 +690,7 @@ function SkeletonRows() {
     <>
       {Array.from({ length: 5 }).map((_, i) => (
         <tr key={i} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
-          {Array.from({ length: 7 }).map((__, j) => (
+          {Array.from({ length: 8 }).map((__, j) => (
             <td key={j} className="px-4 py-3" style={{ borderColor: "var(--platform-border)" }}>
               <div
                 className="h-4 w-full max-w-[200px] animate-pulse rounded"
@@ -545,10 +742,11 @@ function CompanyBadge({ company }: { company: CompanyAccess }) {
 
       <Dialog open={showDashboards} onOpenChange={setShowDashboards}>
         <DialogContent
-          className="sm:max-w-[425px] border"
+          className="sm:max-w-[425px] rounded-2xl border"
           style={{
             background: "var(--platform-surface)",
             borderColor: "var(--platform-border)",
+            boxShadow: "0 4px 24px rgba(0,0,0,0.08)",
           }}
         >
           <DialogHeader>
@@ -563,16 +761,17 @@ function CompanyBadge({ company }: { company: CompanyAccess }) {
                 {dashboards.map((d) => (
                   <li
                     key={d.id}
-                    className="flex items-center justify-between rounded-md border p-2 text-sm"
+                    className="flex items-center justify-between rounded-xl border p-3 text-sm"
                     style={{
                       borderColor: "var(--platform-border)",
                       color: "var(--platform-fg)",
+                      background: "var(--platform-bg-elevated)",
                     }}
                   >
                     <span>{d.title}</span>
                     <button
                       onClick={() => setDashboardToRevoke({ id: d.id, title: d.title })}
-                      className="transition-colors hover:opacity-80"
+                      className="rounded-lg p-1.5 transition-colors hover:opacity-80"
                       style={{ color: "var(--platform-fg-muted)" }}
                       title="Revocar acceso"
                     >
@@ -582,7 +781,7 @@ function CompanyBadge({ company }: { company: CompanyAccess }) {
                 ))}
               </ul>
             ) : (
-              <p className="text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+              <p className="text-center text-sm py-4" style={{ color: "var(--platform-fg-muted)" }}>
                 No hay dashboards disponibles.
               </p>
             )}
@@ -590,8 +789,8 @@ function CompanyBadge({ company }: { company: CompanyAccess }) {
           <DialogFooter>
             <Button
               onClick={() => setShowDashboards(false)}
-              style={{ background: "var(--platform-accent)", color: "#08080b" }}
-              className="hover:opacity-90"
+              className="rounded-xl"
+              style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
             >
               Cerrar
             </Button>
@@ -601,10 +800,11 @@ function CompanyBadge({ company }: { company: CompanyAccess }) {
 
       <Dialog open={!!dashboardToRevoke} onOpenChange={(open) => !open && setDashboardToRevoke(null)}>
         <DialogContent
-          className="sm:max-w-[400px] border"
+          className="sm:max-w-[400px] rounded-2xl border"
           style={{
             background: "var(--platform-surface)",
             borderColor: "var(--platform-border)",
+            boxShadow: "0 4px 24px rgba(0,0,0,0.08)",
           }}
         >
           <DialogHeader>
@@ -617,14 +817,15 @@ function CompanyBadge({ company }: { company: CompanyAccess }) {
             <Button
               variant="outline"
               onClick={() => setDashboardToRevoke(null)}
+              className="rounded-xl"
               style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
             >
               Cancelar
             </Button>
             <Button
-              variant="destructive"
               onClick={onConfirmRevoke}
-              className="hover:opacity-90"
+              className="rounded-xl"
+              style={{ background: "var(--platform-danger)", color: "#fff" }}
             >
               Revocar acceso
             </Button>

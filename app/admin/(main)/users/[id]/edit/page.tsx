@@ -29,9 +29,9 @@ function Field({
 }) {
   return (
     <div className="flex w-full flex-col gap-1">
-      <label className="text-[14px] font-medium text-[#66687E]">{label}</label>
+      <label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>{label}</label>
       {children}
-      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+      {error ? <p className="text-xs" style={{ color: "var(--platform-danger)" }}>{error}</p> : null}
     </div>
   );
 }
@@ -184,19 +184,25 @@ export default function EditUserPage() {
 
   if (loading) {
     return (
-      <div className="box-border mx-auto flex w-full max-w-[1390px] flex-col gap-5 rounded-[30px] border border-[#ECECEC] bg-[#FDFDFD] px-10 py-8">
-        <div className="flex w-full flex-col gap-1">
-          <div className="h-8 w-48 animate-pulse rounded bg-gray-200" />
-          <div className="h-4 w-64 animate-pulse rounded bg-gray-200" />
+      <div
+        className="rounded-3xl border px-6 py-8 sm:px-8 sm:py-10 flex flex-col gap-6 max-w-3xl mx-auto"
+        style={{
+          background: "var(--platform-surface)",
+          borderColor: "var(--platform-border)",
+        }}
+      >
+        <div className="flex flex-col gap-2">
+          <div className="h-8 w-48 animate-pulse rounded" style={{ background: "var(--platform-surface-hover)" }} />
+          <div className="h-4 w-64 animate-pulse rounded" style={{ background: "var(--platform-surface-hover)" }} />
         </div>
         <div className="flex justify-center">
-          <div className="h-32 w-32 animate-pulse rounded-full bg-gray-200" />
+          <div className="h-32 w-32 animate-pulse rounded-full" style={{ background: "var(--platform-surface-hover)" }} />
         </div>
-        <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="flex flex-col gap-1">
-              <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
-              <div className="h-10 w-full animate-pulse rounded-[25px] bg-gray-200" />
+              <div className="h-4 w-24 animate-pulse rounded" style={{ background: "var(--platform-surface-hover)" }} />
+              <div className="h-10 w-full animate-pulse rounded-xl" style={{ background: "var(--platform-surface-hover)" }} />
             </div>
           ))}
         </div>
@@ -209,38 +215,35 @@ export default function EditUserPage() {
   }
 
   return (
-    <div className="box-border mx-auto flex w-full max-w-[1390px] flex-col gap-5 rounded-[30px] border border-[#ECECEC] bg-[#FDFDFD] px-10 py-8">
-      {/* Header */}
-      <div className="flex w-full flex-col gap-1">
-        <h1 className="font-exo2 text-[28px] font-semibold leading-none text-[#00030A]">
+    <div
+      className="rounded-3xl border px-6 py-8 sm:px-8 sm:py-10 flex flex-col gap-6 max-w-3xl mx-auto"
+      style={{
+        background: "var(--platform-surface)",
+        borderColor: "var(--platform-border)",
+        boxShadow: "0 4px 24px rgba(0,0,0,0.04)",
+      }}
+    >
+      <div className="flex flex-col gap-1">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" style={{ color: "var(--platform-fg)" }}>
           Editar usuario
         </h1>
-        <p className="text-sm text-[#54565B]">Modifica los datos del usuario</p>
+        <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Modificá los datos del usuario</p>
       </div>
 
-      {/* Avatar Section */}
       <div className="flex flex-col items-center gap-3">
-        <div
-          className="relative group cursor-pointer"
-          onClick={handleAvatarClick}
-        >
-          <div className="relative h-32 w-32 overflow-hidden rounded-full bg-gray-100 border-4 border-[#0F5F4C]/20">
+        <div className="relative group cursor-pointer" onClick={handleAvatarClick}>
+          <div
+            className="relative h-32 w-32 overflow-hidden rounded-full border-4"
+            style={{ background: "var(--platform-bg-elevated)", borderColor: "var(--platform-accent-dim)" }}
+          >
             {avatarUrl ? (
-              <Image
-                src={avatarUrl}
-                alt={fullName || "Avatar"}
-                fill
-                sizes="128px"
-                className="object-cover"
-                unoptimized
-              />
+              <Image src={avatarUrl} alt={fullName || "Avatar"} fill sizes="128px" className="object-cover" unoptimized />
             ) : (
-              <div className="flex h-full w-full items-center justify-center bg-gray-100">
-                <User className="h-16 w-16 text-gray-400" />
+              <div className="flex h-full w-full items-center justify-center" style={{ background: "var(--platform-bg-elevated)" }}>
+                <User className="h-16 w-16" style={{ color: "var(--platform-fg-muted)" }} />
               </div>
             )}
           </div>
-          {/* Overlay on hover */}
           <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
             {uploadingAvatar ? (
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-white border-t-transparent" />
@@ -249,50 +252,44 @@ export default function EditUserPage() {
             )}
           </div>
         </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={handleAvatarChange}
-          disabled={uploadingAvatar}
-        />
+        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} disabled={uploadingAvatar} />
         <button
           type="button"
           onClick={handleAvatarClick}
           disabled={uploadingAvatar}
-          className="text-sm text-[#0F5F4C] hover:underline disabled:opacity-50"
+          className="text-sm hover:underline disabled:opacity-50"
+          style={{ color: "var(--platform-accent)" }}
         >
           {uploadingAvatar ? "Subiendo..." : "Cambiar foto de perfil"}
         </button>
       </div>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-        {/* Email (readonly) */}
-        <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <Field label="Correo electrónico">
             <Input
               value={user.email ?? ""}
               disabled
-              className="rounded-[25px] bg-gray-100 cursor-not-allowed"
+              className="rounded-xl cursor-not-allowed"
+              style={{ background: "var(--platform-bg-elevated)" }}
             />
           </Field>
           <Field label="Nombre completo">
             <Input
-              placeholder="Ingrese el nombre completo"
-              className="rounded-[25px]"
+              placeholder="Ingresá el nombre completo"
+              className="rounded-xl border"
+              style={{ borderColor: "var(--platform-border)" }}
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
             />
           </Field>
         </div>
-
-        {/* Job title and App Role */}
-        <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <Field label="Cargo / Título">
             <Input
-              placeholder="Ingrese el cargo"
-              className="rounded-[25px]"
+              placeholder="Ingresá el cargo"
+              className="rounded-xl border"
+              style={{ borderColor: "var(--platform-border)" }}
               value={jobTitle}
               onChange={(e) => setJobTitle(e.target.value)}
             />
@@ -301,41 +298,36 @@ export default function EditUserPage() {
             <Select
               value={appRole}
               onChange={(val: string) => setAppRole(val as AppRole)}
-              placeholder="Seleccione un rol"
+              placeholder="Seleccioná un rol"
               options={[
                 { label: "Viewer", value: "VIEWER" },
                 { label: "Creator", value: "CREATOR" },
                 { label: "App Admin", value: "APP_ADMIN" },
               ]}
-              className="rounded-[25px]"
+              className="rounded-xl"
             />
           </Field>
         </div>
-
-        {/* Status */}
-        <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <Field label="Estado del usuario">
             <Select
               value={status}
-              onChange={(val: string) =>
-                setStatus(val as "activo" | "inactivo")
-              }
-              placeholder="Seleccione un estado"
+              onChange={(val: string) => setStatus(val as "activo" | "inactivo")}
+              placeholder="Seleccioná un estado"
               options={[
                 { label: "Activo", value: "activo" },
                 { label: "Inactivo", value: "inactivo" },
               ]}
-              className="rounded-[25px]"
+              className="rounded-xl"
             />
           </Field>
         </div>
-
-        {/* Footer actions */}
-        <div className="flex w-full items-center justify-end gap-6 pt-4">
+        <div className="flex items-center justify-end gap-4 pt-4">
           <Button
             type="button"
             variant="outline"
-            className="h-10 w-[150px] rounded-full border-[#0F5F4C] text-[#0F5F4C]"
+            className="h-10 rounded-xl px-6"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
             onClick={() => router.push("/admin/users")}
           >
             Cancelar
@@ -343,7 +335,8 @@ export default function EditUserPage() {
           <Button
             type="submit"
             disabled={submitting}
-            className="h-10 w-[150px] rounded-full bg-[#0F5F4C] hover:opacity-90"
+            className="h-10 rounded-xl px-6"
+            style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
           >
             {submitting ? "Guardando..." : "Guardar cambios"}
           </Button>

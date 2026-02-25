@@ -126,58 +126,49 @@ export default function NewUserPage() {
   });
 
   return (
-    <div className="box-border mx-auto flex w-full max-w-[1390px] flex-col gap-5 rounded-[30px] border border-[#ECECEC] bg-[#FDFDFD] px-10 py-8">
+    <div
+      className="rounded-3xl border px-6 py-8 sm:px-8 sm:py-10 flex flex-col gap-6 max-w-3xl mx-auto"
+      style={{
+        background: "var(--platform-surface)",
+        borderColor: "var(--platform-border)",
+        boxShadow: "0 4px 24px rgba(0,0,0,0.04)",
+      }}
+    >
       <FormProvider {...methods}>
-        {/* Header */}
-        <div className="flex w-full flex-col gap-1">
-          <h1 className="font-exo2 text-[28px] font-semibold leading-none text-[#00030A]">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" style={{ color: "var(--platform-fg)" }}>
             Crear cliente
           </h1>
-          <p className="text-sm text-[#54565B]">
-            Crea cliente empresa o cliente individuo
+          <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+            Creá cliente empresa o cliente individuo
           </p>
         </div>
-
-        {/* Tipo de cliente */}
-        <div className="flex w-full flex-col gap-3">
-          <div className="text-sm font-medium text-[#66687E]">
+        <div className="flex flex-col gap-3">
+          <div className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
             Tipo de cliente
           </div>
           <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
             <label className="flex cursor-pointer items-center gap-2">
-              <input
-                type="radio"
-                value="empresa"
-                {...register("clientType")}
-                className="h-4 w-4 accent-[#02B8D1]"
-              />
-              <span className="text-[16px] text-[#282828]">Empresa</span>
+              <input type="radio" value="empresa" {...register("clientType")} className="h-4 w-4" style={{ accentColor: "var(--platform-accent)" }} />
+              <span className="text-base" style={{ color: "var(--platform-fg)" }}>Empresa</span>
             </label>
             <label className="flex cursor-pointer items-center gap-2">
-              <input
-                type="radio"
-                value="individuo"
-                {...register("clientType")}
-                className="h-4 w-4 accent-[#02B8D1]"
-              />
-              <span className="text-[16px] text-[#282828]">Individuo</span>
+              <input type="radio" value="individuo" {...register("clientType")} className="h-4 w-4" style={{ accentColor: "var(--platform-accent)" }} />
+              <span className="text-base" style={{ color: "var(--platform-fg)" }}>Individuo</span>
             </label>
           </div>
         </div>
-
-        {/* Formulario por tipo */}
         {clientType === "empresa" ? (
           <FormEmpresa errors={errors} register={register} />
         ) : (
           <FormIndividuo errors={errors} register={register} />
         )}
-
-        {/* Footer acciones */}
-        <div className="flex w-full items-center justify-end gap-6">
+        <div className="flex items-center justify-end gap-4">
           <Button
             type="button"
             variant="outline"
-            className="h-10 w-[150px] rounded-full border-[#0F5F4C] text-[#0F5F4C]"
+            className="h-10 rounded-xl px-6"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
             onClick={() => router.push("/admin/users")}
           >
             Cancelar
@@ -185,7 +176,8 @@ export default function NewUserPage() {
           <Button
             onClick={onSubmit}
             disabled={submitting}
-            className="h-10 w-[150px] rounded-full bg-[#0F5F4C] hover:opacity-90"
+            className="h-10 rounded-xl px-6"
+            style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
           >
             {submitting ? "Guardando..." : "Guardar"}
           </Button>
@@ -206,9 +198,9 @@ function Field({
 }) {
   return (
     <div className="flex w-full flex-col gap-1">
-      <Label className="text-[14px] font-medium text-[#66687E]">{label}</Label>
+      <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>{label}</Label>
       {children}
-      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+      {error ? <p className="text-xs" style={{ color: "var(--platform-danger)" }}>{error}</p> : null}
     </div>
   );
 }
