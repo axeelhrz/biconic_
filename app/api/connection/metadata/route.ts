@@ -415,6 +415,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const allowedSet = new Set(connectionTables.map((t: string) => String(t).trim().toLowerCase()));
         tables = tables.filter((t: any) => allowedSet.has(`${t.schema}.${t.name}`.toLowerCase()));
       }
+      if (typeof bodyTableName === "string" && bodyTableName.trim()) {
+        const wanted = bodyTableName.trim().toLowerCase();
+        const single = tables.find((t: any) => `${t.schema}.${t.name}`.toLowerCase() === wanted);
+        tables = single ? [single] : tables.filter((t: any) => `${t.schema}.${t.name}`.toLowerCase() === wanted);
+      }
       return { dbVersion, schemas, tables };
       };
 
@@ -537,6 +542,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (connectionTables && connectionTables.length > 0) {
         const allowedSet = new Set(connectionTables.map((t: string) => String(t).trim().toLowerCase()));
         tables = tables.filter((t: any) => allowedSet.has(`${t.schema}.${t.name}`.toLowerCase()));
+      }
+      if (typeof bodyTableName === "string" && bodyTableName.trim()) {
+        const wanted = bodyTableName.trim().toLowerCase();
+        const single = tables.find((t: any) => `${t.schema}.${t.name}`.toLowerCase() === wanted);
+        tables = single ? [single] : tables.filter((t: any) => `${t.schema}.${t.name}`.toLowerCase() === wanted);
       }
       return { dbVersion, schemas, tables };
       };

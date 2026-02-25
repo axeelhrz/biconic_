@@ -84,6 +84,8 @@ type MetricsDataResponse = {
     rawRows?: Record<string, unknown>[];
     /** Periodicidad natural inferida por columna de fecha (Diaria, Semanal, Mensual, Anual, Irregular). El admin puede editarla en la UI. */
     dateColumnPeriodicity?: Record<string, string>;
+    /** Nombres para mostrar y formato por columna (desde ETL guided_config.filter.columnDisplay). */
+    columnDisplay?: Record<string, { label?: string; format?: string }>;
   };
 };
 
@@ -814,7 +816,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                             const inferred = data?.dateColumnPeriodicity?.[val];
                             if (inferred) setPeriodicity(inferred);
                           }}
-                          options={dateFields.map((f) => ({ label: f, value: f }))}
+                          options={dateFields.map((f) => ({ label: (data?.columnDisplay?.[f]?.label?.trim() || f), value: f }))}
                           placeholder={dateFields.length === 0 ? "No hay columnas de fecha" : "Seleccionar columna"}
                           className="w-full"
                           buttonClassName="w-full h-9 rounded-lg border px-3 text-sm"
@@ -949,7 +951,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tabla: {data?.schema}.{data?.tableName}</li>
                     <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Columnas: {fields.length}</li>
                     {grainOption && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Grain: {grainOption === "_custom" ? (grainCustomColumns.length > 0 ? grainCustomColumns.join(" + ") : "Personalizado") : grainOption}</li>}
-                    {datasetHasTime && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tiempo: {timeColumn || dateFields[0] || "—"} · {periodicity}</li>}
+                    {datasetHasTime && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tiempo: {(() => { const col = timeColumn || dateFields[0]; return col ? (data?.columnDisplay?.[col]?.label?.trim() || col) : "—"; })()} · {periodicity}</li>}
                   </ul>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>

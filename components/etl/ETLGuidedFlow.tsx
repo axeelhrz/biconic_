@@ -22,6 +22,7 @@ import {
   X,
   Plus,
   RotateCcw,
+  List,
 } from "lucide-react";
 import { Connection as ServerConnection } from "@/components/connections/ConnectionsCard";
 import { Select } from "@/components/ui/Select";
@@ -30,6 +31,7 @@ import { toast } from "sonner";
 const STEPS = [
   { id: "conexion", label: "Conexión", icon: Link2 },
   { id: "origen", label: "Origen", icon: Database },
+  { id: "columnas_tipos", label: "Columnas y tipos", icon: List },
   { id: "filtros", label: "Columnas y filtros", icon: Filter },
   { id: "transformacion", label: "Transformación", icon: Sparkles },
   { id: "destino", label: "Destino", icon: Table },
@@ -37,6 +39,24 @@ const STEPS = [
 ] as const;
 
 type StepId = (typeof STEPS)[number]["id"];
+
+/** Mapea data_type de BD a etiqueta legible para la UI. */
+function dataTypeToLabel(dataType: string | undefined): "Fecha" | "Número" | "Texto" {
+  if (!dataType) return "Texto";
+  const d = String(dataType).toLowerCase();
+  if (["date", "timestamp", "timestamptz", "datetime", "time"].some((t) => d.includes(t))) return "Fecha";
+  if (["int", "integer", "bigint", "smallint", "numeric", "decimal", "float", "double", "real"].some((t) => d.includes(t))) return "Número";
+  return "Texto";
+}
+
+const DATE_FORMAT_OPTIONS = [
+  { value: "", label: "(por defecto)" },
+  { value: "DD/MM/YYYY", label: "DD/MM/YYYY" },
+  { value: "MM/DD/YYYY", label: "MM/DD/YYYY" },
+  { value: "YYYY-MM-DD", label: "YYYY-MM-DD (ISO)" },
+  { value: "DD-MM-YYYY", label: "DD-MM-YYYY" },
+  { value: "DD MMM YYYY", label: "DD MMM YYYY" },
+];
 
 const NORMALIZE_OPTIONS = [
   { value: "", label: "(ninguna)" },
@@ -85,6 +105,8 @@ export type GuidedConfig = {
     conditions?: Array<{ column: string; operator: string; value?: string }>;
     /** Columna usada en "Excluir filas" para cargar valores y marcar excluidos */
     excludeRowsColumn?: string;
+    /** Nombres para mostrar y formato por columna (ej. fecha: DD/MM/YYYY) */
+    columnDisplay?: Record<string, { label?: string; format?: string }>;
   };
   union?: {
     left?: { connectionId?: string | number; filter?: { table?: string; columns?: string[]; conditions?: unknown[] } };
@@ -127,6 +149,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [tables, setTables] = useState<{ schema: string; name: string; columns: { name: string }[] }[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
+  /** Por cada columna: nombre para mostrar (alias) y formato de visualización (ej. DD/MM/YYYY para fechas). */
+  const [columnDisplay, setColumnDisplay] = useState<Record<string, { label: string; format: string }>>({});
   const [conditions, setConditions] = useState<Array<{ column: string; operator: string; value?: string }>>([]);
   /** Excluir filas por valores: por cada columna, lista de valores a excluir (NOT IN) */
   const [excludedValues, setExcludedValues] = useState<Array<{ column: string; excluded: string[] }>>([]);
@@ -278,6 +302,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (notInConds.length > 0) setExcludedValues(notInConds.map((c: { column: string; value?: string }) => ({ column: c.column, excluded: (c.value ?? "").split(",").filter(Boolean) })));
     const excludeRowsCol = (filter as { excludeRowsColumn?: string })?.excludeRowsColumn ?? notInConds[0]?.column;
     if (excludeRowsCol && typeof excludeRowsCol === "string") setDistinctColumn(excludeRowsCol.trim());
+    const colDisp = (filter as { columnDisplay?: Record<string, { label?: string; format?: string }> })?.columnDisplay;
+    if (colDisp && typeof colDisp === "object") {
+      const next: Record<string, { label: string; format: string }> = {};
+      for (const [k, v] of Object.entries(colDisp)) {
+        if (v && (v.label !== undefined || v.format !== undefined))
+          next[k] = { label: v.label ?? "", format: v.format ?? "" };
+      }
+      setColumnDisplay(next);
+    }
     const end = cfg.end;
     if (end?.target?.table) setOutputTableName(end.target.table);
     if (end?.mode) setOutputMode(end.mode);
@@ -402,15 +435,23 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     fetchMetadata(connectionId, selectedTable)
       .then((res) => res.json())
       .then((data) => {
-        if (!data.ok || !data.metadata?.tables?.[0]?.columns) {
+        if (!data.ok || !data.metadata?.tables?.length) {
           setLoadingColumns(null);
           return;
         }
-        const cols = data.metadata.tables[0].columns.map((c: { name: string }) => c.name);
+        const tablesList = data.metadata.tables as { schema: string; name: string; columns?: { name: string; dataType?: string }[] }[];
+        const match = tablesList.find((t: { schema: string; name: string }) => `${t.schema}.${t.name}` === selectedTable)
+          ?? tablesList.find((t: { schema: string; name: string }) => `${t.schema}.${t.name}`.toLowerCase() === selectedTable.toLowerCase());
+        const tableColumns = match?.columns ?? data.metadata.tables[0]?.columns;
+        if (!tableColumns?.length) {
+          setLoadingColumns(null);
+          return;
+        }
+        const cols = tableColumns.map((c: { name: string }) => c.name);
         setTables((prev) =>
           prev.map((t) =>
             `${t.schema}.${t.name}` === selectedTable
-              ? { ...t, columns: data.metadata.tables[0].columns }
+              ? { ...t, columns: tableColumns }
               : t
           )
         );
@@ -591,6 +632,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       conditions: filterConditions.length > 0 ? filterConditions : [],
     };
     if (distinctColumn) filterPayload.excludeRowsColumn = distinctColumn;
+    const colDisplayFiltered: Record<string, { label?: string; format?: string }> = {};
+    for (const [k, v] of Object.entries(columnDisplay)) {
+      if (v && (v.label?.trim() || v.format?.trim())) colDisplayFiltered[k] = { label: v.label?.trim() || undefined, format: v.format?.trim() || undefined };
+    }
+    if (Object.keys(colDisplayFiltered).length > 0) {
+      (filterPayload as Record<string, unknown>).columnDisplay = colDisplayFiltered;
+    }
     const body: Record<string, unknown> = {
       connectionId,
       filter: filterPayload,
@@ -650,6 +698,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     connectionId,
     selectedTable,
     columns,
+    columnDisplay,
     selectedTableInfo?.columns,
     allFilterConditions,
     outputTableName,
@@ -1053,16 +1102,115 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         type="button"
                         className="rounded-xl"
                         style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                        onClick={() => goToStepAndSave("filtros")}
+                        onClick={() => goToStepAndSave("columnas_tipos")}
                         disabled={!canGoNextOrigen}
                       >
-                        Siguiente: Columnas y filtros <ChevronRight className="ml-2 h-4 w-4" />
+                        Siguiente: Columnas y tipos <ChevronRight className="ml-2 h-4 w-4" />
                       </Button>
                     </>
                   )}
                 </div>
               </>
             )}
+          </div>
+        )}
+        </section>
+        )}
+
+        {(step === "columnas_tipos" || isEditorMode) && (
+        <section id="seccion-columnas-tipos" className={isEditorMode ? "mb-10 pb-8 border-b" : ""} style={isEditorMode ? { borderColor: "var(--platform-border)" } : undefined}>
+        {(step === "columnas_tipos" || isEditorMode) && (
+          <div className="space-y-6 max-w-4xl">
+            <div>
+              <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
+                2b. Columnas y tipos
+              </h3>
+              <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                Todas las columnas de la tabla con su tipo (Fecha, Número, Texto). Opcionalmente definí un nombre para mostrar y el formato de fechas para que sea más legible.
+              </p>
+            </div>
+            {loadingColumns === selectedTable ? (
+              <div className="flex items-center gap-2 text-sm rounded-xl border px-4 py-3" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                <Loader2 className="h-4 w-4 animate-spin" /> Cargando columnas…
+              </div>
+            ) : (selectedTableInfo?.columns?.length ?? 0) > 0 ? (
+              <div className="rounded-xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid var(--platform-border)", background: "var(--platform-surface-hover)" }}>
+                        <th className="text-left py-2 px-3 font-medium" style={{ color: "var(--platform-fg-muted)" }}>Columna</th>
+                        <th className="text-left py-2 px-3 font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tipo</th>
+                        <th className="text-left py-2 px-3 font-medium" style={{ color: "var(--platform-fg-muted)" }}>Nombre para mostrar</th>
+                        <th className="text-left py-2 px-3 font-medium" style={{ color: "var(--platform-fg-muted)" }}>Formato (fechas)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(selectedTableInfo?.columns ?? []).map((c: { name: string; dataType?: string }) => {
+                        const disp = columnDisplay[c.name] ?? { label: "", format: "" };
+                        const isDate = dataTypeToLabel(c.dataType) === "Fecha";
+                        return (
+                          <tr key={c.name} style={{ borderBottom: "1px solid var(--platform-border)" }}>
+                            <td className="py-2 px-3 font-mono text-xs" style={{ color: "var(--platform-fg)" }}>{c.name}</td>
+                            <td className="py-2 px-3" style={{ color: "var(--platform-fg-muted)" }}>{dataTypeToLabel(c.dataType)}</td>
+                            <td className="py-1 px-2">
+                              <Input
+                                value={disp.label}
+                                onChange={(e) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), label: e.target.value } }))}
+                                placeholder={c.name}
+                                className="h-8 text-sm rounded-lg"
+                                style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                              />
+                            </td>
+                            <td className="py-1 px-2">
+                              {isDate ? (
+                                <Select
+                                  value={disp.format}
+                                  onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), format: v } }))}
+                                  options={DATE_FORMAT_OPTIONS}
+                                  placeholder="Formato"
+                                  className="min-w-[140px]"
+                                  buttonClassName="h-8 text-sm rounded-lg"
+                                />
+                              ) : (
+                                <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-xl border p-6 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                <List className="h-10 w-10 mx-auto mb-3 opacity-50" style={{ color: "var(--platform-fg-muted)" }} />
+                <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Sin columnas</p>
+                <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>Elegí una tabla en el paso Origen para ver las columnas y sus tipos.</p>
+                <Button type="button" variant="outline" className="rounded-xl mt-4" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("origen")}>
+                  Ir a Origen
+                </Button>
+              </div>
+            )}
+            <div className="flex gap-2">
+              {!isEditorMode && (
+                <>
+                  <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("origen")}>
+                    Atrás
+                  </Button>
+                  <Button
+                    type="button"
+                    className="rounded-xl"
+                    style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                    onClick={() => goToStepAndSave("filtros")}
+                    disabled={!(selectedTableInfo?.columns?.length ?? 0)}
+                  >
+                    Siguiente: Columnas y filtros <ChevronRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
         )}
         </section>
@@ -1978,7 +2126,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     variant="outline"
                     className="rounded-xl"
                     style={{ borderColor: "var(--platform-border)" }}
-                    onClick={() => goToStepAndSave("origen")}
+                    onClick={() => goToStepAndSave("columnas_tipos")}
                   >
                     Atrás
                   </Button>

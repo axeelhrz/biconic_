@@ -654,6 +654,11 @@ export async function GET(
         ? computeDateColumnPeriodicity(rawRows, fields.date)
         : undefined;
 
+    const columnDisplay =
+      filterConfig && typeof (filterConfig as { columnDisplay?: unknown }).columnDisplay === "object"
+        ? (filterConfig as { columnDisplay: Record<string, { label?: string; format?: string }> }).columnDisplay
+        : undefined;
+
     return NextResponse.json({
       ok: true,
       data: {
@@ -666,6 +671,7 @@ export async function GET(
         savedMetrics,
         rawRows,
         dateColumnPeriodicity,
+        columnDisplay,
       },
     });
   } catch (error: unknown) {
