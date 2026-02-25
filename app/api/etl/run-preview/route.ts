@@ -671,27 +671,27 @@ export async function POST(req: NextRequest) {
 
         } else if (body.connectionId) {
           const connectionIdStr = String(body.connectionId);
-          let { data: conn, error: connError } = await supabaseAdmin
-            .from("connections")
-            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
-            .eq("id", connectionIdStr)
-            .single();
-          const isFirebird = (conn as any)?.type === "firebird";
-          const missingFirebirdCreds = isFirebird && (!(conn as any)?.db_user?.trim() || (conn as any)?.db_password_encrypted == null);
-          if (!conn || missingFirebirdCreds) {
-            try {
-              const res = await supabaseService
-                .from("connections")
-                .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
-                .eq("id", connectionIdStr)
-                .single();
-              if (res.data) {
-                conn = res.data;
-                connError = res.error ?? connError;
-              }
-            } catch (_) {
-              // service role no disponible o key no definida; seguir con conn del usuario
-            }
+          let conn: Record<string, unknown> | null = null;
+          let connError: Error | null = null;
+          try {
+            const res = await supabaseService
+              .from("connections")
+              .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+              .eq("id", connectionIdStr)
+              .single();
+            if (res.data) conn = res.data as Record<string, unknown>;
+            if (res.error) connError = res.error as unknown as Error;
+          } catch (_) {
+            // service role no disponible; intentar con cliente del usuario
+          }
+          if (!conn) {
+            const adminRes = await supabaseAdmin
+              .from("connections")
+              .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+              .eq("id", connectionIdStr)
+              .single();
+            if (adminRes.data) conn = adminRes.data as Record<string, unknown>;
+            if (adminRes.error) connError = adminRes.error as unknown as Error;
           }
           if (conn) {
                console.log("[Preview] Connection found:", conn.id);
