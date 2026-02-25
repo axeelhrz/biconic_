@@ -997,8 +997,8 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     <div className="space-y-2">
                       {formFilters.map((f, i) => (
                         <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                          <Select value={f.field} onChange={(val) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={fields.map((name) => ({ value: name, label: name }))} placeholder="Campo" className="min-w-[120px]" buttonClassName="h-9 text-xs" disablePortal />
-                          <Select value={f.operator} onChange={(val) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => ({ value: op, label: op }))} placeholder="Op" className="w-24" buttonClassName="h-9 text-xs" disablePortal />
+                          <Select value={f.field} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={fields.map((name) => ({ value: name, label: name }))} placeholder="Campo" className="min-w-[120px]" buttonClassName="h-9 text-xs" disablePortal />
+                          <Select value={f.operator} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => ({ value: op, label: op }))} placeholder="Op" className="w-24" buttonClassName="h-9 text-xs" disablePortal />
                           <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                           <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
                         </div>
@@ -1015,7 +1015,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                       <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</span>
                       <Select
                         value={metricsDistinctColumn ?? ""}
-                        onChange={(val) => {
+                        onChange={(val: string) => {
                           const col = val || null;
                           setMetricsDistinctColumn(col);
                           setMetricsDistinctValues([]);
@@ -1226,7 +1226,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     <div className="flex flex-wrap gap-2 items-center">
                       <Select
                         value={metricsDistinctColumn ?? ""}
-                        onChange={(val) => { const col = val || null; setMetricsDistinctColumn(col); setMetricsDistinctValues([]); setMetricsDistinctSearch(""); }}
+                        onChange={(val: string) => { const col = val || null; setMetricsDistinctColumn(col); setMetricsDistinctValues([]); setMetricsDistinctSearch(""); }}
                         options={[{ value: "", label: "Elegir columna" }, ...fields.map((col) => ({ value: col, label: col }))]}
                         placeholder="Elegir columna"
                         className="min-w-[160px]"
