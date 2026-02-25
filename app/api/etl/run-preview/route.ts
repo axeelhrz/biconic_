@@ -672,7 +672,7 @@ export async function POST(req: NextRequest) {
         } else if (body.connectionId) {
           const { data: conn, error: connError } = await supabaseService
             .from("connections")
-            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted")
+            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
             .eq("id", body.connectionId)
             .single();
           
