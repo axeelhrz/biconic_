@@ -436,23 +436,28 @@ export async function GET(
       }
     }
 
+    const normalizeKey = (s: string) => String(s).replace(/\./g, "_").replace(/\s+/g, "_").toLowerCase().trim();
     const keyVariants = (col: string) => {
       const withUnderscore = col.replace(/\./g, "_");
       return [col, withUnderscore, withUnderscore.toLowerCase(), withUnderscore.toUpperCase()];
     };
     const pickFromRow = (row: Record<string, unknown>, cols: string[]): Record<string, unknown> => {
       const out: Record<string, unknown> = {};
+      const rowKeys = typeof row === "object" && row !== null ? Object.keys(row) : [];
       for (const col of cols) {
         let val: unknown = undefined;
         for (const key of keyVariants(col)) {
-          if (row[key] !== undefined) { val = row[key]; break; }
+          if (row[key] !== undefined && row[key] !== null) { val = row[key]; break; }
         }
-        if (val === undefined && typeof row === "object" && row !== null) {
-          for (const k of Object.keys(row)) {
-            if (k.replace(/\./g, "_").toLowerCase() === col.replace(/\./g, "_").toLowerCase()) { val = (row as any)[k]; break; }
+        if (val === undefined && rowKeys.length > 0) {
+          const colNorm = normalizeKey(col);
+          for (const k of rowKeys) {
+            if (normalizeKey(k) === colNorm) { val = (row as any)[k]; break; }
           }
         }
-        out[col] = val ?? (row as any)[col];
+        if (val === undefined) val = (row as any)[col];
+        // Usar null en lugar de undefined para que la clave se envíe en JSON y la UI muestre algo
+        out[col] = val !== undefined && val !== null ? val : null;
       }
       return out;
     };
