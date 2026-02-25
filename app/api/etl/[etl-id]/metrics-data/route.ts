@@ -649,14 +649,32 @@ export async function GET(
       rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, fields.all));
     }
 
+    const columnDisplay =
+      filterConfig && typeof (filterConfig as { columnDisplay?: unknown }).columnDisplay === "object"
+        ? (filterConfig as { columnDisplay: Record<string, { label?: string; format?: string; type?: string }> }).columnDisplay
+        : undefined;
+
+    // Incluir en fields.date todas las columnas marcadas como Fecha en el ETL (columnDisplay[].type)
+    if (columnDisplay && fields.all.length > 0) {
+      const dateFromConfig = fields.all.filter((col) => {
+        const key = Object.keys(columnDisplay).find((k) => sameStr(k, col));
+        const t = key ? (columnDisplay as Record<string, { type?: string }>)[key]?.type : undefined;
+        return String(t).toLowerCase() === "fecha";
+      });
+      const existingDateSet = new Set(fields.date.map((d) => d.toLowerCase()));
+      for (const col of dateFromConfig) {
+        if (!existingDateSet.has(col.toLowerCase())) {
+          fields.date.push(col);
+          existingDateSet.add(col.toLowerCase());
+        }
+      }
+      // Ordenar fields.date según el orden en fields.all
+      fields.date = fields.all.filter((col) => fields.date.some((d) => sameStr(d, col)));
+    }
+
     const dateColumnPeriodicity =
       fields.date.length > 0 && rawRows.length > 0
         ? computeDateColumnPeriodicity(rawRows, fields.date)
-        : undefined;
-
-    const columnDisplay =
-      filterConfig && typeof (filterConfig as { columnDisplay?: unknown }).columnDisplay === "object"
-        ? (filterConfig as { columnDisplay: Record<string, { label?: string; format?: string }> }).columnDisplay
         : undefined;
 
     return NextResponse.json({
