@@ -271,14 +271,22 @@ export default function EditUserPage() {
               value={user.email ?? ""}
               disabled
               className="rounded-xl cursor-not-allowed"
-              style={{ background: "var(--platform-bg-elevated)" }}
+              style={{
+                background: "var(--platform-bg-elevated)",
+                color: "var(--platform-fg)",
+                borderColor: "var(--platform-border)",
+              }}
             />
           </Field>
           <Field label="Nombre completo">
             <Input
               placeholder="Ingresá el nombre completo"
-              className="rounded-xl border"
-              style={{ borderColor: "var(--platform-border)" }}
+              className="rounded-xl border placeholder:opacity-70"
+              style={{
+                borderColor: "var(--platform-border)",
+                background: "var(--platform-surface)",
+                color: "var(--platform-fg)",
+              }}
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
             />
@@ -288,8 +296,12 @@ export default function EditUserPage() {
           <Field label="Cargo / Título">
             <Input
               placeholder="Ingresá el cargo"
-              className="rounded-xl border"
-              style={{ borderColor: "var(--platform-border)" }}
+              className="rounded-xl border placeholder:opacity-70"
+              style={{
+                borderColor: "var(--platform-border)",
+                background: "var(--platform-surface)",
+                color: "var(--platform-fg)",
+              }}
               value={jobTitle}
               onChange={(e) => setJobTitle(e.target.value)}
             />
