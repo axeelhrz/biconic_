@@ -355,6 +355,7 @@ export default function ConnectionForm({
             </div>
           </>
         )}
+        </div>
 
         {/* Los botones ahora se ocultan durante el procesamiento del backend */}
         {!isProcessing && (
