@@ -1,13 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { FolderOpen, Users, Eye, CreditCard } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { FolderOpen, Users, Eye, CreditCard, X, Download, Trash2, Loader2 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Database } from "@/lib/supabase/database.types";
 import EditSubscriptionDialog from "./EditSubscriptionDialog";
+import { deleteClients } from "@/app/admin/(main)/clients/actions";
 
 type FilterType = "todos" | "activos" | "inactivos";
 type SubscriptionStatus = Database["public"]["Enums"]["subscription_status"];
@@ -17,11 +28,11 @@ export interface ClientRow {
   id: string;
   name: string;
   plan: string | null;
-  status: string | null; // "Activo" | "Desactivado" | ...
+  status: string | null;
   dashboards: number;
   members: number;
   location?: string;
-  industry?: string | null; // placeholder until field exists
+  industry?: string | null;
   subscription?: {
     id: string;
     plan_id: string;
@@ -30,34 +41,31 @@ export interface ClientRow {
   } | null;
 }
 
-export default function AdminClientTable() {
+interface AdminClientTableProps {
+  search?: string;
+  filter?: FilterType;
+}
+
+export default function AdminClientTable({ search = "", filter = "todos" }: AdminClientTableProps) {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
   const [rows, setRows] = useState<ClientRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<FilterType>("todos");
-  
-  // Subscription Edit State
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [selectedSubscription, setSelectedSubscription] = useState<ClientRow["subscription"] | null>(null);
   const [isEditSubscriptionOpen, setIsEditSubscriptionOpen] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState<string>("");
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  // Function to refresh data, can be passed to dialog
-  const refreshData = async () => {
-      // Re-trigger the useEffect logic essentially. 
-      // Ideally this logic should be in a separate function to be callable, 
-      // but for now we can rely on next/cache revalidatePath from the action 
-      // or just force a re-fetch.
-      // A simple way is to toggle a refresh trigger or just call valid load function if refactored.
-      // For this step I will refactor the load logic slightly to be callable.
-       await loadData();
-  };
+  const refreshData = useCallback(async () => {
+    await loadData();
+  }, []);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
       setLoading(true);
       try {
         const supabase = createClient();
@@ -81,10 +89,10 @@ export default function AdminClientTable() {
           .order("created_at", { ascending: false })
           .range((page - 1) * pageSize, page * pageSize - 1);
 
-        if (search.trim()) {
+        if (typeof search === "string" && search.trim()) {
           query = query.ilike("company_name", `%${search.trim()}%`);
         }
-        if (filter !== "todos") {
+        if (filter === "activos" || filter === "inactivos") {
           const target = filter === "activos" ? "Activo" : "Desactivado";
           query = query.eq("status", target);
         }
@@ -141,11 +149,44 @@ export default function AdminClientTable() {
       } finally {
         setLoading(false);
       }
-  };
+  }, [page, pageSize, search, filter]);
 
   useEffect(() => {
     loadData();
-  }, [page, pageSize, search, filter]);
+  }, [loadData]);
+
+  const selectedSet = new Set(selectedIds);
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+  const selectAllPage = () => {
+    const ids = rows.map((r) => r.id);
+    setSelectedIds((prev) => Array.from(new Set([...prev, ...ids])));
+  };
+  const clearSelection = () => setSelectedIds([]);
+  const exportCurrent = () => exportCSV(rows);
+  const exportSelected = () => {
+    const toExport = rows.filter((r) => selectedSet.has(r.id));
+    if (toExport.length === 0) {
+      toast.info("Seleccioná al menos un cliente para exportar");
+      return;
+    }
+    exportCSV(toExport);
+  };
+  const handleBulkDeleteConfirm = async () => {
+    if (selectedIds.length === 0) return;
+    setDeleting(true);
+    const res = await deleteClients(selectedIds);
+    setDeleting(false);
+    setBulkDeleteOpen(false);
+    setSelectedIds([]);
+    if (res.ok) {
+      toast.success(selectedIds.length === 1 ? "Cliente eliminado." : `${selectedIds.length} clientes eliminados.`);
+      loadData();
+    } else {
+      toast.error(res.error ?? "No se pudo eliminar");
+    }
+  };
 
   const handleEditSubscription = (subscription: ClientRow["subscription"] | null, clientId: string) => {
       setSelectedSubscription(subscription);
@@ -155,58 +196,151 @@ export default function AdminClientTable() {
 
 
   return (
-    <div
-      className="flex w-full max-w-[1390px] flex-col gap-5 rounded-[30px] border px-10 py-8"
-      style={{
-        background: "var(--platform-bg-elevated)",
-        borderColor: "var(--platform-border)",
-      }}
-    >
-      <div className="flex items-center justify-between">
-        <h2 className="text-[20px] font-semibold" style={{ color: "var(--platform-fg)" }}>
-          Clientes
-        </h2>
+    <div className="flex w-full flex-col gap-5">
+      {/* Barra: seleccionar todo, quitar todo, cantidad, exportar, eliminar */}
+      <div
+        className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+        }}
+      >
         <Button
+          type="button"
           variant="outline"
-          className="h-[34px] rounded-full"
-          style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
-          onClick={() => exportCSV(rows)}
+          size="sm"
+          className="rounded-lg h-9"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={selectAllPage}
         >
-          Exportar
+          Seleccionar todo
         </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-lg h-9 gap-1.5"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={clearSelection}
+        >
+          <X className="h-4 w-4" />
+          Quitar todo
+        </Button>
+        {selectedIds.length > 0 && (
+          <span className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+            {selectedIds.length} seleccionado{selectedIds.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-lg h-9 gap-1.5"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={selectedIds.length > 0 ? exportSelected : exportCurrent}
+        >
+          <Download className="h-4 w-4" />
+          {selectedIds.length > 0 ? "Exportar selección" : "Exportar página"}
+        </Button>
+        {selectedIds.length > 0 && (
+          <Button
+            type="button"
+            size="sm"
+            className="rounded-lg h-9 gap-1.5 ml-auto"
+            style={{ background: "var(--platform-danger)", color: "#fff" }}
+            onClick={() => setBulkDeleteOpen(true)}
+            disabled={deleting}
+          >
+            <Trash2 className="h-4 w-4" />
+            {deleting ? "Eliminando…" : "Eliminar seleccionados"}
+          </Button>
+        )}
       </div>
+
+      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <DialogContent
+          className="sm:max-w-[400px]"
+          style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: "var(--platform-fg)" }}>
+              {selectedIds.length === 1 ? "Eliminar cliente" : "Eliminar clientes seleccionados"}
+            </DialogTitle>
+            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
+              {selectedIds.length === 1
+                ? "¿Eliminar este cliente? Se eliminarán sus datos asociados. Esta acción no se puede deshacer."
+                : `¿Eliminar los ${selectedIds.length} clientes seleccionados? Esta acción no se puede deshacer.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setBulkDeleteOpen(false)}
+              disabled={deleting}
+              className="rounded-xl"
+              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              className="rounded-xl gap-2"
+              style={{ background: "var(--platform-danger)", color: "#fff" }}
+              onClick={handleBulkDeleteConfirm}
+              disabled={deleting}
+            >
+              {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {deleting ? "Eliminando…" : "Eliminar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div
-        className="flex items-center justify-between gap-4 border-b px-[15px] py-[3px] text-[12px] font-semibold"
-        style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+        className="w-full overflow-hidden rounded-xl border shadow-sm"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-surface)",
+        }}
       >
-        <div className="w-5"></div>
-        <div className="w-[240px]">Cliente</div>
-        <div className="w-[120px]">Plan</div>
-        <div className="w-[120px]">Estado</div>
-        <div className="w-[120px]">Proyectos</div>
-        <div className="w-[120px]">Usuarios</div>
-        <div className="w-[120px]">Industria</div>
-        <div className="w-[100px] text-center">Acciones</div>
-      </div>
+        <div
+          className="flex items-center justify-between gap-4 border-b px-4 py-3 text-xs font-semibold uppercase tracking-wider"
+          style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}
+        >
+          <div className="w-8" />
+          <div className="w-[220px]">Cliente</div>
+          <div className="w-[100px]">Plan</div>
+          <div className="w-[100px]">Estado</div>
+          <div className="w-[90px]">Proyectos</div>
+          <div className="w-[90px]">Usuarios</div>
+          <div className="w-[100px]">Industria</div>
+          <div className="w-[100px] text-center">Acciones</div>
+        </div>
 
-      <div className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
-        {loading && <SkeletonRows />}
-        {!loading && rows.length === 0 && (
-          <div className="px-4 py-8 text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-            No hay clientes para mostrar.
-          </div>
-        )}
-        {!loading &&
-          rows.map((r) => (
-            <div
-              key={r.id}
-              className="flex items-center justify-between gap-4 px-[15px] py-2.5 text-sm"
-              style={{ color: "var(--platform-fg)" }}
-            >
-              <div className="h-5 w-5 rounded-md border" style={{ borderColor: "var(--platform-border)" }} />
+        <div className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
+          {loading && <SkeletonRows />}
+          {!loading && rows.length === 0 && (
+            <div className="px-4 py-8 text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+              No hay clientes para mostrar.
+            </div>
+          )}
+          {!loading &&
+            rows.map((r) => (
+              <div
+                key={r.id}
+                className="flex items-center justify-between gap-4 px-4 py-3 text-sm align-middle"
+                style={{ color: "var(--platform-fg)" }}
+              >
+                <div className="w-8 flex items-center">
+                  <Checkbox
+                    checked={selectedSet.has(r.id)}
+                    onCheckedChange={() => toggleSelect(r.id)}
+                    className="h-4 w-4 rounded-md border-2 border-[var(--platform-fg-muted)] data-[state=checked]:border-[var(--platform-accent)] data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:text-white"
+                  />
+                </div>
 
-              <div className="flex w-[240px] items-center gap-2">
+              <div className="flex w-[220px] items-center gap-2 min-w-0">
                 <div
                   className="flex h-[35px] w-[35px] items-center justify-center rounded-full text-[12px] font-bold"
                   style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
@@ -223,16 +357,16 @@ export default function AdminClientTable() {
                 </div>
               </div>
 
-              <div className="w-[120px]">
+              <div className="w-[100px]">
                 <span
-                  className="inline-flex items-center rounded-full px-3 py-1 text-[12px] font-medium"
+                  className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium"
                   style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}
                 >
                   {r.plan ?? "—"}
                 </span>
               </div>
 
-              <div className="w-[120px]">
+              <div className="w-[100px]">
                 <span
                   className={cn(
                     "inline-flex items-center rounded-full px-3 py-1 text-[14px] font-medium",
@@ -255,19 +389,17 @@ export default function AdminClientTable() {
                 </span>
               </div>
 
-              <div className="flex w-[120px] items-center gap-1" style={{ color: "var(--platform-accent)" }}>
-                <FolderOpen className="h-5 w-5" />
-                <span className="text-[14px]">{r.dashboards}</span>
+              <div className="flex w-[90px] items-center gap-1" style={{ color: "var(--platform-accent)" }}>
+                <FolderOpen className="h-4 w-4 shrink-0" />
+                <span className="text-sm">{r.dashboards}</span>
               </div>
 
-              <div className="flex w-[120px] items-center gap-1" style={{ color: "var(--platform-accent)" }}>
-                <Users className="h-5 w-5" />
-                <button className="text-[14px] underline" title="Ver usuarios">
-                  {r.members}
-                </button>
+              <div className="flex w-[90px] items-center gap-1" style={{ color: "var(--platform-accent)" }}>
+                <Users className="h-4 w-4 shrink-0" />
+                <span className="text-sm">{r.members}</span>
               </div>
 
-              <div className="w-[120px]">
+              <div className="w-[100px]">
                 <span
                   className="inline-flex items-center rounded-full px-3 py-1 text-[12px] font-medium"
                   style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}
@@ -276,7 +408,7 @@ export default function AdminClientTable() {
                 </span>
               </div>
 
-              <div className="flex w-[100px] items-center justify-center">
+              <div className="flex w-[100px] items-center justify-center gap-1">
                 <Link
                   href={`/admin/clients/${r.id}`}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:opacity-80"
@@ -300,20 +432,20 @@ export default function AdminClientTable() {
           ))}
       </div>
 
-      <div
-        className="flex items-center justify-center gap-4 py-2.5"
-        style={{ background: "var(--platform-surface)" }}
-      >
+      </div>
+
+      <div className="flex items-center justify-center gap-4 py-4">
         <Button
-          variant="ghost"
-          className="h-[30px] rounded-xl"
-          style={{ color: "var(--platform-fg-muted)" }}
+          variant="outline"
+          size="sm"
+          className="h-9 rounded-xl"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
           onClick={() => setPage((p) => Math.max(1, p - 1))}
           disabled={page <= 1}
         >
           Anterior
         </Button>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {useMemo(() => {
             const nums: number[] = [];
             const start = Math.max(1, page - 2);
@@ -324,20 +456,25 @@ export default function AdminClientTable() {
             <button
               key={n}
               onClick={() => setPage(n)}
-              className="flex h-8 w-8 items-center justify-center rounded-xl text-[14px] font-semibold"
-              style={{
-                background: n === page ? "var(--platform-accent)" : "var(--platform-surface-hover)",
-                color: n === page ? "#08080b" : "var(--platform-fg)",
-              }}
+              className={cn(
+                "flex h-9 w-9 items-center justify-center rounded-xl text-sm font-semibold transition-colors",
+                n === page && "bg-[var(--platform-accent)] text-[var(--platform-accent-fg)]"
+              )}
+              style={
+                n !== page
+                  ? { border: "1px solid var(--platform-border)", background: "transparent", color: "var(--platform-fg-muted)" }
+                  : undefined
+              }
             >
               {n}
             </button>
           ))}
         </div>
         <Button
-          variant="ghost"
-          className="h-[30px] rounded-xl"
-          style={{ color: "var(--platform-accent)" }}
+          variant="outline"
+          size="sm"
+          className="h-9 rounded-xl"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
           onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
           disabled={page >= totalPages}
         >

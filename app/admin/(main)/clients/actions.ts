@@ -314,3 +314,26 @@ export async function grantPermissionToEmail(clientId: string, email: string, da
     revalidatePath("/admin/clients/[clientId]");
     return { ok: true, message: "Permiso otorgado exitosamente" };
 }
+
+/** Eliminar uno o más clientes (solo admin). Dependencias con ON DELETE CASCADE se eliminan en cascada. */
+export async function deleteClients(clientIds: string[]): Promise<{ ok: boolean; error?: string }> {
+  if (clientIds.length === 0) return { ok: true };
+  try {
+    const supabase = await (await import("@/lib/supabase/server")).createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { ok: false, error: "No autorizado" };
+
+    const { data: prof } = await supabase.from("profiles").select("app_role").eq("id", user.id).single();
+    if ((prof as { app_role?: string })?.app_role !== "APP_ADMIN")
+      return { ok: false, error: "Solo administradores" };
+
+    const { createServiceRoleClient } = await import("@/lib/supabase/service");
+    const admin = createServiceRoleClient();
+    const { error } = await admin.from("clients").delete().in("id", clientIds);
+    if (error) return { ok: false, error: error.message };
+    revalidatePath("/admin/clients");
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? "Error al eliminar" };
+  }
+}
