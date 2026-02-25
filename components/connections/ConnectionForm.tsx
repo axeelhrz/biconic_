@@ -126,16 +126,16 @@ export default function ConnectionForm({
   }, [connectionType]);
 
   const inputClass =
-    "w-full h-11 px-4 bg-white border border-[#D9DCE3] rounded-lg text-[15px] text-[#555555] placeholder:text-[#9C9EA9] focus:outline-none focus:ring-2 focus:ring-[#0F5F4C]/25 focus:border-[#0F5F4C] transition-colors";
+    "w-full h-11 px-4 rounded-lg text-[15px] transition-colors border bg-[var(--platform-surface)] border-[var(--platform-border)] text-[var(--platform-fg)] placeholder:text-[var(--platform-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]/30 focus:border-[var(--platform-accent)]";
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-[#D9DCE3] w-full max-w-[640px] mx-auto overflow-hidden">
-      <div className="px-8 pt-8 pb-6 border-b border-[#D9DCE3] flex justify-between items-start gap-4 bg-[#fafbfc]">
+    <div className="rounded-xl shadow-lg w-full max-w-[640px] mx-auto overflow-hidden border" style={{ background: "var(--platform-bg-elevated)", borderColor: "var(--platform-border)" }}>
+      <div className="px-8 pt-8 pb-6 border-b flex justify-between items-start gap-4" style={{ borderColor: "var(--platform-border)" }}>
         <div>
-          <h2 className="text-xl font-semibold text-[#0F5F4C] tracking-tight">
+          <h2 className="text-xl font-semibold tracking-tight" style={{ color: "var(--platform-fg)" }}>
             Nueva conexión
           </h2>
-          <p className="mt-1 text-sm text-[#66687E]">
+          <p className="mt-1 text-sm" style={{ color: "var(--platform-fg-muted)" }}>
             Configurá el tipo de base de datos y los datos de acceso.
           </p>
         </div>
@@ -143,7 +143,8 @@ export default function ConnectionForm({
           <button
             type="button"
             aria-label="Cerrar"
-            className="shrink-0 p-2 rounded-lg text-[#035664] hover:bg-[#0F5F4C]/10 hover:text-[#0F5F4C] transition-colors"
+            className="shrink-0 p-2 rounded-lg transition-colors hover:opacity-80"
+            style={{ color: "var(--platform-fg-muted)" }}
           >
             <svg width="18" height="18" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M1.5 13.5L13.5 1.5M1.5 1.5L13.5 13.5" />
@@ -159,7 +160,7 @@ export default function ConnectionForm({
         <div className="px-8 py-6 space-y-5">
           <div className="grid gap-5 sm:grid-cols-2">
             <div>
-              <label htmlFor="type" className="block text-sm font-medium text-[#66687E] mb-1.5">
+              <label htmlFor="type" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                 Tipo
               </label>
               <div className="relative">
@@ -174,18 +175,18 @@ export default function ConnectionForm({
                   <option value="firebird">Firebird (Flexxus)</option>
                   <option value="excel">Archivo Excel/CSV</option>
                 </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
-                  <svg className="h-5 w-5 text-[#9C9EA9]" viewBox="0 0 20 20" fill="currentColor">
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3" style={{ color: "var(--platform-muted)" }}>
+                  <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
                   </svg>
                 </div>
               </div>
               {errors.type && (
-                <p className="mt-1 text-xs text-red-600">{errors.type.message}</p>
+                <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.type.message}</p>
               )}
             </div>
             <div>
-              <label htmlFor="connection-name" className="block text-sm font-medium text-[#66687E] mb-1.5">
+              <label htmlFor="connection-name" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                 Nombre de la conexión
               </label>
               <Input
@@ -196,13 +197,13 @@ export default function ConnectionForm({
                 {...register("connectionName", { required: "Ingrese un nombre" })}
               />
               {errors.connectionName && (
-                <p className="mt-1 text-xs text-red-600">{errors.connectionName.message}</p>
+                <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.connectionName.message}</p>
               )}
             </div>
           </div>
 
         {isExcelMode && (
-          <div className="border-2 border-dashed border-[#D9DCE3] rounded-lg p-6 bg-[#f5f7f9]">
+          <div className="border-2 border-dashed rounded-lg p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
             <div className="text-center">
               {isProcessing && currentImportId && onProcessFinished ? (
                 <ImportStatus
@@ -211,9 +212,9 @@ export default function ConnectionForm({
                 />
               ) : (
                 <>
-                  <div className="mb-4">
+                  <div className="mb-4" style={{ color: "var(--platform-muted)" }}>
                     <svg
-                      className="mx-auto h-12 w-12 text-gray-400"
+                      className="mx-auto h-12 w-12"
                       stroke="currentColor"
                       fill="none"
                       viewBox="0 0 48 48"
@@ -228,7 +229,7 @@ export default function ConnectionForm({
                   </div>
                   <div className="mb-4">
                     <label htmlFor="excel-file" className="cursor-pointer">
-                      <span className="text-[16px] font-medium text-[#0F5F4C]">
+                      <span className="text-[16px] font-medium" style={{ color: "var(--platform-accent)" }}>
                         Seleccionar archivo Excel o CSV
                       </span>
                       <input
@@ -241,18 +242,18 @@ export default function ConnectionForm({
                     </label>
                   </div>
                   {selectedFile && (
-                    <div className="mb-4 p-3 bg-white rounded border">
-                      <p className="text-sm text-gray-600">
+                    <div className="mb-4 p-3 rounded border" style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)" }}>
+                      <p className="text-sm" style={{ color: "var(--platform-fg)" }}>
                         <strong>Archivo seleccionado:</strong>{" "}
                         {selectedFile.name}
                       </p>
-                      <p className="text-xs text-gray-500">
+                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
                         Tamaño: {(selectedFile.size / 1024 / 1024).toFixed(2)}{" "}
                         MB
                       </p>
                     </div>
                   )}
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
                     Formatos soportados: .xlsx, .xls, .csv
                   </p>
                 </>
@@ -263,13 +264,13 @@ export default function ConnectionForm({
 
         {!isExcelMode && (
           <>
-            <div className="pt-2 border-t border-[#D9DCE3]">
-              <p className="text-xs font-medium text-[#66687E] uppercase tracking-wider mb-4">
+            <div className="pt-2 border-t" style={{ borderColor: "var(--platform-border)" }}>
+              <p className="text-xs font-medium uppercase tracking-wider mb-4" style={{ color: "var(--platform-fg-muted)" }}>
                 Datos del servidor
               </p>
               <div className="grid gap-5 sm:grid-cols-[1fr_120px]">
                 <div>
-                  <label htmlFor="host" className="block text-sm font-medium text-[#66687E] mb-1.5">
+                  <label htmlFor="host" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                     Host
                   </label>
                   <Input
@@ -280,11 +281,11 @@ export default function ConnectionForm({
                     {...register("host", { required: "Ingrese el host" })}
                   />
                   {errors.host && (
-                    <p className="mt-1 text-xs text-red-600">{errors.host.message}</p>
+                    <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.host.message}</p>
                   )}
                 </div>
                 <div>
-                  <label htmlFor="port" className="block text-sm font-medium text-[#66687E] mb-1.5">
+                  <label htmlFor="port" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                     Puerto
                   </label>
                   <Input
@@ -299,7 +300,7 @@ export default function ConnectionForm({
                     })}
                   />
                   {errors.port && (
-                    <p className="mt-1 text-xs text-red-600">{errors.port.message}</p>
+                    <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.port.message}</p>
                   )}
                 </div>
               </div>
@@ -307,7 +308,7 @@ export default function ConnectionForm({
 
             <div className="grid gap-5 sm:grid-cols-2">
               <div>
-                <label htmlFor="database" className="block text-sm font-medium text-[#66687E] mb-1.5">
+                <label htmlFor="database" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                   {isFirebird ? "Path / Nombre de base" : "Base de datos"}
                 </label>
                 <Input
@@ -318,11 +319,11 @@ export default function ConnectionForm({
                   {...register("database", { required: "Ingrese la base de datos" })}
                 />
                 {errors.database && (
-                  <p className="mt-1 text-xs text-red-600">{errors.database.message}</p>
+                  <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.database.message}</p>
                 )}
               </div>
               <div>
-                <label htmlFor="user" className="block text-sm font-medium text-[#66687E] mb-1.5">
+                <label htmlFor="user" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                   Usuario
                 </label>
                 <Input
@@ -333,13 +334,13 @@ export default function ConnectionForm({
                   {...register("user", { required: "Ingrese el usuario" })}
                 />
                 {errors.user && (
-                  <p className="mt-1 text-xs text-red-600">{errors.user.message}</p>
+                  <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.user.message}</p>
                 )}
               </div>
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-[#66687E] mb-1.5">
+              <label htmlFor="password" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                 Contraseña
               </label>
               <Input
@@ -350,7 +351,7 @@ export default function ConnectionForm({
                 {...register("password", { required: "Ingrese la contraseña" })}
               />
               {errors.password && (
-                <p className="mt-1 text-xs text-red-600">{errors.password.message}</p>
+                <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.password.message}</p>
               )}
             </div>
           </>
@@ -359,11 +360,12 @@ export default function ConnectionForm({
 
         {/* Los botones ahora se ocultan durante el procesamiento del backend */}
         {!isProcessing && (
-          <div className="px-8 py-6 border-t border-[#D9DCE3] bg-[#f5f7f9] flex flex-col-reverse sm:flex-row sm:justify-end sm:items-center gap-3">
+          <div className="px-8 py-6 border-t flex flex-col-reverse sm:flex-row sm:justify-end sm:items-center gap-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
             <DialogClose asChild>
               <button
                 type="button"
-                className="h-10 px-5 rounded-lg text-sm font-medium text-[#035664] bg-white border border-[#D9DCE3] hover:bg-white hover:border-[#035664] transition-colors"
+                className="h-10 px-5 rounded-lg text-sm font-medium transition-colors border hover:opacity-90"
+                style={{ color: "var(--platform-fg)", borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
               >
                 Cancelar
               </button>
@@ -373,14 +375,16 @@ export default function ConnectionForm({
                 <button
                   type="button"
                   onClick={onTestHandler}
-                  className="h-10 px-5 rounded-lg text-sm font-medium text-[#0F5F4C] bg-white border border-[#0F5F4C] hover:bg-[#0F5F4C]/10 transition-colors"
+                  className="h-10 px-5 rounded-lg text-sm font-medium transition-colors border hover:opacity-90"
+                  style={{ color: "var(--platform-accent)", borderColor: "var(--platform-accent)", background: "transparent" }}
                 >
                   Probar conexión
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="h-10 px-6 rounded-lg text-sm font-medium text-white bg-[#19A180] hover:bg-[#0F5F4C] disabled:opacity-70 transition-colors"
+                  className="h-10 px-6 rounded-lg text-sm font-medium transition-colors disabled:opacity-70 hover:opacity-90"
+                  style={{ color: "var(--platform-accent-fg)", background: "var(--platform-accent)" }}
                 >
                   {isSubmitting ? "Guardando..." : "Guardar"}
                 </button>
@@ -390,7 +394,8 @@ export default function ConnectionForm({
                 type="button"
                 onClick={handleExcelUpload}
                 disabled={!selectedFile || isUploading}
-                className="h-10 px-6 rounded-lg text-sm font-medium text-white bg-[#19A180] hover:bg-[#0F5F4C] disabled:opacity-70 transition-colors"
+                className="h-10 px-6 rounded-lg text-sm font-medium transition-colors disabled:opacity-70 hover:opacity-90"
+                style={{ color: "var(--platform-accent-fg)", background: "var(--platform-accent)" }}
               >
                 {isUploading ? "Subiendo..." : "Procesar archivo"}
               </button>
