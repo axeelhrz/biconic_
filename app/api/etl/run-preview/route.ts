@@ -1094,7 +1094,7 @@ export async function POST(req: NextRequest) {
       (message.includes("I/O error") || message.includes("trying to open file") || message.includes("open file"))
     ) {
       message =
-        "No se pudo abrir la base Firebird. Usá la ruta completa del archivo en el servidor (ej. /var/lib/firebird/data/fbcdistribuciones.fdb o C:\\datos\\fbcdistribuciones.fdb) o un alias configurado en el servidor Firebird. Revisá el campo «Path / Nombre de base» en la conexión.";
+        "No se pudo abrir la base Firebird. Si antes conectaba, puede que en el servidor Firebird se haya reiniciado el servicio, se haya movido el archivo o el alias ya no exista. Probá de nuevo con la ruta completa en el servidor (ej. /var/lib/firebird/data/fbcdistribuciones.fdb) o pedí al administrador del servidor que confirme el path o el alias. Revisá el campo «Path / Nombre de base» en la conexión.";
     }
     return NextResponse.json(
       { ok: false, error: message },
