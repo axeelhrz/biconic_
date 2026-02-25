@@ -454,7 +454,7 @@ async function executeEtlPipeline(
               `SELECT column_name FROM information_schema.columns WHERE table_schema = 'etl_output' AND table_name = $1 ORDER BY ordinal_position`,
               [newTableName]
             );
-            tableColumnNames = Array.isArray(colsRes) ? colsRes.map((r) => (r as { column_name: string }).column_name) : [];
+            tableColumnNames = Array.isArray(colsRes) ? colsRes.map((r) => String((r as unknown as { column_name: string }).column_name)) : [];
           }
         } finally {
           await sql.end();
