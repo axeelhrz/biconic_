@@ -424,6 +424,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     (t) => `${t.schema}.${t.name}` === selectedTable
   );
 
+  /** Clave usada en columnDisplay para esta columna (la vista previa puede tener keys en minúsculas). */
+  const getColumnDisplayKey = useCallback((previewKey: string): string => {
+    if (columnDisplay[previewKey] !== undefined) return previewKey;
+    const found = Object.keys(columnDisplay).find((k) => k.toLowerCase() === previewKey.toLowerCase());
+    return found ?? previewKey;
+  }, [columnDisplay]);
+
   /** Tipo efectivo por columna (override manual o inferido) para formatear la vista previa. */
   const getColumnType = useCallback((key: string): "Fecha" | "Número" | "Texto" => {
     const disp = columnDisplay[key];
@@ -2580,7 +2587,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         <table className="w-full text-sm border-collapse" style={{ color: "var(--platform-fg)" }}>
                           <thead>
                             <tr style={{ background: "var(--platform-bg-elevated)", borderBottom: "1px solid var(--platform-border)" }}>
-                              {keysToShow.map((key: string) => (
+                              {keysToShow.map((key: string) => {
+                                const displayKey = getColumnDisplayKey(key);
+                                return (
                                 <th
                                   key={key}
                                   role="columnheader"
@@ -2589,7 +2598,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   onClick={() => handlePreviewSort(key)}
                                 >
                                   <span className="inline-flex items-center gap-1">
-                                    {(columnDisplay[key]?.label?.trim() || key)}
+                                    {(columnDisplay[displayKey]?.label?.trim() || key)}
                                     {previewSortKey === key ? (
                                       previewSortDir === "asc" ? (
                                         <ArrowUp className="h-3.5 w-3.5 opacity-80" />
@@ -2601,7 +2610,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                     )}
                                   </span>
                                 </th>
-                              ))}
+                              ); })}
                             </tr>
                           </thead>
                           <tbody>
@@ -2609,7 +2618,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               <tr key={idx} className="border-b border-b-[var(--platform-border)] hover:bg-[var(--platform-surface-hover)]">
                                 {keysToShow.map((key: string) => {
                                   const raw = (row as Record<string, unknown>)[key];
-                                  const formatted = formatPreviewCell(key, raw);
+                                  const displayKey = getColumnDisplayKey(key);
+                                  const formatted = formatPreviewCell(displayKey, raw);
                                   return (
                                     <td key={key} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={formatted}>
                                       {formatted}
