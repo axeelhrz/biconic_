@@ -702,7 +702,7 @@ export async function POST(req: NextRequest) {
         let dbUrl: string;
         let tableToQuery = body.filter?.table;
 
-        if (conn.type === "excel_file") {
+        if (String(conn.type ?? "") === "excel_file") {
             console.log("[Preview] Detected Excel connection. Fetching metadata...");
             // Lógica para Excel (similar a run/route.ts)
             const { data: meta } = await supabaseAdmin
@@ -725,7 +725,7 @@ export async function POST(req: NextRequest) {
             if (!internalDbUrl) throw new Error("Variable de entorno SUPABASE_DB_URL no encontrada para conexión interna.");
             dbUrl = internalDbUrl;
 
-        } else if ((conn.type || "").toLowerCase() === "firebird") {
+        } else if (String(conn.type ?? "").toLowerCase() === "firebird") {
             // Vista previa tabla única Firebird: misma lógica segura que en UNION (solo nombre de tabla, SELECT *, WHERE inlined)
             if (!tableToQuery?.trim()) {
               console.error("[Preview] No table specified for Firebird.");
@@ -809,7 +809,7 @@ export async function POST(req: NextRequest) {
             dbUrl = `postgres://${dbConfig.user}:${dbConfig.password}@${dbConfig.host}:${dbConfig.port}/${dbConfig.database}?sslmode=require`;
         }
 
-        if ((conn.type || "").toLowerCase() !== "firebird") {
+        if (String(conn.type ?? "").toLowerCase() !== "firebird") {
         const client = new PgClient({ connectionString: dbUrl });
         await client.connect();
 
