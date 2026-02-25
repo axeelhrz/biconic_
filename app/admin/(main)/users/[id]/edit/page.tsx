@@ -29,7 +29,7 @@ function Field({
 }) {
   return (
     <div className="flex w-full flex-col gap-1">
-      <label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>{label}</label>
+      <label className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>{label}</label>
       {children}
       {error ? <p className="text-xs" style={{ color: "var(--platform-danger)" }}>{error}</p> : null}
     </div>
