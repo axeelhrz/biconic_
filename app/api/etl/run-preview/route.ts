@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { Client as PgClient } from "pg";
 import {
@@ -171,6 +172,7 @@ export async function POST(req: NextRequest) {
     if (!body) throw new Error("Cuerpo vacío");
 
     const supabaseAdmin = await createClient();
+    const supabaseService = createServiceRoleClient();
     const {
       data: { user },
     } = await supabaseAdmin.auth.getUser();
@@ -232,8 +234,8 @@ export async function POST(req: NextRequest) {
         const rightTable = await resolveTable(right.connectionId, right.filter);
         if (!leftTable || !rightTable) throw new Error("UNION: ambas fuentes deben tener tabla.");
 
-        const { data: leftConn } = await supabaseAdmin.from("connections").select("*").eq("id", left.connectionId).single();
-        const { data: rightConn } = await supabaseAdmin.from("connections").select("*").eq("id", right.connectionId).single();
+        const { data: leftConn } = await supabaseService.from("connections").select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted").eq("id", left.connectionId).single();
+        const { data: rightConn } = await supabaseService.from("connections").select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted").eq("id", right.connectionId).single();
         if (!leftConn) throw new Error(`Conexión izquierda ${left.connectionId} no encontrada.`);
         if (!rightConn) throw new Error(`Conexión derecha ${right.connectionId} no encontrada.`);
 
@@ -290,9 +292,12 @@ export async function POST(req: NextRequest) {
           src: typeof left,
           tableQ: string
         ): Promise<Record<string, any>[]> => {
-          const password = (conn as any).db_password_encrypted
+          let password = (conn as any).db_password_encrypted
             ? decryptConnectionPassword((conn as any).db_password_encrypted)
             : (conn as any).db_password ?? "";
+          if (!password) password = process.env.FLEXXUS_PASSWORD ?? process.env.DB_PASSWORD_PLACEHOLDER ?? "";
+          const fbUser = (conn as any).db_user ?? "";
+          if (!fbUser) return Promise.reject(new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión."));
           const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(String(s).trim()) ? String(s).trim().toUpperCase() : `"${String(s).trim().replace(/"/g, '""')}"`);
           const tablePart = tableQ.includes(".")
             ? (tableQ.split(".").pop() || tableQ.trim()).trim().toUpperCase()
@@ -329,7 +334,7 @@ export async function POST(req: NextRequest) {
             host: conn.db_host || "localhost",
             port: conn.db_port ? Number(conn.db_port) : 15421,
             database: conn.db_name,
-            user: conn.db_user,
+            user: fbUser,
             password: password || "",
             lowercase_keys: false,
           };
@@ -444,15 +449,15 @@ export async function POST(req: NextRequest) {
           const primaryConnId = joinConf.connectionId;
           const secondaryConnId = joinConf.secondaryConnectionId;
 
-          const { data: conn1 } = await supabaseAdmin
+          const { data: conn1 } = await supabaseService
             .from("connections")
-            .select("*")
+            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
             .eq("id", primaryConnId)
             .single();
 
-          const { data: conn2 } = await supabaseAdmin
+          const { data: conn2 } = await supabaseService
             .from("connections")
-            .select("*")
+            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
             .eq("id", secondaryConnId || "")
             .single();
 
@@ -490,7 +495,10 @@ export async function POST(req: NextRequest) {
                 return out;
               };
               if (connType === "firebird") {
-                const password = conn.db_password_encrypted ? decryptConnectionPassword(conn.db_password_encrypted) : conn.db_password ?? "";
+                let password = conn.db_password_encrypted ? decryptConnectionPassword(conn.db_password_encrypted) : (conn as any).db_password ?? "";
+                if (!password) password = process.env.FLEXXUS_PASSWORD ?? process.env.DB_PASSWORD_PLACEHOLDER ?? "";
+                const fbUser = (conn as any).db_user ?? "";
+                if (!fbUser) return Promise.reject(new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión."));
                 const tablePart = tableName.includes(".") ? (tableName.split(".").pop() || tableName.trim()).trim().toUpperCase() : tableName.trim().toUpperCase();
                 const { clause, params } = buildWhereClauseFirebird(conditions.filter((c) => (c.column ?? "").trim() !== ""));
                 const escapeFbLiteral = (v: any): string => {
@@ -506,7 +514,7 @@ export async function POST(req: NextRequest) {
                   clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
                 }
                 const Firebird = require("node-firebird");
-                const opts = { host: conn.db_host || "localhost", port: conn.db_port ?? 15421, database: conn.db_name, user: conn.db_user, password: password || "", lowercase_keys: false };
+                const opts = { host: conn.db_host || "localhost", port: conn.db_port ?? 15421, database: conn.db_name, user: fbUser, password: password || "", lowercase_keys: false };
                 return new Promise((resolve, reject) => {
                   const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
                   Firebird.attach(opts, (err: Error | null, db: any) => {
@@ -662,9 +670,9 @@ export async function POST(req: NextRequest) {
           }
 
         } else if (body.connectionId) {
-          const { data: conn, error: connError } = await supabaseAdmin
+          const { data: conn, error: connError } = await supabaseService
             .from("connections")
-            .select("*")
+            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted")
             .eq("id", body.connectionId)
             .single();
           
@@ -708,9 +716,10 @@ export async function POST(req: NextRequest) {
               console.error("[Preview] No table specified for Firebird.");
               return;
             }
-            const password = (conn as any).db_password_encrypted
+            let password = (conn as any).db_password_encrypted
               ? decryptConnectionPassword((conn as any).db_password_encrypted)
               : (conn as any).db_password ?? "";
+            if (!password) password = process.env.FLEXXUS_PASSWORD ?? process.env.DB_PASSWORD_PLACEHOLDER ?? "";
             const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(String(s).trim()) ? String(s).trim().toUpperCase() : `"${String(s).trim().replace(/"/g, '""')}"`);
             const tablePart = tableToQuery.includes(".")
               ? (tableToQuery.split(".").pop() || tableToQuery.trim()).trim().toUpperCase()
@@ -739,11 +748,13 @@ export async function POST(req: NextRequest) {
             }
             const limit = Math.min(PREVIEW_LIMIT, 1000);
             const Firebird = require("node-firebird");
+            const fbUser = (conn as any).db_user ?? "";
+            if (!fbUser) throw new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión (usuario y contraseña).");
             const opts = {
               host: conn.db_host || "localhost",
               port: conn.db_port ? Number(conn.db_port) : 15421,
               database: conn.db_name,
-              user: conn.db_user,
+              user: fbUser,
               password: password || "",
               lowercase_keys: false,
             };
@@ -1090,6 +1101,12 @@ export async function POST(req: NextRequest) {
     console.error("Error en Preview:", err);
     let message = err?.message || "Error generando vista previa";
     if (
+      typeof message === "string" &&
+      (message.includes("user name and password are not defined") || message.includes("username and password") || message.includes("login"))
+    ) {
+      message =
+        "La conexión Firebird no tiene usuario o contraseña definidos. Revisá la configuración de la conexión (usuario y contraseña). Si la contraseña se guarda en el servidor con FLEXXUS_PASSWORD o DB_PASSWORD_PLACEHOLDER, asegurate de que esas variables estén definidas.";
+    } else if (
       typeof message === "string" &&
       (message.includes("I/O error") || message.includes("trying to open file") || message.includes("open file"))
     ) {
