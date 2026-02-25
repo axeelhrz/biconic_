@@ -15,6 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select } from "@/components/ui/Select";
 import { Eye, PencilLine, Trash2, X, Loader2, Download } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -283,15 +284,15 @@ export default function AdminUserTable({ search, filter }: Props) {
       <div className="w-full overflow-x-auto">
         <table className="min-w-[800px] w-full table-fixed">
           <thead style={{ background: "var(--platform-bg-elevated)" }}>
-            <tr className="text-left text-[12px] font-semibold" style={{ color: "var(--platform-fg-muted)" }}>
-              <Th className="w-12 px-2" />
-              <Th className="w-[220px]">Usuario</Th>
-              <Th className="w-[220px]">Correo</Th>
-              <Th className="w-[140px]">Activo desde</Th>
-              <Th className="w-[240px]">Empresas</Th>
-              <Th className="w-[120px]">Estado</Th>
-              <Th className="w-[120px]">Rol</Th>
-              <Th className="w-[100px]">Acciones</Th>
+            <tr className="text-left text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--platform-fg-muted)" }}>
+              <Th className="w-12 px-3 py-3" />
+              <Th className="w-[200px] px-3 py-3">Usuario</Th>
+              <Th className="w-[200px] px-3 py-3">Correo</Th>
+              <Th className="w-[130px] px-3 py-3">Activo desde</Th>
+              <Th className="w-[200px] px-3 py-3">Empresas</Th>
+              <Th className="w-[110px] px-3 py-3">Estado</Th>
+              <Th className="w-[120px] px-3 py-3">Rol</Th>
+              <Th className="w-[100px] px-3 py-3">Acciones</Th>
             </tr>
           </thead>
           <tbody>
@@ -314,17 +315,17 @@ export default function AdminUserTable({ search, filter }: Props) {
                   className="border-b text-sm"
                   style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                 >
-                  <Td className="px-2" style={{ borderColor: "var(--platform-border)" }}>
+                  <Td className="px-3 py-3" style={{ borderColor: "var(--platform-border)" }}>
                     <Checkbox
                       checked={selectedSet.has(u.id)}
                       onCheckedChange={() => toggleSelect(u.id)}
                       className="h-4 w-4 rounded-md border-2 border-[var(--platform-fg-muted)] data-[state=checked]:border-[var(--platform-accent)] data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:text-white"
                     />
                   </Td>
-                  <Td style={{ borderColor: "var(--platform-border)" }}>
-                    <div className="flex items-center gap-2">
+                  <Td className="px-3 py-3 align-middle" style={{ borderColor: "var(--platform-border)" }}>
+                    <div className="flex items-center gap-3">
                       <div
-                        className="relative h-[35px] w-[35px] overflow-hidden rounded-full"
+                        className="relative h-9 w-9 shrink-0 overflow-hidden rounded-full"
                         style={{ background: "var(--platform-surface-hover)" }}
                       >
                         {/* next/image requires whitelisted domains; gravatar is allowed in next.config.ts per repo notes */}
@@ -360,22 +361,13 @@ export default function AdminUserTable({ search, filter }: Props) {
                     </div>
                   </Td>
                   <Td style={{ borderColor: "var(--platform-border)" }}>
-                    <button
-                      className={cn(
-                        "rounded-full px-3 py-1 text-[14px] font-medium transition-colors hover:opacity-90",
-                        u.status === "activo" && "bg-[var(--platform-success-dim)]",
-                        u.status !== "activo" && "bg-[var(--platform-surface-hover)]"
-                      )}
-                      style={{
-                        color: u.status === "activo" ? "var(--platform-success)" : "var(--platform-fg-muted)",
-                      }}
-                      onClick={async () => {
-                        const next =
-                          u.status === "activo" ? "inactivo" : "activo";
+                    <Select
+                      value={u.status}
+                      onChange={async (next) => {
                         const prev = u.status;
                         setRows((r) =>
                           r.map((x) =>
-                            x.id === u.id ? { ...x, status: next } : x
+                            x.id === u.id ? { ...x, status: next as "activo" | "inactivo" } : x
                           )
                         );
                         const res = await setUserStatus(u.id, next);
@@ -385,57 +377,51 @@ export default function AdminUserTable({ search, filter }: Props) {
                               x.id === u.id ? { ...x, status: prev } : x
                             )
                           );
-                          toast.error(
-                            res.error ?? "No se pudo actualizar el estado"
-                          );
+                          toast.error(res.error ?? "No se pudo actualizar el estado");
                         } else {
                           toast.success("Estado actualizado");
                         }
                       }}
-                    >
-                      {u.status === "activo" ? "Activo" : "Inactivo"}
-                    </button>
+                      options={[
+                        { label: "Activo", value: "activo" },
+                        { label: "Inactivo", value: "inactivo" },
+                      ]}
+                      className="min-w-[100px]"
+                      buttonClassName="h-9 rounded-xl text-sm font-medium border w-full justify-between px-3"
+                      disablePortal
+                    />
                   </Td>
                   <Td style={{ borderColor: "var(--platform-border)" }}>
-                    <select
+                    <Select
                       value={u.app_role || ""}
-                      className="rounded-full px-3 py-1 text-[12px] font-medium focus:outline-none"
-                      style={{
-                        background: "var(--platform-surface-hover)",
-                        color: "var(--platform-fg)",
-                        border: "1px solid var(--platform-border)",
-                      }}
-                      onChange={async (e) => {
-                        const nextRole = e.target.value as AppRole;
+                      onChange={async (nextRole) => {
                         const prevRole = u.app_role;
-                        
                         setRows((r) =>
                           r.map((x) =>
-                            x.id === u.id ? { ...x, app_role: nextRole } : x
+                            x.id === u.id ? { ...x, app_role: nextRole as AppRole } : x
                           )
                         );
-                        
-                        const res = await setUserAppRole(u.id, nextRole);
+                        const res = await setUserAppRole(u.id, nextRole as AppRole);
                         if (!res.ok) {
                           setRows((r) =>
                             r.map((x) =>
-                              x.id === u.id
-                                ? { ...x, app_role: prevRole }
-                                : x
+                              x.id === u.id ? { ...x, app_role: prevRole } : x
                             )
                           );
-                          toast.error(
-                            res.error ?? "No se pudo actualizar el rol"
-                          );
+                          toast.error(res.error ?? "No se pudo actualizar el rol");
                         } else {
                           toast.success("Rol actualizado");
                         }
                       }}
-                    >
-                      <option value="VIEWER">Viewer</option>
-                      <option value="CREATOR">Creator</option>
-                      <option value="APP_ADMIN">App Admin</option>
-                    </select>
+                      options={[
+                        { label: "Viewer", value: "VIEWER" },
+                        { label: "Creator", value: "CREATOR" },
+                        { label: "App Admin", value: "APP_ADMIN" },
+                      ]}
+                      className="min-w-[120px]"
+                      buttonClassName="h-9 rounded-xl text-sm font-medium border w-full justify-between px-3"
+                      disablePortal
+                    />
                   </Td>
                   <Td style={{ borderColor: "var(--platform-border)" }}>
                     <div className="flex items-center gap-2">
@@ -534,7 +520,7 @@ function Td({
   ...props
 }: React.TdHTMLAttributes<HTMLTableCellElement>) {
   return (
-    <td className={cn("whitespace-nowrap px-4 py-3", className)} style={style} {...props}>
+    <td className={cn("px-3 py-3 align-middle text-sm", className)} style={style} {...props}>
       {children}
     </td>
   );

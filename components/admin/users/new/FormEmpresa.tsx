@@ -28,25 +28,20 @@ export function FormEmpresa({
     setProvinces,
   } = useLocationOptions();
 
-  // Watch country to fetch provinces if it changes externally or on mount
   const watchedCountry = useFormContext<FormValues>().watch("country");
-  
-  // Effect to load provinces if country is already selected (e.g. valid default)
+
   useEffect(() => {
     if (watchedCountry) {
-        fetchProvinces(watchedCountry);
+      fetchProvinces(watchedCountry);
     } else {
-        setProvinces([]);
+      setProvinces([]);
     }
   }, [watchedCountry]);
 
   return (
     <>
-      {/* --- DATOS DE LA EMPRESA --- */}
-      
-      {/* Fila 1: Identificación y Nombre */}
       <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-3">
-        <Field label="Tipo de identificación">
+        <Field label="Tipo de identificación" error={(errors as FieldErrors<FieldValues>).identificationType?.message as string}>
           <Controller
             name="identificationType"
             control={control}
@@ -61,7 +56,7 @@ export function FormEmpresa({
                   { label: "CUIT/NIT", value: "nit" },
                   { label: "Pasaporte", value: "pasaporte" },
                 ]}
-                className="rounded-[25px]"
+                className="w-full rounded-xl"
               />
             )}
           />
@@ -69,20 +64,21 @@ export function FormEmpresa({
         <Field label="Número de identificación">
           <Input
             placeholder="Ingrese"
-            className="rounded-[25px]"
+            className="rounded-xl border h-11"
+            style={{ borderColor: "var(--platform-border)" }}
             {...register("identificationNumber")}
           />
         </Field>
         <Field label="Nombre de la empresa">
           <Input
             placeholder="Ingrese"
-            className="rounded-[25px]"
+            className="rounded-xl border h-11"
+            style={{ borderColor: "var(--platform-border)" }}
             {...register("companyName")}
           />
         </Field>
       </div>
 
-      {/* Fila 2: Ubicación */}
       <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-3">
         <Field label="País">
           <Controller
@@ -93,15 +89,14 @@ export function FormEmpresa({
                 name={name}
                 value={value as any}
                 onChange={(val: string) => {
-                    onChange(val);
-                    // Reset province when country changes
-                    setValue("province", ""); 
-                    fetchProvinces(val);
+                  onChange(val);
+                  setValue("province", "");
+                  fetchProvinces(val);
                 }}
                 placeholder="Seleccione"
                 options={countries.map((c: any) => ({ label: c.name, value: c.id }))}
                 disabled={loadingCountries}
-                className="rounded-[25px]"
+                className="w-full rounded-xl"
               />
             )}
           />
@@ -118,46 +113,50 @@ export function FormEmpresa({
                 placeholder="Seleccione"
                 options={provinces.map((p: any) => ({ label: p.name, value: p.id }))}
                 disabled={!watchedCountry || loadingProvinces}
-                className="rounded-[25px]"
+                className="w-full rounded-xl"
               />
             )}
           />
         </Field>
         <Field label="Capital / Ciudad">
           <Input
-             placeholder="Ingrese ciudad"
-             className="rounded-[25px]"
-             {...register("capital")}
+            placeholder="Ingrese ciudad"
+            className="rounded-xl border h-11"
+            style={{ borderColor: "var(--platform-border)" }}
+            {...register("capital")}
           />
         </Field>
       </div>
 
-      {/* Fila 3: Dirección y Contacto */}
       <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
         <Field label="Dirección">
           <Input
             placeholder="Ingrese dirección física"
-            className="rounded-[25px]"
+            className="rounded-xl border h-11"
+            style={{ borderColor: "var(--platform-border)" }}
             {...register("address")}
           />
         </Field>
-        
         <Field
           label="Email corporativo (Contacto/Facturación)"
           error={(errors as FieldErrors<FieldValues>).email?.message as string}
         >
           <Input
             placeholder="ej: contabilidad@empresa.com"
-            className="rounded-[25px]"
+            className="rounded-xl border h-11"
+            style={{ borderColor: "var(--platform-border)" }}
             type="email"
             {...register("email")}
           />
-          <p className="pl-1 text-xs text-gray-500">Este email recibirá notificaciones, no es para login.</p>
+          <p className="mt-1 pl-0 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+            Este email recibirá notificaciones, no es para login.
+          </p>
         </Field>
       </div>
 
-      {/* --- PLAN Y SUSCRIPCIÓN --- */}
-      <div className="text-[18px] font-semibold text-[#00030A] mt-2">Plan y Suscripción</div>
+      <div className="text-lg font-semibold mt-6 mb-1" style={{ color: "var(--platform-fg)" }}>
+        Plan y Suscripción
+      </div>
       <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
         <Field
           label="Plan Comercial"
@@ -175,7 +174,7 @@ export function FormEmpresa({
                 placeholder="Seleccione un plan"
                 options={planOptions}
                 disabled={loadingPlans}
-                className="rounded-[25px]"
+                className="w-full rounded-xl"
               />
             )}
           />
@@ -194,24 +193,24 @@ export function FormEmpresa({
                   { label: "Activo", value: "activo" },
                   { label: "Inactivo", value: "inactivo" },
                 ]}
-                className="rounded-[25px]"
+                className="w-full rounded-xl"
               />
             )}
           />
         </Field>
       </div>
 
-      <hr className="my-4 border-gray-200" />
+      <hr className="my-6" style={{ borderColor: "var(--platform-border)" }} />
 
-      {/* --- USUARIO ADMINISTRADOR --- */}
-      <div className="text-[18px] font-semibold text-[#00030A]">
+      <div className="text-lg font-semibold mb-1" style={{ color: "var(--platform-fg)" }}>
         Usuario Administrador (Acceso al sistema)
       </div>
-      <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2">
-        <Field label="Nombre del usuario">
+      <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
+        <Field label="Nombre del usuario" error={(errors as FieldErrors<FieldValues>).userName?.message as string}>
           <Input
             placeholder="Nombre completo del admin"
-            className="rounded-[25px]"
+            className="rounded-xl border h-11"
+            style={{ borderColor: "var(--platform-border)" }}
             {...register("userName", { required: "El nombre del usuario es requerido" })}
           />
         </Field>
@@ -229,31 +228,31 @@ export function FormEmpresa({
                   { label: "Editar", value: "editar" },
                   { label: "Admin", value: "admin" },
                 ]}
-                className="rounded-[25px]"
+                className="w-full rounded-xl"
               />
             )}
           />
         </Field>
-        
-        <Field 
+        <Field
           label="Email de acceso (Login)"
           error={(errors as FieldErrors<FieldValues>).userEmail?.message as string}
         >
           <Input
             placeholder="usuario@empresa.com"
-            className="rounded-[25px]"
+            className="rounded-xl border h-11"
+            style={{ borderColor: "var(--platform-border)" }}
             type="email"
             {...register("userEmail", { required: "El email de acceso es requerido" })}
           />
         </Field>
-        
-        <Field 
+        <Field
           label="Contraseña"
           error={(errors as FieldErrors<FieldValues>).userPassword?.message as string}
         >
           <PasswordInput
             placeholder="Digite la contraseña"
-            className="rounded-[25px] border-[#D9DCE3]"
+            className="rounded-xl border h-11"
+            style={{ borderColor: "var(--platform-border)" }}
             {...register("userPassword", { required: "La contraseña es requerida" })}
           />
         </Field>
@@ -272,10 +271,14 @@ function Field({
   error?: string;
 }) {
   return (
-    <div className="flex w-full flex-col gap-1">
-      <label className="text-[14px] font-medium text-[#66687E]">{label}</label>
+    <div className="flex w-full flex-col gap-1.5">
+      <label className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>
+        {label}
+      </label>
       {children}
-      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+      {error ? (
+        <p className="text-xs" style={{ color: "var(--platform-danger)" }}>{error}</p>
+      ) : null}
     </div>
   );
 }
