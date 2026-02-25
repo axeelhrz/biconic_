@@ -316,8 +316,15 @@ export async function GET(
     }
 
     const etlInfo = { id: etlRow.id, title: (etlRow as any).title, name: (etlRow as any).name };
-    const layout = (etlRow as { layout?: { saved_metrics?: unknown[] } }).layout;
+    const layout = (etlRow as { layout?: { saved_metrics?: unknown[]; guided_config?: Record<string, unknown> } }).layout;
     const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
+    // Columnas elegidas en el ETL (Columnas a incluir): usar siempre para que Profiling muestre lo mismo que el ETL
+    const guided = layout?.guided_config && typeof layout.guided_config === "object" ? layout.guided_config : undefined;
+    const filterConfig = guided?.filter && typeof guided.filter === "object" ? (guided.filter as Record<string, unknown>) : undefined;
+    const columnsFromLayout = Array.isArray(filterConfig?.columns) && (filterConfig!.columns as string[]).length > 0
+      ? (filterConfig!.columns as string[])
+      : undefined;
+    const selectedColumns = columnsFromLayout ?? (resolved as { columnsFromConfig?: string[] }).columnsFromConfig;
 
     if (!resolved) {
       return NextResponse.json({
@@ -429,29 +436,38 @@ export async function GET(
       }
     }
 
-    // Normalizar claves de rawRows para que coincidan con fields.all (ej. primary_RAZONSOCIAL -> primary.RAZONSOCIAL) y la UI muestre los valores
-    const columnsFromConfig = (resolved as any).columnsFromConfig as string[] | undefined;
-    if (columnsFromConfig?.length && rawRows.length > 0 && fields.all.length > 0) {
-      const keyVariants = (col: string) => {
-        const withUnderscore = col.replace(/\./g, "_");
-        return [col, withUnderscore, withUnderscore.toLowerCase(), withUnderscore.toUpperCase()];
-      };
-      rawRows = rawRows.map((row: Record<string, unknown>) => {
-        const out: Record<string, unknown> = {};
-        for (const col of fields.all) {
-          let val: unknown = undefined;
-          for (const key of keyVariants(col)) {
-            if (row[key] !== undefined) { val = row[key]; break; }
-          }
-          if (val === undefined && typeof row === "object" && row !== null) {
-            for (const k of Object.keys(row)) {
-              if (k.replace(/\./g, "_").toLowerCase() === col.replace(/\./g, "_").toLowerCase()) { val = (row as any)[k]; break; }
-            }
-          }
-          out[col] = val ?? (row as any)[col];
+    const keyVariants = (col: string) => {
+      const withUnderscore = col.replace(/\./g, "_");
+      return [col, withUnderscore, withUnderscore.toLowerCase(), withUnderscore.toUpperCase()];
+    };
+    const pickFromRow = (row: Record<string, unknown>, cols: string[]): Record<string, unknown> => {
+      const out: Record<string, unknown> = {};
+      for (const col of cols) {
+        let val: unknown = undefined;
+        for (const key of keyVariants(col)) {
+          if (row[key] !== undefined) { val = row[key]; break; }
         }
-        return out;
-      });
+        if (val === undefined && typeof row === "object" && row !== null) {
+          for (const k of Object.keys(row)) {
+            if (k.replace(/\./g, "_").toLowerCase() === col.replace(/\./g, "_").toLowerCase()) { val = (row as any)[k]; break; }
+          }
+        }
+        out[col] = val ?? (row as any)[col];
+      }
+      return out;
+    };
+
+    // Restringir a las columnas elegidas en el ETL (Columnas a incluir) para que Profiling muestre lo mismo que la previsualización del ETL
+    if (selectedColumns && selectedColumns.length > 0 && rawRows.length > 0) {
+      rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, selectedColumns));
+      fields = deriveFieldsFromSample(rawRows);
+      if (fields.all.length === 0) fields = { all: selectedColumns, numeric: selectedColumns, string: selectedColumns, date: [] };
+    } else {
+      // Normalizar claves de rawRows para que coincidan con fields.all (ej. primary_RAZONSOCIAL -> primary.RAZONSOCIAL)
+      const columnsFromConfig = (resolved as any).columnsFromConfig as string[] | undefined;
+      if (columnsFromConfig?.length && rawRows.length > 0 && fields.all.length > 0) {
+        rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, fields.all));
+      }
     }
 
     return NextResponse.json({

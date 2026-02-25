@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
@@ -903,9 +904,14 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     {formMetrics.map((m, i) => (
                       <div key={m.id} className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <div className="flex gap-2 items-center">
-                          <select value={m.func} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: e.target.value } : mm))} className="flex-1 h-9 rounded-lg border px-3 text-sm appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                            {AGG_FUNCS.map((f) => (<option key={f.value} value={f.value}>{f.label}</option>))}
-                          </select>
+                          <Select
+                            value={m.func}
+                            onChange={(val) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: val } : mm))}
+                            options={AGG_FUNCS}
+                            placeholder="Función"
+                            className="flex-1"
+                            disablePortal
+                          />
                           {formMetrics.length > 1 && (
                             <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormMetrics((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
                           )}
@@ -991,8 +997,8 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     <div className="space-y-2">
                       {formFilters.map((f, i) => (
                         <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                          <select value={f.field} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs min-w-[100px] appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>{fields.map((name) => (<option key={name} value={name}>{name}</option>))}</select>
-                          <select value={f.operator} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: e.target.value } : ff))} className="h-8 rounded-lg border px-2 text-xs w-20 appearance-none cursor-pointer" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>{["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => (<option key={op} value={op}>{op}</option>))}</select>
+                          <Select value={f.field} onChange={(val) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={fields.map((name) => ({ value: name, label: name }))} placeholder="Campo" className="min-w-[120px]" buttonClassName="h-9 text-xs" disablePortal />
+                          <Select value={f.operator} onChange={(val) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => ({ value: op, label: op }))} placeholder="Op" className="w-24" buttonClassName="h-9 text-xs" disablePortal />
                           <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                           <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
                         </div>
@@ -1007,22 +1013,19 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     </p>
                     <div className="flex flex-wrap gap-2 items-center">
                       <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</span>
-                      <select
-                        className="rounded-lg border px-3 py-2 text-sm min-w-[140px]"
-                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                      <Select
                         value={metricsDistinctColumn ?? ""}
-                        onChange={(e) => {
-                          const col = e.target.value || null;
+                        onChange={(val) => {
+                          const col = val || null;
                           setMetricsDistinctColumn(col);
                           setMetricsDistinctValues([]);
                           setMetricsDistinctSearch("");
                         }}
-                      >
-                        <option value="">Elegir columna</option>
-                        {fields.map((col) => (
-                          <option key={col} value={col}>{col}</option>
-                        ))}
-                      </select>
+                        options={[{ value: "", label: "Elegir columna" }, ...fields.map((col) => ({ value: col, label: col }))]}
+                        placeholder="Elegir columna"
+                        className="min-w-[160px]"
+                        disablePortal
+                      />
                       <Button
                         type="button"
                         variant="outline"
@@ -1221,15 +1224,14 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Ver valores de una columna</Label>
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una columna y cargá los valores para revisar opciones al definir filtros.</p>
                     <div className="flex flex-wrap gap-2 items-center">
-                      <select
-                        className="rounded-lg border px-3 py-2 text-sm min-w-[140px]"
-                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                      <Select
                         value={metricsDistinctColumn ?? ""}
-                        onChange={(e) => { const col = e.target.value || null; setMetricsDistinctColumn(col); setMetricsDistinctValues([]); setMetricsDistinctSearch(""); }}
-                      >
-                        <option value="">Elegir columna</option>
-                        {fields.map((col) => (<option key={col} value={col}>{col}</option>))}
-                      </select>
+                        onChange={(val) => { const col = val || null; setMetricsDistinctColumn(col); setMetricsDistinctValues([]); setMetricsDistinctSearch(""); }}
+                        options={[{ value: "", label: "Elegir columna" }, ...fields.map((col) => ({ value: col, label: col }))]}
+                        placeholder="Elegir columna"
+                        className="min-w-[160px]"
+                        disablePortal
+                      />
                       <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} disabled={!metricsDistinctColumn || metricsDistinctLoading} onClick={async () => { if (!metricsDistinctColumn) return; setMetricsDistinctLoading(true); setMetricsDistinctValues([]); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(metricsDistinctColumn)}`); const data = await res.json(); if (data.ok && Array.isArray(data.values)) setMetricsDistinctValues(data.values); else toast.error(data?.error || "No se pudieron cargar los valores"); } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Error al cargar"); } finally { setMetricsDistinctLoading(false); } }}>
                         {metricsDistinctLoading ? "Cargando…" : "Cargar valores"}
                       </Button>
@@ -1382,11 +1384,18 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Reglas de semáforo aplicadas en frontend. No afectan datos del análisis.</p>
                   <div className="mb-4">
                     <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Esquema de color</Label>
-                    <select value={chartColorScheme} onChange={(e) => setChartColorScheme(e.target.value)} className="w-full max-w-[200px] h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                      <option value="auto">Automático</option>
-                      <option value="fixed">Fijo</option>
-                      <option value="category">Por categoría</option>
-                    </select>
+                    <Select
+                      value={chartColorScheme}
+                      onChange={setChartColorScheme}
+                      options={[
+                        { value: "auto", label: "Automático" },
+                        { value: "fixed", label: "Fijo" },
+                        { value: "category", label: "Por categoría" },
+                      ]}
+                      placeholder="Esquema"
+                      className="max-w-[200px]"
+                      disablePortal
+                    />
                   </div>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
