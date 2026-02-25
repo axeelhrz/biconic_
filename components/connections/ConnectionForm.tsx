@@ -1,10 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { DialogClose } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Select, type SelectOption } from "../ui/Select";
 import ImportStatus from "./importStatus"; // Importamos el componente de estado
+
+const CONNECTION_TYPE_OPTIONS: SelectOption[] = [
+  { value: "mysql", label: "MySQL" },
+  { value: "postgres", label: "PostgreSQL" },
+  { value: "firebird", label: "Firebird (Flexxus)" },
+  { value: "excel", label: "Archivo Excel/CSV" },
+];
 
 type ConnectionFormValues = {
   type: string;
@@ -42,6 +50,7 @@ export default function ConnectionForm({
 }: ConnectionFormProps) {
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors, isSubmitting },
     getValues,
@@ -163,24 +172,24 @@ export default function ConnectionForm({
               <label htmlFor="type" className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                 Tipo
               </label>
-              <div className="relative">
-                <select
-                  id="type"
-                  className={inputClass + " pr-10 appearance-none cursor-pointer"}
-                  {...register("type", { required: "Seleccione un tipo" })}
-                >
-                  <option value="">Seleccione tipo</option>
-                  <option value="mysql">MySQL</option>
-                  <option value="postgres">PostgreSQL</option>
-                  <option value="firebird">Firebird (Flexxus)</option>
-                  <option value="excel">Archivo Excel/CSV</option>
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3" style={{ color: "var(--platform-muted)" }}>
-                  <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
-                </div>
-              </div>
+              <Controller
+                name="type"
+                control={control}
+                rules={{ required: "Seleccione un tipo" }}
+                render={({ field }) => (
+                  <Select
+                    id="type"
+                    value={field.value}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                    options={CONNECTION_TYPE_OPTIONS}
+                    placeholder="Seleccione tipo"
+                    searchable
+                    searchPlaceholder="Buscar tipo..."
+                    disablePortal
+                  />
+                )}
+              />
               {errors.type && (
                 <p className="mt-1 text-xs" style={{ color: "var(--platform-danger)" }}>{errors.type.message}</p>
               )}

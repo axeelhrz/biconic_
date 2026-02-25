@@ -29,6 +29,8 @@ export interface SelectProps {
   searchable?: boolean;
   /** Placeholder del campo de búsqueda cuando searchable es true */
   searchPlaceholder?: string;
+  /** Si true, el panel de opciones se renderiza dentro del componente (no en portal). Usar dentro de modales para evitar conflictos de foco. */
+  disablePortal?: boolean;
   disabled?: boolean;
   name?: string;
   // To support react-hook-form register spread
@@ -48,6 +50,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
       optionClassName,
       searchable = false,
       searchPlaceholder = "Buscar...",
+      disablePortal = false,
       disabled,
       name,
       ...rest
@@ -256,7 +259,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                 <ChevronDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
               </Listbox.Button>
 
-              {typeof document !== "undefined" && createPortal(optionsPanel, document.body)}
+              {disablePortal ? optionsPanel : (typeof document !== "undefined" && createPortal(optionsPanel, document.body))}
             </div>
           );
         }}
