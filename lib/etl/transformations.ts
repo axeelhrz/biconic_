@@ -389,11 +389,16 @@ export function applyTransforms(
           next[t.column] = t.replaceWith;
         }
         break;
-      case "normalize_nulls":
-        if ("patterns" in t && isNullLike(v, t.patterns)) {
-          next[t.column] = t.action === "replace" && t.replacement !== undefined ? t.replacement : null;
-        }
+      case "normalize_nulls": {
+        // Solo reemplazar si la columna existe en la fila y su valor coincide con los patrones de vacío.
+        // Si t.column no coincide con la clave (p. ej. "CODIGO" vs "codigo"), v sería undefined y no debemos reemplazar todo.
+        const keyInRow = t.column in next ? t.column : Object.keys(next).find((k) => k.toLowerCase() === t.column.toLowerCase());
+        if (keyInRow === undefined) break;
+        const valueInRow = next[keyInRow];
+        if (!("patterns" in t) || !isNullLike(valueInRow, t.patterns)) break;
+        next[keyInRow] = t.action === "replace" && t.replacement !== undefined ? t.replacement : null;
         break;
+      }
       case "normalize_spaces":
         if (typeof v === "string") {
           next[t.column] = v.replace(/\s+/g, " ").trim();

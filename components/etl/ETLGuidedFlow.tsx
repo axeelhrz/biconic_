@@ -21,6 +21,7 @@ import {
   ArrowDown,
   X,
   Plus,
+  RotateCcw,
 } from "lucide-react";
 import { Connection as ServerConnection } from "@/components/connections/ConnectionsCard";
 import { Select } from "@/components/ui/Select";
@@ -1095,6 +1096,26 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               }
               return (
                 <div className="space-y-6">
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="rounded-lg"
+                      style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+                      onClick={() => {
+                        setNullCleanup(null);
+                        setCustomNullValue("");
+                        setCleanTransforms([]);
+                        setDataFixes([]);
+                        setDedupe(null);
+                        setBulkNormalizeOp("");
+                        toast.success("Transformación restablecida");
+                      }}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Restablecer toda la transformación
+                    </Button>
+                  </div>
                   {/* Valores nulos o vacíos */}
                   <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Valores nulos o vacíos</Label>
@@ -1249,21 +1270,37 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       )}
                     </div>
 
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="rounded-lg"
-                      style={{ borderColor: "var(--platform-border)" }}
-                      onClick={() => setNullCleanup({
-                        patterns: nullCleanup?.patterns ?? defaultNullPatterns,
-                        action: nullCleanup?.action ?? "null",
-                        replacement: nullCleanup?.replacement,
-                        columns: effectiveColumns,
-                      })}
-                    >
-                      Activar en todas las columnas
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="rounded-lg"
+                        style={{ borderColor: "var(--platform-border)" }}
+                        onClick={() => setNullCleanup({
+                          patterns: nullCleanup?.patterns ?? defaultNullPatterns,
+                          action: nullCleanup?.action ?? "null",
+                          replacement: nullCleanup?.replacement,
+                          columns: effectiveColumns,
+                        })}
+                      >
+                        Activar en todas las columnas
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="rounded-lg"
+                        style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+                        onClick={() => {
+                          setNullCleanup(null);
+                          setCustomNullValue("");
+                          toast.success("Valores nulos revertidos");
+                        }}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5 mr-1" /> Revertir
+                      </Button>
+                    </div>
                   </div>
 
                   {/* Normalización de texto por columna */}
