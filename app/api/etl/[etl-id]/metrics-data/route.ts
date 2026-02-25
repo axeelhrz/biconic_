@@ -3,6 +3,9 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import postgres from "postgres";
 
+/** Timeout mayor para lectura vía Postgres directo (etl_output) y tablas grandes. */
+export const maxDuration = 30;
+
 type FieldsInfo = {
   all: string[];
   numeric: string[];
