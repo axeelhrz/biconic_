@@ -92,6 +92,12 @@ function toSqlLiteral(v: any): string {
 const normalizeStr = (str: string) =>
   str ? str.replace(/\s+/g, "").toUpperCase() : "";
 
+/** En Postgres los identificadores sin comillas se guardan en minúsculas; normalizar para que "ID" coincida con "id". */
+function quotedColumn(name: string): string {
+  const s = (name || "").trim().replace(/"/g, '""').toLowerCase();
+  return s ? `"${s}"` : '""';
+}
+
 export async function POST(req: NextRequest) {
   try {
     let body: AggregationRequest;
@@ -184,9 +190,8 @@ export async function POST(req: NextRequest) {
 
     // Helper: condición WHEN para métrica (solo la parte "campo op valor")
     const buildWhenClause = (cond: MetricCondition): string => {
-      const safeC = cond.field.replace(/"/g, '""');
       const op = (cond.operator || "=").toUpperCase().trim();
-      const f = `"${safeC}"`;
+      const f = quotedColumn(cond.field);
       if (op === "IN") {
         const list = (Array.isArray(cond.value) ? cond.value : [cond.value])
           .map((x: any) => toSqlLiteral(x))
@@ -207,13 +212,13 @@ export async function POST(req: NextRequest) {
       .map((m) => {
         const i = body.metrics.indexOf(m);
         const func = m.func.toUpperCase();
-        const safeField = m.field.replace(/"/g, '""');
+        const col = quotedColumn(m.field);
 
         const fieldExpr = (() => {
           if (m.cast === "sanitize")
-            return `regexp_replace("${safeField}"::text, '[^0-9\\.-]', '', 'g')::numeric`;
-          if (m.cast === "numeric") return `"${safeField}"::numeric`;
-          return `"${safeField}"`;
+            return `regexp_replace(${col}::text, '[^0-9\\.-]', '', 'g')::numeric`;
+          if (m.cast === "numeric") return `${col}::numeric`;
+          return col;
         })();
 
         const internalAlias = `metric_${i}`;
@@ -247,15 +252,13 @@ export async function POST(req: NextRequest) {
 
     if (dimList.length > 0) {
       const parts = dimList.map((d) => {
-        const safeD = d.replace(/"/g, '""');
-        return `COALESCE("${safeD}"::text, 'Sin Categoría') AS "${safeD}"`;
+        const col = quotedColumn(d);
+        const alias = (d || "").trim().replace(/"/g, '""');
+        return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
       });
       dimensionSelectClause = parts.join(", ");
       dimensionGroupByClause = dimList
-        .map((d) => {
-          const safeD = d.replace(/"/g, '""');
-          return `COALESCE("${safeD}"::text, 'Sin Categoría')`;
-        })
+        .map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
         .join(", ");
     }
 
@@ -275,23 +278,23 @@ export async function POST(req: NextRequest) {
     if (body.filters && body.filters.length > 0) {
       const whereClauses = body.filters
         .map((f) => {
-          const safeField = f.field.replace(/"/g, '""');
+          const col = quotedColumn(f.field);
           const op = (f.operator || "=").toUpperCase().trim();
 
           let fieldExpression;
           if (op === "MONTH" || op === "DAY" || op === "YEAR") {
             fieldExpression = `(
               CASE
-                WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, 'DD/MM/YYYY')
-                WHEN "${safeField}"::text LIKE '%, % de % de %' THEN to_date("${safeField}"::text, 'Day, DD "de" Month "de" YYYY')
-                ELSE "${safeField}"::date
+                WHEN ${col}::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(${col}::text, 'DD/MM/YYYY')
+                WHEN ${col}::text LIKE '%, % de % de %' THEN to_date(${col}::text, 'Day, DD "de" Month "de" YYYY')
+                ELSE ${col}::date
               END
             )`;
           } else {
             fieldExpression =
               f.cast === "numeric"
-                ? `"${safeField}"::numeric`
-                : `"${safeField}"`;
+                ? `${col}::numeric`
+                : col;
           }
 
           if (op === "MONTH") {
@@ -339,7 +342,7 @@ export async function POST(req: NextRequest) {
             )} AND ${toSqlLiteral(to)}`;
           }
           if ((op === "IS" || op === "IS NOT") && f.value === null)
-            return `"${safeField}" ${op} NULL`;
+            return `${col} ${op} NULL`;
 
           return `${fieldExpression} ${op} ${toSqlLiteral(f.value)}`;
         })
