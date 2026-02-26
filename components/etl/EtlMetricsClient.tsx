@@ -594,9 +594,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       const json = await res.json();
       if (!res.ok) {
         const msg = (json?.error ?? "Error") as string;
-        if (/does not exist|no existe/i.test(msg)) {
-          toast.error("La tabla del ETL no existe o cambió. Ejecutá el ETL de nuevo y hacé clic en «Recargar» aquí.", { duration: 6000 });
-          fetchData({ silent: true });
+        if (/does not exist|no existe|relation.*does not exist/i.test(msg)) {
+          toast.info("La tabla de datos aún no está creada. Ejecutá el ETL para generar los datos; podés seguir configurando la métrica y ver la previsualización después.", { duration: 8000 });
         } else {
           toast.error(msg);
         }

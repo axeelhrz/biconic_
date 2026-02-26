@@ -265,9 +265,9 @@ async function fetchColumnTypesFromSchema(
 async function fetchFromEtlOutputViaPostgres(
   tableName: string,
   limit: number
-): Promise<{ rowCount: number; rows: any[] }> {
+): Promise<{ rowCount: number; rows: any[]; tableExists?: boolean }> {
   const dbUrl = process.env.SUPABASE_DB_URL;
-  if (!dbUrl) return { rowCount: 0, rows: [] };
+  if (!dbUrl) return { rowCount: 0, rows: [], tableExists: false };
   const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
   const sql = postgres(dbUrl);
   try {
@@ -275,14 +275,16 @@ async function fetchFromEtlOutputViaPostgres(
       `SELECT count(*)::int AS c FROM etl_output."${safeTable}"`
     );
     const rowCount = Array.isArray(countRes) && countRes[0]?.c != null ? Number(countRes[0].c) : 0;
-    if (rowCount === 0) return { rowCount: 0, rows: [] };
+    if (rowCount === 0) return { rowCount: 0, rows: [], tableExists: true };
     const rowsRes = await sql.unsafe(
       `SELECT * FROM etl_output."${safeTable}" LIMIT ${Math.min(200, Math.max(1, limit))}`
     );
     const rows = Array.isArray(rowsRes) ? rowsRes : [];
-    return { rowCount, rows };
-  } catch {
-    return { rowCount: 0, rows: [] };
+    return { rowCount, rows, tableExists: true };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const tableMissing = /does not exist|relation.*does not exist|42P01/i.test(msg);
+    return { rowCount: 0, rows: [], tableExists: !tableMissing };
   } finally {
     await sql.end();
   }
@@ -335,11 +337,22 @@ async function resolveEtlToTableAndFields(
   const { count, error: countError } = await schemaClient
     .from(tableName)
     .select("*", { count: "exact", head: true });
-  // Si el esquema es etl_output, la API de Supabase suele no exponerlo: no devolver null;
-  // el GET usará fetchFromEtlOutputViaPostgres para leer los datos.
   if (countError && schema !== "etl_output") return null;
   const rowCount = count ?? 0;
   let sampleData: any[] = [];
+  // Si es etl_output y no hay filas o falló el count, verificar que la tabla exista (Postgres directo)
+  if (schema === "etl_output" && (countError || rowCount === 0)) {
+    const pgResult = await fetchFromEtlOutputViaPostgres(tableName, 1);
+    if (pgResult.tableExists === false) return null; // tabla no existe → dejar que guided_config devuelva stub
+    sampleData = pgResult.rows ?? [];
+    return {
+      schema,
+      tableName,
+      created_at: latestRun.completed_at ?? null,
+      sampleData,
+      rowCount: pgResult.rowCount ?? 0,
+    };
+  }
   if (rowCount > 0) {
     const { data } = await schemaClient.from(tableName).select("*").limit(500);
     sampleData = data || [];
@@ -403,7 +416,15 @@ async function resolveFromGuidedConfig(
       continue;
     }
   }
-  return null;
+  // Tabla aún no existe (ETL no ejecutado): devolver stub con tabla configurada y columnas para que la UI de métricas funcione
+  return {
+    schema: "etl_output",
+    tableName,
+    created_at: null,
+    sampleData: [],
+    rowCount: 0,
+    columnsFromConfig: columnsFromConfig && columnsFromConfig.length > 0 ? columnsFromConfig : undefined,
+  };
 }
 
 /** Usa etl.output_table (tabla real creada en la última ejecución exitosa) */
