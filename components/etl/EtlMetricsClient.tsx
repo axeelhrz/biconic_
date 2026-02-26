@@ -444,6 +444,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
   const hasData = data?.hasData ?? false;
   const fields = data?.fields?.all ?? [];
+  /** Columnas marcadas como measure en Rol BI; usadas para fórmulas y cálculos. */
+  const measureColumns = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "measure");
 
   const dateFieldSet = new Set(data?.fields?.date ?? []);
   const numericFieldSet = new Set(data?.fields?.numeric ?? []);
@@ -1485,7 +1487,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                             )}
                           </div>
                           <div className="flex flex-col gap-1">
-                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Insertar columna</Label>
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Insertar columna (medidas)</Label>
                             <Select
                               value=""
                               onChange={(val: string) => {
@@ -1501,8 +1503,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                                   setTimeout(() => { input.focus(); input.setSelectionRange(start + val.length, start + val.length); }, 0);
                                 }
                               }}
-                              options={[{ value: "", label: "Columna…" }, ...fields.map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]}
-                              placeholder="Columna…"
+                              options={[{ value: "", label: "Columna…" }, ...measureColumns.map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]}
+                              placeholder={measureColumns.length === 0 ? "Sin medidas (Rol BI)" : "Columna…"}
                               className="min-w-[140px]"
                               buttonClassName="h-9 text-sm"
                               disablePortal
