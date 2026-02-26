@@ -70,6 +70,17 @@ const FORMULA_QUICKS = [
   { label: "A × B", expr: "metric_0 * metric_1" },
 ];
 
+/** Nombres de funciones tipo Excel para autocompletado y ayuda en fórmula personalizada. */
+const EXCEL_FUNCTIONS = [
+  "SUM", "AVERAGE", "COUNT", "COUNTA", "MIN", "MAX", "IF", "IFERROR", "NULLIF",
+  "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN", "TRUNC", "MOD", "POWER", "SQRT",
+  "AND", "OR", "NOT", "TRUE", "FALSE",
+  "VLOOKUP", "HLOOKUP", "INDEX", "MATCH", "XLOOKUP",
+  "LEFT", "RIGHT", "MID", "LEN", "CONCATENATE", "TEXT", "VALUE",
+  "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "EOMONTH", "DATEDIF",
+  "metric_0", "metric_1", "metric_2", "metric_3",
+];
+
 type ColumnRole = "key" | "time" | "dimension" | "measure";
 
 type MetricsDataResponse = {
@@ -200,10 +211,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const [connectionTablesLoading, setConnectionTablesLoading] = useState(false);
   const [otherTableColumnsLoaded, setOtherTableColumnsLoaded] = useState<string[]>([]);
   const [otherTableColumnsLoading, setOtherTableColumnsLoading] = useState(false);
+  const formulaInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const [formulaSuggestions, setFormulaSuggestions] = useState<string[]>([]);
+  const [formulaSuggestionIndex, setFormulaSuggestionIndex] = useState(0);
 
   const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
     A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
-    B: ["Identidad", "Tipo cálculo", "Cálculo simple", "Avanzado", "Propiedades", "Filtros base", "Preview"],
+    B: ["Identidad", "Cálculo", "Propiedades", "Filtros base", "Preview"],
     C: ["Métricas", "Tiempo", "Dimensiones", "Filtros", "Transformaciones", "Preview"],
     D: ["Tipo visual", "Mapeo", "Formato", "Colores", "Interacciones", "Guardar"],
   };
@@ -1341,98 +1355,171 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                   </div>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Tipo cálculo</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Cálculo</Button>
                   </div>
                 </section>
               )}
 
-              {/* Wizard B1: Tipo cálculo */}
+              {/* Wizard B1: Cálculo (unificado: tipo + simple / conteo / ratio / fórmula personalizada) */}
               {wizard === "B" && wizardStep === 1 && (
-                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Tipo de cálculo</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Modo Simple cubre la mayoría de casos. Fórmula personalizada habilita expresiones avanzadas.</p>
+                <section className="rounded-xl border p-6 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Cálculo de la métrica</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Elegí el tipo de cálculo: agregación simple, conteo, ratio o fórmula personalizada (estilo Excel).</p>
                   <div className="grid grid-cols-2 gap-3 mb-4">
                     {(["simple", "count", "ratio", "formula"] as const).map((t) => (
-                      <button key={t} type="button" onClick={() => setCalcType(t)} className="p-4 rounded-xl border text-left transition-colors" style={{ borderColor: calcType === t ? "var(--platform-accent)" : "var(--platform-border)", background: calcType === t ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
+                      <button key={t} type="button" onClick={() => {
+                        setCalcType(t);
+                        if (t === "formula") {
+                          if (formMetrics.length === 0 || !formMetrics.some((m) => m.func === "FORMULA")) setFormMetrics([{ id: `m-${Date.now()}`, func: "FORMULA", formula: "metric_0 / NULLIF(metric_1, 0)", alias: "formula", field: "" }]);
+                          else if (formMetrics[0].func !== "FORMULA") setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: "FORMULA", formula: m.formula ?? "metric_0 / NULLIF(metric_1, 0)", field: "" } : m));
+                        }
+                        if ((t === "simple" || t === "count") && formMetrics.every((m) => m.func === "FORMULA")) setFormMetrics([{ id: `m-${Date.now()}`, field: fields[0] ?? "", func: t === "count" ? "COUNT" : "SUM", alias: "total" }]);
+                        if (t === "ratio" && !formMetrics.some((m) => m.func === "FORMULA")) setFormMetrics([{ id: `m-${Date.now()}`, func: "FORMULA", formula: "metric_0 / NULLIF(metric_1, 0)", alias: "ratio", field: "" }]);
+                      }} className="p-4 rounded-xl border text-left transition-colors" style={{ borderColor: calcType === t ? "var(--platform-accent)" : "var(--platform-border)", background: calcType === t ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
                         <span className="font-medium block" style={{ color: "var(--platform-fg)" }}>{t === "simple" ? "Agregación simple" : t === "count" ? "Conteo" : t === "ratio" ? "Ratio" : "Fórmula personalizada"}</span>
-                        <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{t === "simple" ? "sum(total), avg(precio)" : t === "count" ? "count(*), count_distinct(id)" : t === "ratio" ? "numerador / denominador" : "Expresión con campos y funciones"}</span>
+                        <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{t === "simple" ? "SUM, AVG, MIN, MAX por campo" : t === "count" ? "COUNT, COUNT DISTINCT" : t === "ratio" ? "A÷B, %, margen (predeterminadas)" : "Fórmulas Excel + columnas"}</span>
                       </button>
                     ))}
                   </div>
-                  <div className="flex justify-between">
-                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente</Button>
-                  </div>
-                </section>
-              )}
 
-              {/* Wizard B2: Cálculo simple (métricas) */}
-              {wizard === "B" && wizardStep === 2 && (
-                <section className="rounded-xl border p-6 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Cálculo — Métricas y agregaciones</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Definí las métricas (campo, función, alias) o fórmulas.</p>
-                  <div className="flex items-center justify-between mb-2">
-                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Métricas</Label>
-                    <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" onClick={() => setFormMetrics((m) => [...m, { id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: "valor" }])}>+ Añadir métrica</Button>
-                  </div>
-                  <div className="space-y-3">
-                    {formMetrics.map((m, i) => (
-                      <div key={m.id} className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <div className="flex gap-2 items-center">
-                          <Select
-                            value={m.func}
-                            onChange={(val: string) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: val } : mm))}
-                            options={AGG_FUNCS}
-                            placeholder="Función"
-                            className="flex-1"
-                            disablePortal
-                          />
-                          {formMetrics.length > 1 && (
-                            <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormMetrics((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
-                          )}
-                        </div>
-                        {m.func !== "FORMULA" && (
-                          <AdminFieldSelector label="Campo" value={m.field} onChange={(v) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, field: v } : mm))} etlData={etlData} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." className="[&_button]:!bg-[var(--platform-bg)] [&_button]:!border-[var(--platform-border)] [&_button]:!text-[var(--platform-fg)]" />
-                        )}
-                        {m.func === "FORMULA" && (
-                          <div className="space-y-2">
-                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Fórmula (metric_0, metric_1…)</Label>
-                            <div className="flex flex-wrap gap-1 mb-2">
-                              {FORMULA_QUICKS.map(({ label, expr }) => (
-                                <button key={label} type="button" onClick={() => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: expr } : mm))} className="px-2 py-1 rounded text-xs border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{label}</button>
-                              ))}
+                  {/* Contenido según tipo */}
+                  {(calcType === "simple" || calcType === "count") && (
+                    <>
+                      <div className="flex items-center justify-between mb-2">
+                        <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Métricas</Label>
+                        <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" onClick={() => setFormMetrics((m) => [...m, { id: `m-${Date.now()}`, field: fields[0] ?? "", func: calcType === "count" ? "COUNT" : "SUM", alias: "valor" }])}>+ Añadir métrica</Button>
+                      </div>
+                      <div className="space-y-3">
+                        {formMetrics.map((m, i) => {
+                          if (m.func === "FORMULA") return null;
+                          return (
+                            <div key={m.id} className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                              <div className="flex gap-2 items-center">
+                                <Select value={m.func} onChange={(val: string) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: val } : mm))} options={calcType === "count" ? AGG_FUNCS.filter((f) => f.value === "COUNT" || f.value === "COUNT(DISTINCT") : AGG_FUNCS.filter((f) => f.value !== "FORMULA" && f.value !== "COUNT" && f.value !== "COUNT(DISTINCT")} placeholder="Función" className="flex-1" buttonClassName="h-9" disablePortal />
+                                {formMetrics.filter((x) => x.func !== "FORMULA").length > 1 && <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormMetrics((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>}
+                              </div>
+                              <AdminFieldSelector label="Campo" value={m.field} onChange={(v: string) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, field: v } : mm))} etlData={etlData} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." className="[&_button]:!bg-[var(--platform-bg)] [&_button]:!border-[var(--platform-border)] [&_button]:!text-[var(--platform-fg)]" />
+                              <div>
+                                <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias</Label>
+                                <Input value={m.alias} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, alias: e.target.value } : mm))} placeholder="Ej. total_ventas" className="h-8 text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                              </div>
                             </div>
-                            <Input value={m.formula ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, formula: e.target.value } : mm))} placeholder="Ej. metric_0 / NULLIF(metric_1, 0)" className="font-mono text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                          </div>
-                        )}
-                        <div>
-                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias</Label>
-                          <Input value={m.alias} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, alias: e.target.value } : mm))} placeholder="Ej. total_ventas" className="h-8 text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+
+                  {calcType === "ratio" && (
+                    <div className="space-y-3">
+                      <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Fórmulas predeterminadas (ratio)</Label>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {FORMULA_QUICKS.map(({ label, expr }) => (
+                          <button key={label} type="button" onClick={() => { if (formMetrics[0]) setFormMetrics([{ ...formMetrics[0], func: "FORMULA", formula: expr, alias: formMetrics[0].alias || "ratio", field: "" }]); }} className="px-3 py-2 rounded-lg text-sm border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{label}</button>
+                        ))}
+                      </div>
+                      <div>
+                        <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Fórmula (metric_0, metric_1 = métricas anteriores)</Label>
+                        <Input value={formMetrics[0]?.func === "FORMULA" ? (formMetrics[0].formula ?? "") : ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: "FORMULA", formula: e.target.value, field: "" } : m))} placeholder="Ej. metric_0 / NULLIF(metric_1, 0)" className="font-mono text-sm rounded-lg w-full !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                      </div>
+                    </div>
+                  )}
+
+                  {calcType === "formula" && (
+                    <div className="space-y-4">
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Fórmulas predeterminadas (estilo Excel)</Label>
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {FORMULA_QUICKS.map(({ label, expr }) => (
+                            <button key={label} type="button" onClick={() => { if (formMetrics[0]) setFormMetrics([{ ...formMetrics[0], func: "FORMULA", formula: expr, alias: formMetrics[0].alias || "formula", field: "" }]); }} className="px-2 py-1.5 rounded text-xs border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{label}</button>
+                          ))}
+                          {["SUM(", "AVERAGE(", "COUNT(", "MIN(", "MAX(", "IF(", "NULLIF("].map((fn) => (
+                            <button key={fn} type="button" onClick={() => { const cur = formMetrics[0]?.formula ?? ""; if (formMetrics[0]) setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: "FORMULA", formula: cur + fn, field: "" } : m)); }} className="px-2 py-1.5 rounded text-xs border font-mono" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{fn}</button>
+                          ))}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                  <div className="mt-6 flex justify-between">
-                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Avanzado</Button>
-                  </div>
-                </section>
-              )}
-
-              {/* Wizard B3: Avanzado (formula editor) */}
-              {wizard === "B" && wizardStep === 3 && (
-                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Editor de fórmula avanzada</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Fórmulas complejas con validación. Usá metric_0, metric_1… para referenciar las métricas definidas.</p>
-                  <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {FORMULA_QUICKS.map(({ label, expr }) => (
-                        <button key={label} type="button" onClick={() => formMetrics[0] && setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, formula: expr } : m))} className="px-2 py-1 rounded text-xs border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{label}</button>
-                      ))}
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Fórmula personalizada</Label>
+                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Escribí la expresión. Usá metric_0, metric_1… para métricas previas. Aparecerán sugerencias de funciones al escribir.</p>
+                        <div className="flex gap-2 flex-wrap items-start">
+                          <div className="flex-1 min-w-[200px] relative">
+                            <Input
+                              ref={(el) => { formulaInputRef.current = el; }}
+                              value={formMetrics[0]?.func === "FORMULA" ? (formMetrics[0].formula ?? "") : ""}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: "FORMULA", formula: v, field: "" } : m));
+                                const word = (v.match(/([a-zA-Z_][a-zA-Z0-9_]*)$/) ?? [])[1] ?? "";
+                                if (word.length >= 1) {
+                                  const sug = EXCEL_FUNCTIONS.filter((f) => f.toUpperCase().startsWith(word.toUpperCase())).slice(0, 8);
+                                  setFormulaSuggestions(sug);
+                                  setFormulaSuggestionIndex(0);
+                                } else setFormulaSuggestions([]);
+                              }}
+                              onKeyDown={(e) => {
+                                if (formulaSuggestions.length === 0) return;
+                                if (e.key === "ArrowDown") { e.preventDefault(); setFormulaSuggestionIndex((i) => Math.min(i + 1, formulaSuggestions.length - 1)); }
+                                else if (e.key === "ArrowUp") { e.preventDefault(); setFormulaSuggestionIndex((i) => Math.max(i - 1, 0)); }
+                                else if (e.key === "Enter" || e.key === "Tab") {
+                                  const sel = formulaSuggestions[formulaSuggestionIndex];
+                                  if (sel) {
+                                    e.preventDefault();
+                                    const cur = formMetrics[0]?.formula ?? "";
+                                    const before = cur.replace(/([a-zA-Z_][a-zA-Z0-9_]*)$/, "");
+                                    const insert = sel + (["SUM", "AVERAGE", "COUNT", "MIN", "MAX", "IF", "IFERROR", "NULLIF"].includes(sel) ? "(" : "");
+                                    if (formMetrics[0]) setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: "FORMULA", formula: before + insert, field: "" } : m));
+                                    setFormulaSuggestions([]);
+                                  }
+                                }
+                              }}
+                              placeholder="Ej. metric_0 / NULLIF(metric_1, 0) o SUM(PRECIO_TOTAL)"
+                              className="font-mono text-sm rounded-lg w-full !bg-[var(--platform-bg)]"
+                              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                            />
+                            {formulaSuggestions.length > 0 && (
+                              <div className="absolute z-10 left-0 right-0 top-full mt-1 rounded-lg border py-1 shadow-lg max-h-48 overflow-auto" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                                {formulaSuggestions.map((s, idx) => (
+                                  <button key={s} type="button" className="w-full text-left px-3 py-2 text-sm font-mono" style={{ background: idx === formulaSuggestionIndex ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }} onClick={() => { const cur = formMetrics[0]?.formula ?? ""; const before = cur.replace(/([a-zA-Z_][a-zA-Z0-9_]*)$/, ""); const insert = s + (["SUM", "AVERAGE", "COUNT", "MIN", "MAX", "IF", "IFERROR", "NULLIF"].includes(s) ? "(" : ""); setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: "FORMULA", formula: before + insert, field: "" } : m)); setFormulaSuggestions([]); }}>{s}</button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Insertar columna</Label>
+                            <Select
+                              value=""
+                              onChange={(val: string) => {
+                                if (!val) return;
+                                const el = formulaInputRef.current;
+                                if (el && "value" in el) {
+                                  const input = el as HTMLInputElement;
+                                  const cur = formMetrics[0]?.formula ?? "";
+                                  const start = input.selectionStart ?? cur.length;
+                                  const end = input.selectionEnd ?? cur.length;
+                                  const newVal = cur.slice(0, start) + val + cur.slice(end);
+                                  setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: "FORMULA", formula: newVal, field: "" } : m));
+                                  setTimeout(() => { input.focus(); input.setSelectionRange(start + val.length, start + val.length); }, 0);
+                                }
+                              }}
+                              options={[{ value: "", label: "Columna…" }, ...fields.map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]}
+                              placeholder="Columna…"
+                              className="min-w-[140px]"
+                              buttonClassName="h-9 text-sm"
+                              disablePortal
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      {formMetrics[0]?.func === "FORMULA" && (
+                        <div>
+                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias del resultado</Label>
+                          <Input value={formMetrics[0].alias} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. ratio_ventas" className="h-8 text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        </div>
+                      )}
                     </div>
-                    <Input value={formMetrics[0]?.formula ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, formula: e.target.value } : m))} placeholder="Ej. metric_0 / NULLIF(metric_1, 0)" className="font-mono text-sm rounded-lg w-full" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }} />
-                  </div>
-                  <div className="flex justify-between">
+                  )}
+
+                  <div className="flex justify-between pt-2">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Propiedades</Button>
                   </div>
@@ -1440,7 +1527,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               )}
 
               {/* Wizard B4: Propiedades matemáticas */}
-              {wizard === "B" && wizardStep === 4 && (
+              {wizard === "B" && wizardStep === 2 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Propiedades matemáticas</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Declara el comportamiento de la métrica. Previene agregaciones incorrectas en tablas y totales.</p>
@@ -1460,7 +1547,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               )}
 
               {/* Wizard B5: Filtros base */}
-              {wizard === "B" && wizardStep === 5 && (
+              {wizard === "B" && wizardStep === 3 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Filtros base (opcional)</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Filtros que se aplican siempre a esta métrica.</p>
@@ -1565,7 +1652,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               )}
 
               {/* Wizard B6: Preview métrica */}
-              {wizard === "B" && wizardStep === 6 && (
+              {wizard === "B" && wizardStep === 4 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Preview de la métrica</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Validá que el KPI se comporta como esperás antes de continuar al análisis.</p>
