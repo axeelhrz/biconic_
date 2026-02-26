@@ -717,6 +717,11 @@ export async function GET(
         ? computeDateColumnPeriodicity(rawRows, fields.date)
         : undefined;
 
+    const dateColumnPeriodicityOverrides =
+      layout && typeof layout === "object" && (layout as Record<string, unknown>).date_column_periodicity_overrides != null
+        ? ((layout as Record<string, Record<string, string>>).date_column_periodicity_overrides ?? {})
+        : {};
+
     return NextResponse.json({
       ok: true,
       data: {
@@ -729,6 +734,7 @@ export async function GET(
         savedMetrics,
         rawRows,
         dateColumnPeriodicity,
+        dateColumnPeriodicityOverrides,
         columnDisplay,
       },
     });

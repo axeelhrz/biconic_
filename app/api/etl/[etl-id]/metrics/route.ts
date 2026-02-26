@@ -80,6 +80,10 @@ export async function PUT(
 
     const body = await request.json().catch(() => ({}));
     const savedMetrics = Array.isArray(body.savedMetrics) ? body.savedMetrics : [];
+    const dateColumnPeriodicityOverrides =
+      body.dateColumnPeriodicityOverrides != null && typeof body.dateColumnPeriodicityOverrides === "object"
+        ? (body.dateColumnPeriodicityOverrides as Record<string, string>)
+        : undefined;
 
     const adminClient = createServiceRoleClient();
     const { data: etlRow, error: fetchError } = await adminClient
@@ -93,7 +97,11 @@ export async function PUT(
     }
 
     const currentLayout = (etlRow as { layout?: Record<string, unknown> })?.layout ?? {};
-    const updatedLayout = { ...currentLayout, saved_metrics: JSON.parse(JSON.stringify(savedMetrics)) };
+    const updatedLayout = {
+      ...currentLayout,
+      saved_metrics: JSON.parse(JSON.stringify(savedMetrics)),
+      ...(dateColumnPeriodicityOverrides !== undefined && { date_column_periodicity_overrides: dateColumnPeriodicityOverrides }),
+    };
 
     const { error: updateError } = await adminClient
       .from("etl")

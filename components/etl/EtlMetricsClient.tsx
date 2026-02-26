@@ -84,6 +84,8 @@ type MetricsDataResponse = {
     rawRows?: Record<string, unknown>[];
     /** Periodicidad natural inferida por columna de fecha (Diaria, Semanal, Mensual, Anual, Irregular). El admin puede editarla en la UI. */
     dateColumnPeriodicity?: Record<string, string>;
+    /** Sobrescrituras de periodicidad guardadas en layout (columna → Diaria|Semanal|Mensual|Anual|Irregular). */
+    dateColumnPeriodicityOverrides?: Record<string, string>;
     /** Nombres para mostrar y formato por columna (desde ETL guided_config.filter.columnDisplay). */
     columnDisplay?: Record<string, { label?: string; format?: string }>;
   };
@@ -155,6 +157,8 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   const [datasetHasTime, setDatasetHasTime] = useState(true);
   const [timeColumn, setTimeColumn] = useState("");
   const [periodicity, setPeriodicity] = useState("Diaria");
+  /** Sobrescrituras de periodicidad por columna (editable en paso Tiempo); se persisten en layout. */
+  const [periodicityOverrides, setPeriodicityOverrides] = useState<Record<string, string>>({});
   const [grainOption, setGrainOption] = useState<string>("");
   /** Columnas elegidas cuando el grain es "Personalizado" (clave única = concatenación de estas columnas). */
   const [grainCustomColumns, setGrainCustomColumns] = useState<string[]>([]);
@@ -229,6 +233,12 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     fetchData({ silent: true, sampleRows: 500 });
   }, [showForm, data?.hasData, rawTableData.length, fetchData]);
 
+  useEffect(() => {
+    const overrides = data?.dateColumnPeriodicityOverrides;
+    if (overrides && typeof overrides === "object" && Object.keys(overrides).length >= 0)
+      setPeriodicityOverrides({ ...overrides });
+  }, [data?.dateColumnPeriodicityOverrides]);
+
   // Refrescar datos del ETL al entrar al paso Profiling (Dataset) para mostrar filas/columnas actualizadas
   useEffect(() => {
     if (wizard === "A" && wizardStep === 0 && showForm) {
@@ -265,19 +275,25 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   }, [data?.fields?.all, data?.fields?.numeric, data?.fields?.date]);
 
   const dateFields = data?.fields?.date ?? [];
+  const getEffectivePeriodicity = (col: string) =>
+    periodicityOverrides[col] ?? data?.dateColumnPeriodicity?.[col] ?? "Irregular";
+
   useEffect(() => {
     if (dateFields.length > 0) {
       setDatasetHasTime(true);
       if (!timeColumn) {
         const first = dateFields[0];
         setTimeColumn(first);
-        const inferred = data?.dateColumnPeriodicity?.[first];
-        if (inferred) setPeriodicity(inferred);
+        setPeriodicity(getEffectivePeriodicity(first));
       }
     } else {
       setDatasetHasTime(false);
     }
-  }, [dateFields.length, timeColumn, data?.dateColumnPeriodicity]);
+  }, [dateFields.length, timeColumn, data?.dateColumnPeriodicity, periodicityOverrides]);
+
+  useEffect(() => {
+    if (timeColumn && dateFields.includes(timeColumn)) setPeriodicity(getEffectivePeriodicity(timeColumn));
+  }, [timeColumn, periodicityOverrides, data?.dateColumnPeriodicity]);
 
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
   const hasData = data?.hasData ?? false;
@@ -300,6 +316,18 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     return label || col;
   };
 
+  /** Para fechas ISO en UTC (ej. 2025-10-01T00:00:00.000Z) usa componentes UTC para mostrar la fecha de calendario correcta (1/10, no 30/09 en UTC-3). */
+  const dateComponents = (date: Date, value: unknown): { d: number; m: number; y: number; monthIndex: number } => {
+    const isIsoDateOnly =
+      typeof value === "string" &&
+      /^\d{4}-\d{2}-\d{2}/.test(value.trim()) &&
+      (value.length === 10 || /T00:00:00(\.0*)?Z?$/i.test(value.trim()));
+    if (isIsoDateOnly) {
+      return { d: date.getUTCDate(), m: date.getUTCMonth() + 1, y: date.getUTCFullYear(), monthIndex: date.getUTCMonth() };
+    }
+    return { d: date.getDate(), m: date.getMonth() + 1, y: date.getFullYear(), monthIndex: date.getMonth() };
+  };
+
   const formatSampleCell = (col: string, value: unknown): string => {
     if (value === null || value === undefined) return "";
     const key = getColumnDisplayKey(col);
@@ -312,16 +340,14 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       else if (typeof value === "string") date = new Date(value);
       else if (typeof value === "number") date = value > 1e10 ? new Date(value) : new Date(1899, 11, 30 + (value | 0));
       if (date && !isNaN(date.getTime())) {
-        const d = date.getDate();
-        const m = date.getMonth() + 1;
-        const y = date.getFullYear();
+        const { d, m, y, monthIndex } = dateComponents(date, value);
         const pad = (n: number) => String(n).padStart(2, "0");
         const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
         if (format === "DD/MM/YYYY") return `${pad(d)}/${pad(m)}/${y}`;
         if (format === "MM/DD/YYYY") return `${pad(m)}/${pad(d)}/${y}`;
         if (format === "YYYY-MM-DD") return `${y}-${pad(m)}-${pad(d)}`;
         if (format === "DD-MM-YYYY") return `${pad(d)}-${pad(m)}-${y}`;
-        if (format === "DD MMM YYYY") return `${pad(d)} ${months[date.getMonth()]} ${y}`;
+        if (format === "DD MMM YYYY") return `${pad(d)} ${months[monthIndex]} ${y}`;
       }
     }
     if (isNumber && (typeof value === "number" || (typeof value === "string" && /^-?\d+([.,]\d+)?$/.test(String(value).trim())))) {
@@ -559,6 +585,32 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       setSaving(false);
     }
   };
+
+  const PERIODICITY_OPTIONS = [
+    { value: "Diaria", label: "Diaria" },
+    { value: "Semanal", label: "Semanal" },
+    { value: "Mensual", label: "Mensual" },
+    { value: "Anual", label: "Anual" },
+    { value: "Irregular", label: "Irregular" },
+  ];
+
+  const savePeriodicityOverrides = useCallback(
+    async (overrides: Record<string, string>) => {
+      try {
+        const res = await fetch(`/api/etl/${etlId}/metrics`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ savedMetrics: savedMetrics, dateColumnPeriodicityOverrides: overrides }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) toast.error(json.error ?? "Error al guardar periodicidad");
+        else setData((prev) => (prev ? { ...prev, dateColumnPeriodicityOverrides: overrides } : null));
+      } catch {
+        toast.error("Error al guardar periodicidad");
+      }
+    },
+    [etlId, savedMetrics]
+  );
 
   const goToDashboard = () => {
     router.push(`/admin/dashboard?create=1&etlId=${etlId}`);
@@ -876,12 +928,29 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                             <td colSpan={2} className="px-3 py-4 text-sm" style={{ color: "var(--platform-fg-muted)" }}>No hay columnas de tipo fecha en este dataset.</td>
                           </tr>
                         ) : (
-                          dateFields.map((f) => (
-                            <tr key={f} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
-                              <td className="px-3 py-2 font-medium" style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(f)}</td>
-                              <td className="px-3 py-2" style={{ color: "var(--platform-fg-muted)" }}>{data?.dateColumnPeriodicity?.[f] ?? "Irregular"}</td>
-                            </tr>
-                          ))
+                          dateFields.map((f) => {
+                            const effectivePeriodicity = periodicityOverrides[f] ?? data?.dateColumnPeriodicity?.[f] ?? "Irregular";
+                            return (
+                              <tr key={f} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
+                                <td className="px-3 py-2 font-medium" style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(f)}</td>
+                                <td className="px-3 py-2">
+                                  <Select
+                                    value={effectivePeriodicity}
+                                    onChange={(val: string) => {
+                                      const next = { ...periodicityOverrides, [f]: val };
+                                      setPeriodicityOverrides(next);
+                                      savePeriodicityOverrides(next);
+                                    }}
+                                    options={PERIODICITY_OPTIONS}
+                                    placeholder="Periodicidad"
+                                    className="min-w-[120px]"
+                                    buttonClassName="h-8 text-sm rounded-lg border bg-[var(--platform-bg)]"
+                                    disablePortal
+                                  />
+                                </td>
+                              </tr>
+                            );
+                          })
                         )}
                       </tbody>
                     </table>

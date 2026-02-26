@@ -439,6 +439,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return dataTypeToLabel((col as { inferredType?: string; dataType?: string })?.inferredType ?? (col as { dataType?: string })?.dataType);
   }, [columnDisplay, selectedTableInfo?.columns]);
 
+  /** Para fechas ISO en UTC (ej. 2025-10-01T00:00:00.000Z) usa componentes UTC para mostrar la fecha de calendario correcta (1/10, no 30/09 en UTC-3). */
+  const dateComponentsForPreview = (date: Date, val: unknown): { d: number; m: number; y: number; monthIndex: number } => {
+    const isIsoDateOnly =
+      typeof val === "string" &&
+      /^\d{4}-\d{2}-\d{2}/.test(val.trim()) &&
+      (val.length === 10 || /T00:00:00(\.0*)?Z?$/i.test(val.trim()));
+    if (isIsoDateOnly) {
+      return { d: date.getUTCDate(), m: date.getUTCMonth() + 1, y: date.getUTCFullYear(), monthIndex: date.getUTCMonth() };
+    }
+    return { d: date.getDate(), m: date.getMonth() + 1, y: date.getFullYear(), monthIndex: date.getMonth() };
+  };
+
   /** Formatea un valor de celda para la vista previa según tipo y formato de la columna. */
   const formatPreviewCell = useCallback((key: string, value: unknown): string => {
     const disp = columnDisplay[key];
@@ -451,16 +463,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       else if (typeof value === "number") date = value > 1e10 ? new Date(value) : new Date(1899, 11, 30 + (value | 0));
       else if (typeof value === "string") date = new Date(value);
       if (date && !isNaN(date.getTime())) {
-        const d = date.getDate();
-        const m = date.getMonth() + 1;
-        const y = date.getFullYear();
+        const { d, m, y, monthIndex } = dateComponentsForPreview(date, value);
         const pad = (n: number) => String(n).padStart(2, "0");
         const months = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
         if (format === "DD/MM/YYYY") return `${pad(d)}/${pad(m)}/${y}`;
         if (format === "MM/DD/YYYY") return `${pad(m)}/${pad(d)}/${y}`;
         if (format === "YYYY-MM-DD") return `${y}-${pad(m)}-${pad(d)}`;
         if (format === "DD-MM-YYYY") return `${pad(d)}-${pad(m)}-${y}`;
-        if (format === "DD MMM YYYY") return `${pad(d)} ${months[date.getMonth()]} ${y}`;
+        if (format === "DD MMM YYYY") return `${pad(d)} ${months[monthIndex]} ${y}`;
       }
     }
     if (tipo === "Número" && (typeof value === "number" || (typeof value === "string" && /^-?\d+([.,]\d+)?$/.test(String(value).trim())))) {
