@@ -592,11 +592,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         toast.error("No hay tabla de datos. Ejecutá el ETL y recargá la página.");
         return;
       }
-      const freshDerived = Array.isArray(metricsJson?.data?.datasetConfig?.derivedColumns)
-        ? metricsJson.data.datasetConfig.derivedColumns
-        : Array.isArray((metricsJson?.data?.datasetConfig as { derived_columns?: DerivedColumn[] })?.derived_columns)
-          ? (metricsJson.data.datasetConfig as { derived_columns: DerivedColumn[] }).derived_columns.map((d: { name: string; expression: string; default_aggregation?: string }) => ({ name: d.name, expression: d.expression, defaultAggregation: d.default_aggregation || "SUM" }))
-          : null;
+      let freshDerived: { name: string; expression: string; defaultAggregation?: string }[] | null = null;
+      const cfg = metricsJson?.data?.datasetConfig;
+      if (Array.isArray(cfg?.derivedColumns)) freshDerived = cfg.derivedColumns as { name: string; expression: string; defaultAggregation?: string }[];
+      else if (Array.isArray((cfg as { derived_columns?: { name: string; expression: string; default_aggregation?: string }[] })?.derived_columns))
+        freshDerived = ((cfg as { derived_columns: { name: string; expression: string; default_aggregation?: string }[] }).derived_columns).map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.default_aggregation || "SUM" }));
+      if (!freshDerived?.length && (formMetrics.some((m) => m.field && !(m as { expression?: string }).expression) || derivedColumns.length > 0)) {
+        try {
+          const metricsApiRes = await fetch(`/api/etl/${etlId}/metrics`);
+          const metricsApiJson = await metricsApiRes.json();
+          const fromMetrics = metricsApiJson?.data?.datasetConfig?.derivedColumns;
+          if (Array.isArray(fromMetrics) && fromMetrics.length > 0) freshDerived = fromMetrics as { name: string; expression: string; defaultAggregation?: string }[];
+        } catch {
+          // ignore
+        }
+      }
       if (freshDerived && freshDerived.length > 0) setDerivedColumns(freshDerived);
       const derivedToSend = (freshDerived?.length ? freshDerived : derivedColumns) as { name: string; expression: string; defaultAggregation?: string }[];
       const derivedByNameForPayload = Object.fromEntries(derivedToSend.map((d) => [d.name.toLowerCase(), d]));

@@ -491,8 +491,14 @@ export async function POST(req: NextRequest) {
     if (error) {
       const msg = error.message || String(error);
       console.error("[aggregate-data] execute_sql error:", msg, "Query:", query.slice(0, 200));
+      let userMsg = "Error al ejecutar la agregación: " + msg;
+      if (/column\s+["']?(\w+)["']?\s+does not exist/i.test(msg)) {
+        const colMatch = msg.match(/column\s+["']?(\w+)["']?\s+does not exist/i);
+        const colName = colMatch ? colMatch[1] : "";
+        userMsg += ". Si «" + colName + "» es una columna calculada, creala en Métricas (Fórmula personalizada → Crear columna) y enviá derivedColumns en la petición.";
+      }
       return NextResponse.json(
-        { error: "Error al ejecutar la agregación: " + msg },
+        { error: userMsg },
         { status: 500 }
       );
     }
