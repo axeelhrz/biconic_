@@ -577,6 +577,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         alias: m.alias || m.field || "valor",
         ...(m.condition ? { condition: m.condition } : {}),
         ...(m.formula ? { formula: m.formula } : {}),
+        ...((m as { expression?: string }).expression ? { expression: (m as { expression?: string }).expression } : {}),
       }));
       const res = await fetch("/api/dashboard/aggregate-data", {
         method: "POST",
@@ -1409,18 +1410,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                             { id: formulaRow?.id ?? `m-${Date.now() + 2}`, func: "FORMULA", formula: formulaRow?.formula ?? "metric_0 / NULLIF(metric_1, 0)", alias: formulaRow?.alias ?? "ratio", field: "" },
                           ]);
                         } else if (t === "formula") {
-                          const base = formMetrics.filter((m) => m.func !== "FORMULA");
-                          const formulaRow = formMetrics.find((m) => m.func === "FORMULA");
-                          if (base.length === 0 && !formulaRow) {
-                            setFormMetrics([
-                              { id: `m-${Date.now()}`, field: m0, func: "SUM", alias: "metric_0" },
-                              { id: `m-${Date.now() + 1}`, func: "FORMULA", formula: "metric_0", alias: "formula", field: "" },
-                            ]);
-                          } else if (base.length === 0 && formulaRow) {
-                            setFormMetrics([{ id: `m-${Date.now()}`, field: m0, func: "SUM", alias: "metric_0" }, { ...formulaRow, id: formulaRow.id ?? `m-${Date.now() + 1}` }]);
-                          } else if (!formMetrics.some((m) => m.func === "FORMULA")) {
-                            setFormMetrics([...base, { id: `m-${Date.now()}`, func: "FORMULA", formula: "metric_0 / NULLIF(metric_1, 0)", alias: "formula", field: "" }]);
-                          }
+                          const withExpr = formMetrics.find((m) => (m as { expression?: string }).expression != null && (m as { expression?: string }).expression !== "");
+                          if (!withExpr) setFormMetrics([{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado", expression: "" }]);
                         }
                         if ((t === "simple" || t === "count") && formMetrics.every((m) => m.func === "FORMULA")) setFormMetrics([{ id: `m-${Date.now()}`, field: fields[0] ?? "", func: t === "count" ? "COUNT" : "SUM", alias: "total" }]);
                       }} className="p-4 rounded-xl border text-left transition-colors" style={{ borderColor: calcType === t ? "var(--platform-accent)" : "var(--platform-border)", background: calcType === t ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
@@ -1490,119 +1481,75 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                   )}
 
                   {calcType === "formula" && (() => {
-                    const formulaRowIdx = formMetrics.findIndex((m) => m.func === "FORMULA");
-                    const baseIndices = formMetrics.reduce<number[]>((acc, m, i) => { if (m.func !== "FORMULA") acc.push(i); return acc; }, []);
-                    const formulaRow = formulaRowIdx >= 0 ? formMetrics[formulaRowIdx] : null;
+                    const exprMetric = formMetrics[0];
+                    const exprValue = (exprMetric as { expression?: string })?.expression ?? "";
                     return (
                     <div className="space-y-4">
                       <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Métricas base (metric_0, metric_1…)</Label>
-                          <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" onClick={() => setFormMetrics((prev) => { const idx = prev.findIndex((m) => m.func === "FORMULA"); const newBase = { id: `m-${Date.now()}`, field: measureColumns[0] ?? fields[0] ?? "", func: "SUM", alias: `metric_${baseIndices.length}` }; return idx < 0 ? [...prev, newBase] : [...prev.slice(0, idx), newBase, ...prev.slice(idx)]; })}>+ Añadir métrica base</Button>
-                        </div>
-                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Al menos una métrica base. La fórmula las referencia como metric_0, metric_1, etc.</p>
-                        <div className="space-y-2">
-                          {baseIndices.map((formIdx, i) => {
-                            const m = formMetrics[formIdx];
-                            return (
-                            <div key={m.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                              <span className="text-xs font-mono" style={{ color: "var(--platform-fg-muted)" }}>metric_{i}</span>
-                              <Select value={m.func} onChange={(v: string) => setFormMetrics((prev) => prev.map((mm, ii) => ii === formIdx ? { ...mm, func: v } : mm))} options={AGG_FUNCS.filter((f) => f.value !== "FORMULA")} placeholder="Función" className="min-w-[100px]" buttonClassName="h-8 text-xs" disablePortal />
-                              <AdminFieldSelector label="" value={m.field} onChange={(v: string) => setFormMetrics((prev) => prev.map((mm, ii) => ii === formIdx ? { ...mm, field: v } : mm))} etlData={etlData} fieldType="numeric" placeholder="Campo…" className="flex-1 min-w-[120px] [&_button]:!bg-[var(--platform-bg)] [&_button]:!border-[var(--platform-border)] [&_button]:!text-[var(--platform-fg)]" />
-                              {baseIndices.length > 1 && <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormMetrics((prev) => prev.filter((mm) => mm.id !== m.id))}><Trash2 className="h-4 w-4" /></Button>}
-                            </div>
-                          ); })}
-                        </div>
-                      </div>
-                      <div>
                         <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Fórmulas predeterminadas (estilo Excel)</Label>
+                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Escribí la expresión con nombres de columnas (ej. CANTIDAD * PRECIO_UNITARIO). Usá «Insertar columna» para agregar medidas. Después elegí Suma, Promedio, etc.</p>
                         <div className="flex flex-wrap gap-2 mb-3">
-                          {FORMULA_QUICKS.map(({ label, expr }) => (
-                            <button key={label} type="button" onClick={() => { if (formulaRowIdx >= 0) setFormMetrics((prev) => prev.map((m, i) => i === formulaRowIdx ? { ...m, formula: expr } : m)); }} className="px-2 py-1.5 rounded text-xs border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{label}</button>
-                          ))}
-                          {["SUM(", "AVERAGE(", "COUNT(", "MIN(", "MAX(", "IF(", "NULLIF("].map((fn) => (
-                            <button key={fn} type="button" onClick={() => { if (formulaRowIdx >= 0) setFormMetrics((prev) => prev.map((m, i) => i === formulaRowIdx ? { ...m, formula: (m.formula ?? "") + fn } : m)); }} className="px-2 py-1.5 rounded text-xs border font-mono" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{fn}</button>
+                          {[" * ", " / ", " + ", " - ", " * 100 / "].map((op) => (
+                            <button key={op} type="button" onClick={() => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, expression: ((m as { expression?: string }).expression ?? "") + op } : m))} className="px-2 py-1.5 rounded text-xs border font-mono" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{op.trim()}</button>
                           ))}
                         </div>
                       </div>
                       <div>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Fórmula personalizada</Label>
-                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Escribí la expresión. Usá metric_0, metric_1… para métricas base. Aparecerán sugerencias al escribir.</p>
-                        <div className="flex gap-2 flex-wrap items-start">
-                          <div className="flex-1 min-w-[200px] relative">
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Fórmula personalizada (columnas)</Label>
+                        <div className="flex gap-2 flex-wrap items-end">
+                          <div className="flex-1 min-w-[200px]">
                             <Input
                               ref={(el) => { formulaInputRef.current = el; }}
-                              value={formulaRow?.formula ?? ""}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                if (formulaRowIdx >= 0) setFormMetrics((prev) => prev.map((m, i) => i === formulaRowIdx ? { ...m, formula: v } : m));
-                                const word = (v.match(/([a-zA-Z_][a-zA-Z0-9_]*)$/) ?? [])[1] ?? "";
-                                if (word.length >= 1) {
-                                  const sug = EXCEL_FUNCTIONS.filter((f) => f.toUpperCase().startsWith(word.toUpperCase())).slice(0, 8);
-                                  setFormulaSuggestions(sug);
-                                  setFormulaSuggestionIndex(0);
-                                } else setFormulaSuggestions([]);
-                              }}
-                              onKeyDown={(e) => {
-                                if (formulaSuggestions.length === 0) return;
-                                if (e.key === "ArrowDown") { e.preventDefault(); setFormulaSuggestionIndex((i) => Math.min(i + 1, formulaSuggestions.length - 1)); }
-                                else if (e.key === "ArrowUp") { e.preventDefault(); setFormulaSuggestionIndex((i) => Math.max(i - 1, 0)); }
-                                else if (e.key === "Enter" || e.key === "Tab") {
-                                  const sel = formulaSuggestions[formulaSuggestionIndex];
-                                  if (sel && formulaRowIdx >= 0) {
-                                    e.preventDefault();
-                                    const cur = formulaRow?.formula ?? "";
-                                    const before = cur.replace(/([a-zA-Z_][a-zA-Z0-9_]*)$/, "");
-                                    const insert = sel + (["SUM", "AVERAGE", "COUNT", "MIN", "MAX", "IF", "IFERROR", "NULLIF"].includes(sel) ? "(" : "");
-                                    setFormMetrics((prev) => prev.map((m, i) => i === formulaRowIdx ? { ...m, formula: before + insert } : m));
-                                    setFormulaSuggestions([]);
-                                  }
-                                }
-                              }}
-                              placeholder="Ej. metric_0 / NULLIF(metric_1, 0)"
+                              value={exprValue}
+                              onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, expression: e.target.value } : m))}
+                              placeholder="Ej. CANTIDAD * PRECIO_UNITARIO"
                               className="font-mono text-sm rounded-lg w-full !bg-[var(--platform-bg)]"
                               style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                             />
-                            {formulaSuggestions.length > 0 && (
-                              <div className="absolute z-10 left-0 right-0 top-full mt-1 rounded-lg border py-1 shadow-lg max-h-48 overflow-auto" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                                {formulaSuggestions.map((s, idx) => (
-                                  <button key={s} type="button" className="w-full text-left px-3 py-2 text-sm font-mono" style={{ background: idx === formulaSuggestionIndex ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }} onClick={() => { const cur = formulaRow?.formula ?? ""; const before = cur.replace(/([a-zA-Z_][a-zA-Z0-9_]*)$/, ""); const insert = s + (["SUM", "AVERAGE", "COUNT", "MIN", "MAX", "IF", "IFERROR", "NULLIF"].includes(s) ? "(" : ""); if (formulaRowIdx >= 0) setFormMetrics((prev) => prev.map((m, i) => i === formulaRowIdx ? { ...m, formula: before + insert } : m)); setFormulaSuggestions([]); }}>{s}</button>
-                                ))}
-                              </div>
-                            )}
                           </div>
                           <div className="flex flex-col gap-1">
                             <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Insertar columna (medidas)</Label>
                             <Select
                               value=""
                               onChange={(val: string) => {
-                                if (!val || formulaRowIdx < 0) return;
+                                if (!val) return;
                                 const el = formulaInputRef.current;
                                 if (el && "value" in el) {
                                   const input = el as HTMLInputElement;
-                                  const cur = formulaRow?.formula ?? "";
+                                  const cur = exprValue;
                                   const start = input.selectionStart ?? cur.length;
                                   const end = input.selectionEnd ?? cur.length;
-                                  const newVal = cur.slice(0, start) + val + cur.slice(end);
-                                  setFormMetrics((prev) => prev.map((m, i) => i === formulaRowIdx ? { ...m, formula: newVal } : m));
+                                  setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, expression: cur.slice(0, start) + val + cur.slice(end) } : m));
                                   setTimeout(() => { input.focus(); input.setSelectionRange(start + val.length, start + val.length); }, 0);
                                 }
                               }}
                               options={[{ value: "", label: "Columna…" }, ...measureColumns.map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]}
                               placeholder={measureColumns.length === 0 ? "Sin medidas (Rol BI)" : "Columna…"}
-                              className="min-w-[140px]"
+                              className="min-w-[160px]"
                               buttonClassName="h-9 text-sm"
                               disablePortal
                             />
                           </div>
                         </div>
                       </div>
-                      {formulaRow && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Agregación (como en Excel: suma de la columna)</Label>
+                          <Select
+                            value={exprMetric?.func ?? "SUM"}
+                            onChange={(v: string) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: v } : m))}
+                            options={AGG_FUNCS.filter((f) => f.value !== "FORMULA" && f.value !== "COUNT(DISTINCT")}
+                            placeholder="Suma"
+                            className="w-full"
+                            buttonClassName="h-9"
+                            disablePortal
+                          />
+                        </div>
                         <div>
                           <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias del resultado</Label>
-                          <Input value={formulaRow.alias} onChange={(e) => { if (formulaRowIdx >= 0) setFormMetrics((prev) => prev.map((m, i) => i === formulaRowIdx ? { ...m, alias: e.target.value } : m)); }} placeholder="Ej. formula" className="h-8 text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <Input value={exprMetric?.alias ?? "resultado"} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. total_revenue" className="h-9 text-sm rounded-lg w-full !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                         </div>
-                      )}
+                      </div>
                     </div>
                     );
                   })()}

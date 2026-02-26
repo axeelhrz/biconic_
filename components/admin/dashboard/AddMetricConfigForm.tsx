@@ -22,6 +22,8 @@ export type AggregationMetricEdit = {
   alias: string;
   condition?: MetricConditionEdit;
   formula?: string;
+  /** Expresión sobre columnas (ej. CANTIDAD * PRECIO_UNITARIO). Se agrega con func (SUM, AVG…). */
+  expression?: string;
 };
 
 export type AggregationFilterEdit = {

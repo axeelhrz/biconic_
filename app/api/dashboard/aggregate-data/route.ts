@@ -22,6 +22,8 @@ interface Metric {
   condition?: MetricCondition;
   /** Fórmula derivada que referencia otras métricas por alias interno (metric_0, metric_1...). Ej: "(metric_0 - metric_1) / NULLIF(metric_0, 0)". */
   formula?: string;
+  /** Expresión sobre columnas de la tabla (ej. "CANTIDAD * PRECIO_UNITARIO"). Se agrega con func (SUM, AVG...). Permite * - + / ( ) y nombres de columna. */
+  expression?: string;
 }
 
 interface Filter {
@@ -96,6 +98,17 @@ const normalizeStr = (str: string) =>
 function quotedColumn(name: string): string {
   const s = (name || "").trim().replace(/"/g, '""').toLowerCase();
   return s ? `"${s}"` : '""';
+}
+
+/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO") en SQL seguro: cada identificador se pasa a quotedColumn. */
+function expressionToSql(expression: string): string | null {
+  if (!expression || typeof expression !== "string") return null;
+  const s = expression.replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  const allowed = /^[a-zA-Z0-9_*+\-/().\s]+$/;
+  if (!allowed.test(s)) return null;
+  const out = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (_, id) => quotedColumn(id));
+  return out || null;
 }
 
 export async function POST(req: NextRequest) {
@@ -207,14 +220,36 @@ export async function POST(req: NextRequest) {
     const metricsBase = body.metrics.filter((m) => !m.formula);
     const metricsFormula = body.metrics.filter((m) => m.formula);
 
+    for (let i = 0; i < metricsBase.length; i++) {
+      const m = metricsBase[i];
+      const expr = (m as Metric & { expression?: string }).expression;
+      if (expr != null && expr.trim() !== "") {
+        if (!expressionToSql(expr.trim())) {
+          return NextResponse.json(
+            { error: `Métrica en posición ${i + 1}: la expresión solo puede contener nombres de columna y operadores * - + / ( ).` },
+            { status: 400 }
+          );
+        }
+      } else if (!m.field || !String(m.field).trim()) {
+        return NextResponse.json(
+          { error: `Métrica en posición ${i + 1}: indicá una expresión (ej. CANTIDAD * PRECIO_UNITARIO) o un campo.` },
+          { status: 400 }
+        );
+      }
+    }
+
     // 1. Construcción de Métricas (condicionales y estándar; fórmulas después)
     const metricClauses = metricsBase
       .map((m) => {
         const i = body.metrics.indexOf(m);
         const func = m.func.toUpperCase();
-        const col = quotedColumn(m.field);
-
+        const exprOverColumns = (m as Metric & { expression?: string }).expression;
         const fieldExpr = (() => {
+          if (exprOverColumns) {
+            const sqlExpr = expressionToSql(exprOverColumns);
+            if (sqlExpr) return `(${sqlExpr})::numeric`;
+          }
+          const col = quotedColumn(m.field);
           if (m.cast === "sanitize")
             return `regexp_replace(${col}::text, '[^0-9\\.-]', '', 'g')::numeric`;
           if (m.cast === "numeric") return `${col}::numeric`;
