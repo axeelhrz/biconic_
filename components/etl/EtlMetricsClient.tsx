@@ -1521,6 +1521,32 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                     </div>
                   )}
 
+                  {/* Previsualización del resultado en el paso Cálculo */}
+                  <div className="mt-6 rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <p className="text-sm font-medium mb-2" style={{ color: "var(--platform-fg)" }}>Previsualización del resultado</p>
+                    <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Verificá que el cálculo devuelve el valor esperado antes de seguir.</p>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
+                        {previewLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                        Actualizar previsualización
+                      </Button>
+                    </div>
+                    {previewData && previewData.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="rounded-xl border p-4 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                          <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{previewKpiValue ?? "—"}</p>
+                          <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Resultado del cálculo</p>
+                        </div>
+                        <div className="rounded-xl border col-span-2 overflow-auto max-h-[180px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                          <table className="w-full text-xs" style={{ color: "var(--platform-fg)" }}>
+                            <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left py-1 px-2">{k}</th>))}</tr></thead>
+                            <tbody>{previewData.slice(0, 5).map((row, idx) => (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{Object.values(row).map((v, i) => (<td key={i} className="py-1 px-2">{String(v ?? "")}</td>))}</tr>))}</tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="flex justify-between pt-2">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Propiedades</Button>
