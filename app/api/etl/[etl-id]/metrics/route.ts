@@ -45,10 +45,31 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "ETL no encontrado" }, { status: 404 });
     }
 
-    const layout = (etlRow as { layout?: { saved_metrics?: unknown[] } }).layout;
+    const layout = etlRow.layout as {
+      saved_metrics?: unknown[];
+      dataset_config?: {
+        derivedColumns?: { name: string; expression: string; defaultAggregation?: string }[];
+        derived_columns?: { name: string; expression: string; default_aggregation?: string }[];
+      };
+    } | undefined;
     const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
+    const datasetConfig = layout?.dataset_config && typeof layout.dataset_config === "object" ? layout.dataset_config : undefined;
+    const rawDerived = datasetConfig?.derivedColumns ?? datasetConfig?.derived_columns;
+    const derivedColumns = Array.isArray(rawDerived)
+      ? rawDerived.map((d) => ({
+          name: d.name,
+          expression: d.expression,
+          defaultAggregation: (d as { defaultAggregation?: string }).defaultAggregation ?? (d as { default_aggregation?: string }).default_aggregation ?? "SUM",
+        }))
+      : undefined;
 
-    return NextResponse.json({ ok: true, data: { savedMetrics } });
+    return NextResponse.json({
+      ok: true,
+      data: {
+        savedMetrics,
+        ...(derivedColumns != null && { datasetConfig: { derivedColumns } }),
+      },
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Error al obtener métricas";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

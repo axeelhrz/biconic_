@@ -135,6 +135,7 @@ export function AdminDashboardStudio({
   const [pages, setPages] = useState<StudioPage[]>([{ id: "page-1", name: "Página 1" }]);
   const [activePageId, setActivePageId] = useState<string | null>("page-1");
   const [savedMetrics, setSavedMetrics] = useState<SavedMetric[]>([]);
+  const [derivedColumnsFromLayout, setDerivedColumnsFromLayout] = useState<{ name: string; expression: string; defaultAggregation: string }[]>([]);
   const [layoutLoaded, setLayoutLoaded] = useState(false);
   const loadedOnce = useRef(false);
   const etlMetricsMergedRef = useRef(false);
@@ -174,7 +175,7 @@ export function AdminDashboardStudio({
         let loadedPages: StudioPage[] = [{ id: "page-1", name: "Página 1" }];
         let loadedActivePageId: string = "page-1";
         if (rawLayout && typeof rawLayout === "object") {
-          const layout = rawLayout as { widgets?: unknown[]; theme?: DashboardTheme; pages?: StudioPage[]; activePageId?: string; savedMetrics?: SavedMetric[] };
+          const layout = rawLayout as { widgets?: unknown[]; theme?: DashboardTheme; pages?: StudioPage[]; activePageId?: string; savedMetrics?: SavedMetric[]; datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] } };
           if (Array.isArray(layout.pages) && layout.pages.length > 0) {
             loadedPages = layout.pages;
             loadedActivePageId = layout.activePageId ?? layout.pages[0].id;
@@ -196,8 +197,9 @@ export function AdminDashboardStudio({
           setDashboardTheme(loadedTheme);
           setPages(loadedPages);
           setActivePageId(loadedActivePageId);
-          const layout = rawLayout as { savedMetrics?: SavedMetric[] } | undefined;
+          const layout = rawLayout as { savedMetrics?: SavedMetric[]; datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] } } | undefined;
           setSavedMetrics(Array.isArray(layout?.savedMetrics) ? layout.savedMetrics : []);
+          setDerivedColumnsFromLayout(Array.isArray(layout?.datasetConfig?.derivedColumns) ? layout.datasetConfig.derivedColumns : []);
           setLayoutLoaded(true);
         }
       } catch (e) {
@@ -247,15 +249,37 @@ export function AdminDashboardStudio({
     setIsSaving(true);
     try {
       const cleanWidgets = widgets.map(({ rows, config, columns, facetValues, ...rest }) => rest);
+      let datasetConfig: { derivedColumns: { name: string; expression: string; defaultAggregation: string }[] } | undefined;
+      const etlId = etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId;
+      if (etlId) {
+        try {
+          const metricsRes = await fetch(`/api/etl/${etlId}/metrics`);
+          const metricsJson = await metricsRes.json();
+          if (metricsJson?.ok && Array.isArray(metricsJson?.data?.datasetConfig?.derivedColumns) && metricsJson.data.datasetConfig.derivedColumns.length > 0) {
+            datasetConfig = { derivedColumns: metricsJson.data.datasetConfig.derivedColumns };
+          }
+        } catch {
+          // ignore
+        }
+      }
+      const layoutPayload = {
+        widgets: cleanWidgets,
+        theme: dashboardTheme,
+        pages,
+        activePageId,
+        savedMetrics,
+        ...(datasetConfig && { datasetConfig }),
+      } as Json;
       const supabase = createClient();
       const { error } = await supabase
         .from("dashboard")
         .update({
-          layout: { widgets: cleanWidgets, theme: dashboardTheme, pages, activePageId, savedMetrics } as Json,
+          layout: layoutPayload,
           global_filters_config: globalFilters as Json,
         })
         .eq("id", dashboardId);
       if (error) throw error;
+      if (datasetConfig) setDerivedColumnsFromLayout(datasetConfig.derivedColumns);
       setLastSavedAt(new Date());
       setIsDirty(false);
       toast.success("Guardado");
@@ -264,7 +288,7 @@ export function AdminDashboardStudio({
     } finally {
       setIsSaving(false);
     }
-  }, [widgets, globalFilters, dashboardTheme, dashboardId, pages, activePageId, savedMetrics]);
+  }, [widgets, globalFilters, dashboardTheme, dashboardId, pages, activePageId, savedMetrics, etlData?.etl?.id, etlData?.dataSources]);
 
   const saveMetricAsTemplate = useCallback((name: string, metric: AggregationMetric) => {
     const trimmed = name.trim();
@@ -332,6 +356,24 @@ export function AdminDashboardStudio({
               ...(m.condition ? { condition: m.condition } : {}),
             };
           });
+          let derivedColumns: { name: string; expression: string; defaultAggregation: string }[] | undefined;
+          if (derivedColumnsFromLayout.length > 0) {
+            derivedColumns = derivedColumnsFromLayout;
+          } else {
+            const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
+            const etlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
+            if (etlId) {
+              try {
+                const metricsRes = await fetch(`/api/etl/${etlId}/metrics`);
+                const metricsJson = await metricsRes.json();
+                if (metricsJson?.ok && metricsJson?.data?.datasetConfig?.derivedColumns) {
+                  derivedColumns = metricsJson.data.datasetConfig.derivedColumns;
+                }
+              } catch {
+                // ignore
+              }
+            }
+          }
           const res = await fetch("/api/dashboard/aggregate-data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -340,6 +382,7 @@ export function AdminDashboardStudio({
               dimension: agg.dimension,
               dimensions: dimensions.length > 0 ? dimensions : undefined,
               metrics: metricsPayload,
+              ...(Array.isArray(derivedColumns) && derivedColumns.length > 0 && { derivedColumns }),
               filters: [...(agg.filters || []), ...filters],
               orderBy: agg.orderBy,
               limit: agg.limit || 100,
@@ -422,7 +465,7 @@ export function AdminDashboardStudio({
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, getTableName]
+    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout]
   );
 
   useEffect(() => {

@@ -1623,28 +1623,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                           <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Guarda la expresión como columna para usarla en «Insertar columna».</span>
                         </div>
                       </div>
-                      <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Opcional: para la métrica y al guardar</p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div>
-                            <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Agregación (opcional)</Label>
-                            <Select
-                              value={exprMetric?.func ?? "SUM"}
-                              onChange={(v: string) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: v } : m))}
-                              options={AGG_FUNCS.filter((f) => f.value !== "FORMULA" && f.value !== "COUNT(DISTINCT")}
-                              placeholder="Suma"
-                              className="w-full"
-                              buttonClassName="h-9"
-                              disablePortal
-                            />
-                          </div>
-                          <div>
-                            <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Nombre de columna (opcional)</Label>
-                            <Input value={exprMetric?.alias ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura" className="h-9 text-sm rounded-lg w-full !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                            <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Si lo completás y tocás «Crear columna», se usará ese nombre. Si no, se genera uno automático.</p>
-                          </div>
-                        </div>
-                      </div>
                     </div>
                     );
                   })()}

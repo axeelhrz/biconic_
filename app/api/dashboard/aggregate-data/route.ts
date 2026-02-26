@@ -38,12 +38,21 @@ interface OrderBy {
   direction: "ASC" | "DESC";
 }
 
+/** Columna calculada (nombre + expresión sobre columnas + agregación por defecto). */
+interface DerivedColumnRef {
+  name: string;
+  expression: string;
+  defaultAggregation: string;
+}
+
 interface AggregationRequest {
   tableName: string;
   dimension?: string;
   /** Múltiples dimensiones (ej. mes + categoría). Se hace GROUP BY todas. */
   dimensions?: string[];
   metrics: Metric[];
+  /** Columnas calculadas (ej. resultado = CANTIDAD * PRECIO_UNITARIO). Si una métrica usa field = nombre, se resuelve a expresión + agregación. */
+  derivedColumns?: DerivedColumnRef[];
   filters?: Filter[];
   orderBy?: OrderBy;
   limit?: number;
@@ -217,14 +226,22 @@ export async function POST(req: NextRequest) {
     const buildConditionExpr = (cond: MetricCondition, thenExpr: string): string =>
       `CASE WHEN ${buildWhenClause(cond)} THEN ${thenExpr} END`;
 
+    const derivedByName: Record<string, DerivedColumnRef> = {};
+    if (Array.isArray(body.derivedColumns)) {
+      for (const d of body.derivedColumns) {
+        if (d?.name && typeof d.expression === "string" && d.expression.trim()) derivedByName[String(d.name).trim()] = d;
+      }
+    }
+
     const metricsBase = body.metrics.filter((m) => !m.formula);
     const metricsFormula = body.metrics.filter((m) => m.formula);
 
     for (let i = 0; i < metricsBase.length; i++) {
       const m = metricsBase[i];
-      const expr = (m as Metric & { expression?: string }).expression;
-      if (expr != null && expr.trim() !== "") {
-        if (!expressionToSql(expr.trim())) {
+      const derived = m.field && derivedByName[String(m.field).trim()];
+      const expr = (m as Metric & { expression?: string }).expression ?? derived?.expression;
+      if (expr != null && String(expr).trim() !== "") {
+        if (!expressionToSql(String(expr).trim())) {
           return NextResponse.json(
             { error: `Métrica en posición ${i + 1}: la expresión solo puede contener nombres de columna y operadores * - + / ( ).` },
             { status: 400 }
@@ -235,21 +252,24 @@ export async function POST(req: NextRequest) {
           { error: `Métrica en posición ${i + 1}: indicá una expresión (ej. CANTIDAD * PRECIO_UNITARIO) o un campo.` },
           { status: 400 }
         );
+      } else if (!derived) {
+        // field existe pero no es columna calculada: se usará como columna real
       }
     }
 
-    // 1. Construcción de Métricas (condicionales y estándar; fórmulas después)
+    // 1. Construcción de Métricas (condicionales y estándar; fórmulas después). Columnas calculadas: field -> expression + func.
     const metricClauses = metricsBase
       .map((m) => {
         const i = body.metrics.indexOf(m);
-        const func = m.func.toUpperCase();
-        const exprOverColumns = (m as Metric & { expression?: string }).expression;
+        const derived = m.field && derivedByName[String(m.field).trim()];
+        const exprOverColumns = (m as Metric & { expression?: string }).expression ?? derived?.expression;
+        const func = (m.func || derived?.defaultAggregation || "SUM").toString().toUpperCase();
         const fieldExpr = (() => {
-          if (exprOverColumns) {
-            const sqlExpr = expressionToSql(exprOverColumns);
+          if (exprOverColumns && String(exprOverColumns).trim()) {
+            const sqlExpr = expressionToSql(String(exprOverColumns).trim());
             if (sqlExpr) return `(${sqlExpr})::numeric`;
           }
-          const col = quotedColumn(m.field);
+          const col = quotedColumn(m.field!);
           if (m.cast === "sanitize")
             return `regexp_replace(${col}::text, '[^0-9\\.-]', '', 'g')::numeric`;
           if (m.cast === "numeric") return `${col}::numeric`;

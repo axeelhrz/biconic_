@@ -313,6 +313,7 @@ export function DashboardViewer({
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<AggregationFilter[]>([]);
   const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>(() => ({ ...DEFAULT_DASHBOARD_THEME }));
+  const [derivedColumnsFromLayout, setDerivedColumnsFromLayout] = useState<{ name: string; expression: string; defaultAggregation: string }[]>([]);
   const [companyLogoUrl, setCompanyLogoUrl] = useState<string | null>(null);
   const [globalDialogOpen, setGlobalDialogOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -828,6 +829,9 @@ export function DashboardViewer({
           } else if (rawLayout && typeof rawLayout === "object" && Array.isArray(rawLayout.widgets)) {
             loadedWidgets = rawLayout.widgets;
             loadedTheme = mergeTheme(rawLayout.theme);
+            if (Array.isArray((rawLayout as any).datasetConfig?.derivedColumns)) {
+              setDerivedColumnsFromLayout((rawLayout as any).datasetConfig.derivedColumns);
+            }
           }
           setWidgets(loadedWidgets);
           setDashboardTheme(loadedTheme);
@@ -1366,6 +1370,8 @@ export function DashboardViewer({
             bodyPayload.comparePeriod = (aggConfig as any).comparePeriod;
           if ((aggConfig as any).dateDimension)
             bodyPayload.dateDimension = (aggConfig as any).dateDimension;
+          if (Array.isArray(derivedColumnsFromLayout) && derivedColumnsFromLayout.length > 0)
+            bodyPayload.derivedColumns = derivedColumnsFromLayout;
 
           const url =
             apiEndpoints?.aggregateData || "/api/dashboard/aggregate-data";
