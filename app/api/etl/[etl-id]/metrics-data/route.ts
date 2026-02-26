@@ -120,7 +120,30 @@ function valueToTimestamp(v: unknown): number | null {
   return null;
 }
 
-/** Infiere la periodicidad natural de una columna de fecha a partir de los intervalos entre valores únicos ordenados. */
+/** Indica si el valor crudo parece un año (1900–2100). */
+function looksLikeYear(v: unknown): boolean {
+  if (typeof v === "number") return Number.isInteger(v) && v >= 1900 && v <= 2100;
+  if (typeof v === "string") return /^\s*\d{4}\s*$/.test(v.trim()) && parseInt(v.trim(), 10) >= 1900 && parseInt(v.trim(), 10) <= 2100;
+  return false;
+}
+
+/** Indica si el valor crudo parece mes (1–12) o año-mes (YYYYMM 1e5..1e7 o string YYYY-MM). */
+function looksLikeMonthOrYearMonth(v: unknown): boolean {
+  if (typeof v === "number") {
+    if (Number.isInteger(v) && v >= 1 && v <= 12) return true;
+    if (v >= 1e5 && v <= 1e7 && Number.isInteger(v)) return true; // 202401, 202412
+    return false;
+  }
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (/^\s*(0?[1-9]|1[0-2])\s*$/.test(s)) return true;
+    if (/^\d{4}-\d{2}$/.test(s) || /^\d{6}$/.test(s)) return true;
+    return false;
+  }
+  return false;
+}
+
+/** Infiere la periodicidad natural de una columna de fecha: por forma de los valores (año → Anual, mes → Mensual) o por intervalos entre fechas completas (Diaria, Semanal, etc.). */
 function inferNaturalPeriodicity(
   rawRows: Record<string, unknown>[],
   dateColumn: string
@@ -131,9 +154,25 @@ function inferNaturalPeriodicity(
     const key = Object.keys(row).find((k) => k.toLowerCase() === dateColumn.toLowerCase());
     return key !== undefined ? row[key] : undefined;
   };
+
+  const rawValues = rawRows.map(getVal).filter((v) => v !== undefined && v !== null && v !== "");
+  if (rawValues.length === 0) return "Irregular";
+
+  const colLower = String(dateColumn).toLowerCase();
+  const nameSuggestsYear = /anio|año|year|yr/.test(colLower);
+  const nameSuggestsMonth = /mes|month|mes_nombre/.test(colLower);
+
+  // 1) Detección por forma de los valores (evita interpretar año/mes como Excel)
+  const yearLike = rawValues.filter(looksLikeYear).length;
+  const monthLike = rawValues.filter(looksLikeMonthOrYearMonth).length;
+  if (yearLike / rawValues.length >= 0.8 || (nameSuggestsYear && yearLike / rawValues.length >= 0.5)) return "Anual";
+  if (monthLike / rawValues.length >= 0.8 || (nameSuggestsMonth && monthLike / rawValues.length >= 0.5)) return "Mensual";
+
+  // 2) Intervalos entre fechas completas (timestamps)
   const timestamps: number[] = [];
   for (const row of rawRows) {
     const v = getVal(row);
+    if (looksLikeYear(v) || (typeof v === "number" && v >= 1 && v <= 12)) continue;
     const ms = valueToTimestamp(v);
     if (ms != null && Number.isFinite(ms)) timestamps.push(ms);
   }
