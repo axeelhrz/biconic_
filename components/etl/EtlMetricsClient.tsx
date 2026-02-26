@@ -288,15 +288,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const datasetConfigHydratedRef = useRef(false);
   useEffect(() => {
     const cfg = data?.datasetConfig;
-    if (!cfg || typeof cfg !== "object" || datasetConfigHydratedRef.current) return;
-    datasetConfigHydratedRef.current = true;
-    if (typeof cfg.grainOption === "string" && cfg.grainOption) setGrainOption(cfg.grainOption as string);
-    if (Array.isArray(cfg.grainCustomColumns)) setGrainCustomColumns(cfg.grainCustomColumns as string[]);
-    if (typeof cfg.datasetHasTime === "boolean") setDatasetHasTime(cfg.datasetHasTime);
-    if (typeof cfg.timeColumn === "string" && cfg.timeColumn) setTimeColumn(cfg.timeColumn);
-    if (typeof cfg.periodicity === "string" && cfg.periodicity) setPeriodicity(cfg.periodicity);
-    if (cfg.columnRoles && typeof cfg.columnRoles === "object") setColumnRoles(cfg.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }>);
-    if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
+    if (!cfg || typeof cfg !== "object") return;
+    if (!datasetConfigHydratedRef.current) {
+      datasetConfigHydratedRef.current = true;
+      if (typeof cfg.grainOption === "string" && cfg.grainOption) setGrainOption(cfg.grainOption as string);
+      if (Array.isArray(cfg.grainCustomColumns)) setGrainCustomColumns(cfg.grainCustomColumns as string[]);
+      if (typeof cfg.datasetHasTime === "boolean") setDatasetHasTime(cfg.datasetHasTime);
+      if (typeof cfg.timeColumn === "string" && cfg.timeColumn) setTimeColumn(cfg.timeColumn);
+      if (typeof cfg.periodicity === "string" && cfg.periodicity) setPeriodicity(cfg.periodicity);
+      if (cfg.columnRoles && typeof cfg.columnRoles === "object") setColumnRoles(cfg.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }>);
+      if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
+    }
     if (Array.isArray((cfg as { derivedColumns?: DerivedColumn[] }).derivedColumns)) setDerivedColumns((cfg as { derivedColumns: DerivedColumn[] }).derivedColumns);
   }, [data?.datasetConfig]);
 
@@ -590,9 +592,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         toast.error("No hay tabla de datos. Ejecutá el ETL y recargá la página.");
         return;
       }
+      const freshDerived = Array.isArray(metricsJson?.data?.datasetConfig?.derivedColumns)
+        ? metricsJson.data.datasetConfig.derivedColumns
+        : Array.isArray((metricsJson?.data?.datasetConfig as { derived_columns?: DerivedColumn[] })?.derived_columns)
+          ? (metricsJson.data.datasetConfig as { derived_columns: DerivedColumn[] }).derived_columns.map((d: { name: string; expression: string; default_aggregation?: string }) => ({ name: d.name, expression: d.expression, defaultAggregation: d.default_aggregation || "SUM" }))
+          : null;
+      if (freshDerived && freshDerived.length > 0) setDerivedColumns(freshDerived);
+      const derivedToSend = (freshDerived?.length ? freshDerived : derivedColumns) as { name: string; expression: string; defaultAggregation?: string }[];
+      const derivedByNameForPayload = Object.fromEntries(derivedToSend.map((d) => [d.name.toLowerCase(), d]));
       const metricsPayload = formMetrics.map((m) => {
         const expr = (m as { expression?: string }).expression;
-        const derived = m.field && derivedColumnsByName[m.field];
+        const derived = m.field ? derivedByNameForPayload[String(m.field).trim().toLowerCase()] ?? derivedColumnsByName[m.field] : undefined;
         return {
           field: m.field || "",
           func: m.func,
@@ -611,8 +621,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         orderBy: formOrderBy?.field ? formOrderBy : undefined,
         limit: formLimit ?? 100,
       };
-      if (derivedColumns.length > 0) {
-        body.derivedColumns = derivedColumns.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" }));
+      if (derivedToSend.length > 0) {
+        body.derivedColumns = derivedToSend.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" }));
       }
       const res = await fetch("/api/dashboard/aggregate-data", {
         method: "POST",

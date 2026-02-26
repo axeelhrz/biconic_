@@ -229,16 +229,23 @@ export async function POST(req: NextRequest) {
     const derivedByName: Record<string, DerivedColumnRef> = {};
     if (Array.isArray(body.derivedColumns)) {
       for (const d of body.derivedColumns) {
-        if (d?.name && typeof d.expression === "string" && d.expression.trim()) derivedByName[String(d.name).trim()] = d;
+        if (d?.name && typeof d.expression === "string" && d.expression.trim()) {
+          const key = String(d.name).trim().toLowerCase();
+          derivedByName[key] = d;
+        }
       }
     }
+    const getDerived = (field: string | undefined): DerivedColumnRef | undefined => {
+      if (!field || !String(field).trim()) return undefined;
+      return derivedByName[String(field).trim().toLowerCase()];
+    };
 
     const metricsBase = body.metrics.filter((m) => !m.formula);
     const metricsFormula = body.metrics.filter((m) => m.formula);
 
     for (let i = 0; i < metricsBase.length; i++) {
       const m = metricsBase[i];
-      const derived: DerivedColumnRef | undefined = m.field && String(m.field).trim() ? derivedByName[String(m.field).trim()] : undefined;
+      const derived: DerivedColumnRef | undefined = getDerived(m.field);
       const expr = (m as Metric & { expression?: string }).expression ?? derived?.expression;
       if (expr != null && String(expr).trim() !== "") {
         if (!expressionToSql(String(expr).trim())) {
@@ -261,7 +268,7 @@ export async function POST(req: NextRequest) {
     const metricClauses = metricsBase
       .map((m) => {
         const i = body.metrics.indexOf(m);
-        const derived: DerivedColumnRef | undefined = m.field && String(m.field).trim() ? derivedByName[String(m.field).trim()] : undefined;
+        const derived: DerivedColumnRef | undefined = getDerived(m.field);
         const exprOverColumns = (m as Metric & { expression?: string }).expression ?? derived?.expression;
         const func = (m.func || derived?.defaultAggregation || "SUM").toString().toUpperCase();
         const fieldExpr = (() => {
