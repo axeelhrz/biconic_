@@ -602,18 +602,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           ...(expr ? { expression: expr } : derived ? { expression: derived.expression, func: m.func || derived.defaultAggregation } : {}),
         };
       });
+      const body: Record<string, unknown> = {
+        tableName,
+        dimension: formDimension || undefined,
+        dimensions: [formDimension, formDimension2].filter(Boolean).length ? [formDimension, formDimension2].filter(Boolean) : undefined,
+        metrics: metricsPayload,
+        filters: formFilters.length ? formFilters.map((f) => ({ field: f.field, operator: f.operator, value: f.value })) : undefined,
+        orderBy: formOrderBy?.field ? formOrderBy : undefined,
+        limit: formLimit ?? 100,
+      };
+      if (derivedColumns.length > 0) {
+        body.derivedColumns = derivedColumns.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" }));
+      }
       const res = await fetch("/api/dashboard/aggregate-data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tableName,
-          dimension: formDimension || undefined,
-          dimensions: [formDimension, formDimension2].filter(Boolean).length ? [formDimension, formDimension2].filter(Boolean) : undefined,
-          metrics: metricsPayload,
-          filters: formFilters.length ? formFilters.map((f) => ({ field: f.field, operator: f.operator, value: f.value })) : undefined,
-          orderBy: formOrderBy?.field ? formOrderBy : undefined,
-          limit: formLimit ?? 100,
-        }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -627,7 +631,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     } finally {
       setPreviewLoading(false);
     }
-  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName]);
+  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns]);
 
   const recommendationText = (() => {
     const hasDim = !!formDimension;
