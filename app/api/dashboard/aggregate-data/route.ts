@@ -238,7 +238,7 @@ export async function POST(req: NextRequest) {
 
     for (let i = 0; i < metricsBase.length; i++) {
       const m = metricsBase[i];
-      const derived = m.field && derivedByName[String(m.field).trim()];
+      const derived: DerivedColumnRef | undefined = m.field && String(m.field).trim() ? derivedByName[String(m.field).trim()] : undefined;
       const expr = (m as Metric & { expression?: string }).expression ?? derived?.expression;
       if (expr != null && String(expr).trim() !== "") {
         if (!expressionToSql(String(expr).trim())) {
@@ -261,7 +261,7 @@ export async function POST(req: NextRequest) {
     const metricClauses = metricsBase
       .map((m) => {
         const i = body.metrics.indexOf(m);
-        const derived = m.field && derivedByName[String(m.field).trim()];
+        const derived: DerivedColumnRef | undefined = m.field && String(m.field).trim() ? derivedByName[String(m.field).trim()] : undefined;
         const exprOverColumns = (m as Metric & { expression?: string }).expression ?? derived?.expression;
         const func = (m.func || derived?.defaultAggregation || "SUM").toString().toUpperCase();
         const fieldExpr = (() => {
