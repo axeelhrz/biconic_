@@ -848,7 +848,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                     {fields.map((f) => (
                       <label key={f} className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors" style={{ borderColor: grainOption === f ? "var(--platform-accent)" : "var(--platform-border)", background: grainOption === f ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
                         <input type="radio" name="grain" checked={grainOption === f} onChange={() => setGrainOption(f)} className="rounded-full" />
-                        <span className="font-medium" style={{ color: "var(--platform-fg)" }}>{f}</span>
+                        <span className="font-medium" style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(f)}</span>
                         <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>1 columna</span>
                       </label>
                     ))}
@@ -878,14 +878,14 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                                 }}
                                 className="rounded"
                               />
-                              <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{col}</span>
+                              <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(col)}</span>
                             </label>
                           );
                         })}
                       </div>
                       {grainCustomColumns.length > 0 && (
                         <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>
-                          Clave única = {grainCustomColumns.join(" + ")}
+                          Clave única = {grainCustomColumns.map(getSampleDisplayLabel).join(" + ")}
                         </p>
                       )}
                     </div>
@@ -1059,7 +1059,7 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                   <ul className="space-y-2 mb-4">
                     <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tabla: {data?.schema}.{data?.tableName}</li>
                     <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Columnas: {fields.length}</li>
-                    {grainOption && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Grain: {grainOption === "_custom" ? (grainCustomColumns.length > 0 ? grainCustomColumns.join(" + ") : "Personalizado") : grainOption}</li>}
+                    {grainOption && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Grain: {grainOption === "_custom" ? (grainCustomColumns.length > 0 ? grainCustomColumns.map(getSampleDisplayLabel).join(" + ") : "Personalizado") : getSampleDisplayLabel(grainOption)}</li>}
                     {datasetHasTime && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tiempo: {(() => { const col = timeColumn || dateFields[0]; return col ? (data?.columnDisplay?.[col]?.label?.trim() || col) : "—"; })()} · {periodicity}</li>}
                   </ul>
                   <div className="flex justify-between">
