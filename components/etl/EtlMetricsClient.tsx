@@ -945,7 +945,6 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                                     placeholder="Periodicidad"
                                     className="min-w-[120px]"
                                     buttonClassName="h-8 text-sm rounded-lg border bg-[var(--platform-bg)]"
-                                    disablePortal
                                   />
                                 </td>
                               </tr>
