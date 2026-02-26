@@ -457,6 +457,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const measureColumns = useMemo(() => [...baseMeasureColumns, ...derivedColumns.map((d) => d.name)], [baseMeasureColumns, derivedColumns]);
   /** Mapa nombre → expresión para resolver una columna derivada al armar el payload. */
   const derivedColumnsByName = useMemo(() => Object.fromEntries(derivedColumns.map((d) => [d.name, d])), [derivedColumns]);
+  /** Columnas del dataset para Rol BI: físicas + calculadas (las calculadas aparecen como measure por defecto). */
+  const allColumnsForRoles = useMemo(() => [...fields, ...derivedColumns.map((d) => d.name)], [fields, derivedColumns]);
+  /** Columnas para Profiling: físicas + calculadas (en calculadas la celda muestra "—" porque no están en rawTableData). */
+  const displayColumnsForProfiling = useMemo(() => [...fields, ...derivedColumns.map((d) => d.name)], [fields, derivedColumns]);
 
   const dateFieldSet = new Set(data?.fields?.date ?? []);
   const numericFieldSet = new Set(data?.fields?.numeric ?? []);
@@ -780,11 +784,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       toast.error("Escribí una expresión (ej. CANTIDAD * PRECIO_UNITARIO) para crear la columna.");
       return;
     }
-    const colName = alias || `col_calc_${derivedColumns.length + 1}`;
-    if (alias && !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias)) {
+    if (!alias) {
+      toast.error("Indicá un nombre para la nueva columna (ej. factura, total_linea).");
+      return;
+    }
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias)) {
       toast.error("El nombre de la columna solo puede tener letras, números y _ (ej. factura).");
       return;
     }
+    const colName = alias;
     setCreatingColumn(true);
     try {
       const nextDerived = [...derivedColumns.filter((d) => d.name !== colName), { name: colName, expression: expr, defaultAggregation: (m?.func as string) || "SUM" }];
@@ -801,8 +809,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       }
       setDerivedColumns(nextDerived);
       setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfigToSave } : null));
-      if (!alias) setFormMetrics((prev) => prev.map((mm, i) => i === 0 ? { ...mm, alias: colName } : mm));
-      toast.success(`Columna «${colName}» creada. La podés usar en «Insertar columna» en otras métricas.`);
+      setColumnRoles((prev) => ({ ...prev, [colName]: { role: "measure", aggregation: "sum", label: colName, visible: true } }));
+      toast.success(`Columna «${colName}» creada. Aparece en Rol BI, Profiling e «Insertar columna».`);
     } catch {
       toast.error("Error al crear la columna");
     } finally {
@@ -1027,7 +1035,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                     <div><p className="text-xs font-medium uppercase" style={{ color: "var(--platform-fg-muted)" }}>ETL</p><p className="font-medium" style={{ color: "var(--platform-fg)" }}>{etlTitle}</p></div>
                     <div><p className="text-xs font-medium uppercase" style={{ color: "var(--platform-fg-muted)" }}>Tabla</p><p className="font-mono text-sm" style={{ color: "var(--platform-fg)" }}>{data?.schema}.{data?.tableName}</p></div>
                     <div><p className="text-xs font-medium uppercase" style={{ color: "var(--platform-fg-muted)" }}>Filas</p><p className="font-medium" style={{ color: "var(--platform-fg)" }}>{data?.rowCount ?? 0}</p></div>
-                    <div><p className="text-xs font-medium uppercase" style={{ color: "var(--platform-fg-muted)" }}>Columnas</p><p className="font-medium" style={{ color: "var(--platform-fg)" }}>{fields.length}</p></div>
+                    <div><p className="text-xs font-medium uppercase" style={{ color: "var(--platform-fg-muted)" }}>Columnas</p><p className="font-medium" style={{ color: "var(--platform-fg)" }}>{displayColumnsForProfiling.length}</p></div>
                   </div>
                   <div className="mb-4">
                     <p className="text-xs font-medium uppercase mb-2" style={{ color: "var(--platform-fg-muted)" }}>Vista de datos (muestra)</p>
@@ -1036,8 +1044,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         <table className="w-full text-sm border-collapse" style={{ color: "var(--platform-fg)" }}>
                           <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
                             <tr>
-                              {fields.map((k) => (
-                                <th key={k} className="text-left px-3 py-2 font-medium whitespace-nowrap border-r last:border-r-0" style={{ borderColor: "var(--platform-border)", fontSize: "11px", textTransform: "uppercase" }}>{getSampleDisplayLabel(k)}</th>
+                              {displayColumnsForProfiling.map((k) => (
+                                <th key={k} className="text-left px-3 py-2 font-medium whitespace-nowrap border-r last:border-r-0" style={{ borderColor: "var(--platform-border)", fontSize: "11px", textTransform: "uppercase" }}>{getSampleDisplayLabel(k)}{derivedColumnsByName[k] ? " (calculada)" : ""}</th>
                               ))}
                             </tr>
                           </thead>
@@ -1046,18 +1054,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                               const r = row as Record<string, unknown>;
                               const keys = Object.keys(r);
                               const getCell = (col: string, colIndex: number) => {
+                                if (derivedColumnsByName[col]) return undefined;
                                 if (r[col] !== undefined && r[col] !== null) return r[col];
                                 const colNorm = col.replace(/\./g, "_").toLowerCase();
                                 const key = keys.find((k) => k.replace(/\./g, "_").toLowerCase() === colNorm);
                                 if (key !== undefined) return r[key];
-                                if (keys.length === fields.length && keys[colIndex] !== undefined) return r[keys[colIndex]];
+                                if (keys.length === displayColumnsForProfiling.length && keys[colIndex] !== undefined) return r[keys[colIndex]];
                                 return undefined;
                               };
                               return (
                                 <tr key={idx} className="border-b last:border-b-0 hover:opacity-90" style={{ borderColor: "var(--platform-border)" }}>
-                                  {fields.map((col, colIndex) => {
+                                  {displayColumnsForProfiling.map((col, colIndex) => {
                                     const raw = getCell(col, colIndex);
-                                    const formatted = formatSampleCell(col, raw);
+                                    const formatted = derivedColumnsByName[col] ? "—" : formatSampleCell(col, raw);
                                     return (
                                       <td key={col} className="px-3 py-1.5 whitespace-nowrap border-r last:border-r-0 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }} title={formatted}>{formatted}</td>
                                     );
@@ -1243,11 +1252,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         </tr>
                       </thead>
                       <tbody style={{ color: "var(--platform-fg)" }}>
-                        {fields.map((col) => {
-                          const r = columnRoles[col] ?? { role: "dimension" as ColumnRole, aggregation: "—", label: col, visible: true };
+                        {allColumnsForRoles.map((col) => {
+                          const isDerived = derivedColumnsByName[col];
+                          const r = columnRoles[col] ?? { role: (isDerived ? "measure" : "dimension") as ColumnRole, aggregation: isDerived ? "sum" : "—", label: col, visible: true };
                           return (
                             <tr key={col} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
-                              <td className="px-3 py-2 font-medium">{col}</td>
+                              <td className="px-3 py-2 font-medium">{col}{isDerived ? <span className="text-xs ml-1" style={{ color: "var(--platform-fg-muted)" }}>(calculada)</span> : null}</td>
                               <td className="px-3 py-2">
                                 <select value={r.role} onChange={(e) => setColumnRoles((prev) => ({ ...prev, [col]: { ...prev[col], role: e.target.value as ColumnRole } }))} className="h-8 rounded border px-2 text-xs w-full max-w-[120px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}>
                                   <option value="key">key</option>
@@ -1404,16 +1414,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                       <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Roles BI</p>
                       <ul className="space-y-1.5 text-sm" style={{ color: "var(--platform-fg)" }}>
                         {(() => {
-                          const keys = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "key");
-                          const timeCols = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "time");
-                          const dims = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "dimension");
-                          const measures = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "measure");
+                          const allCols = [...new Set([...fields, ...derivedColumns.map((d) => d.name)])];
+                          const keys = allCols.filter((c) => (columnRoles[c]?.role ?? "dimension") === "key");
+                          const timeCols = allCols.filter((c) => (columnRoles[c]?.role ?? "dimension") === "time");
+                          const dims = allCols.filter((c) => (columnRoles[c]?.role ?? "dimension") === "dimension");
+                          const measures = allCols.filter((c) => (columnRoles[c]?.role ?? "dimension") === "measure");
                           return (
                             <>
                               {keys.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Key: {keys.map((c) => getSampleDisplayLabel(c)).join(", ")}</li>}
                               {timeCols.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Tiempo: {timeCols.map((c) => getSampleDisplayLabel(c)).join(", ")}</li>}
                               {dims.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Dimensiones: {dims.length} — {dims.slice(0, 5).map((c) => getSampleDisplayLabel(c)).join(", ")}{dims.length > 5 ? "…" : ""}</li>}
-                              {measures.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Medidas: {measures.length} — {measures.slice(0, 5).map((c) => { const r = columnRoles[c]; const agg = r?.aggregation && r.aggregation !== "—" ? r.aggregation : "sum"; return `${getSampleDisplayLabel(c)} (${agg})`; }).join(", ")}{measures.length > 5 ? "…" : ""}</li>}
+                              {measures.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Medidas: {measures.length} — {measures.slice(0, 5).map((c) => { const r = columnRoles[c]; const agg = r?.aggregation && r.aggregation !== "—" ? r.aggregation : "sum"; return `${getMeasureColumnLabel(c)} (${agg})`; }).join(", ")}{measures.length > 5 ? "…" : ""}</li>}
                             </>
                           );
                         })()}
@@ -1615,12 +1626,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                             />
                           </div>
                         </div>
-                        <div className="flex flex-wrap gap-2 items-center">
-                          <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim()}>
-                            {creatingColumn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                            {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
-                          </Button>
-                          <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Guarda la expresión como columna para usarla en «Insertar columna».</span>
+                        <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                          <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Nombre de la nueva columna</Label>
+                          <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Obligatorio. Solo letras, números y _. La columna aparecerá en Rol BI, Profiling, filtros, dimensiones e «Insertar columna».</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Input value={exprMetric?.alias ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura, total_linea" className="h-9 text-sm rounded-lg w-full max-w-[200px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                            <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim()}>
+                              {creatingColumn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                              {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1701,7 +1716,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                     <div className="space-y-2">
                       {formFilters.map((f, i) => (
                         <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                          <Select value={f.field} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={fields.map((name) => ({ value: name, label: name }))} placeholder="Campo" className="min-w-[120px]" buttonClassName="h-9 text-xs" disablePortal />
+                          <Select value={f.field} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={allColumnsForRoles.map((name) => ({ value: name, label: derivedColumnsByName[name] ? `${name} (calculada)` : getSampleDisplayLabel(name) }))} placeholder="Campo" className="min-w-[120px]" buttonClassName="h-9 text-xs" disablePortal />
                           <Select value={f.operator} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => ({ value: op, label: op }))} placeholder="Op" className="w-24" buttonClassName="h-9 text-xs" disablePortal />
                           <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                           <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
@@ -1725,7 +1740,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                           setMetricsDistinctValues([]);
                           setMetricsDistinctSearch("");
                         }}
-                        options={[{ value: "", label: "Elegir columna" }, ...fields.map((col) => ({ value: col, label: col }))]}
+                        options={[{ value: "", label: "Elegir columna" }, ...allColumnsForRoles.map((col) => ({ value: col, label: derivedColumnsByName[col] ? `${col} (calculada)` : getSampleDisplayLabel(col) }))]}
                         placeholder="Elegir columna"
                         className="min-w-[160px]"
                         disablePortal
@@ -1931,7 +1946,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                       <Select
                         value={metricsDistinctColumn ?? ""}
                         onChange={(val: string) => { const col = val || null; setMetricsDistinctColumn(col); setMetricsDistinctValues([]); setMetricsDistinctSearch(""); }}
-                        options={[{ value: "", label: "Elegir columna" }, ...fields.map((col) => ({ value: col, label: col }))]}
+                        options={[{ value: "", label: "Elegir columna" }, ...allColumnsForRoles.map((col) => ({ value: col, label: derivedColumnsByName[col] ? `${col} (calculada)` : getSampleDisplayLabel(col) }))]}
                         placeholder="Elegir columna"
                         className="min-w-[160px]"
                         disablePortal

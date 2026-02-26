@@ -748,6 +748,17 @@ export async function GET(
         ? ((layout as Record<string, Record<string, unknown>>).dataset_config ?? {})
         : undefined;
 
+    // Incluir columnas calculadas (derivedColumns) en fields para que aparezcan en Rol BI, Profiling e Insertar columna
+    const rawDerived = (datasetConfig as { derivedColumns?: { name: string }[]; derived_columns?: { name: string }[] })?.derivedColumns
+      ?? (datasetConfig as { derived_columns?: { name: string }[] })?.derived_columns;
+    const derivedCols = Array.isArray(rawDerived) ? rawDerived : [];
+    for (const d of derivedCols) {
+      if (d?.name && !fields.all.some((c) => sameStr(c, d.name))) {
+        fields.all.push(d.name);
+        fields.numeric.push(d.name);
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       data: {
