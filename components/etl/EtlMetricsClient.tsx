@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import type { ComponentType } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles } from "lucide-react";
@@ -49,7 +50,7 @@ const AGG_FUNCS = [
   { value: "FORMULA", label: "Fórmula / ratio" },
 ];
 
-const CHART_TYPES: { value: string; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+const CHART_TYPES: { value: string; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { value: "bar", label: "Barras", icon: BarChart2 },
   { value: "horizontalBar", label: "Barras horizontales", icon: BarChart2 },
   { value: "line", label: "Líneas", icon: LineChart },
@@ -264,7 +265,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       setPeriodicityOverrides({ ...overrides });
   }, [data?.dateColumnPeriodicityOverrides]);
 
-  const datasetConfigHydratedRef = React.useRef(false);
+  const datasetConfigHydratedRef = useRef(false);
   useEffect(() => {
     const cfg = data?.datasetConfig;
     if (!cfg || typeof cfg !== "object" || datasetConfigHydratedRef.current) return;
