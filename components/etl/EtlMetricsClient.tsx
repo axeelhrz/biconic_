@@ -619,14 +619,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     if (!previewData || previewData.length === 0) return null;
     const first = previewData[0] as Record<string, unknown>;
     const keys = Object.keys(first);
-    const dimKey = formDimension && keys.includes(formDimension) ? formDimension : keys[0];
+    const metricKeys = keys.filter((k) => /^metric_\d+$/.test(k));
+    const hasDimension = formDimension && keys.includes(formDimension);
+    const dimKey = hasDimension ? formDimension : (metricKeys.length === keys.length ? undefined : keys[0]);
     let valueKeys = formMetrics
       .map((m) => m.alias || m.field || "")
       .filter(Boolean)
       .filter((k) => keys.includes(k));
-    if (valueKeys.length === 0) valueKeys = keys.filter((k) => k !== dimKey);
+    if (valueKeys.length === 0) valueKeys = dimKey != null ? keys.filter((k) => k !== dimKey) : keys.filter((k) => /^metric_\d+$/.test(k));
     if (valueKeys.length === 0) return null;
-    const labels = previewData.map((r) => String((r as Record<string, unknown>)[dimKey] ?? ""));
+    const labels = dimKey != null ? previewData.map((r) => String((r as Record<string, unknown>)[dimKey] ?? "")) : previewData.map((_, i) => (i === 0 ? "Total" : ""));
     const palette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
     const datasets = valueKeys.map((alias, idx) => ({
       label: alias,
@@ -643,6 +645,35 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     const firstNum = previewChartConfig.datasets[0]?.data?.[0];
     return firstNum != null ? firstNum : undefined;
   }, [previewData, previewChartConfig]);
+
+  /** Resultado principal del cálculo (paso Cálculo): valor de la última métrica = fórmula o métrica principal. La API devuelve metric_0, metric_1, ... */
+  const previewCalculationResult = useMemo(() => {
+    if (!previewData || previewData.length === 0 || formMetrics.length === 0) return undefined;
+    const row = previewData[0] as Record<string, unknown>;
+    const lastKey = `metric_${formMetrics.length - 1}`;
+    const val = row[lastKey];
+    if (val != null && typeof val === "number" && !Number.isNaN(val)) return val;
+    for (let i = formMetrics.length - 1; i >= 0; i--) {
+      const v = row[`metric_${i}`];
+      if (v != null && typeof v === "number" && !Number.isNaN(v)) return v;
+    }
+    return undefined;
+  }, [previewData, formMetrics.length]);
+
+  /** Encabezados para la tabla de previsualización: metric_0 → alias de la métrica (estilo Excel). */
+  const previewDisplayHeaders = useMemo(() => {
+    if (!previewData?.[0] || formMetrics.length === 0) return Object.keys(previewData?.[0] ?? {});
+    const first = previewData[0] as Record<string, unknown>;
+    return Object.keys(first).map((k) => {
+      const match = k.match(/^metric_(\d+)$/);
+      if (match) {
+        const i = parseInt(match[1]!, 10);
+        const m = formMetrics[i];
+        return m ? (m.alias || m.field || k) : k;
+      }
+      return k;
+    });
+  }, [previewData, formMetrics]);
 
   const closeForm = () => {
     setShowForm(false);
@@ -1361,7 +1392,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               {wizard === "B" && wizardStep === 1 && (
                 <section className="rounded-xl border p-6 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Cálculo de la métrica</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Elegí el tipo de cálculo: agregación simple, conteo, ratio o fórmula personalizada (estilo Excel).</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Como en Excel: elegí la columna (medida) y la función (Suma, Promedio, Conteo, etc.). Si usás fórmula o ratio, el resultado es el valor calculado.</p>
                   <div className="grid grid-cols-2 gap-3 mb-4">
                     {(["simple", "count", "ratio", "formula"] as const).map((t) => (
                       <button key={t} type="button" onClick={() => {
@@ -1589,13 +1620,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                     {previewData && previewData.length > 0 && (
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div className="rounded-xl border p-4 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                          <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{previewKpiValue ?? "—"}</p>
-                          <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Resultado del cálculo</p>
+                          <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{previewCalculationResult != null ? Number(previewCalculationResult) : "—"}</p>
+                          <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>{formMetrics.some((m) => m.func === "FORMULA") ? "Resultado de la fórmula" : "Resultado (ej. suma / promedio)"}</p>
                         </div>
                         <div className="rounded-xl border col-span-2 overflow-auto max-h-[180px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                           <table className="w-full text-xs" style={{ color: "var(--platform-fg)" }}>
-                            <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left py-1 px-2">{k}</th>))}</tr></thead>
-                            <tbody>{previewData.slice(0, 5).map((row, idx) => (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{Object.values(row).map((v, i) => (<td key={i} className="py-1 px-2">{String(v ?? "")}</td>))}</tr>))}</tbody>
+                            <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewDisplayHeaders.map((label, i) => (<th key={i} className="text-left py-1 px-2">{label}</th>))}</tr></thead>
+                            <tbody>{previewData.slice(0, 5).map((row, idx) => {
+                              const raw = row as Record<string, unknown>;
+                              const keys = Object.keys(raw);
+                              return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{keys.map((k, i) => {
+                                const v = raw[k];
+                                const num = typeof v === "number" && !Number.isNaN(v) ? v : v;
+                                return (<td key={i} className="py-1 px-2">{typeof num === "number" ? (Number.isInteger(num) ? String(num) : Number(num).toLocaleString(undefined, { maximumFractionDigits: 4 })) : String(v ?? "")}</td>);
+                              })}</tr>);
+                            })}</tbody>
                           </table>
                         </div>
                       </div>
