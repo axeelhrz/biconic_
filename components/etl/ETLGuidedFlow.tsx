@@ -772,8 +772,24 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     };
     if (distinctColumn) filterPayload.excludeRowsColumn = distinctColumn;
     const colDisplayFiltered: Record<string, { label?: string; format?: string; type?: "Fecha" | "Número" | "Texto" }> = {};
+    const tableCols = selectedTableInfo?.columns as { name: string; dataType?: string; inferredType?: string }[] | undefined;
+    const getInferredType = (colName: string): "Fecha" | "Número" | "Texto" | undefined => {
+      const col = tableCols?.find((c) => c.name === colName || c.name.toLowerCase() === colName.toLowerCase());
+      const t = col?.inferredType ?? (col?.dataType ? dataTypeToLabel(col.dataType) : undefined);
+      return t === "Fecha" || t === "Número" || t === "Texto" ? (t as "Fecha" | "Número" | "Texto") : undefined;
+    };
+    for (const colName of effectiveColumns) {
+      const dispKey = columnDisplay[colName] !== undefined ? colName : Object.keys(columnDisplay).find((k) => k.toLowerCase() === colName.toLowerCase());
+      const disp = dispKey ? columnDisplay[dispKey] : undefined;
+      const label = disp?.label?.trim() || undefined;
+      const format = disp?.format?.trim() || undefined;
+      const type = disp?.type ?? getInferredType(colName);
+      if (label || format || type) colDisplayFiltered[colName] = { label, format, type };
+    }
     for (const [k, v] of Object.entries(columnDisplay)) {
-      if (v && (v.label?.trim() || v.format?.trim() || v.type)) colDisplayFiltered[k] = { label: v.label?.trim() || undefined, format: v.format?.trim() || undefined, type: v.type };
+      if (v && (v.label?.trim() || v.format?.trim() || v.type) && !colDisplayFiltered[k] && !effectiveColumns.some((c) => c.toLowerCase() === k.toLowerCase())) {
+        colDisplayFiltered[k] = { label: v.label?.trim() || undefined, format: v.format?.trim() || undefined, type: v.type };
+      }
     }
     if (Object.keys(colDisplayFiltered).length > 0) {
       (filterPayload as Record<string, unknown>).columnDisplay = colDisplayFiltered;
