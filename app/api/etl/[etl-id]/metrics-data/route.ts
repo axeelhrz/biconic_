@@ -722,6 +722,11 @@ export async function GET(
         ? ((layout as Record<string, Record<string, string>>).date_column_periodicity_overrides ?? {})
         : {};
 
+    const datasetConfig =
+      layout && typeof layout === "object" && (layout as Record<string, unknown>).dataset_config != null
+        ? ((layout as Record<string, Record<string, unknown>>).dataset_config ?? {})
+        : undefined;
+
     return NextResponse.json({
       ok: true,
       data: {
@@ -736,6 +741,7 @@ export async function GET(
         dateColumnPeriodicity,
         dateColumnPeriodicityOverrides,
         columnDisplay,
+        datasetConfig,
       },
     });
   } catch (error: unknown) {

@@ -88,6 +88,8 @@ type MetricsDataResponse = {
     dateColumnPeriodicityOverrides?: Record<string, string>;
     /** Nombres para mostrar y formato por columna (desde ETL guided_config.filter.columnDisplay). */
     columnDisplay?: Record<string, { label?: string; format?: string }>;
+    /** Configuración del dataset guardada en Publicar (grain, tiempo, roles, relaciones). */
+    datasetConfig?: Record<string, unknown>;
   };
 };
 
@@ -120,12 +122,25 @@ function buildEtlDataFromMetricsResponse(res: MetricsDataResponse["data"]): ETLD
   };
 }
 
+type ConnectionOption = { id: string; title: string; type: string };
+type DatasetRelation = {
+  id: string;
+  connectionId: string;
+  connectionTitle: string;
+  tableKey: string;
+  tableLabel: string;
+  thisColumn: string;
+  otherColumn: string;
+  joinType: "INNER" | "LEFT";
+};
+
 type EtlMetricsClientProps = {
   etlId: string;
   etlTitle: string;
+  connections?: ConnectionOption[];
 };
 
-export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientProps) {
+export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [] }: EtlMetricsClientProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -174,9 +189,19 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
   const [metricsDistinctValues, setMetricsDistinctValues] = useState<string[]>([]);
   const [metricsDistinctLoading, setMetricsDistinctLoading] = useState(false);
   const [metricsDistinctSearch, setMetricsDistinctSearch] = useState("");
+  const [datasetRelations, setDatasetRelations] = useState<DatasetRelation[]>([]);
+  const [relationFormConnectionId, setRelationFormConnectionId] = useState("");
+  const [relationFormTableKey, setRelationFormTableKey] = useState("");
+  const [relationFormThisColumn, setRelationFormThisColumn] = useState("");
+  const [relationFormOtherColumn, setRelationFormOtherColumn] = useState("");
+  const [relationFormJoinType, setRelationFormJoinType] = useState<"INNER" | "LEFT">("LEFT");
+  const [connectionTables, setConnectionTables] = useState<{ schema: string; name: string; columns: { name: string }[] }[]>([]);
+  const [connectionTablesLoading, setConnectionTablesLoading] = useState(false);
+  const [otherTableColumnsLoaded, setOtherTableColumnsLoaded] = useState<string[]>([]);
+  const [otherTableColumnsLoading, setOtherTableColumnsLoading] = useState(false);
 
   const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
-    A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Avanzado", "Publicar"],
+    A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
     B: ["Identidad", "Tipo cálculo", "Cálculo simple", "Avanzado", "Propiedades", "Filtros base", "Preview"],
     C: ["Métricas", "Tiempo", "Dimensiones", "Filtros", "Transformaciones", "Preview"],
     D: ["Tipo visual", "Mapeo", "Formato", "Colores", "Interacciones", "Guardar"],
@@ -239,6 +264,113 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
       setPeriodicityOverrides({ ...overrides });
   }, [data?.dateColumnPeriodicityOverrides]);
 
+  const datasetConfigHydratedRef = React.useRef(false);
+  useEffect(() => {
+    const cfg = data?.datasetConfig;
+    if (!cfg || typeof cfg !== "object" || datasetConfigHydratedRef.current) return;
+    datasetConfigHydratedRef.current = true;
+    if (typeof cfg.grainOption === "string" && cfg.grainOption) setGrainOption(cfg.grainOption as string);
+    if (Array.isArray(cfg.grainCustomColumns)) setGrainCustomColumns(cfg.grainCustomColumns as string[]);
+    if (typeof cfg.datasetHasTime === "boolean") setDatasetHasTime(cfg.datasetHasTime);
+    if (typeof cfg.timeColumn === "string" && cfg.timeColumn) setTimeColumn(cfg.timeColumn);
+    if (typeof cfg.periodicity === "string" && cfg.periodicity) setPeriodicity(cfg.periodicity);
+    if (cfg.columnRoles && typeof cfg.columnRoles === "object") setColumnRoles(cfg.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }>);
+    if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
+  }, [data?.datasetConfig]);
+
+  const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
+
+  useEffect(() => {
+    if (!relationFormConnectionId) {
+      setConnectionTables([]);
+      setRelationFormTableKey("");
+      return;
+    }
+    setConnectionTablesLoading(true);
+    setRelationFormTableKey("");
+    fetch("/api/connection/metadata", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionId: relationFormConnectionId, discoverTables: true }),
+    })
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.metadata?.tables && Array.isArray(json.metadata.tables)) {
+          setConnectionTables(json.metadata.tables);
+        } else {
+          setConnectionTables([]);
+        }
+      })
+      .catch(() => setConnectionTables([]))
+      .finally(() => setConnectionTablesLoading(false));
+  }, [relationFormConnectionId]);
+
+  const loadTableColumns = useCallback((connId: string, tableKey: string): Promise<string[]> => {
+    if (!tableKey) return Promise.resolve([]);
+    return fetch("/api/connection/metadata", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionId: connId, tableName: tableKey }),
+    })
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.metadata?.tables?.[0]?.columns) {
+          return json.metadata.tables[0].columns.map((c: { name: string }) => c.name);
+        }
+        return [] as string[];
+      })
+      .catch(() => [] as string[]);
+  }, []);
+
+  useEffect(() => {
+    if (!relationFormConnectionId || !relationFormTableKey) {
+      setOtherTableColumnsLoaded([]);
+      return;
+    }
+    setOtherTableColumnsLoading(true);
+    loadTableColumns(relationFormConnectionId, relationFormTableKey)
+      .then((cols) => setOtherTableColumnsLoaded(cols || []))
+      .catch(() => setOtherTableColumnsLoaded([]))
+      .finally(() => setOtherTableColumnsLoading(false));
+  }, [relationFormConnectionId, relationFormTableKey, loadTableColumns]);
+
+  const addRelation = () => {
+    if (!relationFormConnectionId || !relationFormTableKey || !relationFormThisColumn || !relationFormOtherColumn) {
+      toast.error("Completá conexión, tabla y ambas columnas.");
+      return;
+    }
+    const conn = connectionsProp.find((c) => String(c.id) === relationFormConnectionId);
+    const tableLabel = connectionTables.find(
+      (t) => `${t.schema}.${t.name}` === relationFormTableKey || t.name === relationFormTableKey
+    )
+      ? `${relationFormTableKey}`
+      : relationFormTableKey;
+    setDatasetRelations((prev) => [
+      ...prev,
+      {
+        id: `rel-${Date.now()}`,
+        connectionId: relationFormConnectionId,
+        connectionTitle: conn?.title || relationFormConnectionId,
+        tableKey: relationFormTableKey,
+        tableLabel,
+        thisColumn: relationFormThisColumn,
+        otherColumn: relationFormOtherColumn,
+        joinType: relationFormJoinType,
+      },
+    ]);
+    setRelationFormConnectionId("");
+    setRelationFormTableKey("");
+    setRelationFormThisColumn("");
+    setRelationFormOtherColumn("");
+    setRelationFormJoinType("LEFT");
+    setConnectionTables([]);
+    toast.success("Relación agregada");
+  };
+
+  const removeRelation = (id: string) => {
+    setDatasetRelations((prev) => prev.filter((r) => r.id !== id));
+  };
+
   // Refrescar datos del ETL al entrar al paso Profiling (Dataset) para mostrar filas/columnas actualizadas
   useEffect(() => {
     if (wizard === "A" && wizardStep === 0 && showForm) {
@@ -279,15 +411,14 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
     periodicityOverrides[col] ?? data?.dateColumnPeriodicity?.[col] ?? "Irregular";
 
   useEffect(() => {
-    if (dateFields.length > 0) {
-      setDatasetHasTime(true);
+    if (dateFields.length === 0) {
+      setDatasetHasTime(false);
+    } else {
       if (!timeColumn) {
         const first = dateFields[0];
         setTimeColumn(first);
         setPeriodicity(getEffectivePeriodicity(first));
       }
-    } else {
-      setDatasetHasTime(false);
     }
   }, [dateFields.length, timeColumn, data?.dateColumnPeriodicity, periodicityOverrides]);
 
@@ -909,51 +1040,68 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                 );
               })()}
 
-              {/* Wizard A2: Tiempo — tabla fija de columnas fecha con periodicidad natural */}
+              {/* Wizard A2: Tiempo — opción de dimensión temporal y tabla de columnas fecha */}
               {wizard === "A" && wizardStep === 2 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Dimensión temporal</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Columnas de tipo fecha y su periodicidad natural (inferida del dato).</p>
-                  <div className="overflow-hidden rounded-xl border mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <table className="w-full text-sm border-collapse">
-                      <thead style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
-                        <tr>
-                          <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna temporal</th>
-                          <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Periodicidad natural</th>
-                        </tr>
-                      </thead>
-                      <tbody style={{ color: "var(--platform-fg)" }}>
-                        {dateFields.length === 0 ? (
-                          <tr>
-                            <td colSpan={2} className="px-3 py-4 text-sm" style={{ color: "var(--platform-fg-muted)" }}>No hay columnas de tipo fecha en este dataset.</td>
-                          </tr>
-                        ) : (
-                          dateFields.map((f) => {
-                            const effectivePeriodicity = periodicityOverrides[f] ?? data?.dateColumnPeriodicity?.[f] ?? "Irregular";
-                            return (
-                              <tr key={f} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
-                                <td className="px-3 py-2 font-medium" style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(f)}</td>
-                                <td className="px-3 py-2">
-                                  <Select
-                                    value={effectivePeriodicity}
-                                    onChange={(val: string) => {
-                                      const next = { ...periodicityOverrides, [f]: val };
-                                      setPeriodicityOverrides(next);
-                                      savePeriodicityOverrides(next);
-                                    }}
-                                    options={PERIODICITY_OPTIONS}
-                                    placeholder="Periodicidad"
-                                    className="min-w-[120px]"
-                                    buttonClassName="h-8 text-sm rounded-lg border bg-[var(--platform-bg)]"
-                                  />
-                                </td>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Indicá si el dataset tiene dimensión temporal. Si la tiene, definí columnas de tipo fecha y su periodicidad natural.</p>
+                  <label className="flex items-center gap-3 p-3 rounded-lg border mb-4 cursor-pointer transition-colors" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <input
+                      type="checkbox"
+                      checked={datasetHasTime}
+                      onChange={(e) => setDatasetHasTime(e.target.checked)}
+                      className="rounded"
+                    />
+                    <span className="font-medium" style={{ color: "var(--platform-fg)" }}>Este dataset tiene dimensión temporal</span>
+                  </label>
+                  {datasetHasTime && (
+                    <>
+                      <p className="text-sm mb-2" style={{ color: "var(--platform-fg-muted)" }}>Columnas de tipo fecha y su periodicidad natural (inferida del dato).</p>
+                      <div className="overflow-hidden rounded-xl border mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <table className="w-full text-sm border-collapse">
+                          <thead style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
+                            <tr>
+                              <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna temporal</th>
+                              <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Periodicidad natural</th>
+                            </tr>
+                          </thead>
+                          <tbody style={{ color: "var(--platform-fg)" }}>
+                            {dateFields.length === 0 ? (
+                              <tr>
+                                <td colSpan={2} className="px-3 py-4 text-sm" style={{ color: "var(--platform-fg-muted)" }}>No hay columnas de tipo fecha en este dataset.</td>
                               </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                            ) : (
+                              dateFields.map((f) => {
+                                const effectivePeriodicity = periodicityOverrides[f] ?? data?.dateColumnPeriodicity?.[f] ?? "Irregular";
+                                return (
+                                  <tr key={f} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
+                                    <td className="px-3 py-2 font-medium" style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(f)}</td>
+                                    <td className="px-3 py-2">
+                                      <Select
+                                        value={effectivePeriodicity}
+                                        onChange={(val: string) => {
+                                          const next = { ...periodicityOverrides, [f]: val };
+                                          setPeriodicityOverrides(next);
+                                          savePeriodicityOverrides(next);
+                                        }}
+                                        options={PERIODICITY_OPTIONS}
+                                        placeholder="Periodicidad"
+                                        className="min-w-[120px]"
+                                        buttonClassName="h-8 text-sm rounded-lg border bg-[var(--platform-bg)]"
+                                      />
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                  {!datasetHasTime && (
+                    <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Sin dimensión temporal. Podés continuar al siguiente paso.</p>
+                  )}
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Roles BI</Button>
@@ -1021,29 +1169,81 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                 </section>
               )}
 
-              {/* Wizard A4: Relaciones (simplificado) */}
+              {/* Wizard A4: Relaciones — conectar con tablas de otras conexiones */}
               {wizard === "A" && wizardStep === 4 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Relaciones entre datasets (joins)</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Opcional: definí cómo se combina este dataset con otros para análisis multi-dataset.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Opcional: definí cómo se combina este dataset con tablas de otras conexiones para análisis multi-dataset.</p>
                   <div className="rounded-lg border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Por ahora se usa solo este dataset. Podés agregar relaciones en una versión futura.</p>
+                    <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Dataset actual</p>
+                    <p className="font-medium text-sm" style={{ color: "var(--platform-fg)" }}>{etlTitle}</p>
+                    <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>{data?.schema}.{data?.tableName} · {data?.rowCount ?? 0} filas</p>
                   </div>
-                  <div className="flex justify-between">
-                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Avanzado</Button>
+                  {datasetRelations.length > 0 && (
+                    <div className="rounded-xl border mb-4 overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <table className="w-full text-sm border-collapse">
+                        <thead style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
+                          <tr>
+                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Conexión / Tabla</th>
+                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna este dataset</th>
+                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna otra tabla</th>
+                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Join</th>
+                            <th className="w-10" />
+                          </tr>
+                        </thead>
+                        <tbody style={{ color: "var(--platform-fg)" }}>
+                          {datasetRelations.map((r) => (
+                            <tr key={r.id} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
+                              <td className="px-3 py-2">{r.connectionTitle} · {r.tableLabel}</td>
+                              <td className="px-3 py-2">{getSampleDisplayLabel(r.thisColumn)}</td>
+                              <td className="px-3 py-2">{r.otherColumn}</td>
+                              <td className="px-3 py-2">{r.joinType}</td>
+                              <td className="px-2 py-2">
+                                <button type="button" onClick={() => removeRelation(r.id)} className="text-xs rounded px-2 py-1 hover:bg-red-500/10 text-red-600" aria-label="Quitar relación">Quitar</button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div className="rounded-xl border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                    <p className="text-xs font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Agregar relación</p>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div className="min-w-[180px]">
+                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
+                        <Select value={relationFormConnectionId} onChange={(v) => setRelationFormConnectionId(v)} options={[{ value: "", label: "Elegir conexión" }, ...connectionOptions]} placeholder="Conexión" className="text-sm" buttonClassName="h-9" disablePortal />
+                      </div>
+                      <div className="min-w-[160px]">
+                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
+                        <Select
+                          value={relationFormTableKey}
+                          onChange={(v) => setRelationFormTableKey(v)}
+                          options={[{ value: "", label: connectionTablesLoading ? "Cargando…" : "Elegir tabla" }, ...connectionTables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))]}
+                          placeholder="Tabla"
+                          className="text-sm"
+                          buttonClassName="h-9"
+                          disablePortal
+                        />
+                      </div>
+                      <div className="min-w-[140px]">
+                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Columna (este dataset)</Label>
+                        <Select value={relationFormThisColumn} onChange={(v) => setRelationFormThisColumn(v)} options={[{ value: "", label: "Columna" }, ...fields.map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]} placeholder="Columna" className="text-sm" buttonClassName="h-9" disablePortal />
+                      </div>
+                      <div className="min-w-[140px]">
+                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Columna (otra tabla)</Label>
+                        <Select value={relationFormOtherColumn} onChange={(v) => setRelationFormOtherColumn(v)} options={[{ value: "", label: otherTableColumnsLoading ? "Cargando…" : "Columna" }, ...otherTableColumnsLoaded.map((c) => ({ value: c, label: c }))]} placeholder="Columna" className="text-sm" buttonClassName="h-9" disablePortal />
+                      </div>
+                      <div className="min-w-[100px]">
+                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Tipo join</Label>
+                        <Select value={relationFormJoinType} onChange={(v) => setRelationFormJoinType(v as "INNER" | "LEFT")} options={[{ value: "LEFT", label: "LEFT" }, { value: "INNER", label: "INNER" }]} buttonClassName="h-9" disablePortal />
+                      </div>
+                      <Button type="button" variant="outline" size="sm" className="rounded-lg h-9" style={{ borderColor: "var(--platform-border)" }} onClick={addRelation}>Agregar</Button>
+                    </div>
                   </div>
-                </section>
-              )}
-
-              {/* Wizard A5: Avanzado */}
-              {wizard === "A" && wizardStep === 5 && (
-                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Avanzado (opcional)</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Estrategia de distribución para granularidad más fina. Requiere aprobación explícita.</p>
-                  <div className="rounded-lg border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Allocation strategy: permitir distribución de valores de periodicidad gruesa a más fina (ej. mensual a diario). Por defecto desactivado.</p>
-                  </div>
+                  {connectionsProp.length === 0 && (
+                    <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>No hay otras conexiones disponibles. Creá conexiones en Admin para poder relacionar tablas.</p>
+                  )}
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Publicar</Button>
@@ -1051,17 +1251,70 @@ export default function EtlMetricsClient({ etlId, etlTitle }: EtlMetricsClientPr
                 </section>
               )}
 
-              {/* Wizard A6: Publicar */}
-              {wizard === "A" && wizardStep === 6 && (
+              {/* Wizard A5: Publicar (validación final) — resumen de todas las pestañas */}
+              {wizard === "A" && wizardStep === 5 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Validación final</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Confirmá que la metadata del dataset está lista para usar en métricas.</p>
-                  <ul className="space-y-2 mb-4">
-                    <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tabla: {data?.schema}.{data?.tableName}</li>
-                    <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Columnas: {fields.length}</li>
-                    {grainOption && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Grain: {grainOption === "_custom" ? (grainCustomColumns.length > 0 ? grainCustomColumns.map(getSampleDisplayLabel).join(" + ") : "Personalizado") : getSampleDisplayLabel(grainOption)}</li>}
-                    {datasetHasTime && <li className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}><span style={{ color: "var(--platform-accent)" }}>OK</span> Tiempo: {(() => { const col = timeColumn || dateFields[0]; return col ? (data?.columnDisplay?.[col]?.label?.trim() || col) : "—"; })()} · {periodicity}</li>}
-                  </ul>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Resumen de la configuración del dataset. Esta metadata quedará guardada para usar en métricas.</p>
+                  <div className="space-y-4 mb-6">
+                    <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Origen (Profiling)</p>
+                      <ul className="space-y-1.5 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Tabla: {data?.schema}.{data?.tableName}</li>
+                        <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Columnas: {fields.length}</li>
+                      </ul>
+                    </div>
+                    <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Grain (clave única)</p>
+                      <p className="text-sm" style={{ color: "var(--platform-fg)" }}>{grainOption ? (grainOption === "_custom" ? (grainCustomColumns.length > 0 ? grainCustomColumns.map(getSampleDisplayLabel).join(" + ") : "Personalizado") : getSampleDisplayLabel(grainOption)) : "—"}</p>
+                    </div>
+                    <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Dimensión temporal</p>
+                      {datasetHasTime ? (
+                        <ul className="space-y-1.5 text-sm" style={{ color: "var(--platform-fg)" }}>
+                          <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Sí · Columna de tiempo: {(() => { const col = timeColumn || dateFields[0]; return col ? (data?.columnDisplay?.[col]?.label?.trim() || col) : "—"; })()} · {periodicity}</li>
+                          {dateFields.length > 0 && (
+                            <li className="pl-5 text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                              Columnas fecha: {dateFields.map((f) => `${getSampleDisplayLabel(f)} (${periodicityOverrides[f] ?? data?.dateColumnPeriodicity?.[f] ?? "Irregular"})`).join(", ")}
+                            </li>
+                          )}
+                        </ul>
+                      ) : (
+                        <p className="text-sm" style={{ color: "var(--platform-fg)" }}>No (sin dimensión temporal)</p>
+                      )}
+                    </div>
+                    <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Roles BI</p>
+                      <ul className="space-y-1.5 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        {(() => {
+                          const keys = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "key");
+                          const timeCols = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "time");
+                          const dims = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "dimension");
+                          const measures = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "measure");
+                          return (
+                            <>
+                              {keys.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Key: {keys.map((c) => getSampleDisplayLabel(c)).join(", ")}</li>}
+                              {timeCols.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Tiempo: {timeCols.map((c) => getSampleDisplayLabel(c)).join(", ")}</li>}
+                              {dims.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Dimensiones: {dims.length} — {dims.slice(0, 5).map((c) => getSampleDisplayLabel(c)).join(", ")}{dims.length > 5 ? "…" : ""}</li>}
+                              {measures.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Medidas: {measures.length} — {measures.slice(0, 5).map((c) => { const r = columnRoles[c]; const agg = r?.aggregation && r.aggregation !== "—" ? r.aggregation : "sum"; return `${getSampleDisplayLabel(c)} (${agg})`; }).join(", ")}{measures.length > 5 ? "…" : ""}</li>}
+                            </>
+                          );
+                        })()}
+                      </ul>
+                    </div>
+                    <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Relaciones (joins)</p>
+                      {datasetRelations.length > 0 ? (
+                        <ul className="space-y-1.5 text-sm" style={{ color: "var(--platform-fg)" }}>
+                          {datasetRelations.map((r) => (
+                            <li key={r.id} className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> {r.connectionTitle} · {r.tableLabel}: {getSampleDisplayLabel(r.thisColumn)} = {r.otherColumn} ({r.joinType})</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Ninguna (solo este dataset)</p>
+                      )}
+                    </div>
+                  </div>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Métrica</Button>

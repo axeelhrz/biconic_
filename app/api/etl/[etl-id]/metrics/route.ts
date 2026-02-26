@@ -84,6 +84,10 @@ export async function PUT(
       body.dateColumnPeriodicityOverrides != null && typeof body.dateColumnPeriodicityOverrides === "object"
         ? (body.dateColumnPeriodicityOverrides as Record<string, string>)
         : undefined;
+    const datasetConfig =
+      body.datasetConfig != null && typeof body.datasetConfig === "object"
+        ? (body.datasetConfig as Record<string, unknown>)
+        : undefined;
 
     const adminClient = createServiceRoleClient();
     const { data: etlRow, error: fetchError } = await adminClient
@@ -101,6 +105,7 @@ export async function PUT(
       ...currentLayout,
       saved_metrics: JSON.parse(JSON.stringify(savedMetrics)),
       ...(dateColumnPeriodicityOverrides !== undefined && { date_column_periodicity_overrides: dateColumnPeriodicityOverrides }),
+      ...(datasetConfig !== undefined && { dataset_config: JSON.parse(JSON.stringify(datasetConfig)) }),
     };
 
     const { error: updateError } = await adminClient
