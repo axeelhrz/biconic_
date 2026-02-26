@@ -655,21 +655,22 @@ export async function GET(
         : undefined;
 
     // Incluir en fields.date todas las columnas marcadas como Fecha en el ETL (columnDisplay[].type)
-    if (columnDisplay && fields.all.length > 0) {
-      const dateFromConfig = fields.all.filter((col) => {
-        const key = Object.keys(columnDisplay).find((k) => sameStr(k, col));
-        const t = key ? (columnDisplay as Record<string, { type?: string }>)[key]?.type : undefined;
-        return String(t).toLowerCase() === "fecha";
+    if (columnDisplay && typeof columnDisplay === "object") {
+      const dateKeysFromConfig = Object.keys(columnDisplay).filter((k) => {
+        const t = String((columnDisplay as Record<string, { type?: string }>)[k]?.type ?? "").toLowerCase();
+        return t === "fecha" || t === "date";
       });
       const existingDateSet = new Set(fields.date.map((d) => d.toLowerCase()));
-      for (const col of dateFromConfig) {
-        if (!existingDateSet.has(col.toLowerCase())) {
-          fields.date.push(col);
-          existingDateSet.add(col.toLowerCase());
+      for (const configKey of dateKeysFromConfig) {
+        const colInFields = fields.all.find((c) => sameStr(c, configKey));
+        if (colInFields && !existingDateSet.has(colInFields.toLowerCase())) {
+          fields.date.push(colInFields);
+          existingDateSet.add(colInFields.toLowerCase());
         }
       }
-      // Ordenar fields.date según el orden en fields.all
-      fields.date = fields.all.filter((col) => fields.date.some((d) => sameStr(d, col)));
+      if (fields.all.length > 0) {
+        fields.date = fields.all.filter((col) => fields.date.some((d) => sameStr(d, col)));
+      }
     }
 
     const dateColumnPeriodicity =
