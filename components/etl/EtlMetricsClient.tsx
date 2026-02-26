@@ -593,12 +593,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       });
       const json = await res.json();
       if (!res.ok) {
-        const msg = (json?.error ?? "Error") as string;
-        if (/does not exist|no existe|relation.*does not exist/i.test(msg)) {
-          toast.info("La tabla de datos aún no está creada. Ejecutá el ETL para generar los datos; podés seguir configurando la métrica y ver la previsualización después.", { duration: 8000 });
-        } else {
-          toast.error(msg);
-        }
+        const msg = (json?.error ?? "Error al cargar previsualización") as string;
+        toast.error(msg);
         return;
       }
       setPreviewData(Array.isArray(json) ? json : []);
