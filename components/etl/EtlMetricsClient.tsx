@@ -134,6 +134,9 @@ function buildEtlDataFromMetricsResponse(res: MetricsDataResponse["data"]): ETLD
   };
 }
 
+/** Columna calculada guardada en el dataset; aparece como medida reutilizable (ej. factura = CANTIDAD * PRECIO_UNITARIO). */
+export type DerivedColumn = { name: string; expression: string; defaultAggregation: string };
+
 type ConnectionOption = { id: string; title: string; type: string };
 type DatasetRelation = {
   id: string;
@@ -214,6 +217,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const formulaInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const [formulaSuggestions, setFormulaSuggestions] = useState<string[]>([]);
   const [formulaSuggestionIndex, setFormulaSuggestionIndex] = useState(0);
+  /** Columnas calculadas (ej. factura = CANTIDAD * PRECIO_UNITARIO); se guardan en dataset y aparecen como medidas. */
+  const [derivedColumns, setDerivedColumns] = useState<DerivedColumn[]>([]);
 
   const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
     A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
@@ -291,6 +296,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     if (typeof cfg.periodicity === "string" && cfg.periodicity) setPeriodicity(cfg.periodicity);
     if (cfg.columnRoles && typeof cfg.columnRoles === "object") setColumnRoles(cfg.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }>);
     if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
+    if (Array.isArray((cfg as { derivedColumns?: DerivedColumn[] }).derivedColumns)) setDerivedColumns((cfg as { derivedColumns: DerivedColumn[] }).derivedColumns);
   }, [data?.datasetConfig]);
 
   const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
@@ -445,7 +451,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const hasData = data?.hasData ?? false;
   const fields = data?.fields?.all ?? [];
   /** Columnas marcadas como measure en Rol BI; usadas para fórmulas y cálculos. */
-  const measureColumns = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "measure");
+  const baseMeasureColumns = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "measure");
+  /** Medidas = columnas Rol BI measure + columnas calculadas (derivadas) para usar en fórmulas y métricas. */
+  const measureColumns = useMemo(() => [...baseMeasureColumns, ...derivedColumns.map((d) => d.name)], [baseMeasureColumns, derivedColumns]);
+  /** Mapa nombre → expresión para resolver una columna derivada al armar el payload. */
+  const derivedColumnsByName = useMemo(() => Object.fromEntries(derivedColumns.map((d) => [d.name, d])), [derivedColumns]);
 
   const dateFieldSet = new Set(data?.fields?.date ?? []);
   const numericFieldSet = new Set(data?.fields?.numeric ?? []);
@@ -463,6 +473,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     const label = data?.columnDisplay?.[key]?.label?.trim();
     return label || col;
   };
+
+  /** Etiqueta para mostrar en listas de medidas: columnas base o "nombre (calculada)" si es derivada. */
+  const getMeasureColumnLabel = (col: string): string =>
+    derivedColumnsByName[col] ? `${col} (calculada)` : getSampleDisplayLabel(col);
 
   /** Para fechas ISO en UTC (ej. 2025-10-01T00:00:00.000Z) usa componentes UTC para mostrar la fecha de calendario correcta (1/10, no 30/09 en UTC-3). */
   const dateComponents = (date: Date, value: unknown): { d: number; m: number; y: number; monthIndex: number } => {
@@ -571,14 +585,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         toast.error("No hay tabla de datos. Ejecutá el ETL y recargá la página.");
         return;
       }
-      const metricsPayload = formMetrics.map((m) => ({
-        field: m.field || "",
-        func: m.func,
-        alias: m.alias || m.field || "valor",
-        ...(m.condition ? { condition: m.condition } : {}),
-        ...(m.formula ? { formula: m.formula } : {}),
-        ...((m as { expression?: string }).expression ? { expression: (m as { expression?: string }).expression } : {}),
-      }));
+      const metricsPayload = formMetrics.map((m) => {
+        const expr = (m as { expression?: string }).expression;
+        const derived = m.field && derivedColumnsByName[m.field];
+        return {
+          field: m.field || "",
+          func: m.func,
+          alias: m.alias || m.field || "valor",
+          ...(m.condition ? { condition: m.condition } : {}),
+          ...(m.formula ? { formula: m.formula } : {}),
+          ...(expr ? { expression: expr } : derived ? { expression: derived.expression, func: m.func || derived.defaultAggregation } : {}),
+        };
+      });
       const res = await fetch("/api/dashboard/aggregate-data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -604,7 +622,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     } finally {
       setPreviewLoading(false);
     }
-  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData]);
+  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName]);
 
   const recommendationText = (() => {
     const hasDim = !!formDimension;
@@ -703,6 +721,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
     };
+    const expr = (firstMetric as { expression?: string }).expression;
+    const alias = (firstMetric.alias || "").trim();
+    const createDerivedColumn = expr && alias && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias);
+    let nextDerivedColumns = derivedColumns;
+    if (createDerivedColumn) {
+      nextDerivedColumns = [...derivedColumns.filter((d) => d.name !== alias), { name: alias, expression: expr, defaultAggregation: firstMetric.func || "SUM" }];
+    }
+    const datasetConfigToSave = createDerivedColumn
+      ? { ...(data?.datasetConfig && typeof data.datasetConfig === "object" ? (data.datasetConfig as Record<string, unknown>) : {}), derivedColumns: nextDerivedColumns }
+      : undefined;
+
     setSaving(true);
     try {
       let next: SavedMetricForm[];
@@ -720,7 +749,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ savedMetrics: next }),
+        body: JSON.stringify({
+          savedMetrics: next,
+          ...(datasetConfigToSave != null && { datasetConfig: datasetConfigToSave }),
+        }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) {
@@ -728,7 +760,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         return;
       }
       toast.success(editingId ? "Métrica actualizada" : "Métrica creada");
-      setData((prev) => (prev ? { ...prev, savedMetrics: next } : null));
+      if (createDerivedColumn) toast.success(`Se creó la columna «${alias}» en el dataset; la podés usar en «Insertar columna» en otras métricas.`, { duration: 6000 });
+      setData((prev) => (prev ? { ...prev, savedMetrics: next, datasetConfig: datasetConfigToSave ?? prev.datasetConfig } : null));
+      if (createDerivedColumn) setDerivedColumns(nextDerivedColumns);
       closeForm();
     } catch (e) {
       toast.error("Error al guardar");
@@ -1346,6 +1380,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         })()}
                       </ul>
                     </div>
+                    {derivedColumns.length > 0 && (
+                      <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Columnas calculadas</p>
+                        <p className="text-sm mb-1.5" style={{ color: "var(--platform-fg)" }}>Creadas desde métricas con fórmula; disponibles en «Insertar columna».</p>
+                        <ul className="space-y-1 text-sm" style={{ color: "var(--platform-fg)" }}>
+                          {derivedColumns.map((d) => (
+                            <li key={d.name} className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> <strong>{d.name}</strong> = {d.expression} ({d.defaultAggregation})</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                       <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Relaciones (joins)</p>
                       {datasetRelations.length > 0 ? (
@@ -1523,7 +1568,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                                   setTimeout(() => { input.focus(); input.setSelectionRange(start + val.length, start + val.length); }, 0);
                                 }
                               }}
-                              options={[{ value: "", label: "Columna…" }, ...measureColumns.map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]}
+                              options={[{ value: "", label: "Columna…" }, ...measureColumns.map((c) => ({ value: c, label: getMeasureColumnLabel(c) }))]}
                               placeholder={measureColumns.length === 0 ? "Sin medidas (Rol BI)" : "Columna…"}
                               className="min-w-[160px]"
                               buttonClassName="h-9 text-sm"
@@ -1546,8 +1591,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                           />
                         </div>
                         <div>
-                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias del resultado</Label>
-                          <Input value={exprMetric?.alias ?? "resultado"} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. total_revenue" className="h-9 text-sm rounded-lg w-full !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias del resultado (nombre de la columna)</Label>
+                          <Input value={exprMetric?.alias ?? "resultado"} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura" className="h-9 text-sm rounded-lg w-full !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Si usás un nombre (ej. factura), al guardar se crea esa columna en el dataset y podés usarla en «Insertar columna» en otras métricas.</p>
                         </div>
                       </div>
                     </div>
