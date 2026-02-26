@@ -607,8 +607,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           // ignore
         }
       }
-      if (freshDerived && freshDerived.length > 0) setDerivedColumns(freshDerived);
-      const derivedToSend = (freshDerived?.length ? freshDerived : derivedColumns) as { name: string; expression: string; defaultAggregation?: string }[];
+      const normalizedDerived: DerivedColumn[] = (freshDerived ?? []).map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation ?? "SUM" }));
+      if (normalizedDerived.length > 0) setDerivedColumns(normalizedDerived);
+      const derivedToSend = normalizedDerived.length > 0 ? normalizedDerived : derivedColumns;
       const derivedByNameForPayload = Object.fromEntries(derivedToSend.map((d) => [d.name.toLowerCase(), d]));
       const metricsPayload = formMetrics.map((m) => {
         const expr = (m as { expression?: string }).expression;
