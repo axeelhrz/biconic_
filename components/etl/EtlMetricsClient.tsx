@@ -217,6 +217,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const formulaInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const [formulaSuggestions, setFormulaSuggestions] = useState<string[]>([]);
   const [formulaSuggestionIndex, setFormulaSuggestionIndex] = useState(0);
+  const [creatingColumn, setCreatingColumn] = useState(false);
   /** Columnas calculadas (ej. factura = CANTIDAD * PRECIO_UNITARIO); se guardan en dataset y aparecen como medidas. */
   const [derivedColumns, setDerivedColumns] = useState<DerivedColumn[]>([]);
 
@@ -768,6 +769,44 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       toast.error("Error al guardar");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const createColumnFromFormula = async () => {
+    const m = formMetrics[0];
+    const expr = (m as { expression?: string })?.expression?.trim();
+    const alias = (m?.alias ?? "").trim();
+    if (!expr) {
+      toast.error("Escribí una expresión (ej. CANTIDAD * PRECIO_UNITARIO) para crear la columna.");
+      return;
+    }
+    const colName = alias || `col_calc_${derivedColumns.length + 1}`;
+    if (alias && !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias)) {
+      toast.error("El nombre de la columna solo puede tener letras, números y _ (ej. factura).");
+      return;
+    }
+    setCreatingColumn(true);
+    try {
+      const nextDerived = [...derivedColumns.filter((d) => d.name !== colName), { name: colName, expression: expr, defaultAggregation: (m?.func as string) || "SUM" }];
+      const datasetConfigToSave = { ...(data?.datasetConfig && typeof data.datasetConfig === "object" ? (data.datasetConfig as Record<string, unknown>) : {}), derivedColumns: nextDerived };
+      const res = await fetch(`/api/etl/${etlId}/metrics`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedMetrics: savedMetrics, datasetConfig: datasetConfigToSave }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        toast.error(json.error ?? "Error al crear la columna");
+        return;
+      }
+      setDerivedColumns(nextDerived);
+      setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfigToSave } : null));
+      if (!alias) setFormMetrics((prev) => prev.map((mm, i) => i === 0 ? { ...mm, alias: colName } : mm));
+      toast.success(`Columna «${colName}» creada. La podés usar en «Insertar columna» en otras métricas.`);
+    } catch {
+      toast.error("Error al crear la columna");
+    } finally {
+      setCreatingColumn(false);
     }
   };
 
@@ -1576,24 +1615,34 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                             />
                           </div>
                         </div>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Agregación (como en Excel: suma de la columna)</Label>
-                          <Select
-                            value={exprMetric?.func ?? "SUM"}
-                            onChange={(v: string) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: v } : m))}
-                            options={AGG_FUNCS.filter((f) => f.value !== "FORMULA" && f.value !== "COUNT(DISTINCT")}
-                            placeholder="Suma"
-                            className="w-full"
-                            buttonClassName="h-9"
-                            disablePortal
-                          />
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim()}>
+                            {creatingColumn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                            {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
+                          </Button>
+                          <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Guarda la expresión como columna para usarla en «Insertar columna».</span>
                         </div>
-                        <div>
-                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias del resultado (nombre de la columna)</Label>
-                          <Input value={exprMetric?.alias ?? "resultado"} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura" className="h-9 text-sm rounded-lg w-full !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                          <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Si usás un nombre (ej. factura), al guardar se crea esa columna en el dataset y podés usarla en «Insertar columna» en otras métricas.</p>
+                      </div>
+                      <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Opcional: para la métrica y al guardar</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Agregación (opcional)</Label>
+                            <Select
+                              value={exprMetric?.func ?? "SUM"}
+                              onChange={(v: string) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: v } : m))}
+                              options={AGG_FUNCS.filter((f) => f.value !== "FORMULA" && f.value !== "COUNT(DISTINCT")}
+                              placeholder="Suma"
+                              className="w-full"
+                              buttonClassName="h-9"
+                              disablePortal
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Nombre de columna (opcional)</Label>
+                            <Input value={exprMetric?.alias ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura" className="h-9 text-sm rounded-lg w-full !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                            <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Si lo completás y tocás «Crear columna», se usará ese nombre. Si no, se genera uno automático.</p>
+                          </div>
                         </div>
                       </div>
                     </div>
