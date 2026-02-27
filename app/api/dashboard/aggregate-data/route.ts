@@ -108,15 +108,27 @@ function quotedColumn(name: string): string {
   return s ? `"${s}"` : '""';
 }
 
-/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO") en SQL seguro: cada identificador se pasa a quotedColumn. */
+const SQL_KNOWN_FUNCTIONS = new Set(["SUM", "AVG", "COUNT", "MIN", "MAX", "NULLIF", "COALESCE", "ABS", "ROUND", "CEIL", "FLOOR", "GREATEST", "LEAST"]);
+
+/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO") en SQL seguro. Funciones SQL conocidas se preservan; identificadores se pasan a quotedColumn. */
 function expressionToSql(expression: string): string | null {
   if (!expression || typeof expression !== "string") return null;
   const s = expression.replace(/\s+/g, " ").trim();
   if (!s) return null;
-  const allowed = /^[a-zA-Z0-9_*+\-/().\s]+$/;
+  const allowed = /^[a-zA-Z0-9_*+\-/().,\s]+$/;
   if (!allowed.test(s)) return null;
-  const out = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (_, id) => quotedColumn(id));
+  const out = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (_, id: string) => {
+    if (SQL_KNOWN_FUNCTIONS.has(id.toUpperCase())) return id.toUpperCase();
+    return quotedColumn(id);
+  });
   return out || null;
+}
+
+/** Si la expresión está envuelta en una función de agregación (ej. "SUM(X * Y)"), devuelve { func, inner }. */
+function unwrapAggExpression(expr: string): { func: string; inner: string } | null {
+  const m = expr.trim().match(/^(SUM|AVG|COUNT|MIN|MAX)\s*\((.+)\)\s*$/i);
+  if (!m) return null;
+  return { func: m[1]!.toUpperCase(), inner: m[2]!.trim() };
 }
 
 export async function POST(req: NextRequest) {
@@ -302,7 +314,11 @@ export async function POST(req: NextRequest) {
     for (let i = 0; i < metricsBase.length; i++) {
       const m = metricsBase[i];
       const derived: DerivedColumnRef | undefined = getDerived(m.field);
-      const expr = (m as Metric & { expression?: string }).expression ?? derived?.expression;
+      let expr = (m as Metric & { expression?: string }).expression ?? derived?.expression;
+      if (expr) {
+        const uw = unwrapAggExpression(expr);
+        if (uw) expr = uw.inner;
+      }
       if (expr != null && String(expr).trim() !== "") {
         if (!expressionToSql(String(expr).trim())) {
           return NextResponse.json(
@@ -325,11 +341,21 @@ export async function POST(req: NextRequest) {
       .map((m) => {
         const i = body.metrics.indexOf(m);
         const derived: DerivedColumnRef | undefined = getDerived(m.field);
-        const exprOverColumns = (m as Metric & { expression?: string }).expression ?? derived?.expression;
-        const func = (m.func || derived?.defaultAggregation || "SUM").toString().toUpperCase();
+        let rawExpr = (m as Metric & { expression?: string }).expression ?? derived?.expression ?? "";
+        let func = (m.func || derived?.defaultAggregation || "SUM").toString().toUpperCase();
+
+        // Si la expresión ya incluye la agregación (ej. "SUM(X * Y)"), extraer la parte interna
+        if (rawExpr) {
+          const unwrapped = unwrapAggExpression(rawExpr);
+          if (unwrapped) {
+            rawExpr = unwrapped.inner;
+            if (!m.func || m.func === "SUM") func = unwrapped.func;
+          }
+        }
+
         const fieldExpr = (() => {
-          if (exprOverColumns && String(exprOverColumns).trim()) {
-            const sqlExpr = expressionToSql(String(exprOverColumns).trim());
+          if (rawExpr && String(rawExpr).trim()) {
+            const sqlExpr = expressionToSql(String(rawExpr).trim());
             if (sqlExpr) return `(${sqlExpr})::numeric`;
           }
           const col = quotedColumn(m.field!);

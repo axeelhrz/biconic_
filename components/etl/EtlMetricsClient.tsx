@@ -755,12 +755,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
     };
-    const expr = (firstMetric as { expression?: string }).expression;
+    let expr = (firstMetric as { expression?: string }).expression;
     const alias = (firstMetric.alias || "").trim();
     const createDerivedColumn = expr && alias && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias);
     let nextDerivedColumns = derivedColumns;
-    if (createDerivedColumn) {
-      nextDerivedColumns = [...derivedColumns.filter((d) => d.name !== alias), { name: alias, expression: expr, defaultAggregation: firstMetric.func || "SUM" }];
+    if (createDerivedColumn && expr) {
+      let derivedAgg = firstMetric.func || "SUM";
+      const aggMatch = expr.match(/^\s*(SUM|AVG|COUNT|MIN|MAX)\s*\((.+)\)\s*$/i);
+      if (aggMatch) { derivedAgg = aggMatch[1]!.toUpperCase(); expr = aggMatch[2]!.trim(); }
+      nextDerivedColumns = [...derivedColumns.filter((d) => d.name !== alias), { name: alias, expression: expr, defaultAggregation: derivedAgg }];
     }
     const datasetConfigToSave = createDerivedColumn
       ? { ...(data?.datasetConfig && typeof data.datasetConfig === "object" ? (data.datasetConfig as Record<string, unknown>) : {}), derivedColumns: nextDerivedColumns }
@@ -807,7 +810,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
   const createColumnFromFormula = async () => {
     const m = formMetrics[0];
-    const expr = (m as { expression?: string })?.expression?.trim();
+    let expr = (m as { expression?: string })?.expression?.trim() ?? "";
     const alias = (m?.alias ?? "").trim();
     if (!expr) {
       toast.error("Escribí una expresión (ej. CANTIDAD * PRECIO_UNITARIO) para crear la columna.");
@@ -821,10 +824,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       toast.error("El nombre de la columna solo puede tener letras, números y _ (ej. factura).");
       return;
     }
+    // Extraer expresión interna si viene con SUM(...), AVG(...), etc.
+    let derivedAgg = (m?.func as string) || "SUM";
+    const aggMatch = expr.match(/^\s*(SUM|AVG|COUNT|MIN|MAX)\s*\((.+)\)\s*$/i);
+    if (aggMatch) {
+      derivedAgg = aggMatch[1]!.toUpperCase();
+      expr = aggMatch[2]!.trim();
+    }
     const colName = alias;
     setCreatingColumn(true);
     try {
-      const nextDerived = [...derivedColumns.filter((d) => d.name !== colName), { name: colName, expression: expr, defaultAggregation: (m?.func as string) || "SUM" }];
+      const nextDerived = [...derivedColumns.filter((d) => d.name !== colName), { name: colName, expression: expr, defaultAggregation: derivedAgg }];
       const datasetConfigToSave = { ...(data?.datasetConfig && typeof data.datasetConfig === "object" ? (data.datasetConfig as Record<string, unknown>) : {}), derivedColumns: nextDerived };
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
