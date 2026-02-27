@@ -648,7 +648,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       if (derivedToSend.length > 0) {
         body.derivedColumns = derivedToSend.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" }));
       }
-      if (timeColumn && analysisGranularity) {
+      if (wizard === "C" && timeColumn && analysisGranularity) {
         body.dateGroupBy = { field: timeColumn, granularity: analysisGranularity };
         const rangeNum = Number(analysisTimeRange);
         if (rangeNum > 0) {
@@ -672,7 +672,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     } finally {
       setPreviewLoading(false);
     }
-  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, timeColumn, analysisGranularity, analysisTimeRange]);
+  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, wizard, timeColumn, analysisGranularity, analysisTimeRange]);
 
   const recommendationText = (() => {
     const hasDim = !!formDimension;
