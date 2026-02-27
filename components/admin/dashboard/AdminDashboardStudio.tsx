@@ -356,33 +356,17 @@ export function AdminDashboardStudio({
               ...(m.condition ? { condition: m.condition } : {}),
             };
           });
-          let derivedColumns: { name: string; expression: string; defaultAggregation: string }[] | undefined;
-          if (derivedColumnsFromLayout.length > 0) {
-            derivedColumns = derivedColumnsFromLayout;
-          } else {
-            const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
-            const etlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
-            if (etlId) {
-              try {
-                const metricsRes = await fetch(`/api/etl/${etlId}/metrics`);
-                const metricsJson = await metricsRes.json();
-                if (metricsJson?.ok && metricsJson?.data?.datasetConfig?.derivedColumns) {
-                  derivedColumns = metricsJson.data.datasetConfig.derivedColumns;
-                }
-              } catch {
-                // ignore
-              }
-            }
-          }
+          const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
+          const widgetEtlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
           const res = await fetch("/api/dashboard/aggregate-data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               tableName,
+              etlId: widgetEtlId || undefined,
               dimension: agg.dimension,
               dimensions: dimensions.length > 0 ? dimensions : undefined,
               metrics: metricsPayload,
-              ...(Array.isArray(derivedColumns) && derivedColumns.length > 0 && { derivedColumns }),
               filters: [...(agg.filters || []), ...filters],
               orderBy: agg.orderBy,
               limit: agg.limit || 100,
@@ -465,7 +449,7 @@ export function AdminDashboardStudio({
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout]
+    [widgets, etlData, globalFilters, getTableName]
   );
 
   useEffect(() => {

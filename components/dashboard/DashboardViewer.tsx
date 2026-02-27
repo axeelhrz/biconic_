@@ -1370,6 +1370,7 @@ export function DashboardViewer({
             bodyPayload.comparePeriod = (aggConfig as any).comparePeriod;
           if ((aggConfig as any).dateDimension)
             bodyPayload.dateDimension = (aggConfig as any).dateDimension;
+          bodyPayload.etlId = etlId;
           if (Array.isArray(derivedColumnsFromLayout) && derivedColumnsFromLayout.length > 0)
             bodyPayload.derivedColumns = derivedColumnsFromLayout;
 

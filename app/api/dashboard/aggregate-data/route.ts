@@ -51,16 +51,15 @@ interface AggregationRequest {
   /** Múltiples dimensiones (ej. mes + categoría). Se hace GROUP BY todas. */
   dimensions?: string[];
   metrics: Metric[];
-  /** Columnas calculadas (ej. resultado = CANTIDAD * PRECIO_UNITARIO). Si una métrica usa field = nombre, se resuelve a expresión + agregación. */
+  /** Columnas calculadas enviadas por el cliente. Se fusionan con las de la DB. */
   derivedColumns?: DerivedColumnRef[];
+  /** ID del ETL para resolver columnas calculadas desde la DB (fallback automático). */
+  etlId?: string;
   filters?: Filter[];
   orderBy?: OrderBy;
   limit?: number;
-  /** Acumulado: running_sum = total acumulado; ytd = año hasta la fecha (requiere dimensión tipo fecha). */
   cumulative?: "none" | "running_sum" | "ytd";
-  /** Comparación temporal: añade métrica_prev y métrica_var_pct vs período anterior. */
   comparePeriod?: "previous_year" | "previous_month";
-  /** Columna de fecha para YTD o comparePeriod (ej. transaction_date). */
   dateDimension?: string;
 }
 
@@ -226,15 +225,72 @@ export async function POST(req: NextRequest) {
     const buildConditionExpr = (cond: MetricCondition, thenExpr: string): string =>
       `CASE WHEN ${buildWhenClause(cond)} THEN ${thenExpr} END`;
 
+    // --- Resolver columnas derivadas: fusionar las del request con las de la DB ---
     const derivedByName: Record<string, DerivedColumnRef> = {};
-    if (Array.isArray(body.derivedColumns)) {
-      for (const d of body.derivedColumns) {
-        if (d?.name && typeof d.expression === "string" && d.expression.trim()) {
-          const key = String(d.name).trim().toLowerCase();
-          derivedByName[key] = d;
+
+    const addDerivedFromArray = (arr: unknown[]) => {
+      for (const d of arr) {
+        const item = d as Record<string, unknown>;
+        const name = String(item?.name ?? "").trim();
+        const expression = String(item?.expression ?? "").trim();
+        if (!name || !expression) continue;
+        const key = name.toLowerCase();
+        if (!derivedByName[key]) {
+          derivedByName[key] = {
+            name,
+            expression,
+            defaultAggregation: String(item?.defaultAggregation ?? item?.default_aggregation ?? "SUM"),
+          };
         }
       }
+    };
+
+    if (Array.isArray(body.derivedColumns)) addDerivedFromArray(body.derivedColumns);
+
+    // Buscar en la DB: por etlId explícito, por output_table, o por etl_runs_log
+    let etlIdForLookup: string | null = body.etlId ?? null;
+    if (!etlIdForLookup && table) {
+      const tbl = table.toLowerCase();
+      try {
+        const { data: etlByOutput } = await supabase
+          .from("etl")
+          .select("id")
+          .ilike("output_table", tbl)
+          .limit(1)
+          .maybeSingle();
+        if (etlByOutput?.id) etlIdForLookup = etlByOutput.id;
+      } catch { /* ignore */ }
+      if (!etlIdForLookup) {
+        try {
+          const { data: runRow } = await supabase
+            .from("etl_runs_log")
+            .select("etl_id")
+            .eq("status", "completed")
+            .ilike("destination_table_name", tbl)
+            .order("completed_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (runRow?.etl_id) etlIdForLookup = runRow.etl_id;
+        } catch { /* ignore */ }
+      }
     }
+    if (etlIdForLookup) {
+      try {
+        const { data: etlRow } = await supabase
+          .from("etl")
+          .select("layout")
+          .eq("id", etlIdForLookup)
+          .maybeSingle();
+        if (etlRow) {
+          const layout = etlRow.layout as Record<string, unknown> | undefined;
+          const cfg = (layout?.dataset_config ?? layout?.datasetConfig) as Record<string, unknown> | undefined;
+          const raw = cfg?.derivedColumns ?? cfg?.derived_columns;
+          if (Array.isArray(raw)) addDerivedFromArray(raw);
+        }
+      } catch { /* ignore */ }
+    }
+    console.log("[aggregate-data] derivedByName keys:", Object.keys(derivedByName), "etlIdForLookup:", etlIdForLookup);
+
     const getDerived = (field: string | undefined): DerivedColumnRef | undefined => {
       if (!field || !String(field).trim()) return undefined;
       return derivedByName[String(field).trim().toLowerCase()];
@@ -484,18 +540,25 @@ export async function POST(req: NextRequest) {
     }
 
     // 6. Ejecución
+    console.log("[aggregate-data] query:", query.slice(0, 300), "| derivedKeys:", Object.keys(derivedByName));
     const { data, error } = await (supabase as any).rpc("execute_sql", {
       sql_query: query,
     });
 
     if (error) {
       const msg = error.message || String(error);
-      console.error("[aggregate-data] execute_sql error:", msg, "Query:", query.slice(0, 200));
+      console.error("[aggregate-data] execute_sql error:", msg, "Query:", query.slice(0, 500), "derivedByName:", JSON.stringify(derivedByName));
       let userMsg = "Error al ejecutar la agregación: " + msg;
       if (/column\s+["']?(\w+)["']?\s+does not exist/i.test(msg)) {
         const colMatch = msg.match(/column\s+["']?(\w+)["']?\s+does not exist/i);
         const colName = colMatch ? colMatch[1] : "";
-        userMsg += ". Si «" + colName + "» es una columna calculada, creala en Métricas (Fórmula personalizada → Crear columna) y enviá derivedColumns en la petición.";
+        const isDerived = derivedByName[colName.toLowerCase()];
+        if (isDerived) {
+          userMsg = `Error interno: la columna «${colName}» fue encontrada como derivada (expr: ${isDerived.expression}) pero el SQL generado no la expandió. Contactá soporte.`;
+        } else {
+          const availableDerived = Object.keys(derivedByName).join(", ") || "(ninguna)";
+          userMsg = `La columna «${colName}» no existe en la tabla ni como columna calculada. Columnas calculadas disponibles: ${availableDerived}. Creala en Métricas → Fórmula → Crear columna.`;
+        }
       }
       return NextResponse.json(
         { error: userMsg },

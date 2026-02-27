@@ -607,9 +607,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           // ignore
         }
       }
-      const normalizedDerived: DerivedColumn[] = (freshDerived ?? []).map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation ?? "SUM" }));
-      if (normalizedDerived.length > 0) setDerivedColumns(normalizedDerived);
-      const derivedToSend = normalizedDerived.length > 0 ? normalizedDerived : derivedColumns;
+      const fromApi: DerivedColumn[] = (freshDerived ?? []).map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation ?? "SUM" }));
+      if (fromApi.length > 0) setDerivedColumns(fromApi);
+      const mergedByName = new Map<string, DerivedColumn>();
+      for (const d of derivedColumns) mergedByName.set(d.name.toLowerCase(), { name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" });
+      for (const d of fromApi) mergedByName.set(d.name.toLowerCase(), { name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" });
+      const derivedToSend = Array.from(mergedByName.values());
       const derivedByNameForPayload = Object.fromEntries(derivedToSend.map((d) => [d.name.toLowerCase(), d]));
       const metricsPayload = formMetrics.map((m) => {
         const expr = (m as { expression?: string }).expression;
@@ -625,6 +628,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       });
       const body: Record<string, unknown> = {
         tableName,
+        etlId,
         dimension: formDimension || undefined,
         dimensions: [formDimension, formDimension2].filter(Boolean).length ? [formDimension, formDimension2].filter(Boolean) : undefined,
         metrics: metricsPayload,
@@ -1069,9 +1073,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         <table className="w-full text-sm border-collapse" style={{ color: "var(--platform-fg)" }}>
                           <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
                             <tr>
-                              {displayColumnsForProfiling.map((k) => (
-                                <th key={k} className="text-left px-3 py-2 font-medium whitespace-nowrap border-r last:border-r-0" style={{ borderColor: "var(--platform-border)", fontSize: "11px", textTransform: "uppercase" }}>{getSampleDisplayLabel(k)}{derivedColumnsByName[k] ? " (calculada)" : ""}</th>
-                              ))}
+                              {displayColumnsForProfiling.map((k) => {
+                                const dc = derivedColumnsByName[k];
+                                return (
+                                  <th key={k} className="text-left px-3 py-2 font-medium whitespace-nowrap border-r last:border-r-0" style={{ borderColor: "var(--platform-border)", fontSize: "11px", textTransform: "uppercase", color: dc ? "var(--platform-accent)" : undefined }} title={dc ? `${k} = ${dc.expression} (${dc.defaultAggregation})` : undefined}>
+                                    {getSampleDisplayLabel(k)}{dc ? <span className="font-normal ml-1 opacity-70" style={{ fontSize: "10px" }}>= {dc.expression}</span> : null}
+                                  </th>
+                                );
+                              })}
                             </tr>
                           </thead>
                           <tbody style={{ background: "var(--platform-bg)" }}>
@@ -1090,10 +1099,34 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                               return (
                                 <tr key={idx} className="border-b last:border-b-0 hover:opacity-90" style={{ borderColor: "var(--platform-border)" }}>
                                   {displayColumnsForProfiling.map((col, colIndex) => {
-                                    const raw = getCell(col, colIndex);
-                                    const formatted = derivedColumnsByName[col] ? "—" : formatSampleCell(col, raw);
+                                    const dc = derivedColumnsByName[col];
+                                    let formatted: string;
+                                    if (dc) {
+                                      try {
+                                        const tokens = dc.expression.split(/([+\-*/])/).map((t: string) => t.trim()).filter(Boolean);
+                                        let val = 0;
+                                        let op = "+";
+                                        let valid = true;
+                                        for (const t of tokens) {
+                                          if (["+", "-", "*", "/"].includes(t)) { op = t; continue; }
+                                          const colVal = getCell(t, -1) ?? getCell(t.toLowerCase(), -1) ?? getCell(t.toUpperCase(), -1);
+                                          const n = Number(colVal);
+                                          if (colVal == null || isNaN(n)) { valid = false; break; }
+                                          if (op === "+") val += n;
+                                          else if (op === "-") val -= n;
+                                          else if (op === "*") val *= n;
+                                          else if (op === "/") val = n !== 0 ? val / n : 0;
+                                        }
+                                        formatted = valid ? val.toLocaleString(undefined, { maximumFractionDigits: 2 }) : `= ${dc.expression}`;
+                                      } catch {
+                                        formatted = `= ${dc.expression}`;
+                                      }
+                                    } else {
+                                      const raw = getCell(col, colIndex);
+                                      formatted = formatSampleCell(col, raw);
+                                    }
                                     return (
-                                      <td key={col} className="px-3 py-1.5 whitespace-nowrap border-r last:border-r-0 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }} title={formatted}>{formatted}</td>
+                                      <td key={col} className="px-3 py-1.5 whitespace-nowrap border-r last:border-r-0 text-xs" style={{ borderColor: "var(--platform-border)", color: dc ? "var(--platform-accent)" : "var(--platform-fg-muted)" }} title={dc ? `${col} = ${dc.expression}` : formatted}>{formatted}</td>
                                     );
                                   })}
                                 </tr>
