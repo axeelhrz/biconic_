@@ -400,7 +400,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     if (wizard === "A" && wizardStep === 0 && showForm) {
       fetchData({ silent: true, sampleRows: 500 });
     }
-  }, [wizard, wizardStep, showForm, fetchData]);
+    if (wizard === "C" && wizardStep === 5 && showForm) {
+      fetchPreview();
+    }
+  }, [wizard, wizardStep, showForm, fetchData, fetchPreview]);
 
   // Refrescar al volver a la pestaña (p. ej. después de ejecutar el ETL en otra pestaña)
   useEffect(() => {
@@ -2109,12 +2112,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               )}
 
               {/* Wizard C5: Vista previa (tabla) */}
-              {wizard === "C" && wizardStep === 5 && (
+              {wizard === "C" && wizardStep === 5 && (() => {
+                const hasValidMetrics = formMetrics.some((m) => m.field || (m as { expression?: string }).expression || m.formula);
+                return (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Vista previa de datos</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Datos agregados con la configuración actual (dimensión, métricas, filtros, orden y límite).</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
+                    Datos agregados con la configuración actual.
+                    {timeColumn && analysisGranularity ? ` Agrupando por ${analysisGranularity === "month" ? "mes" : analysisGranularity === "week" ? "semana" : analysisGranularity === "day" ? "día" : "año"} (${getSampleDisplayLabel(timeColumn)}).` : ""}
+                    {analysisTimeRange && Number(analysisTimeRange) > 0 ? ` Últimos ${analysisTimeRange} ${Number(analysisTimeRange) <= 30 ? "días" : "meses"}.` : ""}
+                  </p>
+                  {!hasValidMetrics && (
+                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
+                      <p className="text-xs" style={{ color: "var(--platform-accent)" }}>No hay métricas configuradas. Volvé al paso Cálculo (Métrica) para crear al menos una fórmula.</p>
+                    </div>
+                  )}
                   <div className="flex flex-wrap items-center gap-2 mb-4">
-                    <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
+                    <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={previewLoading || !hasValidMetrics} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
                       {previewLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
                       Actualizar vista previa
                     </Button>
@@ -2139,12 +2153,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                       <p className="text-xs px-4 py-2 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-surface)" }}>{previewData.length} filas</p>
                     </div>
                   )}
+                  {previewData && previewData.length === 0 && !previewLoading && (
+                    <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>No hay datos. Tocá «Actualizar vista previa» para cargar.</p>
+                  )}
                   <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Gráfico</Button>
                   </div>
                 </section>
-              )}
+                );
+              })()}
 
               {/* Wizard D0: Tipo visual */}
               {wizard === "D" && wizardStep === 0 && (
