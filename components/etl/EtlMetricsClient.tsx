@@ -193,7 +193,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   /** Columnas elegidas cuando el grain es "Personalizado" (clave única = concatenación de estas columnas). */
   const [grainCustomColumns, setGrainCustomColumns] = useState<string[]>([]);
   const [columnRoles, setColumnRoles] = useState<Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }>>({});
-  const [calcType, setCalcType] = useState<"simple" | "count" | "ratio" | "formula">("simple");
+  const [calcType, setCalcType] = useState<"simple" | "count" | "ratio" | "formula">("formula");
   const [metricAdditivity, setMetricAdditivity] = useState<"additive" | "semi" | "non">("additive");
   const [analysisTimeRange, setAnalysisTimeRange] = useState("12");
   const [analysisGranularity, setAnalysisGranularity] = useState("month");
@@ -536,11 +536,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     setFormChartType("bar");
     setFormDimension("");
     setFormDimension2("");
-    setFormMetrics([{ id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: fields[0] ?? "valor" }]);
+    setFormMetrics([{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado", expression: "" } as AggregationMetricEdit]);
     setFormFilters([]);
     setFormOrderBy(null);
     setFormLimit(100);
-    setFormMetric({ id: `m-${Date.now()}`, field: fields[0] ?? "", func: "SUM", alias: fields[0] ?? "valor" });
+    setFormMetric({ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado" });
+    setCalcType("formula");
     setPreviewData(null);
     setGrainOption("");
     setGrainCustomColumns([]);
@@ -1599,94 +1600,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               {wizard === "B" && wizardStep === 1 && (
                 <section className="rounded-xl border p-6 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Cálculo de la métrica</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Como en Excel: elegí la columna (medida) y la función (Suma, Promedio, Conteo, etc.). Si usás fórmula o ratio, el resultado es el valor calculado.</p>
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    {(["simple", "count", "ratio", "formula"] as const).map((t) => (
-                      <button key={t} type="button" onClick={() => {
-                        setCalcType(t);
-                        const m0 = measureColumns[0] ?? fields[0] ?? "";
-                        const m1 = measureColumns[1] ?? measureColumns[0] ?? fields[0] ?? "";
-                        if (t === "ratio") {
-                          const base = formMetrics.filter((m) => m.func !== "FORMULA");
-                          const formulaRow = formMetrics.find((m) => m.func === "FORMULA");
-                          const b0 = base[0]; const b1 = base[1];
-                          setFormMetrics([
-                            { id: b0?.id ?? `m-${Date.now()}`, field: b0?.field ?? m0, func: b0?.func ?? "SUM", alias: "metric_0" },
-                            { id: b1?.id ?? `m-${Date.now() + 1}`, field: b1?.field ?? m1, func: b1?.func ?? "SUM", alias: "metric_1" },
-                            { id: formulaRow?.id ?? `m-${Date.now() + 2}`, func: "FORMULA", formula: formulaRow?.formula ?? "metric_0 / NULLIF(metric_1, 0)", alias: formulaRow?.alias ?? "ratio", field: "" },
-                          ]);
-                        } else if (t === "formula") {
-                          const withExpr = formMetrics.find((m) => (m as { expression?: string }).expression != null && (m as { expression?: string }).expression !== "");
-                          if (!withExpr) setFormMetrics([{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado", expression: "" }]);
-                        }
-                        if ((t === "simple" || t === "count") && formMetrics.every((m) => m.func === "FORMULA")) setFormMetrics([{ id: `m-${Date.now()}`, field: fields[0] ?? "", func: t === "count" ? "COUNT" : "SUM", alias: "total" }]);
-                      }} className="p-4 rounded-xl border text-left transition-colors" style={{ borderColor: calcType === t ? "var(--platform-accent)" : "var(--platform-border)", background: calcType === t ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
-                        <span className="font-medium block" style={{ color: "var(--platform-fg)" }}>{t === "simple" ? "Agregación simple" : t === "count" ? "Conteo" : t === "ratio" ? "Ratio" : "Fórmula personalizada"}</span>
-                        <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{t === "simple" ? "SUM, AVG, MIN, MAX por campo" : t === "count" ? "COUNT, COUNT DISTINCT" : t === "ratio" ? "A÷B, %, margen (predeterminadas)" : "Fórmulas Excel + columnas"}</span>
-                      </button>
-                    ))}
-                  </div>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Escribí la fórmula con nombres de columnas (estilo Excel). Usá «Insertar columna» para agregar medidas. Elegí la función (Suma, Promedio, etc.) y creá columnas calculadas reutilizables.</p>
 
-                  {/* Contenido según tipo */}
-                  {(calcType === "simple" || calcType === "count") && (
-                    <>
-                      <div className="flex items-center justify-between mb-2">
-                        <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Métricas</Label>
-                        <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" onClick={() => setFormMetrics((m) => [...m, { id: `m-${Date.now()}`, field: fields[0] ?? "", func: calcType === "count" ? "COUNT" : "SUM", alias: "valor" }])}>+ Añadir métrica</Button>
-                      </div>
-                      <div className="space-y-3">
-                        {formMetrics.map((m, i) => {
-                          if (m.func === "FORMULA") return null;
-                          return (
-                            <div key={m.id} className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                              <div className="flex gap-2 items-center">
-                                <Select value={m.func} onChange={(val: string) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, func: val } : mm))} options={calcType === "count" ? AGG_FUNCS.filter((f) => f.value === "COUNT" || f.value === "COUNT(DISTINCT") : AGG_FUNCS.filter((f) => f.value !== "FORMULA" && f.value !== "COUNT" && f.value !== "COUNT(DISTINCT")} placeholder="Función" className="flex-1" buttonClassName="h-9" disablePortal />
-                                {formMetrics.filter((x) => x.func !== "FORMULA").length > 1 && <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormMetrics((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>}
-                              </div>
-                              <AdminFieldSelector label="Campo" value={m.field} onChange={(v: string) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, field: v } : mm))} etlData={etlData} fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"} placeholder="Campo..." className="[&_button]:!bg-[var(--platform-bg)] [&_button]:!border-[var(--platform-border)] [&_button]:!text-[var(--platform-fg)]" />
-                              <div>
-                                <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias</Label>
-                                <Input value={m.alias} onChange={(e) => setFormMetrics((prev) => prev.map((mm, ii) => ii === i ? { ...mm, alias: e.target.value } : mm))} placeholder="Ej. total_ventas" className="h-8 text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </>
-                  )}
-
-                  {calcType === "ratio" && (
-                    <div className="space-y-4">
-                      <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Definí las dos métricas base (numerador y denominador). La fórmula usa metric_0 y metric_1.</p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                          <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Numerador (metric_0)</Label>
-                          <Select value={formMetrics[0]?.func ?? "SUM"} onChange={(v: string) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, func: v } : m))} options={AGG_FUNCS.filter((f) => f.value !== "FORMULA" && f.value !== "COUNT" && f.value !== "COUNT(DISTINCT")} placeholder="Función" className="w-full" buttonClassName="h-9" disablePortal />
-                          <AdminFieldSelector label="Campo" value={formMetrics[0]?.field ?? ""} onChange={(v: string) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, field: v } : m))} etlData={etlData} fieldType="numeric" placeholder="Campo…" className="[&_button]:!bg-[var(--platform-bg)] [&_button]:!border-[var(--platform-border)] [&_button]:!text-[var(--platform-fg)]" />
-                        </div>
-                        <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                          <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Denominador (metric_1)</Label>
-                          <Select value={formMetrics[1]?.func ?? "SUM"} onChange={(v: string) => setFormMetrics((prev) => prev.map((m, i) => i === 1 ? { ...m, func: v } : m))} options={AGG_FUNCS.filter((f) => f.value !== "FORMULA" && f.value !== "COUNT" && f.value !== "COUNT(DISTINCT")} placeholder="Función" className="w-full" buttonClassName="h-9" disablePortal />
-                          <AdminFieldSelector label="Campo" value={formMetrics[1]?.field ?? ""} onChange={(v: string) => setFormMetrics((prev) => prev.map((m, i) => i === 1 ? { ...m, field: v } : m))} etlData={etlData} fieldType="numeric" placeholder="Campo…" className="[&_button]:!bg-[var(--platform-bg)] [&_button]:!border-[var(--platform-border)] [&_button]:!text-[var(--platform-fg)]" />
-                        </div>
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Fórmula (metric_0 ÷ metric_1)</Label>
-                        <div className="flex flex-wrap gap-2 mb-2">
-                          {FORMULA_QUICKS.map(({ label, expr }) => (
-                            <button key={label} type="button" onClick={() => { const idx = formMetrics.findIndex((m) => m.func === "FORMULA"); if (idx >= 0) setFormMetrics((prev) => prev.map((m, i) => i === idx ? { ...m, formula: expr } : m)); }} className="px-3 py-2 rounded-lg text-sm border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{label}</button>
-                          ))}
-                        </div>
-                        <Input value={formMetrics.find((m) => m.func === "FORMULA")?.formula ?? ""} onChange={(e) => { const idx = formMetrics.findIndex((m) => m.func === "FORMULA"); if (idx >= 0) setFormMetrics((prev) => prev.map((m, i) => i === idx ? { ...m, formula: e.target.value } : m)); }} placeholder="Ej. metric_0 / NULLIF(metric_1, 0)" className="font-mono text-sm rounded-lg w-full !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                      </div>
-                      <div>
-                        <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Alias del resultado</Label>
-                        <Input value={formMetrics.find((m) => m.func === "FORMULA")?.alias ?? "ratio"} onChange={(e) => { const idx = formMetrics.findIndex((m) => m.func === "FORMULA"); if (idx >= 0) setFormMetrics((prev) => prev.map((m, i) => i === idx ? { ...m, alias: e.target.value } : m)); }} placeholder="Ej. ratio_ventas" className="h-8 text-sm rounded-lg !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                      </div>
-                    </div>
-                  )}
-
-                  {calcType === "formula" && (() => {
+                  {(() => {
                     const exprMetric = formMetrics[0];
                     const exprValue = (exprMetric as { expression?: string })?.expression ?? "";
                     return (
@@ -1714,7 +1630,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                             />
                           </div>
                           <div className="flex flex-col gap-1">
-                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Insertar columna (medidas)</Label>
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Insertar medida</Label>
                             <Select
                               value=""
                               onChange={(val: string) => {
@@ -1729,9 +1645,32 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                                   setTimeout(() => { input.focus(); input.setSelectionRange(start + val.length, start + val.length); }, 0);
                                 }
                               }}
-                              options={[{ value: "", label: "Columna…" }, ...measureColumns.map((c) => ({ value: c, label: getMeasureColumnLabel(c) }))]}
-                              placeholder={measureColumns.length === 0 ? "Sin medidas (Rol BI)" : "Columna…"}
-                              className="min-w-[160px]"
+                              options={[{ value: "", label: "Medida…" }, ...measureColumns.map((c) => ({ value: c, label: getMeasureColumnLabel(c) }))]}
+                              placeholder={measureColumns.length === 0 ? "Sin medidas" : "Medida…"}
+                              className="min-w-[140px]"
+                              buttonClassName="h-9 text-sm"
+                              disablePortal
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Insertar dimensión</Label>
+                            <Select
+                              value=""
+                              onChange={(val: string) => {
+                                if (!val) return;
+                                const el = formulaInputRef.current;
+                                if (el && "value" in el) {
+                                  const input = el as HTMLInputElement;
+                                  const cur = exprValue;
+                                  const start = input.selectionStart ?? cur.length;
+                                  const end = input.selectionEnd ?? cur.length;
+                                  setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, expression: cur.slice(0, start) + val + cur.slice(end) } : m));
+                                  setTimeout(() => { input.focus(); input.setSelectionRange(start + val.length, start + val.length); }, 0);
+                                }
+                              }}
+                              options={[{ value: "", label: "Dimensión…" }, ...fields.filter((c) => { const role = columnRoles[c]?.role ?? "dimension"; return role === "dimension" || role === "key" || role === "time"; }).map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]}
+                              placeholder="Dimensión…"
+                              className="min-w-[140px]"
                               buttonClassName="h-9 text-sm"
                               disablePortal
                             />
