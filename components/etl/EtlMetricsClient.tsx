@@ -1144,6 +1144,48 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                               );
                             })}
                           </tbody>
+                          {rawTableData.length > 0 && (
+                            <tfoot className="sticky bottom-0 z-10" style={{ background: "var(--platform-surface)", borderTop: "2px solid var(--platform-border)" }}>
+                              <tr>
+                                {displayColumnsForProfiling.map((col, colIndex) => {
+                                  const dc = derivedColumnsByName[col];
+                                  const isNumeric = numericFieldSet.has(col) || dc;
+                                  if (!isNumeric) {
+                                    return <td key={col} className="px-3 py-2 text-xs font-medium border-r last:border-r-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>{colIndex === 0 ? `Σ (${rawTableData.length} filas)` : ""}</td>;
+                                  }
+                                  let sum = 0;
+                                  let count = 0;
+                                  for (const row of rawTableData) {
+                                    const r = row as Record<string, unknown>;
+                                    const keys = Object.keys(r);
+                                    if (dc) {
+                                      try {
+                                        const tokens = dc.expression.split(/([+\-*/])/).map((t: string) => t.trim()).filter(Boolean);
+                                        let val = 0; let op = "+"; let valid = true;
+                                        for (const t of tokens) {
+                                          if (["+", "-", "*", "/"].includes(t)) { op = t; continue; }
+                                          const cv = r[t] ?? r[t.toLowerCase()] ?? r[t.toUpperCase()] ?? (() => { const k = keys.find((k2) => k2.toLowerCase() === t.toLowerCase()); return k ? r[k] : undefined; })();
+                                          const n = Number(cv);
+                                          if (cv == null || isNaN(n)) { valid = false; break; }
+                                          if (op === "+") val += n; else if (op === "-") val -= n; else if (op === "*") val *= n; else if (op === "/") val = n !== 0 ? val / n : 0;
+                                        }
+                                        if (valid) { sum += val; count++; }
+                                      } catch { /* skip */ }
+                                    } else {
+                                      const raw = r[col] ?? (() => { const cn = col.replace(/\./g, "_").toLowerCase(); const k = keys.find((k2) => k2.replace(/\./g, "_").toLowerCase() === cn); return k ? r[k] : undefined; })();
+                                      const n = Number(raw);
+                                      if (raw != null && !isNaN(n)) { sum += n; count++; }
+                                    }
+                                  }
+                                  return (
+                                    <td key={col} className="px-3 py-2 text-xs font-bold whitespace-nowrap border-r last:border-r-0" style={{ borderColor: "var(--platform-border)", color: dc ? "var(--platform-accent)" : "var(--platform-fg)" }}>
+                                      {count > 0 ? sum.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            </tfoot>
+                          )}
                         </table>
                       </div>
                       <p className="text-xs px-3 py-2 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-surface)" }}>
