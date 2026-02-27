@@ -615,15 +615,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       const derivedToSend = Array.from(mergedByName.values());
       const derivedByNameForPayload = Object.fromEntries(derivedToSend.map((d) => [d.name.toLowerCase(), d]));
       const metricsPayload = formMetrics.map((m) => {
-        const expr = (m as { expression?: string }).expression;
+        const rawExpr = ((m as { expression?: string }).expression ?? "").trim();
         const derived = m.field ? derivedByNameForPayload[String(m.field).trim().toLowerCase()] ?? derivedColumnsByName[m.field] : undefined;
+        const effectiveExpr = rawExpr || derived?.expression || "";
         return {
           field: m.field || "",
           func: m.func,
           alias: m.alias || m.field || "valor",
           ...(m.condition ? { condition: m.condition } : {}),
           ...(m.formula ? { formula: m.formula } : {}),
-          ...(expr ? { expression: expr } : derived ? { expression: derived.expression, func: m.func || derived.defaultAggregation } : {}),
+          ...(effectiveExpr ? { expression: effectiveExpr } : {}),
         };
       });
       const body: Record<string, unknown> = {

@@ -314,7 +314,8 @@ export async function POST(req: NextRequest) {
     for (let i = 0; i < metricsBase.length; i++) {
       const m = metricsBase[i];
       const derived: DerivedColumnRef | undefined = getDerived(m.field);
-      let expr = (m as Metric & { expression?: string }).expression ?? derived?.expression;
+      const metricExpr = (m as Metric & { expression?: string }).expression;
+      let expr = (metricExpr && metricExpr.trim()) ? metricExpr.trim() : (derived?.expression ?? null);
       if (expr) {
         const uw = unwrapAggExpression(expr);
         if (uw) expr = uw.inner;
@@ -341,7 +342,8 @@ export async function POST(req: NextRequest) {
       .map((m) => {
         const i = body.metrics.indexOf(m);
         const derived: DerivedColumnRef | undefined = getDerived(m.field);
-        let rawExpr = (m as Metric & { expression?: string }).expression ?? derived?.expression ?? "";
+        const metricExpr = (m as Metric & { expression?: string }).expression;
+        let rawExpr = (metricExpr && metricExpr.trim()) ? metricExpr.trim() : (derived?.expression || "");
         let func = (m.func || derived?.defaultAggregation || "SUM").toString().toUpperCase();
 
         // Si la expresión ya incluye la agregación (ej. "SUM(X * Y)"), extraer la parte interna
