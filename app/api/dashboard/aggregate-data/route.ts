@@ -337,28 +337,40 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 1. Construcción de Métricas (condicionales y estándar; fórmulas después). Columnas calculadas: field -> expression + func.
+    // 1. Construcción de Métricas. Columnas calculadas: field -> expression + func.
     const metricClauses = metricsBase
       .map((m) => {
         const i = body.metrics.indexOf(m);
         const derived: DerivedColumnRef | undefined = getDerived(m.field);
-        const metricExpr = (m as Metric & { expression?: string }).expression;
-        let rawExpr = (metricExpr && metricExpr.trim()) ? metricExpr.trim() : (derived?.expression || "");
-        let func = (m.func || derived?.defaultAggregation || "SUM").toString().toUpperCase();
 
-        // Si la expresión ya incluye la agregación (ej. "SUM(X * Y)"), extraer la parte interna
-        if (rawExpr) {
-          const unwrapped = unwrapAggExpression(rawExpr);
+        // Resolver expresión: prioridad derived > metric.expression (defensivo)
+        let resolvedExpr = "";
+        if (derived) {
+          resolvedExpr = derived.expression;
+        }
+        const metricExpr = (m as Metric & { expression?: string }).expression;
+        if (metricExpr && metricExpr.trim()) {
+          resolvedExpr = metricExpr.trim();
+        }
+
+        // Si está envuelta en agregación, extraer
+        let func = (m.func || derived?.defaultAggregation || "SUM").toString().toUpperCase();
+        if (resolvedExpr) {
+          const unwrapped = unwrapAggExpression(resolvedExpr);
           if (unwrapped) {
-            rawExpr = unwrapped.inner;
+            resolvedExpr = unwrapped.inner;
             if (!m.func || m.func === "SUM") func = unwrapped.func;
           }
         }
 
         const fieldExpr = (() => {
-          if (rawExpr && String(rawExpr).trim()) {
-            const sqlExpr = expressionToSql(String(rawExpr).trim());
+          if (resolvedExpr) {
+            const sqlExpr = expressionToSql(resolvedExpr);
             if (sqlExpr) return `(${sqlExpr})::numeric`;
+            console.warn("[aggregate-data] expressionToSql returned null for:", resolvedExpr);
+          }
+          if (derived) {
+            console.warn("[aggregate-data] FALLTHROUGH: derived col", m.field, "expr:", derived.expression, "resolvedExpr:", resolvedExpr);
           }
           const col = quotedColumn(m.field!);
           if (m.cast === "sanitize")
