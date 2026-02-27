@@ -395,15 +395,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     setDatasetRelations((prev) => prev.filter((r) => r.id !== id));
   };
 
-  // Refrescar datos del ETL al entrar al paso Profiling (Dataset) para mostrar filas/columnas actualizadas
+  // Refrescar datos del ETL al entrar al paso Profiling (Dataset) para mostrar filas/columnas actualizadas (solo fetchData aquí; fetchPreview se usa en un useEffect más abajo)
   useEffect(() => {
     if (wizard === "A" && wizardStep === 0 && showForm) {
       fetchData({ silent: true, sampleRows: 500 });
     }
-    if (wizard === "C" && wizardStep === 5 && showForm) {
-      fetchPreview();
-    }
-  }, [wizard, wizardStep, showForm, fetchData, fetchPreview]);
+  }, [wizard, wizardStep, showForm, fetchData]);
 
   // Refrescar al volver a la pestaña (p. ej. después de ejecutar el ETL en otra pestaña)
   useEffect(() => {
@@ -676,6 +673,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       setPreviewLoading(false);
     }
   }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, wizard, timeColumn, analysisGranularity, analysisTimeRange]);
+
+  // Refrescar previsualización al entrar al paso de vista previa (wizard C, paso 5)
+  useEffect(() => {
+    if (wizard === "C" && wizardStep === 5 && showForm) {
+      fetchPreview();
+    }
+  }, [wizard, wizardStep, showForm, fetchPreview]);
 
   const recommendationText = (() => {
     const hasDim = !!formDimension;
