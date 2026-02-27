@@ -477,7 +477,8 @@ export async function POST(req: NextRequest) {
       const drCol = quotedColumn(body.dateRangeFilter.field);
       const n = Math.max(1, Math.min(9999, Math.round(body.dateRangeFilter.last)));
       const unit = body.dateRangeFilter.unit === "days" ? "days" : "months";
-      return `${drCol}::date >= (CURRENT_DATE - INTERVAL '${n} ${unit}')`;
+      const maxDateSubquery = `(SELECT MAX(${drCol}::date) FROM "${schema}"."${table}")`;
+      return `${drCol}::date >= (${maxDateSubquery} - INTERVAL '${n} ${unit}')`;
     })();
 
     if (body.filters && body.filters.length > 0) {

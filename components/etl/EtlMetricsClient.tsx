@@ -2124,7 +2124,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
                     Datos agregados con la configuración actual.
                     {timeColumn && analysisGranularity ? ` Agrupando por ${analysisGranularity === "month" ? "mes" : analysisGranularity === "week" ? "semana" : analysisGranularity === "day" ? "día" : "año"} (${getSampleDisplayLabel(timeColumn)}).` : ""}
-                    {analysisTimeRange && Number(analysisTimeRange) > 0 ? ` Últimos ${analysisTimeRange} ${Number(analysisTimeRange) <= 30 ? "días" : "meses"}.` : ""}
+                    {analysisTimeRange && Number(analysisTimeRange) > 0 ? ` Últimos ${analysisTimeRange} ${Number(analysisTimeRange) <= 30 ? "días" : "meses"} (respecto a los datos).` : ""}
                   </p>
                   {!hasValidMetrics && (
                     <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
