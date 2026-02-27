@@ -110,8 +110,12 @@ function quotedColumn(name: string): string {
 
 const SQL_KNOWN_FUNCTIONS = new Set(["SUM", "AVG", "COUNT", "MIN", "MAX", "NULLIF", "COALESCE", "ABS", "ROUND", "CEIL", "FLOOR", "GREATEST", "LEAST"]);
 
-/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO") en SQL seguro. Funciones SQL conocidas se preservan; identificadores se pasan a quotedColumn. */
-function expressionToSql(expression: string): string | null {
+/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO") en SQL seguro.
+ *  - Funciones SQL conocidas se preservan.
+ *  - Nombres de columnas calculadas (derivedLookup) se expanden a su expresión.
+ *  - Demás identificadores se pasan a quotedColumn.
+ */
+function expressionToSql(expression: string, derivedLookup?: Record<string, DerivedColumnRef>, _depth = 0): string | null {
   if (!expression || typeof expression !== "string") return null;
   const s = expression.replace(/\s+/g, " ").trim();
   if (!s) return null;
@@ -119,6 +123,13 @@ function expressionToSql(expression: string): string | null {
   if (!allowed.test(s)) return null;
   const out = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (_, id: string) => {
     if (SQL_KNOWN_FUNCTIONS.has(id.toUpperCase())) return id.toUpperCase();
+    if (derivedLookup && _depth < 5) {
+      const ref = derivedLookup[id.toLowerCase()];
+      if (ref?.expression) {
+        const inner = expressionToSql(ref.expression, derivedLookup, _depth + 1);
+        if (inner) return `(${inner})`;
+      }
+    }
     return quotedColumn(id);
   });
   return out || null;
@@ -321,7 +332,7 @@ export async function POST(req: NextRequest) {
         if (uw) expr = uw.inner;
       }
       if (expr != null && String(expr).trim() !== "") {
-        if (!expressionToSql(String(expr).trim())) {
+        if (!expressionToSql(String(expr).trim(), derivedByName)) {
           return NextResponse.json(
             { error: `Métrica en posición ${i + 1}: la expresión solo puede contener nombres de columna y operadores * - + / ( ).` },
             { status: 400 }
@@ -365,7 +376,7 @@ export async function POST(req: NextRequest) {
 
         const fieldExpr = (() => {
           if (resolvedExpr) {
-            const sqlExpr = expressionToSql(resolvedExpr);
+            const sqlExpr = expressionToSql(resolvedExpr, derivedByName);
             if (sqlExpr) return `(${sqlExpr})::numeric`;
             console.warn("[aggregate-data] expressionToSql returned null for:", resolvedExpr);
           }
