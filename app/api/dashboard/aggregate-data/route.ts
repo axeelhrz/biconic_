@@ -61,6 +61,10 @@ interface AggregationRequest {
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
   dateDimension?: string;
+  /** Agrupación temporal: aplica DATE_TRUNC(granularity, campo) como primera dimensión. */
+  dateGroupBy?: { field: string; granularity: "day" | "week" | "month" | "year" };
+  /** Filtro de rango temporal: WHERE campo >= CURRENT_DATE - INTERVAL 'N unit'. */
+  dateRangeFilter?: { field: string; last: number; unit: "days" | "months" };
 }
 
 // --- Constantes ---
@@ -410,7 +414,7 @@ export async function POST(req: NextRequest) {
       })
       .join(", ");
 
-    // 2. Dimensiones (una o varias)
+    // 2. Dimensiones (una o varias) + dateGroupBy (DATE_TRUNC)
     const dimList = (body.dimensions && body.dimensions.length > 0)
       ? body.dimensions
       : body.dimension
@@ -418,8 +422,32 @@ export async function POST(req: NextRequest) {
         : [];
     let dimensionSelectClause = "";
     let dimensionGroupByClause = "";
+    let dateGroupByExpr = "";
 
-    if (dimList.length > 0) {
+    if (body.dateGroupBy?.field && body.dateGroupBy?.granularity) {
+      const dgCol = quotedColumn(body.dateGroupBy.field);
+      const gran = body.dateGroupBy.granularity.toLowerCase().replace(/[^a-z]/g, "");
+      const validGran = ["day", "week", "month", "year"].includes(gran) ? gran : "month";
+      dateGroupByExpr = `DATE_TRUNC('${validGran}', ${dgCol}::timestamp)`;
+      const dateParts = [`${dateGroupByExpr}::text AS "periodo"`];
+      if (dimList.length > 0) {
+        dateParts.push(
+          ...dimList.map((d) => {
+            const col = quotedColumn(d);
+            const alias = (d || "").trim().replace(/"/g, '""');
+            return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
+          })
+        );
+      }
+      dimensionSelectClause = dateParts.join(", ");
+      const groupParts = [dateGroupByExpr];
+      if (dimList.length > 0) {
+        groupParts.push(
+          ...dimList.map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
+        );
+      }
+      dimensionGroupByClause = groupParts.join(", ");
+    } else if (dimList.length > 0) {
       const parts = dimList.map((d) => {
         const col = quotedColumn(d);
         const alias = (d || "").trim().replace(/"/g, '""');
@@ -442,8 +470,16 @@ export async function POST(req: NextRequest) {
     }
     let query = `SELECT ${selectClause} FROM "${schema}"."${table}"`;
 
-    // 3. Filtros
+    // 3. Filtros (dateRangeFilter primero, luego los del usuario)
     let whereClausesStr = "";
+    const dateRangeClause = (() => {
+      if (!body.dateRangeFilter?.field || !body.dateRangeFilter?.last) return "";
+      const drCol = quotedColumn(body.dateRangeFilter.field);
+      const n = Math.max(1, Math.min(9999, Math.round(body.dateRangeFilter.last)));
+      const unit = body.dateRangeFilter.unit === "days" ? "days" : "months";
+      return `${drCol}::date >= (CURRENT_DATE - INTERVAL '${n} ${unit}')`;
+    })();
+
     if (body.filters && body.filters.length > 0) {
       const whereClauses = body.filters
         .map((f) => {
@@ -517,15 +553,16 @@ export async function POST(req: NextRequest) {
         })
         .join(" AND ");
       whereClausesStr = whereClauses || "";
-      if (whereClausesStr) query += ` WHERE ${whereClausesStr}`;
     }
+    const allWhere = [dateRangeClause, whereClausesStr].filter(Boolean).join(" AND ");
+    if (allWhere) query += ` WHERE ${allWhere}`;
 
     // 4. Group By
     if (dimensionGroupByClause) {
       query += ` GROUP BY ${dimensionGroupByClause}`;
     }
 
-    // 5. Order By (dimensión o métrica por alias interno)
+    // 5. Order By (dimensión o métrica por alias interno; dateGroupBy ordena por periodo ASC por defecto)
     if (body.orderBy?.field) {
       const dir = (body.orderBy.direction || "DESC").toString().toUpperCase();
       const safeDir = dir === "ASC" ? "ASC" : "DESC";
@@ -546,6 +583,8 @@ export async function POST(req: NextRequest) {
           orderByField = `"${(matchedMetric as any).internalAlias}"`;
       }
       query += ` ORDER BY ${orderByField} ${safeDir}`;
+    } else if (dateGroupByExpr) {
+      query += ` ORDER BY ${dateGroupByExpr} ASC`;
     }
 
     if (body.limit) {

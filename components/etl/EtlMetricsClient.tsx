@@ -497,6 +497,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     return { d: date.getDate(), m: date.getMonth() + 1, y: date.getFullYear(), monthIndex: date.getMonth() };
   };
 
+  const formatNumber = (v: unknown): string => {
+    if (v == null) return "—";
+    const n = typeof v === "number" ? v : Number(v);
+    if (isNaN(n)) return String(v);
+    return new Intl.NumberFormat("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(n);
+  };
+
   const formatSampleCell = (col: string, value: unknown): string => {
     if (value === null || value === undefined) return "";
     const key = getColumnDisplayKey(col);
@@ -641,6 +648,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       if (derivedToSend.length > 0) {
         body.derivedColumns = derivedToSend.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" }));
       }
+      if (timeColumn && analysisGranularity) {
+        body.dateGroupBy = { field: timeColumn, granularity: analysisGranularity };
+        const rangeNum = Number(analysisTimeRange);
+        if (rangeNum > 0) {
+          body.dateRangeFilter = { field: timeColumn, last: rangeNum, unit: rangeNum <= 30 ? "days" : "months" };
+        }
+      }
       const res = await fetch("/api/dashboard/aggregate-data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -658,7 +672,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     } finally {
       setPreviewLoading(false);
     }
-  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns]);
+  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, timeColumn, analysisGranularity, analysisTimeRange]);
 
   const recommendationText = (() => {
     const hasDim = !!formDimension;
@@ -1702,28 +1716,43 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         Actualizar previsualización
                       </Button>
                     </div>
-                    {previewData && previewData.length > 0 && (
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="rounded-xl border p-4 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                          <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{previewCalculationResult != null ? Number(previewCalculationResult) : "—"}</p>
-                          <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>{formMetrics.some((m) => m.func === "FORMULA") ? "Resultado de la fórmula" : "Resultado (ej. suma / promedio)"}</p>
-                        </div>
-                        <div className="rounded-xl border col-span-2 overflow-auto max-h-[180px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                          <table className="w-full text-xs" style={{ color: "var(--platform-fg)" }}>
-                            <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewDisplayHeaders.map((label, i) => (<th key={i} className="text-left py-1 px-2">{label}</th>))}</tr></thead>
-                            <tbody>{previewData.slice(0, 5).map((row, idx) => {
-                              const raw = row as Record<string, unknown>;
-                              const keys = Object.keys(raw);
-                              return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{keys.map((k, i) => {
-                                const v = raw[k];
-                                const num = typeof v === "number" && !Number.isNaN(v) ? v : v;
-                                return (<td key={i} className="py-1 px-2">{typeof num === "number" ? (Number.isInteger(num) ? String(num) : Number(num).toLocaleString(undefined, { maximumFractionDigits: 4 })) : String(v ?? "")}</td>);
-                              })}</tr>);
-                            })}</tbody>
-                          </table>
+                    {previewData && previewData.length > 0 && (() => {
+                      const hasPeriodo = previewData.length > 1 && (previewData[0] as Record<string, unknown>)["periodo"] != null;
+                      const metricKey = `metric_${formMetrics.length - 1}`;
+                      const totalValue = hasPeriodo
+                        ? previewData.reduce((sum, row) => sum + (Number((row as Record<string, unknown>)[metricKey]) || 0), 0)
+                        : previewCalculationResult;
+                      return (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="rounded-xl border p-4 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                            <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{totalValue != null ? formatNumber(totalValue) : "—"}</p>
+                            <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>{hasPeriodo ? `Total (${previewData.length} períodos)` : "Resultado"}</p>
+                          </div>
+                          <div className="rounded-xl border col-span-2 overflow-auto max-h-[240px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                            <table className="w-full text-xs" style={{ color: "var(--platform-fg)" }}>
+                              <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)" }}><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewDisplayHeaders.map((label, i) => (<th key={i} className="text-left py-1.5 px-2 font-medium">{label}</th>))}</tr></thead>
+                              <tbody>{previewData.map((row, idx) => {
+                                const raw = row as Record<string, unknown>;
+                                const keys = Object.keys(raw);
+                                return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{keys.map((k, i) => {
+                                  const v = raw[k];
+                                  let display: string;
+                                  if (k === "periodo" && typeof v === "string") {
+                                    const d = new Date(v);
+                                    display = !isNaN(d.getTime()) ? d.toLocaleDateString("es-AR", { year: "numeric", month: "short" }) : v;
+                                  } else {
+                                    display = typeof v === "number" ? formatNumber(v) : String(v ?? "");
+                                  }
+                                  return (<td key={i} className="py-1.5 px-2">{display}</td>);
+                                })}</tr>);
+                              })}</tbody>
+                            </table>
+                          </div>
                         </div>
                       </div>
-                    )}
+                      );
+                    })()}
                   </div>
 
                   <div className="flex justify-between pt-2">
@@ -1872,7 +1901,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                   {previewData && previewData.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                       <div className="rounded-xl border p-4 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{previewKpiValue ?? "—"}</p>
+                        <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{previewKpiValue != null ? formatNumber(previewKpiValue) : "—"}</p>
                         <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Total {formName || "métrica"}</p>
                       </div>
                       <div className="rounded-xl border p-4 col-span-2 overflow-auto max-h-[180px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
@@ -1912,25 +1941,60 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               {wizard === "C" && wizardStep === 1 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Tiempo: rango y granularidad</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>La granularidad está limitada por el dataset. Sin allocation strategy no se permite granularidad más fina.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Definí el período y la granularidad temporal. Los datos se agruparán por el período elegido (ej. un valor por mes).</p>
+                  {!timeColumn && dateFields.length > 0 && (
+                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
+                      <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-accent)" }}>No hay columna de fecha configurada. Seleccioná una:</p>
+                      <Select value={timeColumn} onChange={(v: string) => setTimeColumn(v)} options={dateFields.map((f) => ({ value: f, label: getSampleDisplayLabel(f) }))} placeholder="Elegir columna de fecha…" className="w-full" buttonClassName="h-9 text-sm" disablePortal />
+                    </div>
+                  )}
+                  {!timeColumn && dateFields.length === 0 && (
+                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>No se detectaron columnas de fecha en el dataset. Configurá una en el paso Tiempo del Dataset (Wizard A).</p>
+                    </div>
+                  )}
+                  {timeColumn && (
+                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna de fecha: <strong style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(timeColumn)}</strong></p>
+                    </div>
+                  )}
                   <div className="grid gap-4 sm:grid-cols-2 mb-4">
                     <div>
                       <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Rango</Label>
-                      <select value={analysisTimeRange} onChange={(e) => setAnalysisTimeRange(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                        <option value="7">Últimos 7 días</option>
-                        <option value="30">Últimos 30 días</option>
-                        <option value="12">Últimos 12 meses</option>
-                        <option value="24">Últimos 24 meses</option>
-                      </select>
+                      <Select
+                        value={analysisTimeRange}
+                        onChange={(v: string) => setAnalysisTimeRange(v)}
+                        options={[
+                          { value: "7", label: "Últimos 7 días" },
+                          { value: "30", label: "Últimos 30 días" },
+                          { value: "3", label: "Últimos 3 meses" },
+                          { value: "6", label: "Últimos 6 meses" },
+                          { value: "12", label: "Últimos 12 meses" },
+                          { value: "24", label: "Últimos 24 meses" },
+                          { value: "0", label: "Todo (sin filtro de fecha)" },
+                        ]}
+                        placeholder="Rango…"
+                        className="w-full"
+                        buttonClassName="h-9 text-sm"
+                        disablePortal
+                      />
                     </div>
                     <div>
                       <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Granularidad</Label>
-                      <select value={analysisGranularity} onChange={(e) => setAnalysisGranularity(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                        <option value="day">Día</option>
-                        <option value="week">Semana</option>
-                        <option value="month">Mes</option>
-                        <option value="year">Año</option>
-                      </select>
+                      <Select
+                        value={analysisGranularity}
+                        onChange={(v: string) => setAnalysisGranularity(v)}
+                        options={[
+                          { value: "day", label: "Día" },
+                          { value: "week", label: "Semana" },
+                          { value: "month", label: "Mes" },
+                          { value: "year", label: "Año" },
+                        ]}
+                        placeholder="Granularidad…"
+                        className="w-full"
+                        buttonClassName="h-9 text-sm"
+                        disablePortal
+                      />
                     </div>
                   </div>
                   <div className="flex justify-between">
@@ -2061,12 +2125,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                       <div className="overflow-auto max-h-[300px]">
                         <table className="w-full text-sm" style={{ color: "var(--platform-fg)" }}>
                           <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
-                            <tr>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left px-4 py-2 font-medium whitespace-nowrap">{k}</th>))}</tr>
+                            <tr>{previewDisplayHeaders.map((h, i) => (<th key={i} className="text-left px-4 py-2 font-medium whitespace-nowrap">{h}</th>))}</tr>
                           </thead>
                           <tbody style={{ background: "var(--platform-bg-elevated)" }}>
                             {previewData.map((row, idx) => (
                               <tr key={idx} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
-                                {Object.values(row).map((v, i) => (<td key={i} className="px-4 py-2 whitespace-nowrap">{String(v ?? "")}</td>))}
+                                {Object.values(row).map((v, i) => (<td key={i} className="px-4 py-2 whitespace-nowrap">{typeof v === "number" ? formatNumber(v) : String(v ?? "")}</td>))}
                               </tr>
                             ))}
                           </tbody>
@@ -2199,7 +2263,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Gráfico (vista previa)</p>
                         {formChartType === "kpi" && previewKpiValue != null && (
                           <div className="flex items-center justify-center min-h-[100px]">
-                            <span className="text-3xl font-bold tabular-nums" style={{ color: "var(--platform-fg)" }}>{previewKpiValue}</span>
+                            <span className="text-3xl font-bold tabular-nums" style={{ color: "var(--platform-fg)" }}>{formatNumber(previewKpiValue)}</span>
                           </div>
                         )}
                         {formChartType === "table" && (
