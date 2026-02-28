@@ -407,9 +407,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           ? columns.map((c) => `"${(c || "").replace(/"/g, '""')}"`).join(", ")
           : "*";
       const { clause, params } = buildWhereClauseFirebird(conditions || []);
-      const baseSql = `SELECT ${cols} FROM ${tablePart} ${clause}`;
-      const sql = `${baseSql} FETCH FIRST ? ROWS ONLY OFFSET ? ROWS`;
-      const allParams = [...params, limit, offset];
+      const limitNum = Math.max(0, Math.min(Number(limit) || 100, 10000));
+      const offsetNum = Math.max(0, Number(offset) || 0);
+      const sql = `SELECT FIRST ${limitNum} SKIP ${offsetNum} ${cols} FROM ${tablePart} ${clause}`;
+      const allParams = [...params];
       return await new Promise<NextResponse>((resolve, reject) => {
         const opts = {
           host,

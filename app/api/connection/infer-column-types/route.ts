@@ -141,8 +141,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             reject(errAttach);
             return;
           }
-          const sql = `SELECT * FROM ${relationName} FETCH FIRST ? ROWS ONLY`;
-          db.query(sql, [SAMPLE_LIMIT], (errQ: Error | null, r: any[]) => {
+          const sql = `SELECT FIRST ${SAMPLE_LIMIT} * FROM ${relationName}`;
+          db.query(sql, [], (errQ: Error | null, r: any[]) => {
             if (db?.detach) db.detach(() => {});
             if (errQ) reject(errQ);
             else resolve((r ?? []) as Record<string, unknown>[]);
