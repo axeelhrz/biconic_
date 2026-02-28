@@ -351,21 +351,27 @@ export function AdminDashboardStudio({
         const agg = widget.aggregationConfig;
         if (agg?.enabled && agg.metrics.length > 0) {
           const dimensions = [agg.dimension, agg.dimension2].filter(Boolean) as string[];
+          const derivedByName = Object.fromEntries(
+            derivedColumnsFromLayout.map((d) => [d.name.toLowerCase().trim(), d])
+          );
           const metricsPayload = agg.metrics
             .map(({ id, ...m }) => {
               if (m.func === "FORMULA")
                 return { formula: m.formula || "", alias: m.alias || "formula", field: "" };
               const expr = (m as { expression?: string }).expression;
-              const hasField = m.field != null && String(m.field).trim() !== "";
-              const hasExpr = expr != null && String(expr).trim() !== "";
+              const fieldStr = m.field != null ? String(m.field).trim() : "";
+              const derived = fieldStr ? derivedByName[fieldStr.toLowerCase()] : undefined;
+              const effectiveExpr = (expr && String(expr).trim()) || derived?.expression || "";
+              const hasField = fieldStr !== "";
+              const hasExpr = effectiveExpr !== "";
               if (!hasField && !hasExpr) return null;
               const metric: Record<string, unknown> = {
-                field: (m.field != null ? String(m.field).trim() : "") || "",
+                field: fieldStr || "",
                 func: m.func,
                 alias: m.alias || `${m.func}_${(m.field || "valor")}`,
                 ...(m.condition ? { condition: m.condition } : {}),
               };
-              if (hasExpr) metric.expression = String(expr).trim();
+              if (hasExpr) metric.expression = effectiveExpr;
               return metric;
             })
             .filter((item): item is NonNullable<typeof item> => item != null);

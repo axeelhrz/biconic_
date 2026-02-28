@@ -1084,14 +1084,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
             enabled: true,
             dimension: dims[0] || undefined,
             dimension2: dims[1] || undefined,
-            metrics: metricsArr.map((met: any) => ({
-              id: met.id || `m-${idx}`,
-              field: met.field || "",
-              func: met.func || "SUM",
-              alias: met.alias || "",
-              condition: met.condition || undefined,
-              formula: met.formula || undefined,
-            })),
+            metrics: metricsArr.map((met: any) => {
+              const base = {
+                id: met.id || `m-${idx}`,
+                field: met.field || "",
+                func: met.func || "SUM",
+                alias: met.alias || "",
+                condition: met.condition || undefined,
+                formula: met.formula || undefined,
+              };
+              if (met.expression && String(met.expression).trim()) (base as any).expression = String(met.expression).trim();
+              return base;
+            }),
             filters: Array.isArray(cfg.filters) ? cfg.filters : undefined,
             orderBy: cfg.orderBy || undefined,
             limit: cfg.limit ?? 100,
