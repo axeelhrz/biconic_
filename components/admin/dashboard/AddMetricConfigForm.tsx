@@ -64,10 +64,36 @@ export type AddMetricFormConfig = {
 export type SavedMetricAggregationConfig = {
   dimension?: string;
   dimension2?: string;
+  /** Múltiples dimensiones (GROUP BY); si está presente tiene prioridad sobre dimension/dimension2 */
+  dimensions?: string[];
   metrics: AggregationMetricEdit[];
   filters?: AggregationFilterEdit[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
+  // Opciones de gráfico (persistidas al guardar métrica)
+  chartXAxis?: string;
+  chartYAxes?: string[];
+  chartSeriesField?: string;
+  chartNumberFormat?: string;
+  chartCurrencySymbol?: string;
+  chartThousandSep?: boolean;
+  chartDecimals?: number;
+  chartSortDirection?: string;
+  chartRankingEnabled?: boolean;
+  chartRankingTop?: number;
+  chartRankingMetric?: string;
+  chartPinnedDimensions?: string[];
+  chartColorScheme?: string;
+  chartSeriesColors?: Record<string, string>;
+  showDataLabels?: boolean;
+  interCrossFilter?: boolean;
+  interCrossFilterFields?: string[];
+  interDrilldown?: boolean;
+  interDrilldownHierarchy?: string[];
+  interDrillThrough?: boolean;
+  interDrillThroughTarget?: string;
+  interTooltipFields?: string[];
+  interHighlight?: boolean;
 };
 
 /** Métrica guardada para reutilizar (mismo formato que en AdminDashboardStudio) */

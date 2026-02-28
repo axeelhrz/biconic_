@@ -60,11 +60,13 @@ interface AggregationRequest {
   limit?: number;
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
+  /** Comparación contra un valor fijo: agrega columnas alias_vs_fijo y alias_var_pct_fijo. */
+  compareFixedValue?: number;
   dateDimension?: string;
   /** Agrupación temporal: aplica DATE_TRUNC(granularity, campo) como primera dimensión. */
   dateGroupBy?: { field: string; granularity: "day" | "week" | "month" | "year" };
-  /** Filtro de rango temporal: WHERE campo >= CURRENT_DATE - INTERVAL 'N unit'. */
-  dateRangeFilter?: { field: string; last: number; unit: "days" | "months" };
+  /** Filtro de rango temporal: último N (last/unit) o rango personalizado (from/to). */
+  dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string };
 }
 
 // --- Constantes ---
@@ -473,10 +475,19 @@ export async function POST(req: NextRequest) {
     // 3. Filtros (dateRangeFilter primero, luego los del usuario)
     let whereClausesStr = "";
     const dateRangeClause = (() => {
-      if (!body.dateRangeFilter?.field || !body.dateRangeFilter?.last) return "";
-      const drCol = quotedColumn(body.dateRangeFilter.field);
-      const n = Math.max(1, Math.min(9999, Math.round(body.dateRangeFilter.last)));
-      const unit = body.dateRangeFilter.unit === "days" ? "days" : "months";
+      const dr = body.dateRangeFilter;
+      if (!dr?.field) return "";
+      const drCol = quotedColumn(dr.field);
+      if (dr.from != null && dr.to != null) {
+        const from = String(dr.from).trim().replace(/'/g, "''");
+        const to = String(dr.to).trim().replace(/'/g, "''");
+        if (/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
+          return `${drCol}::date BETWEEN '${from}' AND '${to}'`;
+        }
+      }
+      if (dr.last == null || Number(dr.last) <= 0) return "";
+      const n = Math.max(1, Math.min(9999, Math.round(Number(dr.last))));
+      const unit = dr.unit === "days" ? "days" : "months";
       const maxDateSubquery = `(SELECT MAX(${drCol}::date) FROM "${schema}"."${table}")`;
       return `${drCol}::date >= (${maxDateSubquery} - INTERVAL '${n} ${unit}')`;
     })();
@@ -693,21 +704,49 @@ export async function POST(req: NextRequest) {
           const prev = prevByDim.get(key);
           const out = { ...row };
           metricsBase.forEach((m) => {
-            const i = body.metrics.indexOf(m);
             const alias = (m as any).internalAlias;
             const v = row[alias] != null ? Number(row[alias]) : null;
             const vPrev = prev?.[alias] != null ? Number(prev[alias]) : null;
-            out[`${m.alias || alias}_prev`] = vPrev;
+            out[`${alias}_prev`] = vPrev;
+            out[`${alias}_delta`] = (v != null && vPrev != null) ? v - vPrev : null;
             if (v != null && vPrev != null && vPrev !== 0)
-              out[`${m.alias || alias}_var_pct`] = ((v - vPrev) / vPrev) * 100;
+              out[`${alias}_delta_pct`] = ((v - vPrev) / vPrev) * 100;
             else if (v != null && vPrev != null)
-              out[`${m.alias || alias}_var_pct`] = vPrev === 0 ? (v === 0 ? 0 : 100) : null;
+              out[`${alias}_delta_pct`] = vPrev === 0 ? (v === 0 ? 0 : 100) : null;
+            else
+              out[`${alias}_delta_pct`] = null;
           });
           return out;
+        });
+        const accumulator: Record<string, number> = {};
+        results.forEach((row: any) => {
+          metricsBase.forEach((m) => {
+            const alias = (m as any).internalAlias;
+            const v = row[alias] != null ? Number(row[alias]) : 0;
+            accumulator[alias] = (accumulator[alias] || 0) + v;
+            row[`${alias}_acumulado`] = accumulator[alias];
+          });
         });
       } catch (_) {
         // si falla comparación, devolver solo resultados actuales
       }
+    }
+
+    // 6c. Comparación contra valor fijo: agrega columnas _vs_fijo y _var_pct_fijo
+    const fixedVal = body.compareFixedValue != null && typeof body.compareFixedValue === "number" && Number.isFinite(body.compareFixedValue) ? body.compareFixedValue : null;
+    if (fixedVal !== null) {
+      results = results.map((row: any) => {
+        const out = { ...row };
+        body.metrics.forEach((m, i) => {
+          const alias = (m as any).internalAlias;
+          const v = row[alias] != null ? Number(row[alias]) : null;
+          if (v != null && Number.isFinite(v)) {
+            out[`${alias}_vs_fijo`] = v - fixedVal;
+            out[`${alias}_var_pct_fijo`] = fixedVal !== 0 ? ((v - fixedVal) / fixedVal) * 100 : (v === 0 ? 0 : null);
+          }
+        });
+        return out;
+      });
     }
 
     // 7. Mapeo final: metric_X -> alias del usuario
@@ -724,6 +763,24 @@ export async function POST(req: NextRequest) {
         if (cumulative && Object.prototype.hasOwnProperty.call(newRow, `${internalKey}_cumulative`)) {
           newRow[`${externalKey}_acumulado`] = newRow[`${internalKey}_cumulative`];
           delete newRow[`${internalKey}_cumulative`];
+        }
+        if (body.comparePeriod) {
+          for (const suffix of ["_prev", "_delta", "_delta_pct", "_acumulado"]) {
+            if (Object.prototype.hasOwnProperty.call(newRow, `${internalKey}${suffix}`)) {
+              newRow[`${externalKey}${suffix}`] = newRow[`${internalKey}${suffix}`];
+              delete newRow[`${internalKey}${suffix}`];
+            }
+          }
+        }
+        if (fixedVal !== null) {
+          if (Object.prototype.hasOwnProperty.call(newRow, `${internalKey}_vs_fijo`)) {
+            newRow[`${externalKey}_vs_fijo`] = newRow[`${internalKey}_vs_fijo`];
+            delete newRow[`${internalKey}_vs_fijo`];
+          }
+          if (Object.prototype.hasOwnProperty.call(newRow, `${internalKey}_var_pct_fijo`)) {
+            newRow[`${externalKey}_var_pct_fijo`] = newRow[`${internalKey}_var_pct_fijo`];
+            delete newRow[`${internalKey}_var_pct_fijo`];
+          }
         }
       });
 

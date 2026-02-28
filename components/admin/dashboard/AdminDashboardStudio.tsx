@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { Plus, Check } from "lucide-react";
@@ -30,7 +31,6 @@ import type { ChartConfig } from "./MetricBlock";
 import { AddMetricConfigForm, type AddMetricFormConfig, type SavedMetricForm } from "./AddMetricConfigForm";
 
 type SavedMetric = SavedMetricForm;
-import type { Json } from "@/lib/supabase/database.types";
 
 // Tipos compatibles con el layout guardado en DB (mismo formato que AdminDashboardEditor)
 type AggregationMetric = {
@@ -269,16 +269,19 @@ export function AdminDashboardStudio({
         activePageId,
         savedMetrics,
         ...(datasetConfig && { datasetConfig }),
-      } as Json;
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("dashboard")
-        .update({
+      };
+      const res = await fetch(`/api/dashboard/${dashboardId}/layout`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           layout: layoutPayload,
-          global_filters_config: globalFilters as Json,
-        })
-        .eq("id", dashboardId);
-      if (error) throw error;
+          global_filters_config: globalFilters,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error ?? "No se pudo guardar");
+      }
       if (datasetConfig) setDerivedColumnsFromLayout(datasetConfig.derivedColumns);
       setLastSavedAt(new Date());
       setIsDirty(false);
@@ -678,6 +681,19 @@ export function AdminDashboardStudio({
         onSave={handleSave}
         onRun={runAllMetrics}
       />
+      {etlData?.etl?.id && widgetsForCurrentPage.length > 0 && (
+        <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-accent-dim)]/50">
+          <span className="text-xs font-medium text-[var(--studio-fg-muted)]">
+            Este dashboard se sincroniza desde las métricas del ETL. Para añadir o editar métricas, usá la página de métricas.
+          </span>
+          <Link
+            href={`/admin/etl/${etlData.etl.id}/metrics`}
+            className="shrink-0 text-xs font-semibold text-[var(--studio-accent)] hover:underline"
+          >
+            Ir a métricas →
+          </Link>
+        </div>
+      )}
       {etlData?.dataSources && etlData.dataSources.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]">
           <span className="text-xs font-medium text-[var(--studio-fg-muted)]">Fuentes de datos:</span>
@@ -774,7 +790,10 @@ export function AdminDashboardStudio({
       <main className="studio-main flex flex-1 min-h-0 overflow-hidden">
         <div className="flex flex-1 min-h-0 overflow-auto min-w-0">
         {widgetsForCurrentPage.length === 0 && sortedWidgets.length === 0 ? (
-          <StudioEmptyState onSelectIntent={openAddMetricConfig} />
+          <StudioEmptyState
+            onSelectIntent={openAddMetricConfig}
+            etlId={etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId ?? null}
+          />
         ) : (
           <div className="studio-canvas flex flex-1 flex-col gap-6 min-w-0">
             {isRunning && (

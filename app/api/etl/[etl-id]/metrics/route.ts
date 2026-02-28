@@ -63,11 +63,16 @@ export async function GET(
         }))
       : undefined;
 
+    const linkedDashboardId = (layout as any)?.linked_dashboard_id ?? null;
+    const dashboardFilters = Array.isArray((layout as any)?.dashboard_filters) ? (layout as any).dashboard_filters : [];
+
     return NextResponse.json({
       ok: true,
       data: {
         savedMetrics,
         ...(derivedColumns != null && { datasetConfig: { derivedColumns } }),
+        linkedDashboardId,
+        dashboardFilters,
       },
     });
   } catch (err: unknown) {
@@ -109,6 +114,8 @@ export async function PUT(
       body.datasetConfig != null && typeof body.datasetConfig === "object"
         ? (body.datasetConfig as Record<string, unknown>)
         : undefined;
+    const linkedDashboardId = typeof body.dashboardId === "string" ? body.dashboardId : undefined;
+    const dashboardFilters = Array.isArray(body.dashboardFilters) ? body.dashboardFilters : undefined;
 
     const adminClient = createServiceRoleClient();
     const { data: etlRow, error: fetchError } = await adminClient
@@ -127,6 +134,8 @@ export async function PUT(
       saved_metrics: JSON.parse(JSON.stringify(savedMetrics)),
       ...(dateColumnPeriodicityOverrides !== undefined && { date_column_periodicity_overrides: dateColumnPeriodicityOverrides }),
       ...(datasetConfig !== undefined && { dataset_config: JSON.parse(JSON.stringify(datasetConfig)) }),
+      ...(linkedDashboardId !== undefined && { linked_dashboard_id: linkedDashboardId }),
+      ...(dashboardFilters !== undefined && { dashboard_filters: JSON.parse(JSON.stringify(dashboardFilters)) }),
     };
 
     const { error: updateError } = await adminClient

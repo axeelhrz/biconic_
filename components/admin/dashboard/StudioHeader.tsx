@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronLeft, MoreHorizontal, Eye, Play, Save } from "lucide-react";
+import { ChevronLeft, MoreHorizontal, Eye, Play, Save, BarChart2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -148,6 +148,17 @@ export function StudioHeader({
                 align="end"
                 className="studio-header-menu-content min-w-[200px] rounded-[var(--studio-radius-sm)] border-[var(--studio-border)] bg-[var(--studio-surface)] p-1.5 shadow-xl"
               >
+                {etlId && (
+                  <DropdownMenuItem asChild>
+                    <Link
+                      href={`/admin/etl/${etlId}/metrics`}
+                      className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-[var(--studio-text-body)] text-[var(--studio-accent)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
+                    >
+                      <BarChart2 className="h-4 w-4" />
+                      Ir a métricas del ETL
+                    </Link>
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem asChild>
                   <Link
                     href={`/admin/dashboard/${dashboardId}/view`}

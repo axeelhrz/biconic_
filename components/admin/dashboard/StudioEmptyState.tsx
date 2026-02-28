@@ -1,6 +1,7 @@
 "use client";
 
-import { TrendingUp, BarChart3, AlertTriangle, GitCompare, ScanSearch, LayoutDashboard } from "lucide-react";
+import Link from "next/link";
+import { TrendingUp, BarChart3, AlertTriangle, GitCompare, ScanSearch, LayoutDashboard, BarChart2, ArrowRight } from "lucide-react";
 
 export type StudioIntent =
   | "detectar_cambios"
@@ -19,18 +20,45 @@ export const STUDIO_INTENTS: { id: StudioIntent; label: string; description: str
 
 type StudioEmptyStateProps = {
   onSelectIntent: (intent: StudioIntent | "blank") => void;
+  /** Si el dashboard tiene ETL vinculado, priorizar el flujo métricas→dashboard */
+  etlId?: string | null;
 };
 
-export function StudioEmptyState({ onSelectIntent }: StudioEmptyStateProps) {
+export function StudioEmptyState({ onSelectIntent, etlId }: StudioEmptyStateProps) {
   return (
     <div className="studio-empty flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
-      <h2 className="studio-empty-headline">
-        ¿Qué querés entender hoy?
-      </h2>
-      <p className="studio-empty-sub text-center">
-        Empezá por una intención o creá una métrica vacía y configurá agregaciones, acumulados y comparaciones.
-      </p>
-      <div className="studio-intents">
+      {etlId ? (
+        <>
+          <h2 className="studio-empty-headline">
+            Creá métricas y sincronizá el dashboard
+          </h2>
+          <p className="studio-empty-sub text-center max-w-md mx-auto mb-8">
+            Este dashboard se alimenta desde la página de métricas del ETL. Creá tus métricas allí, configurá agregaciones y sincronizá para verlas aquí.
+          </p>
+          <Link
+            href={`/admin/etl/${etlId}/metrics`}
+            className="inline-flex items-center gap-2 rounded-xl px-6 py-3.5 font-semibold text-[var(--studio-accent-fg)] transition-all hover:opacity-90"
+            style={{ background: "var(--studio-accent)" }}
+          >
+            <BarChart2 className="h-5 w-5" />
+            Ir a métricas del ETL
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+          <p className="mt-8 text-sm text-[var(--studio-fg-muted)]">
+            O añadí una métrica manualmente aquí
+          </p>
+        </>
+      ) : (
+        <h2 className="studio-empty-headline">
+          ¿Qué querés entender hoy?
+        </h2>
+      )}
+      {!etlId && (
+        <p className="studio-empty-sub text-center">
+          Empezá por una intención o creá una métrica vacía y configurá agregaciones, acumulados y comparaciones.
+        </p>
+      )}
+      <div className={etlId ? "studio-intents mt-8 max-w-xl" : "studio-intents"}>
         {STUDIO_INTENTS.map((item, i) => {
           const Icon = item.icon;
           return (

@@ -4,12 +4,13 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { ComponentType } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles } from "lucide-react";
-import { Bar, Line, Pie, Doughnut } from "react-chartjs-2";
+import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles, AreaChart, ScatterChart, MapPin, TrendingUp } from "lucide-react";
+import { Bar, Line, Pie, Doughnut, Scatter, Radar } from "react-chartjs-2";
 import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
+  RadialLinearScale,
   PointElement,
   LineElement,
   BarElement,
@@ -31,6 +32,7 @@ import type { SavedMetricForm, AggregationMetricEdit, AggregationFilterEdit } fr
 ChartJS.register(
   CategoryScale,
   LinearScale,
+  RadialLinearScale,
   PointElement,
   LineElement,
   BarElement,
@@ -50,15 +52,18 @@ const AGG_FUNCS = [
   { value: "FORMULA", label: "Fórmula / ratio" },
 ];
 
-const CHART_TYPES: { value: string; label: string; icon: ComponentType<{ className?: string }> }[] = [
-  { value: "bar", label: "Barras", icon: BarChart2 },
-  { value: "horizontalBar", label: "Barras horizontales", icon: BarChart2 },
-  { value: "line", label: "Líneas", icon: LineChart },
-  { value: "pie", label: "Circular", icon: PieChart },
-  { value: "doughnut", label: "Dona", icon: Donut },
-  { value: "kpi", label: "KPI", icon: Hash },
-  { value: "table", label: "Tabla", icon: Table2 },
-  { value: "combo", label: "Combo", icon: BarChart2 },
+const CHART_TYPES: { value: string; label: string; icon: ComponentType<{ className?: string }>; description: string }[] = [
+  { value: "bar", label: "Barras", icon: BarChart2, description: "Comparar valores por categoría" },
+  { value: "horizontalBar", label: "Barras horiz.", icon: BarChart2, description: "Ideal para muchas categorías o nombres largos" },
+  { value: "line", label: "Líneas", icon: LineChart, description: "Evolución temporal o tendencias" },
+  { value: "area", label: "Área", icon: AreaChart, description: "Tendencias con volumen acumulado" },
+  { value: "pie", label: "Circular", icon: PieChart, description: "Distribución proporcional (pocas categorías)" },
+  { value: "doughnut", label: "Dona", icon: Donut, description: "Distribución proporcional con espacio central" },
+  { value: "scatter", label: "Dispersión", icon: ScatterChart, description: "Correlación entre dos métricas numéricas" },
+  { value: "kpi", label: "KPI", icon: Hash, description: "Un solo número destacado (sin dimensiones)" },
+  { value: "table", label: "Tabla", icon: Table2, description: "Datos detallados en filas y columnas" },
+  { value: "combo", label: "Combo", icon: TrendingUp, description: "Barras + línea para comparar escalas diferentes" },
+  { value: "map", label: "Mapa", icon: MapPin, description: "Visualización geográfica (requiere dimensión de ubicación)" },
 ];
 
 const FORMULA_QUICKS = [
@@ -165,8 +170,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
   const [formChartType, setFormChartType] = useState("bar");
-  const [formDimension, setFormDimension] = useState("");
-  const [formDimension2, setFormDimension2] = useState("");
+  const [chartXAxis, setChartXAxis] = useState<string>("");
+  const [chartYAxes, setChartYAxes] = useState<string[]>([]);
+  const [chartSeriesField, setChartSeriesField] = useState<string>("");
+  /** Dimensiones opcionales: vacío = KPI único agregado; 1+ = GROUP BY por esas columnas. */
+  const [formDimensions, setFormDimensions] = useState<string[]>([]);
   const [formMetrics, setFormMetrics] = useState<AggregationMetricEdit[]>([
     { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" },
   ]);
@@ -196,10 +204,52 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const [calcType, setCalcType] = useState<"simple" | "count" | "ratio" | "formula">("formula");
   const [metricAdditivity, setMetricAdditivity] = useState<"additive" | "semi" | "non">("additive");
   const [analysisTimeRange, setAnalysisTimeRange] = useState("12");
+  const [analysisDateFrom, setAnalysisDateFrom] = useState("");
+  const [analysisDateTo, setAnalysisDateTo] = useState("");
   const [analysisGranularity, setAnalysisGranularity] = useState("month");
-  const [transformCompare, setTransformCompare] = useState<"none" | "mom" | "yoy">("none");
+  const [transformCompare, setTransformCompare] = useState<"none" | "mom" | "yoy" | "fixed">("none");
+  const [transformCompareFixedValue, setTransformCompareFixedValue] = useState("");
+  const [transformShowDelta, setTransformShowDelta] = useState(true);
+  const [transformShowDeltaPct, setTransformShowDeltaPct] = useState(true);
+  const [transformShowAccum, setTransformShowAccum] = useState(true);
   const [showDataLabels, setShowDataLabels] = useState(false);
   const [chartColorScheme, setChartColorScheme] = useState("auto");
+  const [chartNumberFormat, setChartNumberFormat] = useState<"number" | "currency" | "K" | "M" | "BI" | "percent">("number");
+  const [chartCurrencySymbol, setChartCurrencySymbol] = useState("$");
+  const [chartThousandSep, setChartThousandSep] = useState(true);
+  const [chartDecimals, setChartDecimals] = useState(2);
+  const [chartSortDirection, setChartSortDirection] = useState<"none" | "asc" | "desc">("none");
+  const [chartRankingEnabled, setChartRankingEnabled] = useState(false);
+  const [chartRankingTop, setChartRankingTop] = useState(5);
+  const [chartRankingMetric, setChartRankingMetric] = useState("");
+  const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
+  const [chartSeriesColors, setChartSeriesColors] = useState<Record<string, string>>({});
+  const [interCrossFilter, setInterCrossFilter] = useState(true);
+  const [interCrossFilterFields, setInterCrossFilterFields] = useState<string[]>([]);
+  const [interDrilldown, setInterDrilldown] = useState(false);
+  const [interDrilldownHierarchy, setInterDrilldownHierarchy] = useState<string[]>([]);
+  const [interDrillThrough, setInterDrillThrough] = useState(false);
+  const [interDrillThroughTarget, setInterDrillThroughTarget] = useState("");
+  const [interTooltipFields, setInterTooltipFields] = useState<string[]>(["value", "delta_pct"]);
+  const [interHighlight, setInterHighlight] = useState(true);
+
+  // Dashboard vinculado al ETL
+  const [linkedDashboardId, setLinkedDashboardId] = useState<string | null>(null);
+  const [linkedDashboardName, setLinkedDashboardName] = useState("Dashboard principal");
+  const [dashboardSyncing, setDashboardSyncing] = useState(false);
+
+  // Filtros dinámicos del dashboard (8.1)
+  type DynamicFilter = {
+    id: string;
+    field: string;
+    filterType: "single" | "multi" | "dateRange" | "numericRange";
+    label: string;
+    scope: "all" | "selected";
+    scopeMetricIds: string[];
+    applyToOtherDashboards: boolean;
+  };
+  const [dashboardFilters, setDashboardFilters] = useState<DynamicFilter[]>([]);
+
   const [metricsDistinctColumn, setMetricsDistinctColumn] = useState<string | null>(null);
   const [metricsDistinctValues, setMetricsDistinctValues] = useState<string[]>([]);
   const [metricsDistinctLoading, setMetricsDistinctLoading] = useState(false);
@@ -284,6 +334,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     if (overrides && typeof overrides === "object" && Object.keys(overrides).length >= 0)
       setPeriodicityOverrides({ ...overrides });
   }, [data?.dateColumnPeriodicityOverrides]);
+
+  const dashboardHydratedRef = useRef(false);
+  useEffect(() => {
+    if (dashboardHydratedRef.current) return;
+    const d = data as any;
+    if (d?.linkedDashboardId) { setLinkedDashboardId(d.linkedDashboardId); dashboardHydratedRef.current = true; }
+    if (Array.isArray(d?.dashboardFilters) && d.dashboardFilters.length > 0) setDashboardFilters(d.dashboardFilters);
+  }, [data]);
 
   const datasetConfigHydratedRef = useRef(false);
   useEffect(() => {
@@ -497,12 +555,24 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     return { d: date.getDate(), m: date.getMonth() + 1, y: date.getFullYear(), monthIndex: date.getMonth() };
   };
 
-  const formatNumber = (v: unknown): string => {
+  const formatNumber = useCallback((v: unknown): string => {
     if (v == null) return "—";
     const n = typeof v === "number" ? v : Number(v);
     if (isNaN(n)) return String(v);
-    return new Intl.NumberFormat("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(n);
-  };
+    let val = n;
+    let suffix = "";
+    if (chartNumberFormat === "K") { val = n / 1_000; suffix = "K"; }
+    else if (chartNumberFormat === "M") { val = n / 1_000_000; suffix = "M"; }
+    else if (chartNumberFormat === "BI") { val = n / 1_000_000_000; suffix = "BI"; }
+    else if (chartNumberFormat === "percent") { suffix = "%"; }
+    const formatted = new Intl.NumberFormat("es-AR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: chartDecimals,
+      useGrouping: chartThousandSep,
+    }).format(val);
+    if (chartNumberFormat === "currency") return `${chartCurrencySymbol}${formatted}`;
+    return `${formatted}${suffix}`;
+  }, [chartNumberFormat, chartDecimals, chartThousandSep, chartCurrencySymbol]);
 
   const formatSampleCell = (col: string, value: unknown): string => {
     if (value === null || value === undefined) return "";
@@ -541,8 +611,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     setEditingId(null);
     setFormName("");
     setFormChartType("bar");
-    setFormDimension("");
-    setFormDimension2("");
+    setFormDimensions([]);
     setFormMetrics([{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado", expression: "" } as AggregationMetricEdit]);
     setFormFilters([]);
     setFormOrderBy(null);
@@ -563,21 +632,74 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     setFormChartType(saved.chartType ?? "bar");
     const cfg = saved.aggregationConfig;
     if (cfg) {
-      setFormDimension(cfg.dimension ?? "");
-      setFormDimension2(cfg.dimension2 ?? "");
+      const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter((d): d is string => typeof d === "string" && d !== "");
+      setFormDimensions(dims.length > 0 ? dims : []);
       setFormMetrics((cfg.metrics ?? [saved.metric]).map((m) => ({ ...m, id: m.id || `m-${Date.now()}-${Math.random().toString(36).slice(2)}` })));
       setFormFilters((cfg.filters ?? []).map((f) => ({ ...f, id: f.id || `f-${Date.now()}-${Math.random().toString(36).slice(2)}` })));
       setFormOrderBy(cfg.orderBy ?? null);
       setFormLimit(cfg.limit ?? 100);
+      setChartXAxis(cfg.chartXAxis ?? "");
+      setChartYAxes(Array.isArray(cfg.chartYAxes) ? cfg.chartYAxes : []);
+      setChartSeriesField(cfg.chartSeriesField ?? "");
+      setChartNumberFormat(
+        (["number", "currency", "K", "M", "BI", "percent"] as const).includes(cfg.chartNumberFormat as any)
+          ? (cfg.chartNumberFormat as "number" | "currency" | "K" | "M" | "BI" | "percent")
+          : "number"
+      );
+      setChartCurrencySymbol(cfg.chartCurrencySymbol ?? "$");
+      setChartThousandSep(cfg.chartThousandSep !== false);
+      setChartDecimals(cfg.chartDecimals ?? 2);
+      setChartSortDirection(
+        (["none", "asc", "desc"] as const).includes(cfg.chartSortDirection as any)
+          ? (cfg.chartSortDirection as "none" | "asc" | "desc")
+          : "none"
+      );
+      setChartRankingEnabled(!!cfg.chartRankingEnabled);
+      setChartRankingTop(cfg.chartRankingTop ?? 5);
+      setChartRankingMetric(cfg.chartRankingMetric ?? "");
+      setChartPinnedDimensions(Array.isArray(cfg.chartPinnedDimensions) ? cfg.chartPinnedDimensions : []);
+      setChartColorScheme(cfg.chartColorScheme ?? "auto");
+      setChartSeriesColors(cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? cfg.chartSeriesColors : {});
+      setShowDataLabels(!!cfg.showDataLabels);
+      setInterCrossFilter(cfg.interCrossFilter !== false);
+      setInterCrossFilterFields(Array.isArray(cfg.interCrossFilterFields) ? cfg.interCrossFilterFields : []);
+      setInterDrilldown(!!cfg.interDrilldown);
+      setInterDrilldownHierarchy(Array.isArray(cfg.interDrilldownHierarchy) ? cfg.interDrilldownHierarchy : []);
+      setInterDrillThrough(!!cfg.interDrillThrough);
+      setInterDrillThroughTarget(cfg.interDrillThroughTarget ?? "");
+      setInterTooltipFields(Array.isArray(cfg.interTooltipFields) ? cfg.interTooltipFields : ["value", "delta_pct"]);
+      setInterHighlight(cfg.interHighlight !== false);
       const first = (cfg.metrics ?? [saved.metric])[0];
       setFormMetric(first ? { ...first, id: first.id || `m-${Date.now()}` } : { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" });
     } else {
-      setFormDimension("");
-      setFormDimension2("");
+      setFormDimensions([]);
       setFormMetrics([{ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` }]);
       setFormFilters([]);
       setFormOrderBy(null);
       setFormLimit(100);
+      setChartXAxis("");
+      setChartYAxes([]);
+      setChartSeriesField("");
+      setChartNumberFormat("number");
+      setChartCurrencySymbol("$");
+      setChartThousandSep(true);
+      setChartDecimals(2);
+      setChartSortDirection("none");
+      setChartRankingEnabled(false);
+      setChartRankingTop(5);
+      setChartRankingMetric("");
+      setChartPinnedDimensions([]);
+      setChartColorScheme("auto");
+      setChartSeriesColors({});
+      setShowDataLabels(false);
+      setInterCrossFilter(true);
+      setInterCrossFilterFields([]);
+      setInterDrilldown(false);
+      setInterDrilldownHierarchy([]);
+      setInterDrillThrough(false);
+      setInterDrillThroughTarget("");
+      setInterTooltipFields(["value", "delta_pct"]);
+      setInterHighlight(true);
       setFormMetric({ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` });
     }
     setPreviewData(null);
@@ -638,8 +760,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       const body: Record<string, unknown> = {
         tableName,
         etlId,
-        dimension: formDimension || undefined,
-        dimensions: [formDimension, formDimension2].filter(Boolean).length ? [formDimension, formDimension2].filter(Boolean) : undefined,
+        dimensions: formDimensions.length > 0 ? formDimensions.filter(Boolean) : undefined,
         metrics: metricsPayload,
         filters: formFilters.length ? formFilters.map((f) => ({ field: f.field, operator: f.operator, value: f.value })) : undefined,
         orderBy: formOrderBy?.field ? formOrderBy : undefined,
@@ -650,9 +771,27 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       }
       if (wizard === "C" && timeColumn && analysisGranularity) {
         body.dateGroupBy = { field: timeColumn, granularity: analysisGranularity };
-        const rangeNum = Number(analysisTimeRange);
-        if (rangeNum > 0) {
-          body.dateRangeFilter = { field: timeColumn, last: rangeNum, unit: rangeNum <= 30 ? "days" : "months" };
+        if (analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo) {
+          body.dateRangeFilter = { field: timeColumn, from: analysisDateFrom, to: analysisDateTo };
+        } else {
+          const rangeNum = Number(analysisTimeRange);
+          if (rangeNum > 0) {
+            body.dateRangeFilter = { field: timeColumn, last: rangeNum, unit: rangeNum <= 30 ? "days" : "months" };
+          }
+        }
+      }
+      if (wizard === "C" && transformCompare !== "none") {
+        if (transformCompare === "mom") {
+          body.comparePeriod = "previous_month";
+          body.dateDimension = timeColumn || undefined;
+        }
+        if (transformCompare === "yoy") {
+          body.comparePeriod = "previous_year";
+          body.dateDimension = timeColumn || undefined;
+        }
+        if (transformCompare === "fixed") {
+          const fixed = parseFloat(transformCompareFixedValue);
+          if (Number.isFinite(fixed)) body.compareFixedValue = fixed;
         }
       }
       const res = await fetch("/api/dashboard/aggregate-data", {
@@ -672,7 +811,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     } finally {
       setPreviewLoading(false);
     }
-  }, [etlId, tableNameForPreview, formDimension, formDimension2, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, wizard, timeColumn, analysisGranularity, analysisTimeRange]);
+  }, [etlId, tableNameForPreview, formDimensions, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, wizard, timeColumn, analysisGranularity, analysisTimeRange, analysisDateFrom, analysisDateTo, transformCompare, transformCompareFixedValue]);
 
   // Refrescar previsualización al entrar al paso de vista previa (wizard C, paso 5)
   useEffect(() => {
@@ -681,40 +820,122 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     }
   }, [wizard, wizardStep, showForm, fetchPreview]);
 
-  const recommendationText = (() => {
-    const hasDim = !!formDimension;
+  const { recommendationText, suggestedChartType } = useMemo(() => {
+    const hasDim = formDimensions.filter(Boolean).length > 0;
+    const dimCount = formDimensions.filter(Boolean).length;
     const metricCount = formMetrics.length;
-    if (!hasDim && metricCount >= 1) return "Un solo valor numérico: recomendamos **KPI** para destacar el número.";
-    if (hasDim && metricCount === 1) return "Una dimensión y un valor: recomendamos **Barras** o **Líneas**.";
-    if (hasDim && metricCount > 1) return "Varias métricas: **Combo** (barras + línea) o **Tabla** para comparar.";
-    if (hasDim) return "Muchas categorías: **Barras horizontales** para leer mejor.";
-    return "Elegí dimensión y al menos una métrica para ver recomendaciones.";
-  })();
+    const isTimeSeries = !!timeColumn && !!analysisGranularity;
+    const hasTransformCompare = transformCompare === "mom" || transformCompare === "yoy";
+    const previewRows = previewData?.length ?? 0;
+    const geoKeywords = /lat|lng|lon|geo|country|pais|ciudad|city|region|provincia|estado|state|zip|postal|coord/i;
+    const hasGeoDim = formDimensions.some((d) => geoKeywords.test(d));
+
+    if (!hasDim && metricCount === 0) return { recommendationText: "Elegí al menos una métrica; las dimensiones son opcionales (sin dimensión = KPI único).", suggestedChartType: "bar" };
+    if (!hasDim && metricCount >= 1) return { recommendationText: "Un solo valor numérico sin dimensiones: recomendamos **KPI** para destacar el número.", suggestedChartType: "kpi" };
+    if (hasGeoDim) return { recommendationText: "Dimensión geográfica detectada: recomendamos **Mapa** para visualizar distribución espacial.", suggestedChartType: "map" };
+    if (isTimeSeries && hasTransformCompare && metricCount >= 1) return { recommendationText: "Serie temporal con comparación: recomendamos **Combo** (barras para valor actual, línea para período anterior).", suggestedChartType: "combo" };
+    if (isTimeSeries && metricCount === 1) return { recommendationText: "Serie temporal con una métrica: recomendamos **Líneas** para ver la tendencia, o **Área** para resaltar volumen.", suggestedChartType: "line" };
+    if (isTimeSeries && metricCount > 1) return { recommendationText: "Serie temporal con varias métricas: recomendamos **Combo** (barras + línea) para comparar escalas.", suggestedChartType: "combo" };
+    if (hasDim && metricCount >= 2) return { recommendationText: "Varias métricas: recomendamos **Combo** (barras + línea) o **Tabla** para comparar.", suggestedChartType: "combo" };
+    if (dimCount >= 1 && previewRows > 12) return { recommendationText: "Muchas categorías (" + previewRows + " filas): recomendamos **Barras horizontales** o **Tabla** para mejor lectura.", suggestedChartType: "horizontalBar" };
+    if (dimCount >= 1 && previewRows <= 6 && metricCount === 1) return { recommendationText: "Pocas categorías: recomendamos **Circular** o **Dona** para distribución, o **Barras** para comparar.", suggestedChartType: "pie" };
+    if (hasDim && metricCount === 1) return { recommendationText: "Una dimensión y un valor: recomendamos **Barras** para comparar categorías.", suggestedChartType: "bar" };
+    return { recommendationText: "Seleccioná el tipo de gráfico que mejor represente tu análisis.", suggestedChartType: "bar" };
+  }, [formDimensions, formMetrics, timeColumn, analysisGranularity, transformCompare, previewData]);
+
+  const chartAutoSelectedRef = useRef(false);
+  useEffect(() => {
+    if (wizard === "D" && wizardStep === 0 && !chartAutoSelectedRef.current) {
+      chartAutoSelectedRef.current = true;
+      setFormChartType(suggestedChartType);
+    }
+    if (wizard !== "D") chartAutoSelectedRef.current = false;
+  }, [wizard, wizardStep, suggestedChartType]);
 
   const previewChartConfig = useMemo(() => {
     if (!previewData || previewData.length === 0) return null;
     const first = previewData[0] as Record<string, unknown>;
     const keys = Object.keys(first);
-    const metricKeys = keys.filter((k) => /^metric_\d+$/.test(k));
-    const hasDimension = formDimension && keys.includes(formDimension);
-    const dimKey = hasDimension ? formDimension : (metricKeys.length === keys.length ? undefined : keys[0]);
-    let valueKeys = formMetrics
-      .map((m) => m.alias || m.field || "")
-      .filter(Boolean)
-      .filter((k) => keys.includes(k));
-    if (valueKeys.length === 0) valueKeys = dimKey != null ? keys.filter((k) => k !== dimKey) : keys.filter((k) => /^metric_\d+$/.test(k));
-    if (valueKeys.length === 0) return null;
-    const labels = dimKey != null ? previewData.map((r) => String((r as Record<string, unknown>)[dimKey] ?? "")) : previewData.map((_, i) => (i === 0 ? "Total" : ""));
-    const palette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
-    const datasets = valueKeys.map((alias, idx) => ({
-      label: alias,
-      data: previewData.map((r) => Number((r as Record<string, unknown>)[alias] ?? 0)),
-      backgroundColor: palette[idx % palette.length] + "99",
-      borderColor: palette[idx % palette.length],
-      borderWidth: 1,
-    }));
+
+    const xKey = chartXAxis && keys.includes(chartXAxis) ? chartXAxis : (() => {
+      const firstDim = formDimensions[0];
+      if (firstDim && keys.includes(firstDim)) return firstDim;
+      const metricKeys = keys.filter((k) => /^metric_\d+$/.test(k));
+      return metricKeys.length === keys.length ? undefined : keys[0];
+    })();
+
+    let yKeys = chartYAxes.filter((k) => keys.includes(k));
+    if (yKeys.length === 0) {
+      yKeys = formMetrics.map((m) => m.alias || m.field || "").filter(Boolean).filter((k) => keys.includes(k));
+    }
+    if (yKeys.length === 0) {
+      yKeys = xKey != null ? keys.filter((k) => k !== xKey) : keys.filter((k) => /^metric_\d+$/.test(k));
+    }
+    if (yKeys.length === 0) return null;
+
+    const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
+    const colLabel = (k: string) => {
+      const match = k.match(/^metric_(\d+)$/);
+      if (match) {
+        const idx = parseInt(match[1]!, 10);
+        const m = formMetrics[idx];
+        return m ? (m.alias || m.field || k) : k;
+      }
+      return k;
+    };
+    const getColor = (label: string, idx: number) => chartSeriesColors[label] || defaultPalette[idx % defaultPalette.length]!;
+
+    let rows = [...previewData];
+
+    if (chartSortDirection !== "none" && xKey) {
+      const sortKey = yKeys[0]!;
+      rows.sort((a, b) => {
+        const va = Number((a as Record<string, unknown>)[sortKey] ?? 0);
+        const vb = Number((b as Record<string, unknown>)[sortKey] ?? 0);
+        return chartSortDirection === "asc" ? va - vb : vb - va;
+      });
+    }
+
+    if (chartRankingEnabled && chartRankingTop > 0) {
+      const rKey = chartRankingMetric && keys.includes(chartRankingMetric) ? chartRankingMetric : yKeys[0]!;
+      rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
+      rows = rows.slice(0, chartRankingTop);
+    }
+
+    if (chartSeriesField && keys.includes(chartSeriesField) && xKey) {
+      const seriesValues = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[chartSeriesField] ?? "")))];
+      const xValues = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? "")))];
+      const yField = yKeys[0]!;
+      const datasets = seriesValues.map((sv, idx) => {
+        const color = getColor(sv, idx);
+        return {
+          label: sv,
+          data: xValues.map((xv) => {
+            const row = rows.find((r) => String((r as Record<string, unknown>)[xKey] ?? "") === xv && String((r as Record<string, unknown>)[chartSeriesField] ?? "") === sv);
+            return row ? Number((row as Record<string, unknown>)[yField] ?? 0) : 0;
+          }),
+          backgroundColor: color + "99",
+          borderColor: color,
+          borderWidth: 1,
+        };
+      });
+      return { labels: xValues, datasets };
+    }
+
+    const labels = xKey != null ? rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? "")) : rows.map((_, i) => (i === 0 ? "Total" : ""));
+    const datasets = yKeys.map((alias, idx) => {
+      const label = colLabel(alias);
+      const color = getColor(label, idx);
+      return {
+        label,
+        data: rows.map((r) => Number((r as Record<string, unknown>)[alias] ?? 0)),
+        backgroundColor: color + "99",
+        borderColor: color,
+        borderWidth: 1,
+      };
+    });
     return { labels, datasets };
-  }, [previewData, formDimension, formMetrics]);
+  }, [previewData, formDimensions, formMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors]);
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
@@ -736,11 +957,57 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     return undefined;
   }, [previewData, formMetrics.length]);
 
+  const previewVisibleKeys = useMemo(() => {
+    if (!previewData?.[0]) return [];
+    const allKeys = Object.keys(previewData[0] as Record<string, unknown>);
+    if (transformCompare !== "mom" && transformCompare !== "yoy") return allKeys;
+    return allKeys.filter((k) => {
+      if (k.endsWith("_delta_pct") && !transformShowDeltaPct) return false;
+      if (k.endsWith("_delta") && !k.endsWith("_delta_pct") && !transformShowDelta) return false;
+      if (k.endsWith("_acumulado") && !transformShowAccum) return false;
+      return true;
+    });
+  }, [previewData, transformCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum]);
+
+  const chartAvailableColumns = useMemo(() => {
+    if (!previewData?.[0]) return [];
+    return previewVisibleKeys.map((k, i) => {
+      const match = k.match(/^metric_(\d+)$/);
+      let label = k;
+      if (match) {
+        const idx = parseInt(match[1]!, 10);
+        const m = formMetrics[idx];
+        label = m ? (m.alias || m.field || k) : k;
+      }
+      return { key: k, label };
+    });
+  }, [previewVisibleKeys, previewData, formMetrics]);
+
+  const chartDimensionColumns = useMemo(() => chartAvailableColumns.filter((c) => {
+    if (/^metric_\d+/.test(c.key)) return false;
+    if (c.key.endsWith("_prev") || c.key.endsWith("_delta") || c.key.endsWith("_delta_pct") || c.key.endsWith("_acumulado") || c.key.endsWith("_vs_fijo") || c.key.endsWith("_var_pct_fijo")) return false;
+    return true;
+  }), [chartAvailableColumns]);
+
+  const chartNumericColumns = useMemo(() => chartAvailableColumns.filter((c) => {
+    if (/^metric_\d+/.test(c.key)) return true;
+    const metricAliases = formMetrics.map((m) => m.alias || m.field || "").filter(Boolean);
+    if (metricAliases.includes(c.key)) return true;
+    if (c.key.endsWith("_prev") || c.key.endsWith("_delta") || c.key.endsWith("_delta_pct") || c.key.endsWith("_acumulado") || c.key.endsWith("_vs_fijo") || c.key.endsWith("_var_pct_fijo")) return true;
+    return false;
+  }), [chartAvailableColumns, formMetrics]);
+
+  useEffect(() => {
+    if (wizard === "D" && wizardStep === 1) {
+      if (!chartXAxis && chartDimensionColumns.length > 0) setChartXAxis(chartDimensionColumns[0]!.key);
+      if (chartYAxes.length === 0 && chartNumericColumns.length > 0) setChartYAxes(chartNumericColumns.slice(0, Math.min(3, chartNumericColumns.length)).map((c) => c.key));
+    }
+  }, [wizard, wizardStep, chartXAxis, chartYAxes.length, chartDimensionColumns, chartNumericColumns]);
+
   /** Encabezados para la tabla de previsualización: metric_0 → alias de la métrica (estilo Excel). */
   const previewDisplayHeaders = useMemo(() => {
-    if (!previewData?.[0] || formMetrics.length === 0) return Object.keys(previewData?.[0] ?? {});
-    const first = previewData[0] as Record<string, unknown>;
-    return Object.keys(first).map((k) => {
+    if (!previewData?.[0] || formMetrics.length === 0) return previewVisibleKeys;
+    return previewVisibleKeys.map((k) => {
       const match = k.match(/^metric_(\d+)$/);
       if (match) {
         const i = parseInt(match[1]!, 10);
@@ -749,7 +1016,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       }
       return k;
     });
-  }, [previewData, formMetrics]);
+  }, [previewData, previewVisibleKeys, formMetrics]);
 
   const closeForm = () => {
     setShowForm(false);
@@ -757,6 +1024,132 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     setWizard("A");
     setWizardStep(0);
   };
+
+  const syncMetricsToDashboard = useCallback(async (metrics: SavedMetricForm[]) => {
+    if (!etlId || metrics.length === 0) return;
+    setDashboardSyncing(true);
+    try {
+      let dbId = linkedDashboardId;
+
+      // 1. Crear dashboard si no existe
+      if (!dbId) {
+        const createRes = await fetch("/api/dashboard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: linkedDashboardName || "Dashboard principal", etl_id: etlId }),
+        });
+        const createJson = await createRes.json();
+        if (!createRes.ok || !createJson.ok) {
+          toast.error("Error al crear el dashboard");
+          return;
+        }
+        dbId = createJson.id as string;
+        setLinkedDashboardId(dbId);
+      }
+
+      // 2. Convertir métricas a StudioWidget (formato real del AdminDashboardStudio)
+      const widgets = metrics.map((m, idx) => {
+        const cfg = (m.aggregationConfig ?? {}) as Record<string, any>;
+        const chartType = cfg.chartType || m.chartType || formChartType || "bar";
+        const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter(Boolean);
+        const metricsArr = Array.isArray(cfg.metrics) ? cfg.metrics : [m.metric];
+
+        return {
+          id: `w-${m.id}`,
+          type: chartType,
+          title: m.name,
+          x: 0,
+          y: 0,
+          w: 400,
+          h: 280,
+          gridOrder: idx,
+          gridSpan: chartType === "kpi" ? 1 : 2,
+          pageId: "page-1",
+          metricId: m.id,
+          aggregationConfig: {
+            enabled: true,
+            dimension: dims[0] || undefined,
+            dimension2: dims[1] || undefined,
+            metrics: metricsArr.map((met: any) => ({
+              id: met.id || `m-${idx}`,
+              field: met.field || "",
+              func: met.func || "SUM",
+              alias: met.alias || "",
+              condition: met.condition || undefined,
+              formula: met.formula || undefined,
+            })),
+            filters: Array.isArray(cfg.filters) ? cfg.filters : undefined,
+            orderBy: cfg.orderBy || undefined,
+            limit: cfg.limit ?? 100,
+            cumulative: cfg.cumulative || undefined,
+            comparePeriod: cfg.comparePeriod || undefined,
+            dateDimension: cfg.dateDimension || undefined,
+          },
+          excludeGlobalFilters: false,
+          color: cfg.chartSeriesColors ? Object.values(cfg.chartSeriesColors)[0] as string : undefined,
+          labelDisplayMode: undefined,
+          kpiSecondaryLabel: undefined,
+          dataSourceId: null,
+        };
+      });
+
+      // 3. Convertir DynamicFilters a GlobalFilter (formato real del dashboard)
+      const globalFiltersToSave = dashboardFilters
+        .filter((f) => f.field)
+        .map((f) => ({
+          id: f.id,
+          field: f.field,
+          operator: f.filterType === "single" ? "=" : f.filterType === "multi" ? "IN" : "BETWEEN",
+          value: "",
+          filterType: f.filterType,
+          label: f.label,
+          scope: f.scope,
+          scopeMetricIds: f.scopeMetricIds,
+          applyToOtherDashboards: f.applyToOtherDashboards,
+        }));
+
+      // 4. Construir layout compatible con AdminDashboardStudio
+      const dcArr = derivedColumns.length > 0 ? { derivedColumns } : undefined;
+      const layoutPayload = {
+        widgets,
+        theme: {},
+        pages: [{ id: "page-1", name: "Página 1" }],
+        activePageId: "page-1",
+        savedMetrics: metrics,
+        ...(dcArr && { datasetConfig: dcArr }),
+      };
+
+      // 5. Guardar via API
+      const res = await fetch(`/api/dashboard/${dbId}/layout`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          layout: layoutPayload,
+          global_filters_config: globalFiltersToSave,
+          title: linkedDashboardName || undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        toast.error(json.error ?? "Error al sincronizar dashboard");
+        return;
+      }
+
+      // 6. Persistir el dashboardId en el ETL
+      await fetch(`/api/etl/${etlId}/metrics`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedMetrics: metrics, dashboardId: dbId, dashboardFilters }),
+      });
+
+      toast.success(linkedDashboardId ? "Dashboard sincronizado" : "Dashboard creado y sincronizado");
+    } catch (e) {
+      console.error("Error syncing dashboard", e);
+      toast.error("Error al sincronizar dashboard");
+    } finally {
+      setDashboardSyncing(false);
+    }
+  }, [etlId, linkedDashboardId, linkedDashboardName, dashboardFilters, derivedColumns, formChartType]);
 
   const saveMetric = async () => {
     const name = formName.trim();
@@ -771,12 +1164,36 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     }
     const metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
     const aggregationConfig = {
-      dimension: formDimension || undefined,
-      dimension2: formDimension2 || undefined,
+      dimension: formDimensions[0] || undefined,
+      dimension2: formDimensions[1] || undefined,
+      dimensions: formDimensions.length > 0 ? formDimensions : undefined,
       metrics: formMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` })),
       filters: formFilters.length ? formFilters : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
+      chartXAxis: chartXAxis || undefined,
+      chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
+      chartSeriesField: chartSeriesField || undefined,
+      chartNumberFormat: chartNumberFormat !== "number" ? chartNumberFormat : undefined,
+      chartCurrencySymbol: chartNumberFormat === "currency" ? chartCurrencySymbol : undefined,
+      chartThousandSep: chartThousandSep === false ? false : undefined,
+      chartDecimals: chartDecimals !== 2 ? chartDecimals : undefined,
+      chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
+      chartRankingEnabled: chartRankingEnabled || undefined,
+      chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
+      chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
+      chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
+      chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
+      chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
+      showDataLabels: showDataLabels || undefined,
+      interCrossFilter: interCrossFilter === false ? false : undefined,
+      interCrossFilterFields: interCrossFilterFields.length > 0 ? interCrossFilterFields : undefined,
+      interDrilldown: interDrilldown || undefined,
+      interDrilldownHierarchy: interDrilldownHierarchy.length > 0 ? interDrilldownHierarchy : undefined,
+      interDrillThrough: interDrillThrough || undefined,
+      interDrillThroughTarget: interDrillThrough && interDrillThroughTarget ? interDrillThroughTarget : undefined,
+      interTooltipFields: interTooltipFields.length > 0 ? interTooltipFields : undefined,
+      interHighlight: interHighlight === false ? false : undefined,
     };
     let expr = (firstMetric as { expression?: string }).expression;
     const alias = (firstMetric.alias || "").trim();
@@ -823,6 +1240,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       if (createDerivedColumn) toast.success(`Se creó la columna «${alias}» en el dataset; la podés usar en «Insertar columna» en otras métricas.`, { duration: 6000 });
       setData((prev) => (prev ? { ...prev, savedMetrics: next, datasetConfig: datasetConfigToSave ?? prev.datasetConfig } : null));
       if (createDerivedColumn) setDerivedColumns(nextDerivedColumns);
+      syncMetricsToDashboard(next);
       closeForm();
     } catch (e) {
       toast.error("Error al guardar");
@@ -1949,20 +2367,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Tiempo: rango y granularidad</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Definí el período y la granularidad temporal. Los datos se agruparán por el período elegido (ej. un valor por mes).</p>
-                  {!timeColumn && dateFields.length > 0 && (
-                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
-                      <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-accent)" }}>No hay columna de fecha configurada. Seleccioná una:</p>
-                      <Select value={timeColumn} onChange={(v: string) => setTimeColumn(v)} options={dateFields.map((f) => ({ value: f, label: getSampleDisplayLabel(f) }))} placeholder="Elegir columna de fecha…" className="w-full" buttonClassName="h-9 text-sm" disablePortal />
+                  {dateFields.length > 0 && (
+                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Dimensión temporal principal</Label>
+                      <Select
+                        value={timeColumn || dateFields[0] || ""}
+                        onChange={(v: string) => setTimeColumn(v)}
+                        options={dateFields.map((f) => ({ value: f, label: getSampleDisplayLabel(f) }))}
+                        placeholder="Elegir columna de fecha…"
+                        className="w-full"
+                        buttonClassName="h-9 text-sm"
+                        disablePortal
+                      />
+                      {dateFields.length > 1 && (
+                        <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Hay varias columnas de fecha; elegí cuál usar para el análisis temporal.</p>
+                      )}
                     </div>
                   )}
-                  {!timeColumn && dateFields.length === 0 && (
+                  {dateFields.length === 0 && (
                     <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                       <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>No se detectaron columnas de fecha en el dataset. Configurá una en el paso Tiempo del Dataset (Wizard A).</p>
-                    </div>
-                  )}
-                  {timeColumn && (
-                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna de fecha: <strong style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(timeColumn)}</strong></p>
                     </div>
                   )}
                   <div className="grid gap-4 sm:grid-cols-2 mb-4">
@@ -1972,13 +2396,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         value={analysisTimeRange}
                         onChange={(v: string) => setAnalysisTimeRange(v)}
                         options={[
+                          { value: "0", label: "No aplicar rango" },
+                          { value: "custom", label: "Personalizable" },
                           { value: "7", label: "Últimos 7 días" },
                           { value: "30", label: "Últimos 30 días" },
                           { value: "3", label: "Últimos 3 meses" },
                           { value: "6", label: "Últimos 6 meses" },
                           { value: "12", label: "Últimos 12 meses" },
                           { value: "24", label: "Últimos 24 meses" },
-                          { value: "0", label: "Todo (sin filtro de fecha)" },
                         ]}
                         placeholder="Rango…"
                         className="w-full"
@@ -2004,6 +2429,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                       />
                     </div>
                   </div>
+                  {analysisTimeRange === "custom" && (
+                    <div className="rounded-lg border p-3 mb-4 grid grid-cols-2 gap-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                      <div>
+                        <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Desde</Label>
+                        <Input type="date" value={analysisDateFrom} onChange={(e) => setAnalysisDateFrom(e.target.value)} className="h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Hasta</Label>
+                        <Input type="date" value={analysisDateTo} onChange={(e) => setAnalysisDateTo(e.target.value)} className="h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                      </div>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Dimensiones</Button>
@@ -2011,21 +2448,28 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                 </section>
               )}
 
-              {/* Wizard C2: Dimensiones */}
+              {/* Wizard C2: Dimensiones (todas opcionales; sin dimensiones = KPI único) */}
               {wizard === "C" && wizardStep === 2 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Dimensiones y series</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Las dimensiones definen el GROUP BY del resultado. Opcional para KPI total.</p>
-                  <div className="space-y-4">
-                    <div>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Agrupar por (dimensión)</Label>
-                      <AdminFieldSelector label="" value={formDimension} onChange={setFormDimension} etlData={etlData} fieldType="all" placeholder="Ninguna..." className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]" />
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Segunda dimensión (opcional)</Label>
-                      <AdminFieldSelector label="" value={formDimension2} onChange={setFormDimension2} etlData={etlData} fieldType="all" placeholder="Ninguna..." className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]" />
-                    </div>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Dimensiones (opcionales)</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Podés no usar dimensiones (KPI único agregado) o agregar varias para agrupar el resultado. Ninguna es obligatoria.</p>
+                  <div className="space-y-3">
+                    {formDimensions.map((dim, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <Label className="text-xs font-medium block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Dimensión {formDimensions.length > 1 ? i + 1 : ""}</Label>
+                          <AdminFieldSelector label="" value={dim} onChange={(v) => setFormDimensions((prev) => prev.map((d, j) => (j === i ? v : d)))} etlData={etlData} fieldType="all" placeholder="Ninguna..." className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]" />
+                        </div>
+                        <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-red-500 mt-6" onClick={() => setFormDimensions((prev) => prev.filter((_, j) => j !== i))} title="Quitar dimensión"><Trash2 className="h-4 w-4" /></Button>
+                      </div>
+                    ))}
+                    <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} onClick={() => setFormDimensions((prev) => [...prev, ""])}>
+                      + Agregar dimensión
+                    </Button>
                   </div>
+                  {formDimensions.length === 0 && (
+                    <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Sin dimensiones: el resultado será un único valor agregado (ideal para KPIs).</p>
+                  )}
                   <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Filtros</Button>
@@ -2033,79 +2477,105 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                 </section>
               )}
 
-              {/* Wizard C3: Filtros y orden */}
+              {/* Wizard C3: Filtros del análisis (estructurales; sin ordenar/sentido) */}
               {wizard === "C" && wizardStep === 3 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Filtros del análisis y orden</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Restringen el universo y orden del resultado. Se aplican antes de la agregación.</p>
-                  <div className="rounded-xl border p-4 space-y-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Ordenar por</Label>
-                        <select value={formOrderBy?.field ?? ""} onChange={(e) => setFormOrderBy((prev) => ({ field: e.target.value, direction: prev?.direction ?? "DESC" }))} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                          <option value="">—</option>
-                          {[...(formDimension ? [formDimension] : []), ...(formDimension2 ? [formDimension2] : []), ...fields].filter(Boolean).map((f) => (<option key={f} value={f}>{f}</option>))}
-                        </select>
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Sentido</Label>
-                        <select value={formOrderBy?.direction ?? "DESC"} onChange={(e) => setFormOrderBy((prev) => prev ? { ...prev, direction: e.target.value as "ASC" | "DESC" } : { field: "", direction: "DESC" })} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                          <option value="DESC">Descendente</option>
-                          <option value="ASC">Ascendente</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Límite (filas)</Label>
-                      <Input type="number" min={1} max={1000} value={formLimit ?? ""} onChange={(e) => setFormLimit(e.target.value ? parseInt(e.target.value, 10) : undefined)} className="max-w-[120px] h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} placeholder="100" />
-                    </div>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Filtros del análisis</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Filtros estructurales que se aplican antes de la agregación. Seleccioná el campo, la condición y el valor. Podés agregar varios filtros a la vez.</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>Filtros</Label>
+                    <Button type="button" variant="outline" size="sm" className="rounded-lg h-8 text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} onClick={() => setFormFilters((f) => [...f, { id: `f-${Date.now()}`, field: fields[0] ?? "", operator: "=", value: "" }])}>+ Agregar filtro</Button>
                   </div>
-                  <div className="rounded-xl border p-4 space-y-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  {formFilters.length > 0 ? (
+                    <div className="space-y-2 mb-4">
+                      {formFilters.map((f, i) => (
+                        <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                          <span className="text-xs font-medium w-20 shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Campo</span>
+                          <Select value={f.field} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={allColumnsForRoles.map((name) => ({ value: name, label: derivedColumnsByName[name] ? `${name} (calculada)` : getSampleDisplayLabel(name) }))} placeholder="Seleccionar campo" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
+                          <span className="text-xs font-medium w-16 shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Condición</span>
+                          <Select value={f.operator} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE", "IN"].map((op) => ({ value: op, label: op }))} placeholder="Op" className="w-24" buttonClassName="h-9 text-xs" disablePortal />
+                          <span className="text-xs font-medium w-12 shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Valor</span>
+                          <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))} title="Quitar filtro"><Trash2 className="h-4 w-4" /></Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm mb-4 rounded-lg border p-3" style={{ color: "var(--platform-fg-muted)", borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>Ningún filtro. Tocá «Agregar filtro» para restringir el análisis por campo, condición y valor.</p>
+                  )}
+                  <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Ver valores de una columna</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una columna y cargá los valores para revisar opciones al definir filtros.</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Cargá los valores posibles de una columna para elegir mejor al definir filtros.</p>
                     <div className="flex flex-wrap gap-2 items-center">
-                      <Select
-                        value={metricsDistinctColumn ?? ""}
-                        onChange={(val: string) => { const col = val || null; setMetricsDistinctColumn(col); setMetricsDistinctValues([]); setMetricsDistinctSearch(""); }}
-                        options={[{ value: "", label: "Elegir columna" }, ...allColumnsForRoles.map((col) => ({ value: col, label: derivedColumnsByName[col] ? `${col} (calculada)` : getSampleDisplayLabel(col) }))]}
-                        placeholder="Elegir columna"
-                        className="min-w-[160px]"
-                        disablePortal
-                      />
-                      <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} disabled={!metricsDistinctColumn || metricsDistinctLoading} onClick={async () => { if (!metricsDistinctColumn) return; setMetricsDistinctLoading(true); setMetricsDistinctValues([]); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(metricsDistinctColumn)}`); const data = await res.json(); if (data.ok && Array.isArray(data.values)) setMetricsDistinctValues(data.values); else toast.error(data?.error || "No se pudieron cargar los valores"); } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Error al cargar"); } finally { setMetricsDistinctLoading(false); } }}>
-                        {metricsDistinctLoading ? "Cargando…" : "Cargar valores"}
-                      </Button>
+                      <Select value={metricsDistinctColumn ?? ""} onChange={(val: string) => { const col = val || null; setMetricsDistinctColumn(col); setMetricsDistinctValues([]); setMetricsDistinctSearch(""); }} options={[{ value: "", label: "Elegir columna" }, ...allColumnsForRoles.map((col) => ({ value: col, label: derivedColumnsByName[col] ? `${col} (calculada)` : getSampleDisplayLabel(col) }))]} placeholder="Elegir columna" className="min-w-[160px]" disablePortal />
+                      <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} disabled={!metricsDistinctColumn || metricsDistinctLoading} onClick={async () => { if (!metricsDistinctColumn) return; setMetricsDistinctLoading(true); setMetricsDistinctValues([]); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(metricsDistinctColumn)}`); const data = await res.json(); if (data.ok && Array.isArray(data.values)) setMetricsDistinctValues(data.values); else toast.error(data?.error || "No se pudieron cargar los valores"); } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Error al cargar"); } finally { setMetricsDistinctLoading(false); } }}>{metricsDistinctLoading ? "Cargando…" : "Cargar valores"}</Button>
                     </div>
                     {metricsDistinctValues.length > 0 && metricsDistinctColumn && (
                       <>
                         <input type="text" placeholder="Buscar valor…" value={metricsDistinctSearch} onChange={(e) => setMetricsDistinctSearch(e.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }} />
-                        <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
+                        <div className="max-h-40 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
                           {metricsDistinctValues.filter((v) => !metricsDistinctSearch.trim() || String(v).toLowerCase().includes(metricsDistinctSearch.trim().toLowerCase())).map((val) => (<div key={String(val)} className="py-1.5 px-2 rounded text-sm" style={{ color: "var(--platform-fg)" }}>{String(val)}</div>))}
                         </div>
-                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{metricsDistinctValues.length} valor{metricsDistinctValues.length !== 1 ? "es" : ""} en esta columna.</p>
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{metricsDistinctValues.length} valor{metricsDistinctValues.length !== 1 ? "es" : ""}.</p>
                       </>
                     )}
                   </div>
-                  <div className="flex justify-between">
+                  <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Transformaciones</Button>
                   </div>
                 </section>
               )}
 
-              {/* Wizard C4: Transformaciones */}
+              {/* Wizard C4: Transformaciones (opcional) — concepto: tabla base primero; transformaciones agregan columnas sin modificar la métrica */}
               {wizard === "C" && wizardStep === 4 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Transformaciones BI (post-agregado)</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Columnas derivadas sobre el resultado ya agregado. No afectan la definición del KPI.</p>
-                  <div className="grid gap-4 sm:grid-cols-2 mb-4">
-                    <div>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Comparar con</Label>
-                      <select value={transformCompare} onChange={(e) => setTransformCompare(e.target.value as "none" | "mom" | "yoy")} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Transformaciones (opcional)</h3>
+                  <div className="rounded-xl border p-4 mb-4" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
+                    <p className="text-sm font-medium mb-2" style={{ color: "var(--platform-fg)" }}>Concepto</p>
+                    <ul className="text-sm space-y-1 list-disc list-inside" style={{ color: "var(--platform-fg-muted)" }}>
+                      <li>Primero el motor genera la <strong style={{ color: "var(--platform-fg)" }}>tabla base del análisis</strong> (lo que se ve en la vista previa sin aplicar transformaciones).</li>
+                      <li>Si elegís alguna transformación: se ejecutan <strong style={{ color: "var(--platform-fg)" }}>cálculos adicionales</strong>, se <strong style={{ color: "var(--platform-fg)" }}>agregan nuevas columnas</strong> a esa tabla base.</li>
+                      <li>La <strong style={{ color: "var(--platform-fg)" }}>métrica original no se modifica</strong>; las transformaciones son columnas extra (ej. comparación con período anterior).</li>
+                    </ul>
+                  </div>
+                  <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg)" }}>Comparaciones disponibles</p>
+                  <div className="space-y-4 mb-4">
+                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Comparar contra período anterior</Label>
+                      <select value={transformCompare === "mom" || transformCompare === "yoy" ? transformCompare : "none"} onChange={(e) => setTransformCompare(e.target.value === "none" ? "none" : e.target.value as "mom" | "yoy")} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
                         <option value="none">Ninguno</option>
-                        <option value="mom">Período anterior (MoM)</option>
+                        <option value="mom">Mes anterior (MoM)</option>
                         <option value="yoy">Año anterior (YoY)</option>
                       </select>
+                      <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Agrega columnas con el valor del período anterior, diferencia, variación % y acumulado.</p>
+                      {(transformCompare === "mom" || transformCompare === "yoy") && (
+                        <div className="mt-3 space-y-2">
+                          <p className="text-xs font-medium" style={{ color: "var(--platform-fg)" }}>Columnas a visualizar:</p>
+                          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                            <input type="checkbox" checked={transformShowDelta} onChange={(e) => setTransformShowDelta(e.target.checked)} className="rounded" />
+                            Delta <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>(diferencia con período anterior)</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                            <input type="checkbox" checked={transformShowDeltaPct} onChange={(e) => setTransformShowDeltaPct(e.target.checked)} className="rounded" />
+                            Delta % <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>(variación porcentual)</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                            <input type="checkbox" checked={transformShowAccum} onChange={(e) => setTransformShowAccum(e.target.checked)} className="rounded" />
+                            Acumulado <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>(suma acumulada)</span>
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Comparar contra valor fijo</Label>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input type="number" step="any" placeholder="Ej. 1000" value={transformCompare === "fixed" ? transformCompareFixedValue : ""} onChange={(e) => { setTransformCompareFixedValue(e.target.value); if (e.target.value.trim() !== "") setTransformCompare("fixed"); }} className="h-9 rounded-lg text-sm max-w-[140px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        {(transformCompare === "fixed" && transformCompareFixedValue.trim() !== "") && (
+                          <Button type="button" variant="ghost" size="sm" className="text-xs h-8" style={{ color: "var(--platform-fg-muted)" }} onClick={() => { setTransformCompareFixedValue(""); setTransformCompare("none"); }}>Quitar</Button>
+                        )}
+                      </div>
+                      <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Ingresá un número; se agregan columnas con la diferencia y la variación % respecto a ese valor.</p>
                     </div>
                   </div>
                   <div className="flex justify-between">
@@ -2118,14 +2588,42 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               {/* Wizard C5: Vista previa (tabla) */}
               {wizard === "C" && wizardStep === 5 && (() => {
                 const hasValidMetrics = formMetrics.some((m) => m.field || (m as { expression?: string }).expression || m.formula);
+                const transformLabel = transformCompare === "mom" ? "Período anterior (MoM)" : transformCompare === "yoy" ? "Año anterior (YoY)" : transformCompare === "fixed" ? `Valor fijo (${transformCompareFixedValue})` : null;
+                const formatCell = (k: string, v: unknown): string => {
+                  if (v == null) return "—";
+                  if (typeof v !== "number") return String(v);
+                  if (k.endsWith("_delta_pct") || k.endsWith("_var_pct_fijo")) {
+                    const sign = v > 0 ? "+" : "";
+                    return `${sign}${formatNumber(v)}%`;
+                  }
+                  if (k.endsWith("_delta") || k.endsWith("_vs_fijo")) {
+                    const sign = v > 0 ? "+" : "";
+                    return `${sign}${formatNumber(v)}`;
+                  }
+                  return formatNumber(v);
+                };
+                const deltaColor = (k: string, v: unknown): string | undefined => {
+                  if (v == null || typeof v !== "number") return undefined;
+                  if (k.endsWith("_delta") || k.endsWith("_delta_pct") || k.endsWith("_vs_fijo") || k.endsWith("_var_pct_fijo")) {
+                    if (v > 0) return "#10b981";
+                    if (v < 0) return "#ef4444";
+                  }
+                  return undefined;
+                };
                 return (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Vista previa de datos</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
-                    Datos agregados con la configuración actual.
+                    Tabla final resultante con la configuración actual.
                     {timeColumn && analysisGranularity ? ` Agrupando por ${analysisGranularity === "month" ? "mes" : analysisGranularity === "week" ? "semana" : analysisGranularity === "day" ? "día" : "año"} (${getSampleDisplayLabel(timeColumn)}).` : ""}
-                    {analysisTimeRange && Number(analysisTimeRange) > 0 ? ` Últimos ${analysisTimeRange} ${Number(analysisTimeRange) <= 30 ? "días" : "meses"} (respecto a los datos).` : ""}
+                    {analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo ? ` Rango: ${analysisDateFrom} a ${analysisDateTo}.` : analysisTimeRange && Number(analysisTimeRange) > 0 ? ` Últimos ${analysisTimeRange} ${Number(analysisTimeRange) <= 30 ? "días" : "meses"} (respecto a los datos).` : ""}
                   </p>
+                  {transformLabel && (
+                    <div className="rounded-lg border p-3 mb-4 flex items-center gap-2" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
+                      <span className="text-xs font-medium" style={{ color: "var(--platform-accent)" }}>Transformación activa:</span>
+                      <span className="text-xs" style={{ color: "var(--platform-fg)" }}>{transformLabel}</span>
+                    </div>
+                  )}
                   {!hasValidMetrics && (
                     <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
                       <p className="text-xs" style={{ color: "var(--platform-accent)" }}>No hay métricas configuradas. Volvé al paso Cálculo (Métrica) para crear al menos una fórmula.</p>
@@ -2140,21 +2638,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                   </div>
                   {previewData && previewData.length > 0 && (
                     <div className="overflow-hidden rounded-xl border shadow-sm mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                      <div className="overflow-auto max-h-[300px]">
+                      <div className="overflow-auto max-h-[360px]">
                         <table className="w-full text-sm" style={{ color: "var(--platform-fg)" }}>
                           <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
-                            <tr>{previewDisplayHeaders.map((h, i) => (<th key={i} className="text-left px-4 py-2 font-medium whitespace-nowrap">{h}</th>))}</tr>
+                            <tr>{previewDisplayHeaders.map((h, i) => {
+                              const k = previewVisibleKeys[i] ?? "";
+                              const isTx = k.endsWith("_prev") || k.endsWith("_delta") || k.endsWith("_delta_pct") || k.endsWith("_acumulado") || k.endsWith("_vs_fijo") || k.endsWith("_var_pct_fijo");
+                              return (<th key={i} className="text-left px-4 py-2 font-medium whitespace-nowrap text-xs" style={{ color: isTx ? "var(--platform-accent)" : undefined }}>{h}</th>);
+                            })}</tr>
                           </thead>
                           <tbody style={{ background: "var(--platform-bg-elevated)" }}>
                             {previewData.map((row, idx) => (
                               <tr key={idx} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
-                                {Object.values(row).map((v, i) => (<td key={i} className="px-4 py-2 whitespace-nowrap">{typeof v === "number" ? formatNumber(v) : String(v ?? "")}</td>))}
+                                {previewVisibleKeys.map((k, i) => { const v = (row as Record<string, unknown>)[k]; const dc = deltaColor(k, v); return (<td key={i} className="px-4 py-2 whitespace-nowrap" style={dc ? { color: dc, fontWeight: 500 } : undefined}>{formatCell(k, v)}</td>); })}
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
-                      <p className="text-xs px-4 py-2 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-surface)" }}>{previewData.length} filas</p>
+                      <p className="text-xs px-4 py-2 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-surface)" }}>{previewData.length} filas · {previewVisibleKeys.length} columnas</p>
                     </div>
                   )}
                   {previewData && previewData.length === 0 && !previewLoading && (
@@ -2162,7 +2664,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                   )}
                   <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Gráfico</Button>
+                    <div className="flex gap-2">
+                      <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>OK — Siguiente: Gráfico</Button>
+                    </div>
                   </div>
                 </section>
                 );
@@ -2179,12 +2683,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                       <p className="text-sm" dangerouslySetInnerHTML={{ __html: recommendationText.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
                     </div>
                   </section>
-                  <div className="flex flex-wrap gap-2">
-                    {CHART_TYPES.map(({ value, label, icon: Icon }) => (
-                      <button key={value} type="button" onClick={() => setFormChartType(value)} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all" style={{ background: formChartType === value ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: formChartType === value ? "var(--platform-bg)" : "var(--platform-fg-muted)" }}>
-                        <Icon className="h-4 w-4" /> {label}
-                      </button>
-                    ))}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    {CHART_TYPES.map(({ value, label, icon: Icon, description }) => {
+                      const isSelected = formChartType === value;
+                      const isSuggested = suggestedChartType === value && !isSelected;
+                      return (
+                        <button key={value} type="button" onClick={() => setFormChartType(value)} className="relative flex flex-col items-center gap-1 rounded-xl px-3 py-3 text-sm font-medium transition-all border" style={{ background: isSelected ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: isSelected ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: isSuggested ? "var(--platform-accent)" : isSelected ? "transparent" : "var(--platform-border)" }}>
+                          {isSuggested && <span className="absolute -top-2 right-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}>Sugerido</span>}
+                          <Icon className="h-5 w-5" />
+                          <span className="text-xs font-semibold">{label}</span>
+                          <span className="text-[10px] leading-tight text-center opacity-70">{description}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                   <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
@@ -2193,22 +2704,69 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                 </section>
               )}
 
-              {/* Wizard D1: Mapeo (resumen) */}
+              {/* Wizard D1: Mapeo de campos */}
               {wizard === "D" && wizardStep === 1 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Mapeo de campos</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Resumen: qué columnas se usan como dimensión y métricas.</p>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <p className="text-xs font-medium uppercase mb-1" style={{ color: "var(--platform-fg-muted)" }}>Dimensión / Eje X</p>
-                      <p className="font-medium" style={{ color: "var(--platform-fg)" }}>{formDimension || "— (KPI)"}</p>
-                      {formDimension2 && <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>2ª: {formDimension2}</p>}
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Definí qué columnas van en cada eje del gráfico. Los cambios se reflejan en la vista previa.</p>
+
+                  {chartAvailableColumns.length === 0 && (
+                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
+                      <p className="text-xs" style={{ color: "var(--platform-accent)" }}>No hay datos de preview. Volvé al paso Preview y actualizá la vista previa primero.</p>
                     </div>
-                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <p className="text-xs font-medium uppercase mb-1" style={{ color: "var(--platform-fg-muted)" }}>Métricas / Eje Y</p>
-                      <p className="font-medium" style={{ color: "var(--platform-fg)" }}>{formMetrics.map((m) => m.alias || m.field || "—").join(", ") || "—"}</p>
+                  )}
+
+                  <div className="space-y-5">
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Eje X (categorías / tiempo)</Label>
+                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>La columna que define las etiquetas del eje horizontal.</p>
+                      <select value={chartXAxis} onChange={(e) => setChartXAxis(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                        <option value="">— Sin eje X (KPI)</option>
+                        {chartDimensionColumns.map((c) => (<option key={c.key} value={c.key}>{c.label}</option>))}
+                      </select>
+                    </div>
+
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Eje Y (valores / métricas)</Label>
+                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná una o varias columnas numéricas para graficar.</p>
+                      <div className="space-y-1.5 max-h-[200px] overflow-y-auto">
+                        {chartNumericColumns.map((c) => {
+                          const checked = chartYAxes.includes(c.key);
+                          return (
+                            <label key={c.key} className="flex items-center gap-2 text-sm py-1 px-2 rounded-lg cursor-pointer transition-colors" style={{ background: checked ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }}>
+                              <input type="checkbox" checked={checked} onChange={(e) => {
+                                if (e.target.checked) setChartYAxes((prev) => [...prev, c.key]);
+                                else setChartYAxes((prev) => prev.filter((k) => k !== c.key));
+                              }} className="rounded" />
+                              {c.label}
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {chartYAxes.length === 0 && <p className="text-xs mt-2" style={{ color: "var(--platform-accent)" }}>Seleccioná al menos una métrica.</p>}
+                    </div>
+
+                    {chartDimensionColumns.length >= 2 && (
+                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Serie (agrupación por color)</Label>
+                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Si tenés más de una dimensión, podés usar una como serie: cada valor único genera una línea/barra distinta.</p>
+                        <select value={chartSeriesField} onChange={(e) => setChartSeriesField(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                          <option value="">— Sin serie</option>
+                          {chartDimensionColumns.filter((c) => c.key !== chartXAxis).map((c) => (<option key={c.key} value={c.key}>{c.label}</option>))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                    <p className="text-xs font-medium uppercase mb-1" style={{ color: "var(--platform-fg-muted)" }}>Resumen del mapeo</p>
+                    <div className="flex flex-wrap gap-4 text-sm" style={{ color: "var(--platform-fg)" }}>
+                      <span><strong>X:</strong> {chartXAxis ? chartAvailableColumns.find((c) => c.key === chartXAxis)?.label ?? chartXAxis : "— (KPI)"}</span>
+                      <span><strong>Y:</strong> {chartYAxes.length > 0 ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k).join(", ") : "—"}</span>
+                      {chartSeriesField && <span><strong>Serie:</strong> {chartAvailableColumns.find((c) => c.key === chartSeriesField)?.label ?? chartSeriesField}</span>}
                     </div>
                   </div>
+
                   <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Formato</Button>
@@ -2219,13 +2777,96 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               {/* Wizard D2: Formato */}
               {wizard === "D" && wizardStep === 2 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Orden, formato y etiquetas</h3>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Formato, orden y ranking</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Solo afecta la presentación visual. No cambia filas ni valores del análisis.</p>
-                  <div className="flex items-center gap-3 mb-4">
-                    <input type="checkbox" id="showDataLabels" checked={showDataLabels} onChange={(e) => setShowDataLabels(e.target.checked)} className="rounded" />
-                    <label htmlFor="showDataLabels" className="text-sm" style={{ color: "var(--platform-fg)" }}>Mostrar etiquetas de datos en el gráfico</label>
+
+                  <div className="space-y-5">
+                    {/* 6.3.1 Formato numérico */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-3 block" style={{ color: "var(--platform-fg)" }}>Formato numérico</Label>
+                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mb-3">
+                        {([["number", "Número"], ["currency", "Moneda"], ["K", "Miles (K)"], ["M", "Millones (M)"], ["BI", "Billones (BI)"], ["percent", "Porcentaje"]] as [string, string][]).map(([val, lbl]) => (
+                          <button key={val} type="button" onClick={() => setChartNumberFormat(val as any)} className="rounded-lg px-2 py-1.5 text-xs font-medium transition-all border" style={{ background: chartNumberFormat === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartNumberFormat === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartNumberFormat === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-4">
+                        {chartNumberFormat === "currency" && (
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Símbolo</Label>
+                            <Input value={chartCurrencySymbol} onChange={(e) => setChartCurrencySymbol(e.target.value)} className="h-8 w-16 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Decimales</Label>
+                          <Input type="number" min={0} max={6} value={chartDecimals} onChange={(e) => setChartDecimals(Math.max(0, Math.min(6, parseInt(e.target.value) || 0)))} className="h-8 w-16 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        </div>
+                        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                          <input type="checkbox" checked={chartThousandSep} onChange={(e) => setChartThousandSep(e.target.checked)} className="rounded" />
+                          Separador de miles
+                        </label>
+                        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                          <input type="checkbox" checked={showDataLabels} onChange={(e) => setShowDataLabels(e.target.checked)} className="rounded" />
+                          Mostrar etiquetas en gráfico
+                        </label>
+                      </div>
+                      <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Vista previa: {formatNumber(1234567.89)}</p>
+                    </div>
+
+                    {/* 6.3.2 Orden */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Orden de datos</Label>
+                      <div className="flex gap-2">
+                        {([["none", "Sin orden"], ["asc", "Ascendente ↑"], ["desc", "Descendente ↓"]] as [string, string][]).map(([val, lbl]) => (
+                          <button key={val} type="button" onClick={() => setChartSortDirection(val as any)} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartSortDirection === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartSortDirection === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartSortDirection === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 6.3.3 Ranking */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <div className="flex items-center gap-3 mb-2">
+                        <input type="checkbox" id="chartRankingEnabled" checked={chartRankingEnabled} onChange={(e) => setChartRankingEnabled(e.target.checked)} className="rounded" />
+                        <Label htmlFor="chartRankingEnabled" className="text-sm font-medium cursor-pointer" style={{ color: "var(--platform-fg)" }}>Aplicar ranking (Top N)</Label>
+                      </div>
+                      {chartRankingEnabled && (
+                        <div className="flex flex-wrap items-center gap-3 mt-3">
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Top</Label>
+                            <Input type="number" min={1} max={100} value={chartRankingTop} onChange={(e) => setChartRankingTop(Math.max(1, parseInt(e.target.value) || 5))} className="h-8 w-16 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>por métrica</Label>
+                            <select value={chartRankingMetric} onChange={(e) => setChartRankingMetric(e.target.value)} className="h-8 rounded-lg border px-2 text-xs" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                              <option value="">Automático (primera métrica)</option>
+                              {chartNumericColumns.map((c) => (<option key={c.key} value={c.key}>{c.label}</option>))}
+                            </select>
+                          </div>
+                          <p className="text-xs w-full" style={{ color: "var(--platform-fg-muted)" }}>Ej: Top {chartRankingTop} {formDimensions[0] ? formDimensions[0] : "categorías"} que más {chartYAxes[0] ? (chartAvailableColumns.find((c) => c.key === chartYAxes[0])?.label ?? chartYAxes[0]) : "valor"} tienen.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 6.3.4 Siempre visible */}
+                    {formDimensions.filter(Boolean).length > 0 && (
+                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Dimensiones siempre visibles</Label>
+                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Estas dimensiones permanecen visibles aunque se apliquen filtros dinámicos en el dashboard.</p>
+                        <div className="space-y-1.5">
+                          {formDimensions.filter(Boolean).map((dim) => (
+                            <label key={dim} className="flex items-center gap-2 text-sm py-1 px-2 rounded-lg cursor-pointer transition-colors" style={{ background: chartPinnedDimensions.includes(dim) ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }}>
+                              <input type="checkbox" checked={chartPinnedDimensions.includes(dim)} onChange={(e) => {
+                                if (e.target.checked) setChartPinnedDimensions((prev) => [...prev, dim]);
+                                else setChartPinnedDimensions((prev) => prev.filter((d) => d !== dim));
+                              }} className="rounded" />
+                              {getSampleDisplayLabel(dim)}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="flex justify-between">
+
+                  <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Colores</Button>
                   </div>
@@ -2233,41 +2874,186 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               )}
 
               {/* Wizard D3: Colores */}
-              {wizard === "D" && wizardStep === 3 && (
+              {wizard === "D" && wizardStep === 3 && (() => {
+                const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16"];
+                const presetPalettes: { name: string; colors: string[] }[] = [
+                  { name: "Predeterminado", colors: ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"] },
+                  { name: "Corporativo", colors: ["#1e40af", "#0369a1", "#0891b2", "#059669", "#65a30d", "#ca8a04"] },
+                  { name: "Pastel", colors: ["#93c5fd", "#86efac", "#fde68a", "#fca5a5", "#c4b5fd", "#f9a8d4"] },
+                  { name: "Oscuro", colors: ["#1e3a5f", "#1a3c34", "#4a3728", "#4a1e1e", "#2e1a4a", "#4a1a3a"] },
+                  { name: "Cálido", colors: ["#dc2626", "#ea580c", "#d97706", "#ca8a04", "#65a30d", "#16a34a"] },
+                  { name: "Frío", colors: ["#1d4ed8", "#2563eb", "#0284c7", "#0891b2", "#0d9488", "#059669"] },
+                ];
+                const seriesLabels = chartYAxes.length > 0 ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k) : formMetrics.map((m) => m.alias || m.field || "Métrica");
+                return (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Colores y reglas condicionales</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Reglas de semáforo aplicadas en frontend. No afectan datos del análisis.</p>
-                  <div className="mb-4">
-                    <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Esquema de color</Label>
-                    <Select
-                      value={chartColorScheme}
-                      onChange={setChartColorScheme}
-                      options={[
-                        { value: "auto", label: "Automático" },
-                        { value: "fixed", label: "Fijo" },
-                        { value: "category", label: "Por categoría" },
-                      ]}
-                      placeholder="Esquema"
-                      className="max-w-[200px]"
-                      disablePortal
-                    />
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Colores</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Personalizá los colores de cada serie del gráfico. Se aplican a barras, líneas, porciones de torta/dona y áreas.</p>
+
+                  <div className="space-y-5">
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-3 block" style={{ color: "var(--platform-fg)" }}>Paleta predefinida</Label>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {presetPalettes.map((p) => (
+                          <button key={p.name} type="button" onClick={() => {
+                            const newColors: Record<string, string> = {};
+                            seriesLabels.forEach((s, i) => { newColors[s] = p.colors[i % p.colors.length]!; });
+                            setChartSeriesColors(newColors);
+                            setChartColorScheme("fixed");
+                          }} className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 border transition-all" style={{ borderColor: "var(--platform-border)" }}>
+                            <div className="flex gap-0.5">{p.colors.slice(0, 6).map((c, i) => (<div key={i} className="w-4 h-4 rounded-sm" style={{ background: c }} />))}</div>
+                            <span className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>{p.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        {([["auto", "Automático"], ["fixed", "Personalizado"], ["category", "Por categoría"]] as [string, string][]).map(([val, lbl]) => (
+                          <button key={val} type="button" onClick={() => setChartColorScheme(val)} className="rounded-lg px-3 py-1.5 text-xs font-medium border transition-all" style={{ background: chartColorScheme === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartColorScheme === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartColorScheme === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {chartColorScheme !== "auto" && (
+                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <Label className="text-sm font-medium mb-3 block" style={{ color: "var(--platform-fg)" }}>Color por serie</Label>
+                        <div className="space-y-2">
+                          {seriesLabels.map((label, idx) => {
+                            const color = chartSeriesColors[label] || defaultPalette[idx % defaultPalette.length]!;
+                            return (
+                              <div key={label} className="flex items-center gap-3">
+                                <input type="color" value={color} onChange={(e) => setChartSeriesColors((prev) => ({ ...prev, [label]: e.target.value }))} className="w-8 h-8 rounded cursor-pointer border-0 p-0" style={{ background: "transparent" }} />
+                                <div className="w-6 h-6 rounded-md border" style={{ background: color, borderColor: "var(--platform-border)" }} />
+                                <span className="text-sm" style={{ color: "var(--platform-fg)" }}>{label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="flex justify-between">
+
+                  <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Interacciones</Button>
                   </div>
                 </section>
-              )}
+                );
+              })()}
 
               {/* Wizard D4: Interacciones */}
               {wizard === "D" && wizardStep === 4 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Interacciones</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Define el comportamiento interactivo del gráfico dentro del dashboard.</p>
-                  <div className="rounded-lg border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Drilldown por jerarquía, tooltips y filtros cruzados se configuran al usar la métrica en el dashboard.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Las interacciones convierten un gráfico estático en una herramienta analítica. El gráfico no recalcula lógica de negocio: genera eventos que modifican filtros y re-ejecutan análisis.</p>
+
+                  <div className="rounded-xl border p-4 mb-5" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Los eventos se disparan al hacer click, pasar el mouse, seleccionar valores, realizar drill o cambiar visualización. Aplican a todos los gráficos del dashboard que compartan dimensiones.</p>
                   </div>
-                  <div className="flex justify-between">
+
+                  <div className="space-y-4">
+                    {/* 7.2.1 Cross-filter */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <div className="flex items-center gap-3 mb-2">
+                        <input type="checkbox" id="interCrossFilter" checked={interCrossFilter} onChange={(e) => setInterCrossFilter(e.target.checked)} className="rounded" />
+                        <Label htmlFor="interCrossFilter" className="text-sm font-medium cursor-pointer" style={{ color: "var(--platform-fg)" }}>Cross-filter</Label>
+                      </div>
+                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Click en un elemento aplica filtro dinámico a gráficos compatibles. Ej: click en "Sucursal Norte" → filtro sucursal = Norte.</p>
+                      {interCrossFilter && formDimensions.filter(Boolean).length > 0 && (
+                        <div className="mt-3">
+                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Dimensiones que emiten filtro:</Label>
+                          <div className="space-y-1">
+                            {formDimensions.filter(Boolean).map((dim) => (
+                              <label key={dim} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg cursor-pointer" style={{ background: interCrossFilterFields.includes(dim) ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }}>
+                                <input type="checkbox" checked={interCrossFilterFields.includes(dim)} onChange={(e) => {
+                                  if (e.target.checked) setInterCrossFilterFields((prev) => [...prev, dim]);
+                                  else setInterCrossFilterFields((prev) => prev.filter((d) => d !== dim));
+                                }} className="rounded" />
+                                {getSampleDisplayLabel(dim)}
+                              </label>
+                            ))}
+                          </div>
+                          {interCrossFilterFields.length === 0 && <p className="text-[11px] mt-1" style={{ color: "var(--platform-fg-muted)" }}>Si no seleccionás ninguna, todas las dimensiones emitirán filtro.</p>}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 7.2.2 Drilldown */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <div className="flex items-center gap-3 mb-2">
+                        <input type="checkbox" id="interDrilldown" checked={interDrilldown} onChange={(e) => setInterDrilldown(e.target.checked)} className="rounded" />
+                        <Label htmlFor="interDrilldown" className="text-sm font-medium cursor-pointer" style={{ color: "var(--platform-fg)" }}>Drilldown</Label>
+                      </div>
+                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Permite bajar el nivel de agregación: Año → Mes → Día. Cambia la granularidad y re-ejecuta el análisis.</p>
+                      {interDrilldown && (
+                        <div className="mt-3">
+                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Jerarquía de drill (orden de niveles):</Label>
+                          <div className="flex flex-wrap gap-1.5 mb-2">
+                            {interDrilldownHierarchy.map((level, idx) => (
+                              <span key={level} className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg border" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
+                                {idx > 0 && <span className="mr-1" style={{ color: "var(--platform-fg-muted)" }}>→</span>}
+                                {level}
+                                <button type="button" onClick={() => setInterDrilldownHierarchy((prev) => prev.filter((l) => l !== level))} className="ml-1 opacity-60 hover:opacity-100">×</button>
+                              </span>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <select onChange={(e) => { if (e.target.value && !interDrilldownHierarchy.includes(e.target.value)) setInterDrilldownHierarchy((prev) => [...prev, e.target.value]); e.target.value = ""; }} className="h-8 rounded-lg border px-2 text-xs" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                              <option value="">+ Agregar nivel</option>
+                              {["year", "quarter", "month", "week", "day"].filter((g) => !interDrilldownHierarchy.includes(g)).map((g) => (<option key={g} value={g}>{g === "year" ? "Año" : g === "quarter" ? "Trimestre" : g === "month" ? "Mes" : g === "week" ? "Semana" : "Día"}</option>))}
+                              {formDimensions.filter(Boolean).filter((d) => !interDrilldownHierarchy.includes(d)).map((d) => (<option key={d} value={d}>{getSampleDisplayLabel(d)}</option>))}
+                            </select>
+                          </div>
+                          {interDrilldownHierarchy.length === 0 && <p className="text-[11px] mt-1" style={{ color: "var(--platform-fg-muted)" }}>Agregá al menos 2 niveles para habilitar drill (ej. Año → Mes).</p>}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 7.2.3 Drill-through */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <div className="flex items-center gap-3 mb-2">
+                        <input type="checkbox" id="interDrillThrough" checked={interDrillThrough} onChange={(e) => setInterDrillThrough(e.target.checked)} className="rounded" />
+                        <Label htmlFor="interDrillThrough" className="text-sm font-medium cursor-pointer" style={{ color: "var(--platform-fg)" }}>Drill-through</Label>
+                      </div>
+                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Permite navegar a otro dashboard con el contexto (filtros) aplicados del click actual.</p>
+                      {interDrillThrough && (
+                        <div className="mt-3">
+                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Dashboard destino (ID o slug):</Label>
+                          <Input value={interDrillThroughTarget} onChange={(e) => setInterDrillThroughTarget(e.target.value)} placeholder="ej. dashboard-detalle-ventas" className="h-8 rounded-lg text-xs !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <p className="text-[11px] mt-1" style={{ color: "var(--platform-fg-muted)" }}>Al navegar, se pasarán como parámetros los valores de las dimensiones del elemento clickeado.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 7.2.4 Tooltip enriquecido */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Tooltip enriquecido</Label>
+                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Configurá qué información se muestra al pasar el mouse sobre un elemento. No recalcula datos.</p>
+                      <div className="space-y-1">
+                        {([["value", "Valor actual"], ["delta_pct", "Delta %"], ["comparative", "Comparativo (período anterior)"], ["metadata", "Metadata (nombre, dimensión)"]] as [string, string][]).map(([val, lbl]) => (
+                          <label key={val} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg cursor-pointer" style={{ background: interTooltipFields.includes(val) ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }}>
+                            <input type="checkbox" checked={interTooltipFields.includes(val)} onChange={(e) => {
+                              if (e.target.checked) setInterTooltipFields((prev) => [...prev, val]);
+                              else setInterTooltipFields((prev) => prev.filter((f) => f !== val));
+                            }} className="rounded" />
+                            {lbl}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 7.2.5 Highlight */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <div className="flex items-center gap-3">
+                        <input type="checkbox" id="interHighlight" checked={interHighlight} onChange={(e) => setInterHighlight(e.target.checked)} className="rounded" />
+                        <div>
+                          <Label htmlFor="interHighlight" className="text-sm font-medium cursor-pointer block" style={{ color: "var(--platform-fg)" }}>Highlight en hover</Label>
+                          <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Resalta elementos relacionados al pasar el mouse. Es solo visual, no modifica filtros ni datos.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Guardar</Button>
                   </div>
@@ -2298,14 +3084,38 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                             </table>
                           </div>
                         )}
-                        {previewChartConfig && formChartType !== "kpi" && formChartType !== "table" && (
-                          <div className="h-[240px] w-full" style={{ color: "var(--platform-fg)" }}>
-                            {formChartType === "bar" && <Bar data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } } } }} />}
-                            {formChartType === "horizontalBar" && <Bar data={previewChartConfig} options={{ indexAxis: "y" as const, responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 12 } } } }} />}
-                            {formChartType === "line" && <Line data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } } } }} />}
-                            {formChartType === "pie" && <Pie data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: "right" } } }} />}
-                            {formChartType === "doughnut" && <Doughnut data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: "right" } } }} />}
-                            {(formChartType === "combo" || !["bar", "horizontalBar", "line", "pie", "doughnut", "kpi", "table"].includes(formChartType)) && <Bar data={previewChartConfig} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } }, scales: { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } } } }} />}
+                        {previewChartConfig && formChartType !== "kpi" && formChartType !== "table" && formChartType !== "map" && (() => {
+                          const axisScales = { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } } };
+                          const baseOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } } };
+                          const areaData = { ...previewChartConfig, datasets: previewChartConfig.datasets.map((ds: any) => ({ ...ds, fill: true })) };
+                          const scatterData = previewChartConfig.datasets.length >= 1 ? {
+                            datasets: [{
+                              label: previewChartConfig.datasets[0].label,
+                              data: previewChartConfig.labels.map((_: string, i: number) => ({ x: previewChartConfig.datasets[0]?.data[i] ?? 0, y: previewChartConfig.datasets[1]?.data[i] ?? previewChartConfig.datasets[0]?.data[i] ?? 0 })),
+                              backgroundColor: previewChartConfig.datasets[0].backgroundColor,
+                              borderColor: previewChartConfig.datasets[0].borderColor,
+                            }],
+                          } : previewChartConfig;
+                          const radarData = { labels: previewChartConfig.labels, datasets: previewChartConfig.datasets.map((ds: any) => ({ ...ds, fill: true, backgroundColor: ds.backgroundColor, borderColor: ds.borderColor })) };
+                          return (
+                            <div className="h-[240px] w-full" style={{ color: "var(--platform-fg)" }}>
+                              {formChartType === "bar" && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
+                              {formChartType === "horizontalBar" && <Bar data={previewChartConfig} options={{ ...baseOpts, indexAxis: "y" as const, scales: { x: axisScales.x, y: { ...axisScales.y, ticks: { ...axisScales.y.ticks, maxTicksLimit: 12 } } } }} />}
+                              {formChartType === "line" && <Line data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
+                              {formChartType === "area" && <Line data={areaData} options={{ ...baseOpts, scales: axisScales }} />}
+                              {formChartType === "pie" && <Pie data={previewChartConfig} options={{ ...baseOpts, plugins: { legend: { display: true, position: "right" as const } } }} />}
+                              {formChartType === "doughnut" && <Doughnut data={previewChartConfig} options={{ ...baseOpts, plugins: { legend: { display: true, position: "right" as const } } }} />}
+                              {formChartType === "scatter" && <Scatter data={scatterData as { datasets: { label: string; data: { x: number; y: number }[]; backgroundColor: string; borderColor: string }[] }} options={{ ...baseOpts, scales: axisScales }} />}
+                              {formChartType === "combo" && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
+                              {!["bar", "horizontalBar", "line", "area", "pie", "doughnut", "scatter", "combo", "kpi", "table", "map"].includes(formChartType) && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
+                            </div>
+                          );
+                        })()}
+                        {formChartType === "map" && (
+                          <div className="flex flex-col items-center justify-center min-h-[200px] rounded-lg border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                            <MapPin className="h-10 w-10 mb-3" style={{ color: "var(--platform-accent)" }} />
+                            <p className="text-sm font-medium mb-1" style={{ color: "var(--platform-fg)" }}>Visualización de mapa</p>
+                            <p className="text-xs text-center max-w-sm" style={{ color: "var(--platform-fg-muted)" }}>El mapa se renderizará en el dashboard con los datos geográficos de las dimensiones seleccionadas (país, provincia, ciudad, coordenadas).</p>
                           </div>
                         )}
                       </div>
@@ -2376,6 +3186,132 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
           Aún no hay métricas guardadas. Creá una con "Nueva métrica" para usarla después en tus dashboards.
         </p>
+      )}
+
+      {/* Dashboard & Filtros Dinámicos */}
+      {savedMetrics.length > 0 && !showForm && (
+        <section className="mt-6">
+          <div className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>Dashboard</h2>
+                <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Las métricas creadas se insertan automáticamente como widgets en el dashboard vinculado.</p>
+              </div>
+              {linkedDashboardId && (
+                <Link href={`/admin/dashboard/${linkedDashboardId}`} className="text-xs font-medium underline" style={{ color: "var(--platform-accent)" }}>
+                  Abrir dashboard →
+                </Link>
+              )}
+            </div>
+
+            <div className="rounded-lg border p-3 mb-4 flex flex-wrap items-center gap-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+              <div className="flex items-center gap-2 flex-1 min-w-[180px]">
+                <Label className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Nombre</Label>
+                <Input value={linkedDashboardName} onChange={(e) => setLinkedDashboardName(e.target.value)} placeholder="Dashboard principal" className="h-8 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{savedMetrics.length} métrica{savedMetrics.length !== 1 ? "s" : ""} como widgets</span>
+                {dashboardSyncing && <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--platform-accent)" }} />}
+              </div>
+              <Button type="button" variant="outline" size="sm" className="rounded-lg text-xs" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={() => syncMetricsToDashboard(savedMetrics)} disabled={dashboardSyncing}>
+                {linkedDashboardId ? "Sincronizar" : "Crear dashboard"}
+              </Button>
+            </div>
+
+            {/* 8.1 Filtros Dinámicos */}
+            <div className="mt-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>Filtros dinámicos</h3>
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Filtros interactivos visibles en el dashboard. No afectan el cálculo estructural de métricas.</p>
+                </div>
+                <Button type="button" variant="outline" size="sm" className="rounded-lg text-xs" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={() => setDashboardFilters((prev) => [...prev, { id: `df-${Date.now()}`, field: "", filterType: "single", label: "", scope: "all", scopeMetricIds: [], applyToOtherDashboards: false }])}>
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Agregar filtro
+                </Button>
+              </div>
+
+              {dashboardFilters.length === 0 && (
+                <p className="text-xs py-3" style={{ color: "var(--platform-fg-muted)" }}>Sin filtros dinámicos. Agregá uno para que los usuarios puedan filtrar interactivamente en el dashboard.</p>
+              )}
+
+              <div className="space-y-3">
+                {dashboardFilters.map((f, idx) => (
+                  <div key={f.id} className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs font-semibold" style={{ color: "var(--platform-fg-muted)" }}>Filtro {idx + 1}</span>
+                      <Button type="button" variant="ghost" size="sm" className="text-xs h-6 text-red-500" onClick={() => setDashboardFilters((prev) => prev.filter((x) => x.id !== f.id))}>Quitar</Button>
+                    </div>
+
+                    {/* Paso 1: Campo y tipo */}
+                    <div className="grid gap-3 sm:grid-cols-3 mb-3">
+                      <div>
+                        <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Campo</Label>
+                        <select value={f.field} onChange={(e) => setDashboardFilters((prev) => prev.map((x) => x.id === f.id ? { ...x, field: e.target.value, label: e.target.value ? getSampleDisplayLabel(e.target.value) : "" } : x))} className="w-full h-8 rounded-lg border px-2 text-xs" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                          <option value="">Elegir campo</option>
+                          {allColumnsForRoles.map((col) => (<option key={col} value={col}>{getSampleDisplayLabel(col)}</option>))}
+                        </select>
+                      </div>
+                      <div>
+                        <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Tipo de filtro</Label>
+                        <select value={f.filterType} onChange={(e) => setDashboardFilters((prev) => prev.map((x) => x.id === f.id ? { ...x, filterType: e.target.value as any } : x))} className="w-full h-8 rounded-lg border px-2 text-xs" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                          <option value="single">Selección única</option>
+                          <option value="multi">Selección múltiple</option>
+                          <option value="dateRange">Rango de fechas</option>
+                          <option value="numericRange">Rango numérico</option>
+                        </select>
+                      </div>
+                      <div>
+                        <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Etiqueta</Label>
+                        <Input value={f.label} onChange={(e) => setDashboardFilters((prev) => prev.map((x) => x.id === f.id ? { ...x, label: e.target.value } : x))} placeholder="Nombre visible" className="h-8 rounded-lg text-xs !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                      </div>
+                    </div>
+
+                    {/* Paso 2: Alcance */}
+                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                      <Label className="text-xs font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Alcance del filtro</Label>
+                      <div className="space-y-1.5 mb-2">
+                        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                          <input type="radio" name={`scope-${f.id}`} checked={f.scope === "all"} onChange={() => setDashboardFilters((prev) => prev.map((x) => x.id === f.id ? { ...x, scope: "all", scopeMetricIds: [] } : x))} />
+                          Dashboard completo (todos los gráficos)
+                        </label>
+                        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                          <input type="radio" name={`scope-${f.id}`} checked={f.scope === "selected"} onChange={() => setDashboardFilters((prev) => prev.map((x) => x.id === f.id ? { ...x, scope: "selected" } : x))} />
+                          Solo gráficos seleccionados
+                        </label>
+                      </div>
+                      {f.scope === "selected" && (
+                        <div className="space-y-1 ml-5">
+                          {savedMetrics.map((m) => (
+                            <label key={m.id} className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                              <input type="checkbox" checked={f.scopeMetricIds.includes(m.id)} onChange={(e) => {
+                                const ids = e.target.checked ? [...f.scopeMetricIds, m.id] : f.scopeMetricIds.filter((id) => id !== m.id);
+                                setDashboardFilters((prev) => prev.map((x) => x.id === f.id ? { ...x, scopeMetricIds: ids } : x));
+                              }} className="rounded" />
+                              {m.name}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2 text-xs mt-2 cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                        <input type="checkbox" checked={f.applyToOtherDashboards} onChange={(e) => setDashboardFilters((prev) => prev.map((x) => x.id === f.id ? { ...x, applyToOtherDashboards: e.target.checked } : x))} className="rounded" />
+                        Aplicar a otros dashboards que compartan la misma base de datos
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {dashboardFilters.length > 0 && (
+                <div className="mt-3 flex justify-end">
+                  <Button type="button" variant="outline" size="sm" className="rounded-lg text-xs" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={() => syncMetricsToDashboard(savedMetrics)} disabled={dashboardSyncing}>
+                    {dashboardSyncing && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+                    Guardar filtros en dashboard
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
       )}
     </div>
   );
