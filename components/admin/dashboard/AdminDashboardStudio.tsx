@@ -351,19 +351,29 @@ export function AdminDashboardStudio({
         const agg = widget.aggregationConfig;
         if (agg?.enabled && agg.metrics.length > 0) {
           const dimensions = [agg.dimension, agg.dimension2].filter(Boolean) as string[];
-          const metricsPayload = agg.metrics.map(({ id, ...m }) => {
-            if (m.func === "FORMULA")
-              return { formula: m.formula || "", alias: m.alias || "formula", field: "" };
-            const metric: Record<string, unknown> = {
-              field: m.field,
-              func: m.func,
-              alias: m.alias || `${m.func}_${m.field}`,
-              ...(m.condition ? { condition: m.condition } : {}),
-            };
-            const expr = (m as { expression?: string }).expression;
-            if (expr) metric.expression = expr;
-            return metric;
-          });
+          const metricsPayload = agg.metrics
+            .map(({ id, ...m }) => {
+              if (m.func === "FORMULA")
+                return { formula: m.formula || "", alias: m.alias || "formula", field: "" };
+              const expr = (m as { expression?: string }).expression;
+              const hasField = m.field != null && String(m.field).trim() !== "";
+              const hasExpr = expr != null && String(expr).trim() !== "";
+              if (!hasField && !hasExpr) return null;
+              const metric: Record<string, unknown> = {
+                field: (m.field != null ? String(m.field).trim() : "") || "",
+                func: m.func,
+                alias: m.alias || `${m.func}_${(m.field || "valor")}`,
+                ...(m.condition ? { condition: m.condition } : {}),
+              };
+              if (hasExpr) metric.expression = String(expr).trim();
+              return metric;
+            })
+            .filter((item): item is NonNullable<typeof item> => item != null);
+          if (metricsPayload.length === 0) {
+            toast.warning("La métrica no tiene campos ni expresiones válidas. Revisá la configuración del widget.");
+            setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+            return;
+          }
           const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
           const widgetEtlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
           const res = await fetch("/api/dashboard/aggregate-data", {
