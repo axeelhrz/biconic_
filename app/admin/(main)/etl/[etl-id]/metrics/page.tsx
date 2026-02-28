@@ -47,7 +47,7 @@ export default async function AdminEtlMetricsPage({ params }: PageProps) {
 
   return (
     <div className="flex flex-col min-h-[calc(100vh-4rem)] w-full">
-      <EtlMetricsClient etlId={etlId} etlTitle={etlTitle} connections={connections} />
+      <EtlMetricsClient etlId={etlId} etlTitle={etlTitle} etlClientId={etlClientId} connections={connections} />
     </div>
   );
 }

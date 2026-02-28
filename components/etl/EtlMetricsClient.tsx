@@ -154,13 +154,15 @@ type DatasetRelation = {
   joinType: "INNER" | "LEFT";
 };
 
-type EtlMetricsClientProps = {
+export type EtlMetricsClientProps = {
   etlId: string;
   etlTitle: string;
+  /** client_id del ETL; necesario para crear el dashboard (tabla dashboard requiere client_id) */
+  etlClientId?: string | null;
   connections?: ConnectionOption[];
 };
 
-export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [] }: EtlMetricsClientProps) {
+export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connections: connectionsProp = [] }: EtlMetricsClientProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1044,7 +1046,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         const createRes = await fetch("/api/dashboard", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: linkedDashboardName || "Dashboard principal", etl_id: etlId }),
+          body: JSON.stringify({
+            name: linkedDashboardName || "Dashboard principal",
+            etl_id: etlId,
+            ...(etlClientId ? { client_id: etlClientId } : {}),
+          }),
         });
         const createJson = await createRes.json();
         if (!createRes.ok || !createJson.ok) {
@@ -1157,7 +1163,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     } finally {
       setDashboardSyncing(false);
     }
-  }, [etlId, linkedDashboardId, linkedDashboardName, dashboardFilters, derivedColumns, formChartType]);
+  }, [etlId, etlClientId, linkedDashboardId, linkedDashboardName, dashboardFilters, derivedColumns, formChartType]);
 
   const saveMetric = async () => {
     const name = formName.trim();

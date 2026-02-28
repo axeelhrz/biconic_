@@ -18,7 +18,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // Parse request body to get dashboard data
     const body = await req.json().catch(() => ({}));
-    const { name, etl_id, etl_ids } = body;
+    const { name, etl_id, etl_ids, client_id: bodyClientId } = body;
 
     // Soporte: etl_ids (array) o etl_id (único legacy)
     const etlIdsArray: string[] = Array.isArray(etl_ids)
@@ -28,8 +28,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       : [];
     const firstEtlId = etlIdsArray[0] ?? null;
 
+    // client_id es obligatorio en la tabla dashboard. Si no viene en el body, lo obtenemos del ETL.
+    let clientId: string | null = bodyClientId ? String(bodyClientId).trim() : null;
+    if (!clientId && firstEtlId) {
+      const { data: etlRow } = await supabase
+        .from("etl")
+        .select("client_id")
+        .eq("id", firstEtlId)
+        .maybeSingle();
+      clientId = (etlRow as { client_id?: string | null })?.client_id ?? null;
+    }
+    if (!clientId) {
+      return NextResponse.json(
+        { ok: false, error: "Falta client_id. Asigná un cliente al ETL o enviá client_id en el body." },
+        { status: 400 }
+      );
+    }
+
     // Prepare dashboard data
     const dashboardData: any = {
+      client_id: clientId,
       user_id: user.id,
     };
 
