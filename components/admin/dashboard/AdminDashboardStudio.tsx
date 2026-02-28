@@ -360,7 +360,8 @@ export function AdminDashboardStudio({
               alias: m.alias || `${m.func}_${m.field}`,
               ...(m.condition ? { condition: m.condition } : {}),
             };
-            if ((m as { expression?: string }).expression) metric.expression = (m as { expression: string }).expression;
+            const expr = (m as { expression?: string }).expression;
+            if (expr) metric.expression = expr;
             return metric;
           });
           const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
