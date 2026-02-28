@@ -59,6 +59,8 @@ type AggregationConfig = {
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
   dateDimension?: string;
+  /** Colores por alias de serie (ej. resultado, resultado_prev) para barras, líneas, torta. */
+  chartSeriesColors?: Record<string, string>;
 };
 type StudioWidget = {
   id: string;
