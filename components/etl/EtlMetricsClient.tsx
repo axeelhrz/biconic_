@@ -893,7 +893,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       }
       return k;
     };
-    const getColor = (label: string, idx: number) => chartSeriesColors[label] || defaultPalette[idx % defaultPalette.length]!;
+    const colorKeys = Object.keys(chartSeriesColors);
+    const getColor = (label: string, idx: number) => {
+      const byLabel = chartSeriesColors[label] ?? chartSeriesColors[label?.trim?.() ?? ""];
+      if (byLabel) return byLabel;
+      if (colorKeys[idx] != null) return chartSeriesColors[colorKeys[idx]!]!;
+      return defaultPalette[idx % defaultPalette.length]!;
+    };
 
     let rows = [...previewData];
 
@@ -1102,6 +1108,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
             cumulative: cfg.cumulative || undefined,
             comparePeriod: cfg.comparePeriod || undefined,
             dateDimension: cfg.dateDimension || undefined,
+            chartSeriesColors: cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" && Object.keys(cfg.chartSeriesColors).length > 0 ? cfg.chartSeriesColors : undefined,
           },
           excludeGlobalFilters: false,
           color: cfg.chartSeriesColors ? Object.values(cfg.chartSeriesColors)[0] as string : undefined,

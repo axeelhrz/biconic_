@@ -415,21 +415,28 @@ export function AdminDashboardStudio({
           }
           const dim = agg.dimension || Object.keys(dataArray[0] || {})[0];
           const labels = dataArray.map((r: Record<string, unknown>) => String(r[dim] ?? ""));
-          const palette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+          const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+          const seriesColors = (agg as { chartSeriesColors?: Record<string, string> }).chartSeriesColors;
+          const colorKeys = seriesColors ? Object.keys(seriesColors) : [];
+          const getColor = (label: string, idx: number) => {
+            const c = seriesColors?.[label] ?? seriesColors?.[colorKeys[idx]!];
+            return c ?? defaultPalette[idx % defaultPalette.length]!;
+          };
           const datasets = agg.metrics.map((metric, idx) => {
             const alias = metric.alias || (metric.func === "FORMULA" ? "formula" : `${metric.func}_${metric.field}`);
             const data = dataArray.map((r: Record<string, unknown>) => Number(r[alias] ?? 0));
+            const color = getColor(alias, idx);
             return {
               label: alias,
               data,
-              backgroundColor: palette[idx % palette.length] + "99",
-              borderColor: palette[idx % palette.length],
+              backgroundColor: color + "99",
+              borderColor: color,
               borderWidth: 1,
             };
           });
           const config: ChartConfig = {
             labels,
-            datasets: datasets.length > 0 ? datasets : [{ label: "valor", data: [], backgroundColor: palette[0], borderColor: "#fff", borderWidth: 1 }],
+            datasets: datasets.length > 0 ? datasets : [{ label: "valor", data: [], backgroundColor: defaultPalette[0], borderColor: "#fff", borderWidth: 1 }],
           };
           setWidgets((prev) =>
             prev.map((w) => (w.id === widgetId ? { ...w, config, rows: dataArray, isLoading: false } : w))
@@ -662,6 +669,7 @@ export function AdminDashboardStudio({
           filters: Array.isArray(cfg.filters) ? cfg.filters : undefined,
           orderBy: cfg.orderBy as { field: string; direction: "ASC" | "DESC" } | undefined,
           limit: (cfg.limit as number) ?? 100,
+          chartSeriesColors: cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? (cfg.chartSeriesColors as Record<string, string>) : undefined,
         },
         excludeGlobalFilters: false,
         dataSourceId: null,
