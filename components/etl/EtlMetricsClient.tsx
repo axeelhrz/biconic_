@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { ComponentType } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles, AreaChart, ScatterChart, MapPin, TrendingUp } from "lucide-react";
+import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles, AreaChart, ScatterChart, MapPin, TrendingUp, HelpCircle } from "lucide-react";
 import { Bar, Line, Pie, Doughnut, Scatter, Radar } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -25,6 +25,13 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import type { SavedMetricForm, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
@@ -84,6 +91,155 @@ const EXCEL_FUNCTIONS = [
   "LEFT", "RIGHT", "MID", "LEN", "CONCATENATE", "TEXT", "VALUE",
   "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "EOMONTH", "DATEDIF",
   "metric_0", "metric_1", "metric_2", "metric_3",
+];
+
+/** Referencia completa de fórmulas estilo Excel para el modal de ayuda. */
+const EXCEL_FORMULAS_REFERENCIA: { categoria: string; funciones: { nombre: string; sintaxis: string; descripcion: string }[] }[] = [
+  {
+    categoria: "Operadores aritméticos",
+    funciones: [
+      { nombre: "+", sintaxis: "A + B", descripcion: "Suma" },
+      { nombre: "-", sintaxis: "A - B", descripcion: "Resta" },
+      { nombre: "*", sintaxis: "A * B", descripcion: "Multiplicación" },
+      { nombre: "/", sintaxis: "A / B", descripcion: "División" },
+      { nombre: "^", sintaxis: "A ^ B", descripcion: "Potencia" },
+      { nombre: "%", sintaxis: "A %", descripcion: "Porcentaje" },
+    ],
+  },
+  {
+    categoria: "Matemáticas y trigonometría",
+    funciones: [
+      { nombre: "SUM", sintaxis: "SUM(rango)", descripcion: "Suma de valores" },
+      { nombre: "AVERAGE", sintaxis: "AVERAGE(rango)", descripcion: "Promedio" },
+      { nombre: "COUNT", sintaxis: "COUNT(rango)", descripcion: "Cuenta celdas numéricas" },
+      { nombre: "COUNTA", sintaxis: "COUNTA(rango)", descripcion: "Cuenta celdas no vacías" },
+      { nombre: "MIN", sintaxis: "MIN(rango)", descripcion: "Valor mínimo" },
+      { nombre: "MAX", sintaxis: "MAX(rango)", descripcion: "Valor máximo" },
+      { nombre: "ABS", sintaxis: "ABS(número)", descripcion: "Valor absoluto" },
+      { nombre: "ROUND", sintaxis: "ROUND(número; decimales)", descripcion: "Redondeo estándar" },
+      { nombre: "ROUNDUP", sintaxis: "ROUNDUP(número; decimales)", descripcion: "Redondeo hacia arriba" },
+      { nombre: "ROUNDDOWN", sintaxis: "ROUNDDOWN(número; decimales)", descripcion: "Redondeo hacia abajo" },
+      { nombre: "TRUNC", sintaxis: "TRUNC(número)", descripcion: "Trunca decimales" },
+      { nombre: "MOD", sintaxis: "MOD(número; divisor)", descripcion: "Módulo (resto)" },
+      { nombre: "POWER", sintaxis: "POWER(base; exponente)", descripcion: "Potencia" },
+      { nombre: "SQRT", sintaxis: "SQRT(número)", descripcion: "Raíz cuadrada" },
+      { nombre: "FLOOR", sintaxis: "FLOOR(número; significancia)", descripcion: "Redondea hacia abajo" },
+      { nombre: "CEILING", sintaxis: "CEILING(número; significancia)", descripcion: "Redondea hacia arriba" },
+      { nombre: "INT", sintaxis: "INT(número)", descripcion: "Parte entera" },
+      { nombre: "SIGN", sintaxis: "SIGN(número)", descripcion: "Signo (-1, 0, 1)" },
+      { nombre: "EXP", sintaxis: "EXP(número)", descripcion: "e elevado a número" },
+      { nombre: "LN", sintaxis: "LN(número)", descripcion: "Logaritmo natural" },
+      { nombre: "LOG", sintaxis: "LOG(número; base)", descripcion: "Logaritmo" },
+      { nombre: "LOG10", sintaxis: "LOG10(número)", descripcion: "Logaritmo base 10" },
+      { nombre: "SIN", sintaxis: "SIN(ángulo)", descripcion: "Seno" },
+      { nombre: "COS", sintaxis: "COS(ángulo)", descripcion: "Coseno" },
+      { nombre: "TAN", sintaxis: "TAN(ángulo)", descripcion: "Tangente" },
+      { nombre: "PI", sintaxis: "PI()", descripcion: "Constante π" },
+    ],
+  },
+  {
+    categoria: "Lógica",
+    funciones: [
+      { nombre: "IF", sintaxis: "IF(condición; valor_si_verdadero; valor_si_falso)", descripcion: "Condicional" },
+      { nombre: "IFERROR", sintaxis: "IFERROR(valor; valor_si_error)", descripcion: "Devuelve valor si hay error" },
+      { nombre: "IFNA", sintaxis: "IFNA(valor; valor_si_NA)", descripcion: "Devuelve valor si es #N/A" },
+      { nombre: "AND", sintaxis: "AND(cond1; cond2; ...)", descripcion: "Y lógico" },
+      { nombre: "OR", sintaxis: "OR(cond1; cond2; ...)", descripcion: "O lógico" },
+      { nombre: "NOT", sintaxis: "NOT(condición)", descripcion: "Negación" },
+      { nombre: "TRUE", sintaxis: "TRUE()", descripcion: "Verdadero" },
+      { nombre: "FALSE", sintaxis: "FALSE()", descripcion: "Falso" },
+      { nombre: "XOR", sintaxis: "XOR(cond1; cond2; ...)", descripcion: "O exclusivo" },
+      { nombre: "IFS", sintaxis: "IFS(cond1; valor1; cond2; valor2; ...)", descripcion: "Múltiples condiciones" },
+      { nombre: "SWITCH", sintaxis: "SWITCH(expr; val1; res1; ...; default)", descripcion: "Selección por valor" },
+    ],
+  },
+  {
+    categoria: "Texto",
+    funciones: [
+      { nombre: "LEFT", sintaxis: "LEFT(texto; cantidad)", descripcion: "Caracteres a la izquierda" },
+      { nombre: "RIGHT", sintaxis: "RIGHT(texto; cantidad)", descripcion: "Caracteres a la derecha" },
+      { nombre: "MID", sintaxis: "MID(texto; inicio; cantidad)", descripcion: "Extrae subcadena" },
+      { nombre: "LEN", sintaxis: "LEN(texto)", descripcion: "Longitud del texto" },
+      { nombre: "CONCATENATE", sintaxis: "CONCATENATE(texto1; texto2; ...)", descripcion: "Une textos" },
+      { nombre: "CONCAT", sintaxis: "CONCAT(texto1; texto2; ...)", descripcion: "Une textos" },
+      { nombre: "TEXTJOIN", sintaxis: "TEXTJOIN(separador; omitir_vacíos; texto1; ...)", descripcion: "Une con separador" },
+      { nombre: "TEXT", sintaxis: "TEXT(valor; formato)", descripcion: "Formatea como texto" },
+      { nombre: "VALUE", sintaxis: "VALUE(texto)", descripcion: "Convierte texto a número" },
+      { nombre: "TRIM", sintaxis: "TRIM(texto)", descripcion: "Quita espacios extra" },
+      { nombre: "UPPER", sintaxis: "UPPER(texto)", descripcion: "Mayúsculas" },
+      { nombre: "LOWER", sintaxis: "LOWER(texto)", descripcion: "Minúsculas" },
+      { nombre: "PROPER", sintaxis: "PROPER(texto)", descripcion: "Primera letra en mayúscula" },
+      { nombre: "REPLACE", sintaxis: "REPLACE(texto; inicio; longitud; nuevo)", descripcion: "Reemplaza caracteres" },
+      { nombre: "SUBSTITUTE", sintaxis: "SUBSTITUTE(texto; buscar; reemplazar; ocurrencia)", descripcion: "Sustituye texto" },
+      { nombre: "FIND", sintaxis: "FIND(buscar; texto; inicio)", descripcion: "Posición (sensible mayúsculas)" },
+      { nombre: "SEARCH", sintaxis: "SEARCH(buscar; texto; inicio)", descripcion: "Posición (no sensible)" },
+      { nombre: "REPT", sintaxis: "REPT(texto; veces)", descripcion: "Repite texto" },
+    ],
+  },
+  {
+    categoria: "Fecha y hora",
+    funciones: [
+      { nombre: "DATE", sintaxis: "DATE(año; mes; día)", descripcion: "Fecha a partir de año, mes, día" },
+      { nombre: "TODAY", sintaxis: "TODAY()", descripcion: "Fecha actual" },
+      { nombre: "NOW", sintaxis: "NOW()", descripcion: "Fecha y hora actual" },
+      { nombre: "YEAR", sintaxis: "YEAR(fecha)", descripcion: "Año" },
+      { nombre: "MONTH", sintaxis: "MONTH(fecha)", descripcion: "Mes" },
+      { nombre: "DAY", sintaxis: "DAY(fecha)", descripcion: "Día" },
+      { nombre: "HOUR", sintaxis: "HOUR(fecha_hora)", descripcion: "Hora" },
+      { nombre: "MINUTE", sintaxis: "MINUTE(fecha_hora)", descripcion: "Minuto" },
+      { nombre: "SECOND", sintaxis: "SECOND(fecha_hora)", descripcion: "Segundo" },
+      { nombre: "WEEKDAY", sintaxis: "WEEKDAY(fecha; tipo)", descripcion: "Día de la semana" },
+      { nombre: "WEEKNUM", sintaxis: "WEEKNUM(fecha; tipo)", descripcion: "Número de semana" },
+      { nombre: "EOMONTH", sintaxis: "EOMONTH(fecha; meses)", descripcion: "Último día del mes" },
+      { nombre: "EDATE", sintaxis: "EDATE(fecha; meses)", descripcion: "Fecha + N meses" },
+      { nombre: "DATEDIF", sintaxis: "DATEDIF(inicio; fin; unidad)", descripcion: "Diferencia entre fechas" },
+      { nombre: "DATEVALUE", sintaxis: "DATEVALUE(texto)", descripcion: "Texto a fecha" },
+      { nombre: "TIMEVALUE", sintaxis: "TIMEVALUE(texto)", descripcion: "Texto a hora" },
+    ],
+  },
+  {
+    categoria: "Búsqueda y referencia",
+    funciones: [
+      { nombre: "VLOOKUP", sintaxis: "VLOOKUP(valor; tabla; col; aprox)", descripcion: "Búsqueda vertical" },
+      { nombre: "HLOOKUP", sintaxis: "HLOOKUP(valor; tabla; fila; aprox)", descripcion: "Búsqueda horizontal" },
+      { nombre: "INDEX", sintaxis: "INDEX(rango; fila; col)", descripcion: "Valor en posición" },
+      { nombre: "MATCH", sintaxis: "MATCH(valor; rango; tipo)", descripcion: "Posición en rango" },
+      { nombre: "XLOOKUP", sintaxis: "XLOOKUP(buscar; rango_buscar; rango_devuelve)", descripcion: "Búsqueda moderna" },
+      { nombre: "OFFSET", sintaxis: "OFFSET(ref; filas; cols; alto; ancho)", descripcion: "Referencia desplazada" },
+      { nombre: "INDIRECT", sintaxis: "INDIRECT(ref_texto)", descripcion: "Referencia desde texto" },
+      { nombre: "CHOOSE", sintaxis: "CHOOSE(índice; valor1; valor2; ...)", descripcion: "Elige por índice" },
+    ],
+  },
+  {
+    categoria: "Estadística",
+    funciones: [
+      { nombre: "MEDIAN", sintaxis: "MEDIAN(rango)", descripcion: "Mediana" },
+      { nombre: "MODE", sintaxis: "MODE(rango)", descripcion: "Moda" },
+      { nombre: "STDEV", sintaxis: "STDEV(rango)", descripcion: "Desviación estándar (muestra)" },
+      { nombre: "STDEVP", sintaxis: "STDEVP(rango)", descripcion: "Desviación estándar (población)" },
+      { nombre: "VAR", sintaxis: "VAR(rango)", descripcion: "Varianza (muestra)" },
+      { nombre: "VARP", sintaxis: "VARP(rango)", descripcion: "Varianza (población)" },
+      { nombre: "AVERAGEIF", sintaxis: "AVERAGEIF(rango; criterio; rango_promedio)", descripcion: "Promedio condicional" },
+      { nombre: "SUMIF", sintaxis: "SUMIF(rango; criterio; rango_suma)", descripcion: "Suma condicional" },
+      { nombre: "COUNTIF", sintaxis: "COUNTIF(rango; criterio)", descripcion: "Conteo condicional" },
+      { nombre: "COUNTIFS", sintaxis: "COUNTIFS(rango1; crit1; rango2; crit2; ...)", descripcion: "Conteo con múltiples criterios" },
+      { nombre: "SUMIFS", sintaxis: "SUMIFS(rango_suma; rango1; crit1; ...)", descripcion: "Suma con múltiples criterios" },
+    ],
+  },
+  {
+    categoria: "Información y compatibilidad",
+    funciones: [
+      { nombre: "ISBLANK", sintaxis: "ISBLANK(valor)", descripcion: "¿Está vacío?" },
+      { nombre: "ISNUMBER", sintaxis: "ISNUMBER(valor)", descripcion: "¿Es número?" },
+      { nombre: "ISTEXT", sintaxis: "ISTEXT(valor)", descripcion: "¿Es texto?" },
+      { nombre: "ISDATE", sintaxis: "ISDATE(valor)", descripcion: "¿Es fecha?" },
+      { nombre: "ISERROR", sintaxis: "ISERROR(valor)", descripcion: "¿Es error?" },
+      { nombre: "ISNA", sintaxis: "ISNA(valor)", descripcion: "¿Es #N/A?" },
+      { nombre: "NA", sintaxis: "NA()", descripcion: "Devuelve #N/A" },
+      { nombre: "NULLIF", sintaxis: "NULLIF(valor1; valor2)", descripcion: "NULL si son iguales" },
+      { nombre: "COALESCE", sintaxis: "COALESCE(val1; val2; ...)", descripcion: "Primer valor no nulo" },
+    ],
+  },
 ];
 
 type ColumnRole = "key" | "time" | "dimension" | "measure";
@@ -270,6 +426,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [formulaSuggestions, setFormulaSuggestions] = useState<string[]>([]);
   const [formulaSuggestionIndex, setFormulaSuggestionIndex] = useState(0);
   const [creatingColumn, setCreatingColumn] = useState(false);
+  const [formulasHelpOpen, setFormulasHelpOpen] = useState(false);
   /** Columnas calculadas (ej. factura = CANTIDAD * PRECIO_UNITARIO); se guardan en dataset y aparecen como medidas. */
   const [derivedColumns, setDerivedColumns] = useState<DerivedColumn[]>([]);
 
@@ -2081,7 +2238,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                         </div>
                       </div>
                       <div>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Fórmula personalizada (columnas)</Label>
+                        <div className="flex items-center gap-2 mb-2">
+                            <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg-muted)" }}>Fórmula personalizada (columnas)</Label>
+                            <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full shrink-0" onClick={() => setFormulasHelpOpen(true)} title="Ver todas las fórmulas de Excel" style={{ color: "var(--platform-accent)" }}>
+                              <HelpCircle className="h-4 w-4" />
+                            </Button>
+                          </div>
                         <div className="flex gap-2 flex-wrap items-end">
                           <div className="flex-1 min-w-[200px]">
                             <Input
@@ -3351,6 +3513,34 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
           </div>
         </section>
       )}
+
+      {/* Modal de ayuda: todas las fórmulas de Excel */}
+      <Dialog open={formulasHelpOpen} onOpenChange={setFormulasHelpOpen}>
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-hidden flex flex-col rounded-2xl" style={{ background: "var(--platform-bg-elevated)", borderColor: "var(--platform-border)" }}>
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>Referencia de fórmulas (estilo Excel)</DialogTitle>
+            <DialogDescription className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+              Podés usar nombres de columnas en las expresiones (ej. CANTIDAD * PRECIO_UNITARIO). Las funciones se evalúan según el motor de datos. Operadores: + - * / y funciones listadas abajo.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto pr-2 -mr-2 space-y-6">
+            {EXCEL_FORMULAS_REFERENCIA.map((grupo) => (
+              <div key={grupo.categoria}>
+                <h4 className="text-sm font-semibold mb-2 sticky top-0 py-1 z-10" style={{ color: "var(--platform-accent)", background: "var(--platform-bg-elevated)" }}>{grupo.categoria}</h4>
+                <div className="grid gap-2">
+                  {grupo.funciones.map((f) => (
+                    <div key={f.nombre} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border py-2 px-3 text-sm" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                      <span className="font-mono font-semibold shrink-0" style={{ color: "var(--platform-fg)" }}>{f.nombre}</span>
+                      <span className="font-mono text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>{f.sintaxis}</span>
+                      <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{f.descripcion}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
