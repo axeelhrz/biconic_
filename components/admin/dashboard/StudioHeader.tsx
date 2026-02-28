@@ -29,6 +29,8 @@ type StudioHeaderProps = {
   isSaving?: boolean;
   onSave?: () => void;
   onRun?: () => void;
+  /** Si true, no se muestra "Ejecutar métricas" (los datos se cargan solos al abrir). */
+  hideRunButton?: boolean;
 };
 
 const MODES: { id: StudioMode; label: string }[] = [
@@ -57,6 +59,7 @@ export function StudioHeader({
   isSaving,
   onSave,
   onRun,
+  hideRunButton = false,
 }: StudioHeaderProps) {
   return (
     <header className="studio-header flex flex-shrink-0 items-center">
@@ -168,13 +171,15 @@ export function StudioHeader({
                     Vista previa
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={onRun}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-[var(--studio-text-body)] text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
-                >
-                  <Play className="h-4 w-4" />
-                  Ejecutar métricas
-                </DropdownMenuItem>
+                {!hideRunButton && onRun && (
+                  <DropdownMenuItem
+                    onClick={onRun}
+                    className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-[var(--studio-text-body)] text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
+                  >
+                    <Play className="h-4 w-4" />
+                    Ejecutar métricas
+                  </DropdownMenuItem>
+                )}
                 {onSave && (
                   <>
                     <DropdownMenuSeparator className="bg-[var(--studio-border)]" />

@@ -124,7 +124,7 @@ export function AdminDashboardStudio({
   const [isDirty, setIsDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [addMetricOpen, setAddMetricOpen] = useState(false);
-  const [addMetricStep, setAddMetricStep] = useState<"intent" | "config">("intent");
+  const [addMetricStep, setAddMetricStep] = useState<"list" | "intent" | "config">("list");
   const [addSourceOpen, setAddSourceOpen] = useState(false);
   const [addSourceQuery, setAddSourceQuery] = useState("");
   const [addSourceEtls, setAddSourceEtls] = useState<{ id: string; title: string }[]>([]);
@@ -139,12 +139,14 @@ export function AdminDashboardStudio({
   const [layoutLoaded, setLayoutLoaded] = useState(false);
   const loadedOnce = useRef(false);
   const etlMetricsMergedRef = useRef(false);
+  const autoLoadWidgetsDoneRef = useRef(false);
 
   const { data: etlData, loading: etlLoading, error: etlError, refetch: refetchEtlData } = useAdminDashboardEtlData(dashboardId);
 
-  // Reset merge flag when dashboard changes so we merge ETL metrics again for the new dashboard
+  // Reset merge flag and auto-load when dashboard changes
   useEffect(() => {
     etlMetricsMergedRef.current = false;
+    autoLoadWidgetsDoneRef.current = false;
     setLayoutLoaded(false);
   }, [dashboardId]);
 
@@ -352,12 +354,14 @@ export function AdminDashboardStudio({
           const metricsPayload = agg.metrics.map(({ id, ...m }) => {
             if (m.func === "FORMULA")
               return { formula: m.formula || "", alias: m.alias || "formula", field: "" };
-            return {
+            const metric: Record<string, unknown> = {
               field: m.field,
               func: m.func,
               alias: m.alias || `${m.func}_${m.field}`,
               ...(m.condition ? { condition: m.condition } : {}),
             };
+            if ((m as { expression?: string }).expression) metric.expression = (m as { expression: string }).expression;
+            return metric;
           });
           const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
           const widgetEtlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
@@ -376,10 +380,14 @@ export function AdminDashboardStudio({
               cumulative: agg.cumulative || "none",
               comparePeriod: agg.comparePeriod || undefined,
               dateDimension: agg.dateDimension || undefined,
+              ...(derivedColumnsFromLayout.length > 0 && { derivedColumns: derivedColumnsFromLayout }),
             }),
           });
-          if (!res.ok) throw new Error("Error en agregación");
           const dataArray = await res.json();
+          if (!res.ok) {
+            const errMsg = (dataArray && typeof dataArray === "object" && dataArray.error) ? dataArray.error : "Error en agregación";
+            throw new Error(typeof errMsg === "string" ? errMsg : "Error en agregación");
+          }
           if (!Array.isArray(dataArray) || dataArray.length === 0) {
             setWidgets((prev) =>
               prev.map((w) =>
@@ -452,7 +460,7 @@ export function AdminDashboardStudio({
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, getTableName]
+    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout]
   );
 
   useEffect(() => {
@@ -499,6 +507,23 @@ export function AdminDashboardStudio({
   );
 
   const widgetsForCurrentPage = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
+
+  // Auto-cargar datos de todos los widgets al abrir el dashboard (solo una vez)
+  useEffect(() => {
+    if (!layoutLoaded || !etlData || etlLoading || widgets.length === 0 || autoLoadWidgetsDoneRef.current) return;
+    autoLoadWidgetsDoneRef.current = true;
+    const toLoad = widgets.filter((w) => w.aggregationConfig?.enabled);
+    if (toLoad.length === 0) return;
+    (async () => {
+      setIsRunning(true);
+      try {
+        await Promise.all(toLoad.map((w) => loadMetricData(w.id)));
+      } finally {
+        setIsRunning(false);
+      }
+    })();
+  }, [layoutLoaded, etlData, etlLoading, widgets, loadMetricData]);
+
   const runAllMetrics = useCallback(async () => {
     const toRun = activePageId ? widgets.filter((w) => (w.pageId ?? "page-1") === activePageId) : widgets;
     if (toRun.length === 0) return;
@@ -578,11 +603,61 @@ export function AdminDashboardStudio({
       setSelectedId(null);
       setIsDirty(true);
       setAddMetricOpen(false);
-      setAddMetricStep("intent");
+      setAddMetricStep("list");
       setAddMetricInitialIntent(null);
       if (etlData) setTimeout(() => loadMetricData(id), 300);
     },
     [etlData, widgets, activePageId, loadMetricData]
+  );
+
+  /** Añade al dashboard una métrica ya creada (del ETL). */
+  const addSavedMetricToDashboard = useCallback(
+    (saved: SavedMetricForm) => {
+      const cfg = (saved.aggregationConfig ?? {}) as Record<string, unknown>;
+      const chartType = (cfg.chartType as string) || saved.chartType || "bar";
+      const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter(Boolean) as string[];
+      const metricsArr = Array.isArray(cfg.metrics) ? cfg.metrics : [saved.metric];
+      const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
+      const newWidget: StudioWidget = {
+        id: `w-${saved.id}-${Date.now()}`,
+        type: chartType,
+        title: saved.name,
+        x: 0,
+        y: 0,
+        w: 400,
+        h: 280,
+        gridOrder: currentPageWidgets.length,
+        gridSpan: chartType === "kpi" ? 1 : 2,
+        pageId: activePageId ?? "page-1",
+        aggregationConfig: {
+          enabled: true,
+          dimension: dims[0] || undefined,
+          dimension2: dims[1] || undefined,
+          metrics: metricsArr.map((m: any) => ({
+            id: m.id || `m-${Date.now()}`,
+            field: m.field || "",
+            func: m.func || "SUM",
+            alias: m.alias || "",
+            condition: m.condition,
+            formula: m.formula,
+            expression: m.expression,
+          })),
+          filters: Array.isArray(cfg.filters) ? cfg.filters : undefined,
+          orderBy: cfg.orderBy as { field: string; direction: "ASC" | "DESC" } | undefined,
+          limit: (cfg.limit as number) ?? 100,
+        },
+        excludeGlobalFilters: false,
+        dataSourceId: null,
+      };
+      setWidgets((prev) => [...prev, newWidget]);
+      setSelectedId(null);
+      setIsDirty(true);
+      setAddMetricOpen(false);
+      setAddMetricStep("list");
+      setAddMetricInitialIntent(null);
+      if (etlData) setTimeout(() => loadMetricData(newWidget.id), 300);
+    },
+    [widgets, activePageId, etlData, loadMetricData]
   );
 
   const openAddMetricConfig = useCallback((intentOrBlank: StudioIntent | "blank") => {
@@ -593,7 +668,7 @@ export function AdminDashboardStudio({
 
   const closeAddMetricModal = useCallback(() => {
     setAddMetricOpen(false);
-    setAddMetricStep("intent");
+    setAddMetricStep("list");
     setAddMetricInitialIntent(null);
   }, []);
 
@@ -680,6 +755,7 @@ export function AdminDashboardStudio({
         isSaving={isSaving}
         onSave={handleSave}
         onRun={runAllMetrics}
+        hideRunButton
       />
       {etlData?.etl?.id && widgetsForCurrentPage.length > 0 && (
         <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-accent-dim)]/50">
@@ -873,14 +949,14 @@ export function AdminDashboardStudio({
         onOpenChange={(open) => {
           setAddMetricOpen(open);
           if (!open) {
-            setAddMetricStep("intent");
+            setAddMetricStep("list");
             setAddMetricInitialIntent(null);
           }
         }}
       >
-        <DialogContent className="studio-modal-content border-0 p-0 gap-0 overflow-hidden">
+        <DialogContent className="studio-modal-content border-0 p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col">
           {addMetricStep === "config" && addMetricInitialIntent != null ? (
-            <div className="studio-modal-inner p-6">
+            <div className="studio-modal-inner p-6 overflow-auto">
               <AddMetricConfigForm
                 initialValues={getInitialFormConfig(addMetricInitialIntent)}
                 etlData={etlData ?? null}
@@ -893,11 +969,48 @@ export function AdminDashboardStudio({
                 onSaveMetricAsTemplate={saveMetricAsTemplate}
               />
             </div>
-          ) : (
+          ) : addMetricStep === "list" ? (
             <>
-              <div className="studio-modal-inner">
+              <div className="studio-modal-inner p-6 pb-4">
                 <DialogHeader>
                   <DialogTitle>Añadir métrica</DialogTitle>
+                  <DialogDescription>
+                    Elegí una métrica ya creada para este ETL o creá una nueva.
+                  </DialogDescription>
+                </DialogHeader>
+                {savedMetrics.length > 0 ? (
+                  <div className="mt-4 space-y-2 max-h-[280px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
+                    {savedMetrics.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => addSavedMetricToDashboard(m)}
+                        className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
+                        style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
+                      >
+                        <span className="font-medium truncate">{m.name}</span>
+                        <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir al dashboard</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm" style={{ color: "var(--studio-fg-muted)" }}>
+                    No hay métricas creadas para este ETL. Creá una desde la página de métricas o desde cero aquí.
+                  </p>
+                )}
+              </div>
+              <div className="studio-modal-cta p-4 pt-0 border-t" style={{ borderColor: "var(--studio-border)" }}>
+                <Button type="button" variant="outline" className="w-full" onClick={() => setAddMetricStep("intent")}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Crear nueva métrica
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="studio-modal-inner p-6">
+                <DialogHeader>
+                  <DialogTitle>Crear nueva métrica</DialogTitle>
                   <DialogDescription>
                     ¿Qué querés entender? Elegí una intención o creá una métrica desde cero.
                   </DialogDescription>
@@ -924,12 +1037,14 @@ export function AdminDashboardStudio({
                   })}
                 </div>
               </div>
-              <div className="studio-modal-cta">
-                <p>O crear una métrica desde cero y configurarla aquí.</p>
+              <div className="studio-modal-cta p-4 border-t" style={{ borderColor: "var(--studio-border)" }}>
                 <Button type="button" variant="outline" className="w-full" onClick={() => openAddMetricConfig("blank")}>
                   <Plus className="mr-2 h-4 w-4" />
                   Crear métrica vacía
                 </Button>
+                <button type="button" className="w-full mt-2 text-sm underline" style={{ color: "var(--studio-fg-muted)" }} onClick={() => setAddMetricStep("list")}>
+                  ← Volver a métricas del ETL
+                </button>
               </div>
             </>
           )}
