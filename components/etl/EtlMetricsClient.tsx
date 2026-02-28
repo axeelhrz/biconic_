@@ -813,12 +813,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     }
   }, [etlId, tableNameForPreview, formDimensions, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, wizard, timeColumn, analysisGranularity, analysisTimeRange, analysisDateFrom, analysisDateTo, transformCompare, transformCompareFixedValue]);
 
-  // Refrescar previsualización al entrar al paso de vista previa (wizard C, paso 5)
+  const fetchPreviewRef = useRef(fetchPreview);
+  fetchPreviewRef.current = fetchPreview;
+
+  // Refrescar previsualización solo una vez al entrar al paso de vista previa (wizard C, paso 5). No incluir fetchPreview en deps para evitar bucle infinito.
+  const prevWizardStepRef = useRef<{ wizard: string; wizardStep: number; showForm: boolean }>({ wizard: "", wizardStep: -1, showForm: false });
   useEffect(() => {
-    if (wizard === "C" && wizardStep === 5 && showForm) {
-      fetchPreview();
+    const now = wizard === "C" && wizardStep === 5 && showForm;
+    const prev = prevWizardStepRef.current;
+    const wasAlreadyHere = prev.wizard === "C" && prev.wizardStep === 5 && prev.showForm;
+    prevWizardStepRef.current = { wizard, wizardStep, showForm };
+    if (now && !wasAlreadyHere) {
+      fetchPreviewRef.current();
     }
-  }, [wizard, wizardStep, showForm, fetchPreview]);
+  }, [wizard, wizardStep, showForm]);
 
   const { recommendationText, suggestedChartType } = useMemo(() => {
     const hasDim = formDimensions.filter(Boolean).length > 0;
