@@ -3090,10 +3090,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                 <section className="rounded-xl border p-6 space-y-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Vista previa y guardar</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Vista previa del gráfico con los datos actuales. Guardá la métrica para usarla en dashboards.</p>
-                  {previewData && previewData.length > 0 && (
-                    <>
-                      <div className="rounded-xl border p-4 shadow-sm" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Gráfico (vista previa)</p>
+                  <div className="rounded-xl border p-4 shadow-sm min-h-[260px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Gráfico (vista previa)</p>
+                    {previewLoading ? (
+                      <div className="flex flex-col items-center justify-center min-h-[240px] gap-3" style={{ color: "var(--platform-fg-muted)" }}>
+                        <Loader2 className="h-8 w-8 animate-spin" />
+                        <span className="text-sm">Cargando vista previa…</span>
+                      </div>
+                    ) : !previewData || previewData.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center min-h-[240px] gap-3 rounded-lg border border-dashed p-6" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                        <BarChart2 className="h-12 w-12 opacity-50" />
+                        <p className="text-sm text-center">Tocá «Actualizar vista previa» para cargar datos y ver el gráfico.</p>
+                        <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
+                          Actualizar vista previa
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
                         {formChartType === "kpi" && previewKpiValue != null && (
                           <div className="flex items-center justify-center min-h-[100px]">
                             <span className="text-3xl font-bold tabular-nums" style={{ color: "var(--platform-fg)" }}>{formatNumber(previewKpiValue)}</span>
@@ -3143,9 +3156,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             <p className="text-xs text-center max-w-sm" style={{ color: "var(--platform-fg-muted)" }}>El mapa se renderizará en el dashboard con los datos geográficos de las dimensiones seleccionadas (país, provincia, ciudad, coordenadas).</p>
                           </div>
                         )}
-                      </div>
-                    </>
-                  )}
+                      </>
+                    )}
+                  </div>
                   <div className="flex justify-between items-center">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
                     <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>
