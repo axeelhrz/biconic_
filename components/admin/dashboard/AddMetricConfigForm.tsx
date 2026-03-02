@@ -80,6 +80,12 @@ export type SavedMetricAggregationConfig = {
   chartThousandSep?: boolean;
   chartDecimals?: number;
   chartSortDirection?: string;
+  chartSortBy?: string;
+  chartAxisOrder?: string;
+  chartScaleMode?: string;
+  chartScaleMin?: string | number;
+  chartScaleMax?: string | number;
+  chartAxisStep?: string | number;
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
