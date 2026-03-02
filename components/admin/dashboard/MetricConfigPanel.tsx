@@ -177,7 +177,10 @@ export function MetricConfigPanel({
   };
 
   const addSavedMetric = (saved: SavedMetricPanel) => {
-    updateAgg({ metrics: [...metrics, { ...saved.metric, id: `m-${Date.now()}` }] });
+    const savedWithConfig = saved as SavedMetricPanel & { aggregationConfig?: { metrics?: AggregationMetricEdit[] } };
+    const firstMetric = savedWithConfig.aggregationConfig?.metrics?.[0];
+    const metricToAdd = (firstMetric ?? saved.metric) as AggregationMetricEdit;
+    updateAgg({ metrics: [...metrics, { ...metricToAdd, id: `m-${Date.now()}` }] });
   };
 
   const orderFields = agg.enabled

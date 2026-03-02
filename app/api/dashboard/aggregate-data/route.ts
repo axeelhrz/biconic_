@@ -442,12 +442,23 @@ export async function POST(req: NextRequest) {
             const cfgMetrics = s?.aggregationConfig?.metrics;
             const firstMetric = Array.isArray(cfgMetrics) && cfgMetrics.length > 0 ? cfgMetrics[0] : topMetric;
             if (!firstMetric) continue;
-            const field = String(firstMetric?.field ?? "").trim();
+            let field = String(firstMetric?.field ?? "").trim();
             const expression = (firstMetric as { expression?: string }).expression;
+            const alias = String(firstMetric?.alias ?? name);
+            if (field.toLowerCase() === name && !expression) {
+              const byAlias = Array.isArray(cfgMetrics) && cfgMetrics.length > 0
+                ? cfgMetrics.find((mm: any) => mm?.field && String(mm.field).trim().toLowerCase() !== name)
+                : null;
+              if (byAlias) {
+                field = String((byAlias as { field?: string }).field ?? "").trim();
+              } else {
+                field = alias;
+              }
+            }
             savedMetricByName[name] = {
               field,
               func: String(firstMetric?.func ?? "SUM").toUpperCase(),
-              alias: String(firstMetric?.alias ?? name),
+              alias,
               ...(expression && String(expression).trim() && { expression: String(expression).trim() }),
             };
           }
