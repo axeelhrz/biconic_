@@ -1,6 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+// Lista dashboards (por etl_id o por client_id). GET /api/dashboard?etl_id=xxx
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return NextResponse.json(
+        { ok: false, error: "No autorizado" },
+        { status: 401 }
+      );
+    }
+    const { searchParams } = new URL(req.url);
+    const etlId = searchParams.get("etl_id")?.trim() || null;
+    const clientId = searchParams.get("client_id")?.trim() || null;
+    if (!etlId && !clientId) {
+      return NextResponse.json(
+        { ok: false, error: "Indicá etl_id o client_id" },
+        { status: 400 }
+      );
+    }
+    let query = supabase
+      .from("dashboard")
+      .select("id, title")
+      .order("title", { ascending: true, nullsFirst: false });
+    if (etlId) query = query.eq("etl_id", etlId);
+    if (clientId) query = query.eq("client_id", clientId);
+    const { data: rows, error } = await query;
+    if (error) {
+      return NextResponse.json(
+        { ok: false, error: error.message },
+        { status: 400 }
+      );
+    }
+    const list = (rows || []).map((r: any) => ({
+      id: String(r.id),
+      title: r.title ?? "Sin título",
+    }));
+    return NextResponse.json({ ok: true, dashboards: list });
+  } catch (e: any) {
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Error al listar dashboards" },
+      { status: 500 }
+    );
+  }
+}
+
 // Crea un nuevo dashboard y devuelve su ID
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {

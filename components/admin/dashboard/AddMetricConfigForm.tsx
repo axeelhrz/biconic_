@@ -71,6 +71,7 @@ export type SavedMetricAggregationConfig = {
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
   // Opciones de gráfico (persistidas al guardar métrica)
+  chartType?: string;
   chartXAxis?: string;
   chartYAxes?: string[];
   chartSeriesField?: string;

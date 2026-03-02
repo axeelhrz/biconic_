@@ -456,6 +456,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [linkedDashboardId, setLinkedDashboardId] = useState<string | null>(null);
   const [linkedDashboardName, setLinkedDashboardName] = useState("Dashboard principal");
   const [dashboardSyncing, setDashboardSyncing] = useState(false);
+  const [availableDashboards, setAvailableDashboards] = useState<{ id: string; title: string }[]>([]);
+  const [dashboardListLoading, setDashboardListLoading] = useState(false);
 
   // Filtros dinámicos del dashboard (8.1)
   type DynamicFilter = {
@@ -567,6 +569,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     if (d?.linkedDashboardId) { setLinkedDashboardId(d.linkedDashboardId); dashboardHydratedRef.current = true; }
     if (Array.isArray(d?.dashboardFilters) && d.dashboardFilters.length > 0) setDashboardFilters(d.dashboardFilters);
   }, [data]);
+
+  // Cargar lista de dashboards del ETL para poder elegir destino
+  useEffect(() => {
+    if (!etlId || savedMetrics.length === 0) return;
+    setDashboardListLoading(true);
+    fetch(`/api/dashboard?etl_id=${encodeURIComponent(etlId)}`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.ok && Array.isArray(json.dashboards)) setAvailableDashboards(json.dashboards);
+      })
+      .finally(() => setDashboardListLoading(false));
+  }, [etlId, savedMetrics.length]);
 
   const datasetConfigHydratedRef = useRef(false);
   useEffect(() => {
@@ -962,8 +976,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const openEdit = (saved: SavedMetricForm) => {
     setEditingId(saved.id);
     setFormName(saved.name);
-    setFormChartType(saved.chartType ?? "bar");
     const cfg = saved.aggregationConfig;
+    setFormChartType((cfg as { chartType?: string })?.chartType ?? (saved as { chartType?: string }).chartType ?? "bar");
     if (cfg) {
       const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter((d): d is string => typeof d === "string" && d !== "");
       setFormDimensions(dims.length > 0 ? dims : []);
@@ -1495,7 +1509,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       // 2. Convertir métricas a StudioWidget (formato real del AdminDashboardStudio)
       const widgets = metrics.map((m, idx) => {
         const cfg = (m.aggregationConfig ?? {}) as Record<string, any>;
-        const chartType = cfg.chartType || m.chartType || formChartType || "bar";
+        const chartType = cfg.chartType ?? (m as { chartType?: string }).chartType ?? "bar";
         const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter(Boolean);
         const metricsArr = Array.isArray(cfg.metrics) ? cfg.metrics : [m.metric];
 
@@ -1621,6 +1635,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
+      chartType: formChartType || undefined,
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
       chartSeriesField: chartSeriesField || undefined,
@@ -1794,6 +1809,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
+      chartType: formChartType || undefined,
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
       chartSeriesField: chartSeriesField || undefined,
@@ -3998,10 +4014,38 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
             </div>
 
             <div className="rounded-lg border p-3 mb-4 flex flex-wrap items-center gap-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-              <div className="flex items-center gap-2 flex-1 min-w-[180px]">
-                <Label className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Nombre</Label>
-                <Input value={linkedDashboardName} onChange={(e) => setLinkedDashboardName(e.target.value)} placeholder="Dashboard principal" className="h-8 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+              <div className="flex items-center gap-2 min-w-[200px]">
+                <Label className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Dashboard de destino</Label>
+                <select
+                  value={linkedDashboardId ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) {
+                      setLinkedDashboardId(null);
+                      setLinkedDashboardName("Dashboard principal");
+                    } else {
+                      const d = availableDashboards.find((x) => x.id === v);
+                      setLinkedDashboardId(v);
+                      setLinkedDashboardName(d?.title ?? linkedDashboardName);
+                    }
+                  }}
+                  className="h-8 rounded-lg border px-2 text-sm min-w-[180px]"
+                  style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                  disabled={dashboardListLoading}
+                >
+                  <option value="">Crear nuevo...</option>
+                  {availableDashboards.map((d) => (
+                    <option key={d.id} value={d.id}>{d.title}</option>
+                  ))}
+                </select>
+                {dashboardListLoading && <Loader2 className="h-4 w-4 animate-spin shrink-0" style={{ color: "var(--platform-accent)" }} />}
               </div>
+              {!linkedDashboardId && (
+                <div className="flex items-center gap-2 min-w-[180px]">
+                  <Label className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Nombre del nuevo</Label>
+                  <Input value={linkedDashboardName} onChange={(e) => setLinkedDashboardName(e.target.value)} placeholder="Dashboard principal" className="h-8 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{savedMetrics.length} métrica{savedMetrics.length !== 1 ? "s" : ""} como widgets</span>
                 {dashboardSyncing && <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--platform-accent)" }} />}
