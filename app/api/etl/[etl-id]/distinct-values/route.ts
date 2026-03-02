@@ -108,10 +108,14 @@ export async function GET(
     }
 
     const url = new URL(request.url);
-    const column = (url.searchParams.get("column") ?? "").trim().replace(/[^a-zA-Z0-9_]/g, "");
-    if (!column) {
+    const columnParam = (url.searchParams.get("column") ?? "").trim();
+    // Quitar prefijo tipo "schema." o "tablename." si vino calificado
+    const columnRaw = columnParam.replace(/^[a-zA-Z0-9_]+\./, "").replace(/[^a-zA-Z0-9_]/g, "");
+    if (!columnRaw) {
       return NextResponse.json({ ok: false, error: "Parámetro column requerido" }, { status: 400 });
     }
+    // En PostgreSQL los identificadores sin comillas son en minúsculas; PostgREST usa el nombre tal cual
+    const column = columnRaw.toLowerCase();
 
     const resolved = await resolveEtlTable(supabase, etlId);
     if (!resolved) {
