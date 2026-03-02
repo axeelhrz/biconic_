@@ -1178,6 +1178,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     return { recommendationText: "Seleccioná el tipo de gráfico que mejor represente tu análisis.", suggestedChartType: "bar" };
   }, [formDimensions, formMetrics, timeColumn, analysisGranularity, transformCompare, previewData]);
 
+  /** Restricciones por datos: sin rol Geo no permitir Mapa; con dimensión no permitir KPI. */
+  const chartTypeRestrictions = useMemo(() => {
+    const hasDim = formDimensions.filter(Boolean).length > 0;
+    const geoKeywords = /lat|lng|lon|geo|country|pais|ciudad|city|region|provincia|estado|state|zip|postal|coord/i;
+    const hasGeo = formDimensions.some((d) => columnRoles[d]?.role === "geo" || geoKeywords.test(d));
+    return { hasDimension: hasDim, hasGeo };
+  }, [formDimensions, columnRoles]);
+
   const chartAutoSelectedRef = useRef(false);
   useEffect(() => {
     if (wizard === "D" && wizardStep === 0 && !chartAutoSelectedRef.current) {
@@ -1186,6 +1194,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
     if (wizard !== "D") chartAutoSelectedRef.current = false;
   }, [wizard, wizardStep, suggestedChartType]);
+
+  useEffect(() => {
+    if (wizard !== "D" || wizardStep !== 0) return;
+    const { hasDimension, hasGeo } = chartTypeRestrictions;
+    if (formChartType === "kpi" && hasDimension) setFormChartType(suggestedChartType);
+    if (formChartType === "map" && !hasGeo) setFormChartType(suggestedChartType);
+  }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType]);
 
   const previewChartConfig = useMemo(() => {
     if (!previewData || previewData.length === 0) return null;
@@ -1338,12 +1353,32 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     return false;
   }), [chartAvailableColumns, formMetrics]);
 
+  const lastChartTypeForMappingRef = useRef<string | null>(null);
   useEffect(() => {
-    if (wizard === "D" && wizardStep === 1) {
-      if (!chartXAxis && chartDimensionColumns.length > 0) setChartXAxis(chartDimensionColumns[0]!.key);
-      if (chartYAxes.length === 0 && chartNumericColumns.length > 0) setChartYAxes(chartNumericColumns.slice(0, Math.min(3, chartNumericColumns.length)).map((c) => c.key));
+    if (wizard !== "D" || wizardStep !== 1) return;
+    const dims = chartDimensionColumns;
+    const nums = chartNumericColumns;
+    const chartTypeChanged = lastChartTypeForMappingRef.current !== formChartType;
+    lastChartTypeForMappingRef.current = formChartType;
+    const emptyMapping = !chartXAxis && chartYAxes.length === 0;
+    if (!chartTypeChanged && !emptyMapping) return;
+    if (dims.length === 0 && nums.length === 0) return;
+
+    if (formChartType === "kpi") {
+      setChartXAxis("");
+      setChartYAxes(nums.length ? [nums[0]!.key] : []);
+      setChartSeriesField("");
+    } else if (formChartType === "map") {
+      const geoCol = dims.find((c) => columnRoles[c.key]?.role === "geo") ?? dims[0];
+      setChartXAxis(geoCol?.key ?? "");
+      setChartYAxes(nums.length ? nums.slice(0, 2).map((c) => c.key) : []);
+      setChartSeriesField("");
+    } else {
+      if (!chartXAxis && dims.length > 0) setChartXAxis(dims[0]!.key);
+      if (chartYAxes.length === 0 && nums.length > 0) setChartYAxes(nums.slice(0, Math.min(3, nums.length)).map((c) => c.key));
+      if (dims.length >= 2 && !chartSeriesField) setChartSeriesField(dims[1]!.key);
     }
-  }, [wizard, wizardStep, chartXAxis, chartYAxes.length, chartDimensionColumns, chartNumericColumns]);
+  }, [wizard, wizardStep, formChartType, chartDimensionColumns, chartNumericColumns, chartXAxis, chartYAxes.length, chartSeriesField, columnRoles]);
 
   /** Encabezados para la tabla de previsualización: metric_0 → alias de la métrica (estilo Excel). */
   const previewDisplayHeaders = useMemo(() => {
@@ -3370,7 +3405,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               {wizard === "D" && wizardStep === 0 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Tipo de visual</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Elegí cómo ver la métrica. Se elige al usarla en el dashboard; esto es solo vista previa.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Vinculado al mapeo: el tipo condiciona qué ejes y series se sugieren. Solo se ofrecen opciones válidas según tus dimensiones y métricas.</p>
                   <section className="rounded-xl border p-4 mb-4" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
                     <div className="flex items-start gap-2">
                       <Sparkles className="h-5 w-5 shrink-0 mt-0.5" style={{ color: "var(--platform-accent)" }} />
@@ -3381,12 +3416,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     {CHART_TYPES.map(({ value, label, icon: Icon, description }) => {
                       const isSelected = formChartType === value;
                       const isSuggested = suggestedChartType === value && !isSelected;
+                      const noMap = value === "map" && !chartTypeRestrictions.hasGeo;
+                      const noKpi = value === "kpi" && chartTypeRestrictions.hasDimension;
+                      const disabled = noMap || noKpi;
+                      const reason = noMap ? "Requiere dimensión con rol Geo" : noKpi ? "KPI no admite dimensiones" : null;
                       return (
-                        <button key={value} type="button" onClick={() => setFormChartType(value)} className="relative flex flex-col items-center gap-1 rounded-xl px-3 py-3 text-sm font-medium transition-all border" style={{ background: isSelected ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: isSelected ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: isSuggested ? "var(--platform-accent)" : isSelected ? "transparent" : "var(--platform-border)" }}>
-                          {isSuggested && <span className="absolute -top-2 right-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}>Sugerido</span>}
+                        <button key={value} type="button" onClick={() => !disabled && setFormChartType(value)} disabled={disabled} title={reason ?? undefined} className="relative flex flex-col items-center gap-1 rounded-xl px-3 py-3 text-sm font-medium transition-all border" style={{ background: disabled ? "var(--platform-surface)" : isSelected ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: disabled ? "var(--platform-fg-muted)" : isSelected ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: isSuggested ? "var(--platform-accent)" : isSelected ? "transparent" : "var(--platform-border)", opacity: disabled ? 0.7 : 1, cursor: disabled ? "not-allowed" : "pointer" }}>
+                          {isSuggested && !disabled && <span className="absolute -top-2 right-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}>Sugerido</span>}
                           <Icon className="h-5 w-5" />
                           <span className="text-xs font-semibold">{label}</span>
-                          <span className="text-[10px] leading-tight text-center opacity-70">{description}</span>
+                          <span className="text-[10px] leading-tight text-center opacity-70">{disabled ? reason : description}</span>
                         </button>
                       );
                     })}
@@ -3402,7 +3441,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               {wizard === "D" && wizardStep === 1 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Mapeo de campos</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Definí qué columnas van en cada eje del gráfico. Los cambios se reflejan en la vista previa.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Según el tipo <strong>{CHART_TYPES.find((t) => t.value === formChartType)?.label ?? formChartType}</strong>: se sugieren Eje X, Eje Y y Serie. Podés ajustarlos manualmente.</p>
 
                   {chartAvailableColumns.length === 0 && (
                     <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
