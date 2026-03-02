@@ -1320,6 +1320,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       return {
         labels,
         datasets: [{
+          label: colLabel(yKey),
           data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
           backgroundColor: sliceColors,
           hoverBackgroundColor: hoverColors,
