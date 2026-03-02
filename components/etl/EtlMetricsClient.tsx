@@ -570,18 +570,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     if (Array.isArray(d?.dashboardFilters) && d.dashboardFilters.length > 0) setDashboardFilters(d.dashboardFilters);
   }, [data]);
 
-  // Cargar lista de dashboards del ETL para poder elegir destino
-  useEffect(() => {
-    if (!etlId || savedMetrics.length === 0) return;
-    setDashboardListLoading(true);
-    fetch(`/api/dashboard?etl_id=${encodeURIComponent(etlId)}`)
-      .then((r) => r.json())
-      .then((json) => {
-        if (json?.ok && Array.isArray(json.dashboards)) setAvailableDashboards(json.dashboards);
-      })
-      .finally(() => setDashboardListLoading(false));
-  }, [etlId, savedMetrics.length]);
-
   const datasetConfigHydratedRef = useRef(false);
   useEffect(() => {
     const cfg = data?.datasetConfig;
@@ -758,6 +746,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   }, [dateDimsInForm.join(",")]);
 
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
+
+  // Cargar lista de dashboards del ETL para poder elegir destino
+  useEffect(() => {
+    if (!etlId || savedMetrics.length === 0) return;
+    setDashboardListLoading(true);
+    fetch(`/api/dashboard?etl_id=${encodeURIComponent(etlId)}`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.ok && Array.isArray(json.dashboards)) setAvailableDashboards(json.dashboards);
+      })
+      .finally(() => setDashboardListLoading(false));
+  }, [etlId, savedMetrics.length]);
+
   const hasData = data?.hasData ?? false;
   const fields = data?.fields?.all ?? [];
   /** Columnas marcadas como measure en Rol BI; usadas para fórmulas y cálculos. */
