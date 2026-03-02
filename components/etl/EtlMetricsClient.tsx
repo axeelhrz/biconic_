@@ -471,7 +471,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
     A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
     B: ["Identidad", "Cálculo", "Propiedades", "Filtros base", "Preview"],
-    C: ["Métricas", "Tiempo", "Dimensiones", "Filtros", "Transformaciones", "Preview"],
+    C: ["Métricas", "Dimensiones y Tiempo", "Filtros", "Transformaciones", "Preview"],
     D: ["Tipo visual", "Mapeo", "Formato", "Colores", "Interacciones", "Guardar"],
   };
 
@@ -709,6 +709,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   useEffect(() => {
     if (timeColumn && dateFields.includes(timeColumn)) setPeriodicity(getEffectivePeriodicity(timeColumn));
   }, [timeColumn, periodicityOverrides, data?.dateColumnPeriodicity]);
+
+  const dateDimsInForm = formDimensions.filter((d) => d && dateFields.includes(d));
+  useEffect(() => {
+    if (dateDimsInForm.length > 0 && (!timeColumn || !dateDimsInForm.includes(timeColumn))) setTimeColumn(dateDimsInForm[0]!);
+  }, [dateDimsInForm.join(",")]);
 
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
   const hasData = data?.hasData ?? false;
@@ -1116,9 +1121,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   // Refrescar previsualización solo una vez al entrar al paso de vista previa (wizard C, paso 5). No incluir fetchPreview en deps para evitar bucle infinito.
   const prevWizardStepRef = useRef<{ wizard: string; wizardStep: number; showForm: boolean }>({ wizard: "", wizardStep: -1, showForm: false });
   useEffect(() => {
-    const now = wizard === "C" && wizardStep === 5 && showForm;
+    const now = wizard === "C" && wizardStep === 4 && showForm;
     const prev = prevWizardStepRef.current;
-    const wasAlreadyHere = prev.wizard === "C" && prev.wizardStep === 5 && prev.showForm;
+    const wasAlreadyHere = prev.wizard === "C" && prev.wizardStep === 4 && prev.showForm;
     prevWizardStepRef.current = { wizard, wizardStep, showForm };
     if (now && !wasAlreadyHere) {
       fetchPreviewRef.current();
@@ -2941,115 +2946,122 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                 </section>
               )}
 
-              {/* Wizard C1: Tiempo */}
+              {/* Wizard C1: Dimensiones y Tiempo (unificado: si se selecciona una dimensión tipo Fecha, se despliega Tiempo abajo) */}
               {wizard === "C" && wizardStep === 1 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Tiempo: rango y granularidad</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Definí el período y la granularidad temporal. Los datos se agruparán por el período elegido (ej. un valor por mes).</p>
-                  {dateFields.length > 0 && (
-                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Dimensión temporal principal</Label>
-                      <Select
-                        value={timeColumn || dateFields[0] || ""}
-                        onChange={(v: string) => setTimeColumn(v)}
-                        options={dateFields.map((f) => ({ value: f, label: getSampleDisplayLabel(f) }))}
-                        placeholder="Elegir columna de fecha…"
-                        className="w-full"
-                        buttonClassName="h-9 text-sm"
-                        disablePortal
-                      />
-                      {dateFields.length > 1 && (
-                        <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Hay varias columnas de fecha; elegí cuál usar para el análisis temporal.</p>
-                      )}
-                    </div>
-                  )}
-                  {dateFields.length === 0 && (
-                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>No se detectaron columnas de fecha en el dataset. Configurá una en el paso Tiempo del Dataset (Wizard A).</p>
-                    </div>
-                  )}
-                  <div className="grid gap-4 sm:grid-cols-2 mb-4">
-                    <div>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Rango</Label>
-                      <Select
-                        value={analysisTimeRange}
-                        onChange={(v: string) => setAnalysisTimeRange(v)}
-                        options={[
-                          { value: "0", label: "No aplicar rango" },
-                          { value: "custom", label: "Personalizable" },
-                          { value: "7", label: "Últimos 7 días" },
-                          { value: "30", label: "Últimos 30 días" },
-                          { value: "3", label: "Últimos 3 meses" },
-                          { value: "6", label: "Últimos 6 meses" },
-                          { value: "12", label: "Últimos 12 meses" },
-                          { value: "24", label: "Últimos 24 meses" },
-                        ]}
-                        placeholder="Rango…"
-                        className="w-full"
-                        buttonClassName="h-9 text-sm"
-                        disablePortal
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Granularidad</Label>
-                      <Select
-                        value={analysisGranularity}
-                        onChange={(v: string) => setAnalysisGranularity(v)}
-                        options={[
-                          { value: "day", label: "Día" },
-                          { value: "week", label: "Semana" },
-                          { value: "month", label: "Mes" },
-                          { value: "year", label: "Año" },
-                        ]}
-                        placeholder="Granularidad…"
-                        className="w-full"
-                        buttonClassName="h-9 text-sm"
-                        disablePortal
-                      />
-                    </div>
-                  </div>
-                  {analysisTimeRange === "custom" && (
-                    <div className="rounded-lg border p-3 mb-4 grid grid-cols-2 gap-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                      <div>
-                        <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Desde</Label>
-                        <Input type="date" value={analysisDateFrom} onChange={(e) => setAnalysisDateFrom(e.target.value)} className="h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Hasta</Label>
-                        <Input type="date" value={analysisDateTo} onChange={(e) => setAnalysisDateTo(e.target.value)} className="h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                      </div>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Dimensiones</Button>
-                  </div>
-                </section>
-              )}
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Dimensiones y Tiempo</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Elegí dimensiones para agrupar (opcional). Si agregás una de tipo Fecha, abajo se despliega la configuración de Tiempo (rango y granularidad).</p>
 
-              {/* Wizard C2: Dimensiones (todas opcionales; sin dimensiones = KPI único) */}
-              {wizard === "C" && wizardStep === 2 && (
-                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Dimensiones (opcionales)</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Podés no usar dimensiones (KPI único agregado) o agregar varias para agrupar el resultado. Ninguna es obligatoria.</p>
-                  <div className="space-y-3">
-                    {formDimensions.map((dim, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <div className="flex-1 min-w-0">
-                          <Label className="text-xs font-medium block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Dimensión {formDimensions.length > 1 ? i + 1 : ""}</Label>
-                          <AdminFieldSelector label="" value={dim} onChange={(v) => setFormDimensions((prev) => prev.map((d, j) => (j === i ? v : d)))} etlData={etlData} fieldType="all" placeholder="Ninguna..." className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]" />
+                  <div className="mb-6">
+                    <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Dimensiones (opcionales)</Label>
+                    <div className="space-y-3">
+                      {formDimensions.map((dim, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <div className="flex-1 min-w-0">
+                            <Label className="text-xs font-medium block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Dimensión {formDimensions.length > 1 ? i + 1 : ""}</Label>
+                            <AdminFieldSelector label="" value={dim} onChange={(v) => setFormDimensions((prev) => prev.map((d, j) => (j === i ? v : d)))} etlData={etlData} fieldType="all" placeholder="Ninguna..." className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-[var(--platform-border)] [&_button]:!bg-[var(--platform-bg)] [&_button]:!text-[var(--platform-fg)]" />
+                          </div>
+                          <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-red-500 mt-6" onClick={() => setFormDimensions((prev) => prev.filter((_, j) => j !== i))} title="Quitar dimensión"><Trash2 className="h-4 w-4" /></Button>
                         </div>
-                        <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-red-500 mt-6" onClick={() => setFormDimensions((prev) => prev.filter((_, j) => j !== i))} title="Quitar dimensión"><Trash2 className="h-4 w-4" /></Button>
-                      </div>
-                    ))}
-                    <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} onClick={() => setFormDimensions((prev) => [...prev, ""])}>
-                      + Agregar dimensión
-                    </Button>
+                      ))}
+                      <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} onClick={() => setFormDimensions((prev) => [...prev, ""])}>
+                        + Agregar dimensión
+                      </Button>
+                    </div>
+                    {formDimensions.length === 0 && (
+                      <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Sin dimensiones: el resultado será un único valor agregado (ideal para KPIs).</p>
+                    )}
                   </div>
-                  {formDimensions.length === 0 && (
-                    <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Sin dimensiones: el resultado será un único valor agregado (ideal para KPIs).</p>
-                  )}
-                  <div className="mt-6 flex justify-between">
+
+                  {/* Tiempo: se despliega cuando hay al menos una dimensión de tipo Fecha seleccionada */}
+                  {(() => {
+                    const dateDimsInSelection = formDimensions.filter((d) => d && dateFields.includes(d));
+                    const showTime = dateDimsInSelection.length > 0;
+                    if (!showTime) {
+                      if (dateFields.length > 0 && formDimensions.some(Boolean)) {
+                        return <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná una columna de tipo Fecha en Dimensiones para desplegar la configuración de Tiempo (rango y granularidad).</p>;
+                      }
+                      return null;
+                    }
+                    return (
+                      <div className="rounded-lg border p-4 mt-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                        <h4 className="text-sm font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Tiempo: rango y granularidad</h4>
+                        <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Configurá el período y la granularidad para la dimensión temporal. Si elegiste una columna Fecha en Dimensiones, usala como base.</p>
+                        {dateFields.length > 0 ? (
+                          <>
+                            <div className="mb-4">
+                              <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Dimensión temporal</Label>
+                              <Select
+                                value={timeColumn || dateDimsInSelection[0] || dateFields[0] || ""}
+                                onChange={(v: string) => setTimeColumn(v)}
+                                options={dateFields.map((f) => ({ value: f, label: getSampleDisplayLabel(f) }))}
+                                placeholder="Elegir columna de fecha…"
+                                className="w-full"
+                                buttonClassName="h-9 text-sm"
+                                disablePortal
+                              />
+                            </div>
+                            <div className="grid gap-4 sm:grid-cols-2 mb-4">
+                              <div>
+                                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Rango</Label>
+                                <Select
+                                  value={analysisTimeRange}
+                                  onChange={(v: string) => setAnalysisTimeRange(v)}
+                                  options={[
+                                    { value: "0", label: "No aplicar rango" },
+                                    { value: "custom", label: "Personalizable" },
+                                    { value: "7", label: "Últimos 7 días" },
+                                    { value: "30", label: "Últimos 30 días" },
+                                    { value: "3", label: "Últimos 3 meses" },
+                                    { value: "6", label: "Últimos 6 meses" },
+                                    { value: "12", label: "Últimos 12 meses" },
+                                    { value: "24", label: "Últimos 24 meses" },
+                                  ]}
+                                  placeholder="Rango…"
+                                  className="w-full"
+                                  buttonClassName="h-9 text-sm"
+                                  disablePortal
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Granularidad</Label>
+                                <Select
+                                  value={analysisGranularity}
+                                  onChange={(v: string) => setAnalysisGranularity(v)}
+                                  options={[
+                                    { value: "day", label: "Día" },
+                                    { value: "week", label: "Semana" },
+                                    { value: "month", label: "Mes" },
+                                    { value: "year", label: "Año" },
+                                  ]}
+                                  placeholder="Granularidad…"
+                                  className="w-full"
+                                  buttonClassName="h-9 text-sm"
+                                  disablePortal
+                                />
+                              </div>
+                            </div>
+                            {analysisTimeRange === "custom" && (
+                              <div className="grid grid-cols-2 gap-3 mb-4">
+                                <div>
+                                  <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Desde</Label>
+                                  <Input type="date" value={analysisDateFrom} onChange={(e) => setAnalysisDateFrom(e.target.value)} className="h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                                </div>
+                                <div>
+                                  <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Hasta</Label>
+                                  <Input type="date" value={analysisDateTo} onChange={(e) => setAnalysisDateTo(e.target.value)} className="h-9 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>No hay columnas de fecha en el dataset. Configurá una en el paso Tiempo del Dataset (Wizard A).</p>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  <div className="flex justify-between mt-6">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Filtros</Button>
                   </div>
@@ -3057,7 +3069,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               )}
 
               {/* Wizard C3: Filtros del análisis (estructurales; sin ordenar/sentido) */}
-              {wizard === "C" && wizardStep === 3 && (
+              {wizard === "C" && wizardStep === 2 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Filtros del análisis</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Filtros estructurales que se aplican antes de la agregación. Seleccioná el campo, la condición y el valor. Podés agregar varios filtros a la vez.</p>
@@ -3107,7 +3119,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               )}
 
               {/* Wizard C4: Transformaciones (opcional) — concepto: tabla base primero; transformaciones agregan columnas sin modificar la métrica */}
-              {wizard === "C" && wizardStep === 4 && (
+              {wizard === "C" && wizardStep === 3 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Transformaciones (opcional)</h3>
                   <div className="rounded-xl border p-4 mb-4" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
@@ -3165,7 +3177,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               )}
 
               {/* Wizard C5: Vista previa (tabla) */}
-              {wizard === "C" && wizardStep === 5 && (() => {
+              {wizard === "C" && wizardStep === 4 && (() => {
                 const hasValidMetrics = formMetrics.some((m) => m.field || (m as { expression?: string }).expression || m.formula);
                 const transformLabel = transformCompare === "mom" ? "Período anterior (MoM)" : transformCompare === "yoy" ? "Año anterior (YoY)" : transformCompare === "fixed" ? `Valor fijo (${transformCompareFixedValue})` : null;
                 const formatCell = (k: string, v: unknown): string => {
