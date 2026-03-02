@@ -494,7 +494,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
     B: ["Identidad", "Cálculo", "Propiedades", "Filtros base", "Preview"],
     C: ["Métricas", "Dimensiones y Tiempo", "Filtros", "Transformaciones", "Preview"],
-    D: ["Tipo visual", "Mapeo", "Formato", "Colores", "Interacciones", "Guardar"],
+    D: ["Tipo visual", "Mapeo", "Formato y colores", "Interacciones", "Guardar"],
   };
 
   const currentStepLabel = WIZARD_STEPS[wizard][wizardStep];
@@ -3554,12 +3554,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Solo afecta la presentación visual. No cambia filas ni valores del análisis.</p>
 
                   <div className="space-y-5">
-                    {/* 6.3.1 Formato numérico */}
+                    {/* 6.3.1 Formato numérico: Tipo (Número / Moneda / %) y Escala (K, M, B) */}
                     <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium mb-3 block" style={{ color: "var(--platform-fg)" }}>Formato numérico</Label>
-                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mb-3">
-                        {([["number", "Número"], ["currency", "Moneda"], ["K", "Miles (K)"], ["M", "Millones (M)"], ["BI", "Billones (BI)"], ["percent", "Porcentaje"]] as [string, string][]).map(([val, lbl]) => (
-                          <button key={val} type="button" onClick={() => setChartNumberFormat(val as any)} className="rounded-lg px-2 py-1.5 text-xs font-medium transition-all border" style={{ background: chartNumberFormat === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartNumberFormat === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartNumberFormat === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Formato numérico</Label>
+                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Tipo</p>
+                      <div className="flex flex-wrap gap-1.5 mb-3">
+                        {([["number", "Número"], ["currency", "Moneda"], ["percent", "Porcentaje"]] as [string, string][]).map(([val, lbl]) => (
+                          <button key={val} type="button" onClick={() => setChartNumberFormat(val as any)} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartNumberFormat === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartNumberFormat === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartNumberFormat === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                        ))}
+                      </div>
+                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Escala</p>
+                      <div className="flex flex-wrap gap-1.5 mb-3">
+                        {([["K", "K"], ["M", "M"], ["BI", "B"]] as [string, string][]).map(([val, lbl]) => (
+                          <button key={val} type="button" onClick={() => setChartNumberFormat(val as any)} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartNumberFormat === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartNumberFormat === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartNumberFormat === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
                         ))}
                       </div>
                       <div className="flex flex-wrap items-center gap-4">
@@ -3588,6 +3595,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     {/* 6.3.2 Orden */}
                     <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                       <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Orden de datos</Label>
+                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Se aplica en la vista previa y al guardar la métrica.</p>
                       <div className="flex gap-2">
                         {([["none", "Sin orden"], ["asc", "Ascendente ↑"], ["desc", "Descendente ↓"]] as [string, string][]).map(([val, lbl]) => (
                           <button key={val} type="button" onClick={() => setChartSortDirection(val as any)} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartSortDirection === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartSortDirection === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartSortDirection === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
@@ -3619,6 +3627,68 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       )}
                     </div>
 
+                    {/* Colores: vinculado al tipo de gráfico (porciones en torta/dona, series en bar/line) */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Colores</Label>
+                      <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Según el tipo <strong>{CHART_TYPES.find((t) => t.value === formChartType)?.label ?? formChartType}</strong>: {formChartType === "pie" || formChartType === "doughnut" ? "cada porción (categoría del Eje X)." : chartSeriesField ? "cada serie." : "cada métrica del Eje Y."}</p>
+                      {(() => {
+                        const defaultPaletteColors = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16"];
+                        const presetPalettes: { name: string; colors: string[] }[] = [
+                          { name: "Predeterminado", colors: ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"] },
+                          { name: "Corporativo", colors: ["#1e40af", "#0369a1", "#0891b2", "#059669", "#65a30d", "#ca8a04"] },
+                          { name: "Pastel", colors: ["#93c5fd", "#86efac", "#fde68a", "#fca5a5", "#c4b5fd", "#f9a8d4"] },
+                          { name: "Cálido", colors: ["#dc2626", "#ea580c", "#d97706", "#ca8a04", "#65a30d", "#16a34a"] },
+                          { name: "Frío", colors: ["#1d4ed8", "#2563eb", "#0284c7", "#0891b2", "#0d9488", "#059669"] },
+                        ];
+                        const colorLabels: string[] = formChartType === "pie" || formChartType === "doughnut"
+                          ? ((previewChartConfig?.labels as string[]) ?? [])
+                          : chartSeriesField && previewChartConfig?.datasets?.length
+                            ? previewChartConfig.datasets.map((d: { label?: string }) => d.label ?? "")
+                            : chartYAxes.length > 0
+                              ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k)
+                              : formMetrics.map((m) => m.alias || m.field || "Métrica");
+                        return (
+                          <>
+                            <div className="flex flex-wrap gap-2 mb-3">
+                              {presetPalettes.map((p) => (
+                                <button key={p.name} type="button" onClick={() => {
+                                  const newColors: Record<string, string> = {};
+                                  colorLabels.forEach((s, i) => { newColors[s] = p.colors[i % p.colors.length]!; });
+                                  setChartSeriesColors(newColors);
+                                  setChartColorScheme("fixed");
+                                }} className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 border transition-all" style={{ borderColor: "var(--platform-border)" }}>
+                                  <div className="flex gap-0.5">{p.colors.slice(0, 6).map((c, i) => (<div key={i} className="w-4 h-4 rounded-sm" style={{ background: c }} />))}</div>
+                                  <span className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>{p.name}</span>
+                                </button>
+                              ))}
+                            </div>
+                            <div className="flex gap-2 mb-3">
+                              {([["auto", "Automático"], ["fixed", "Personalizado"]] as [string, string][]).map(([val, lbl]) => (
+                                <button key={val} type="button" onClick={() => setChartColorScheme(val)} className="rounded-lg px-3 py-1.5 text-xs font-medium border transition-all" style={{ background: chartColorScheme === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartColorScheme === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartColorScheme === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                              ))}
+                            </div>
+                            {chartColorScheme !== "auto" && colorLabels.length > 0 && (
+                              <div className="space-y-2 max-h-48 overflow-y-auto">
+                                {colorLabels.map((label, idx) => {
+                                  const color = chartSeriesColors[label] || defaultPaletteColors[idx % defaultPaletteColors.length]!;
+                                  return (
+                                    <div key={label || idx} className="flex items-center gap-3">
+                                      <input type="color" value={color} onChange={(e) => setChartSeriesColors((prev) => ({ ...prev, [label]: e.target.value }))} className="w-8 h-8 rounded cursor-pointer border-0 p-0" style={{ background: "transparent" }} />
+                                      <div className="w-6 h-6 rounded-md border shrink-0" style={{ background: color, borderColor: "var(--platform-border)" }} />
+                                      <span className="text-sm truncate" style={{ color: "var(--platform-fg)" }}>{label || "(sin nombre)"}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {chartColorScheme !== "auto" && colorLabels.length === 0 && (
+                              <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Actualizá la vista previa en el paso anterior para ver las categorías o series y asignar colores.</p>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+
                     {/* 6.3.4 Siempre visible */}
                     {formDimensions.filter(Boolean).length > 0 && (
                       <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
@@ -3641,80 +3711,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
                   <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Colores</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Interacciones</Button>
                   </div>
                 </section>
               )}
 
-              {/* Wizard D3: Colores */}
-              {wizard === "D" && wizardStep === 3 && (() => {
-                const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16"];
-                const presetPalettes: { name: string; colors: string[] }[] = [
-                  { name: "Predeterminado", colors: ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"] },
-                  { name: "Corporativo", colors: ["#1e40af", "#0369a1", "#0891b2", "#059669", "#65a30d", "#ca8a04"] },
-                  { name: "Pastel", colors: ["#93c5fd", "#86efac", "#fde68a", "#fca5a5", "#c4b5fd", "#f9a8d4"] },
-                  { name: "Oscuro", colors: ["#1e3a5f", "#1a3c34", "#4a3728", "#4a1e1e", "#2e1a4a", "#4a1a3a"] },
-                  { name: "Cálido", colors: ["#dc2626", "#ea580c", "#d97706", "#ca8a04", "#65a30d", "#16a34a"] },
-                  { name: "Frío", colors: ["#1d4ed8", "#2563eb", "#0284c7", "#0891b2", "#0d9488", "#059669"] },
-                ];
-                const seriesLabels = chartYAxes.length > 0 ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k) : formMetrics.map((m) => m.alias || m.field || "Métrica");
-                return (
-                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Colores</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Personalizá los colores de cada serie del gráfico. Se aplican a barras, líneas, porciones de torta/dona y áreas.</p>
-
-                  <div className="space-y-5">
-                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium mb-3 block" style={{ color: "var(--platform-fg)" }}>Paleta predefinida</Label>
-                      <div className="flex flex-wrap gap-2 mb-3">
-                        {presetPalettes.map((p) => (
-                          <button key={p.name} type="button" onClick={() => {
-                            const newColors: Record<string, string> = {};
-                            seriesLabels.forEach((s, i) => { newColors[s] = p.colors[i % p.colors.length]!; });
-                            setChartSeriesColors(newColors);
-                            setChartColorScheme("fixed");
-                          }} className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 border transition-all" style={{ borderColor: "var(--platform-border)" }}>
-                            <div className="flex gap-0.5">{p.colors.slice(0, 6).map((c, i) => (<div key={i} className="w-4 h-4 rounded-sm" style={{ background: c }} />))}</div>
-                            <span className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>{p.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex gap-2">
-                        {([["auto", "Automático"], ["fixed", "Personalizado"], ["category", "Por categoría"]] as [string, string][]).map(([val, lbl]) => (
-                          <button key={val} type="button" onClick={() => setChartColorScheme(val)} className="rounded-lg px-3 py-1.5 text-xs font-medium border transition-all" style={{ background: chartColorScheme === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartColorScheme === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartColorScheme === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {chartColorScheme !== "auto" && (
-                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <Label className="text-sm font-medium mb-3 block" style={{ color: "var(--platform-fg)" }}>Color por serie</Label>
-                        <div className="space-y-2">
-                          {seriesLabels.map((label, idx) => {
-                            const color = chartSeriesColors[label] || defaultPalette[idx % defaultPalette.length]!;
-                            return (
-                              <div key={label} className="flex items-center gap-3">
-                                <input type="color" value={color} onChange={(e) => setChartSeriesColors((prev) => ({ ...prev, [label]: e.target.value }))} className="w-8 h-8 rounded cursor-pointer border-0 p-0" style={{ background: "transparent" }} />
-                                <div className="w-6 h-6 rounded-md border" style={{ background: color, borderColor: "var(--platform-border)" }} />
-                                <span className="text-sm" style={{ color: "var(--platform-fg)" }}>{label}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-6 flex justify-between">
-                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Interacciones</Button>
-                  </div>
-                </section>
-                );
-              })()}
-
-              {/* Wizard D4: Interacciones */}
-              {wizard === "D" && wizardStep === 4 && (
+              {/* Wizard D3: Interacciones */}
+              {wizard === "D" && wizardStep === 3 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Interacciones</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Las interacciones convierten un gráfico estático en una herramienta analítica. El gráfico no recalcula lógica de negocio: genera eventos que modifican filtros y re-ejecutan análisis.</p>
@@ -3833,8 +3836,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                 </section>
               )}
 
-              {/* Wizard D5: Vista previa gráfico + Guardar */}
-              {wizard === "D" && wizardStep === 5 && (
+              {/* Wizard D4: Vista previa gráfico + Guardar */}
+              {wizard === "D" && wizardStep === 4 && (
                 <section className="rounded-xl border p-6 space-y-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Vista previa y guardar</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Vista previa del gráfico con los datos actuales. Guardá la métrica para usarla en dashboards.</p>
