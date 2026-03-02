@@ -1727,6 +1727,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                 const key = keys.find((k) => k.replace(/\./g, "_").toLowerCase() === colNorm);
                                 if (key !== undefined) return r[key];
                                 if (keys.length === displayColumnsForProfiling.length && keys[colIndex] !== undefined) return r[keys[colIndex]];
+                                const withUnderscore = col.replace(/\./g, "_");
+                                if (r[withUnderscore] !== undefined && r[withUnderscore] !== null) return r[withUnderscore];
+                                if (r[withUnderscore.toLowerCase()] !== undefined && r[withUnderscore.toLowerCase()] !== null) return r[withUnderscore.toLowerCase()];
                                 return undefined;
                               };
                               return (
@@ -1794,7 +1797,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                         if (valid) { sum += val; count++; }
                                       } catch { /* skip */ }
                                     } else {
-                                      const raw = r[col] ?? (() => { const cn = col.replace(/\./g, "_").toLowerCase(); const k = keys.find((k2) => k2.replace(/\./g, "_").toLowerCase() === cn); return k ? r[k] : undefined; })();
+                                      const cn = col.replace(/\./g, "_").toLowerCase();
+                                      const raw = r[col] ?? r[col.replace(/\./g, "_")] ?? r[cn] ?? (() => { const k = keys.find((k2) => k2.replace(/\./g, "_").toLowerCase() === cn); return k ? r[k] : undefined; })();
                                       const n = Number(raw);
                                       if (raw != null && !isNaN(n)) { sum += n; count++; }
                                     }
