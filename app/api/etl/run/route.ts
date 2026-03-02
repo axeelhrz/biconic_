@@ -627,17 +627,219 @@ async function executeEtlPipeline(
         .single();
       if (!conn) throw new Error(`Conexión ${primaryConnId} no encontrada.`);
 
-      // Firebird: solo tabla simple (sin JOIN), leer en lotes y devolver filas normalizadas
+      // Firebird: tabla simple o JOIN en memoria (soporta Firebird + Firebird/Postgres)
       if (conn.type === "firebird") {
-        if (isJoin) throw new Error("Firebird en ETL solo soporta una tabla. No uses JOIN.");
-        const tableToQuery = (body!.filter?.table || "").trim();
-        if (!tableToQuery) throw new Error("Tabla de origen requerida.");
         const password =
           (conn as any).db_password_encrypted
             ? decryptConnectionPassword((conn as any).db_password_encrypted)
             : (conn as any).db_password ?? "";
-        // Firebird: solo nombre de tabla (sin esquema en FROM evita -104 Token unknown en algunos entornos); SELECT * evita puntos en "primary.COL"
         const safePart = (s: string) => /^[A-Z0-9_]+$/i.test(s) ? s.toUpperCase() : `"${s.replace(/"/g, '""')}"`;
+        const normalizeRow = (row: Record<string, any>) => {
+          const out: Record<string, any> = {};
+          for (const k in row) {
+            out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
+          }
+          return out;
+        };
+
+        if (isJoin) {
+          // JOIN en memoria: resolver tabla izquierda (Firebird) y derecha (Firebird o Postgres)
+          const isStar = isStarJoin && Array.isArray(joinObj.joins) && joinObj.joins.length > 0;
+          const leftTable = isStar ? (joinObj.primaryTable || (body!.filter?.table || "").trim()) : (joinObj.leftTable || "").trim();
+          const rightTable = isStar ? (joinObj.joins![0] as any).secondaryTable : (joinObj.rightTable || "").trim();
+          const jc = isStar ? (joinObj.joins![0] as any) : (joinObj.joinConditions?.[0] || {});
+          const leftCol = (jc.primaryColumn || jc.leftColumn || "").trim();
+          const rightCol = (jc.secondaryColumn || jc.rightColumn || "").trim();
+          const secondaryConnId = isStar ? (joinObj.joins![0] as any).secondaryConnectionId : joinObj.secondaryConnectionId;
+          if (!leftTable || !rightTable || !leftCol || !rightCol || !secondaryConnId)
+            throw new Error("JOIN con Firebird requiere tabla izquierda, tabla derecha, columnas de enlace y conexión secundaria.");
+
+          const { data: conn2 } = await supabaseAdmin.from("connections").select("*").eq("id", secondaryConnId).single();
+          if (!conn2) throw new Error(`Conexión secundaria ${secondaryConnId} no encontrada.`);
+
+          const selectedCols = (body!.filter?.columns || []) as string[];
+          const leftColumns = selectedCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, "").trim());
+          const rightColumns = selectedCols.filter((c: string) => /^join_0\./i.test(c)).map((c: string) => c.replace(/^join_0\./i, "").trim());
+          const leftConditions = (body!.filter?.conditions || [])
+            .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
+            .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^primary\./i, "").trim() }));
+          const rightConditions = (body!.filter?.conditions || [])
+            .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
+            .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
+
+          const fetchFromConnection = async (
+            connection: any,
+            tableName: string,
+            columns: string[] | undefined,
+            conditions: FilterCondition[]
+          ): Promise<Record<string, any>[]> => {
+            const connType = (connection.type || "").toLowerCase();
+            const pwd = connection.db_password_encrypted
+              ? decryptConnectionPassword(connection.db_password_encrypted)
+              : (connection.db_password ?? "");
+            const tablePart = tableName.includes(".")
+              ? (tableName.split(".").pop() || tableName).trim().toUpperCase()
+              : safePart(tableName.trim());
+            const { clause, params } = buildWhereClauseFirebird(
+              conditions.map((c) => ({ ...c, column: (c.column || "").trim() })).filter((c) => (c.column ?? "").length > 0)
+            );
+            if (connType === "firebird") {
+              const Firebird = require("node-firebird");
+              const opts = {
+                host: connection.db_host || "localhost",
+                port: connection.db_port ? Number(connection.db_port) : 15421,
+                database: connection.db_name,
+                user: connection.db_user,
+                password: pwd || "",
+                lowercase_keys: false,
+              };
+              const limit = 500000;
+              return new Promise((resolve, reject) => {
+                Firebird.attach(opts, (err: Error | null, db: any) => {
+                  if (err) return reject(err);
+                  const cols = columns?.length ? columns.map((c) => /^[A-Z0-9_]+$/i.test(c) ? c.toUpperCase() : `"${c.replace(/"/g, '""')}"`).join(", ") : "*";
+                  const escapeFb = (v: any): string => {
+                    if (v == null) return "NULL";
+                    if (typeof v === "boolean") return v ? "1" : "0";
+                    if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${v}' AS DOUBLE PRECISION)`;
+                    return `'${String(v).replace(/'/g, "''")}'`;
+                  };
+                  let clauseInlined = clause;
+                  for (const p of params) {
+                    const pos = clauseInlined.indexOf("?");
+                    if (pos === -1) break;
+                    clauseInlined = clauseInlined.slice(0, pos) + escapeFb(p) + clauseInlined.slice(pos + 1);
+                  }
+                  db.query(`SELECT FIRST ${limit} ${cols} FROM ${tablePart} ${clauseInlined}`.trim(), [], (qerr: Error | null, rows: any[]) => {
+                    if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                    if (qerr) return reject(qerr);
+                    resolve((rows || []).map(normalizeRow));
+                  });
+                });
+              });
+            }
+            if (connType === "postgres" || connType === "postgresql") {
+              const pgClient = new PgClient({
+                host: connection.db_host,
+                user: connection.db_user,
+                database: connection.db_name,
+                port: connection.db_port ?? 5432,
+                password: pwd || undefined,
+              });
+              await pgClient.connect();
+              try {
+                const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
+                const { clause: pgClause, params: pgParams } = buildWhereClausePg(conditions);
+                const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${pgClause} ORDER BY 1 ASC`;
+                const res = await pgClient.query(q, pgParams);
+                return (res.rows || []).map(normalizeRow);
+              } finally {
+                await pgClient.end();
+              }
+            }
+            throw new Error(`JOIN con Firebird: conexión secundaria tipo "${connection.type}" no soportada. Usá Firebird o Postgres.`);
+          };
+
+          const rightRows = await fetchFromConnection(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions);
+          const rightColNorm = rightCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+          const rightMap = new Map<string, Record<string, any>[]>();
+          for (const r of rightRows) {
+            const key = String(r[rightColNorm] ?? (r as any)[rightCol] ?? "");
+            if (!rightMap.has(key)) rightMap.set(key, []);
+            rightMap.get(key)!.push(r);
+          }
+          const leftColNorm = leftCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+          const joinType = (jc.joinType || "INNER").toString().toUpperCase();
+
+          const leftTablePart = leftTable.includes(".") ? (leftTable.split(".").pop() || leftTable).trim().toUpperCase() : safePart(leftTable);
+          const leftFbConditions = leftConditions.map((c) => ({ ...c, column: (c.column || "").trim() })).filter((c) => (c.column ?? "").length > 0);
+          const { clause: leftClause, params: leftParams } = buildWhereClauseFirebird(leftFbConditions);
+          const Firebird = require("node-firebird");
+          const opts = {
+            host: conn.db_host || "localhost",
+            port: conn.db_port ? Number(conn.db_port) : 15421,
+            database: conn.db_name,
+            user: conn.db_user,
+            password: password || "",
+            lowercase_keys: false,
+          };
+          const leftCols = leftColumns.length ? leftColumns : [];
+          let db: any = null;
+          try {
+            db = await withRetry(
+              () =>
+                new Promise<any>((resolve, reject) => {
+                  Firebird.attach(opts, (err: Error | null, connection: any) => {
+                    if (err) reject(err);
+                    else resolve(connection);
+                  });
+                }),
+              { label: "firebird-attach-join" }
+            );
+            let offset = 0;
+            for (;;) {
+              const cols = leftCols.length
+                ? leftCols.map((c) => /^[A-Z0-9_]+$/i.test(c) ? c.toUpperCase() : `"${c.replace(/"/g, '""')}"`).join(", ")
+                : "*";
+              const sql =
+                offset === 0
+                  ? `SELECT FIRST ${pageSize} ${cols} FROM ${leftTablePart} ${leftClause}`
+                  : `SELECT FIRST ${pageSize} SKIP ${offset} ${cols} FROM ${leftTablePart} ${leftClause}`;
+              const leftRows = await withRetry(
+                () =>
+                  new Promise<any[]>((resolve, reject) => {
+                    db.query(sql, leftParams, (err: Error | null, r: any[]) => {
+                      if (err) reject(err);
+                      else resolve(r || []);
+                    });
+                  }),
+                { label: "firebird-query-join" }
+              );
+              const leftNorm = leftRows.map(normalizeRow);
+              if (leftNorm.length === 0) break;
+
+              const leftKeys = leftCols.length ? leftCols.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : (leftNorm[0] ? Object.keys(leftNorm[0]) : []);
+              const rightKeys = rightColumns.length ? rightColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : (rightRows[0] ? Object.keys(rightRows[0]) : []);
+
+              const prefixLeft = (row: Record<string, any>) => {
+                const out: Record<string, any> = {};
+                if (leftKeys.length) for (const k of leftKeys) out["primary_" + k] = row[k];
+                else for (const key in row) out["primary_" + key] = row[key];
+                return out;
+              };
+              const prefixRight = (row: Record<string, any>) => {
+                const out: Record<string, any> = {};
+                if (rightKeys.length) for (const k of rightKeys) out["join_0_" + k] = row[k];
+                else for (const key in row) out["join_0_" + key] = row[key];
+                return out;
+              };
+
+              const batch: Record<string, any>[] = [];
+              for (const lr of leftNorm) {
+                const key = String(lr[leftColNorm] ?? (lr as any)[leftCol] ?? "");
+                const matches = rightMap.get(key) ?? [];
+                if (matches.length > 0) {
+                  for (const rr of matches) batch.push({ ...prefixLeft(lr), ...prefixRight(rr) });
+                } else if (joinType === "LEFT" || joinType === "FULL") {
+                  const rightNulls: Record<string, any> = {};
+                  for (const k of rightKeys) rightNulls["join_0_" + k] = null;
+                  if (!rightKeys.length) for (const key in (rightRows[0] || {})) rightNulls["join_0_" + key] = null;
+                  batch.push({ ...prefixLeft(lr), ...rightNulls });
+                }
+              }
+              if (batch.length > 0) yield batch;
+              if (leftNorm.length < pageSize) break;
+              offset += pageSize;
+            }
+          } finally {
+            if (db?.detach) db.detach(() => {});
+          }
+          return;
+        }
+
+        // Firebird: una sola tabla
+        const tableToQuery = (body!.filter?.table || "").trim();
+        if (!tableToQuery) throw new Error("Tabla de origen requerida.");
         const tablePart = tableToQuery.includes(".")
           ? (tableToQuery.split(".").pop() || tableToQuery).trim().toUpperCase()
           : safePart(tableToQuery);
@@ -686,14 +888,7 @@ async function executeEtlPipeline(
                 }),
               { label: "firebird-query" }
             );
-            const normalized = rows.map((row: Record<string, any>) => {
-              const out: Record<string, any> = {};
-              for (const k in row) {
-                const key = k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-                out[key] = row[k];
-              }
-              return out;
-            });
+            const normalized = rows.map(normalizeRow);
             if (normalized.length === 0) break;
             yield normalized;
             if (normalized.length < pageSize) break;
