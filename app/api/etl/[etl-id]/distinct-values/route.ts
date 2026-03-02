@@ -122,7 +122,15 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "No se encontró tabla de destino para este ETL" }, { status: 404 });
     }
 
-    const schemaClient = (process.env.SUPABASE_SERVICE_ROLE_KEY ? createServiceRoleClient() : supabase).schema(resolved.schema as "public" | "etl_output") as any;
+    // Las tablas de destino del ETL (ej. etl_output.otraprueba) suelen no tener permisos para el rol anónimo/authenticated.
+    // Usamos siempre el service role para leerlas y así evitar "permission denied".
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return NextResponse.json(
+        { ok: false, error: "Servidor sin SUPABASE_SERVICE_ROLE_KEY. Configurá la variable para leer tablas del ETL." },
+        { status: 503 }
+      );
+    }
+    const schemaClient = createServiceRoleClient().schema(resolved.schema as "public" | "etl_output") as any;
     const { data: rows, error } = await schemaClient
       .from(resolved.tableName)
       .select(column)
