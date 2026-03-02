@@ -2526,15 +2526,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     return (
                     <div className="space-y-4">
                       <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                        <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Detección automática del tipo de cálculo</p>
-                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>El sistema analiza la fórmula y la clasifica en uno de estos grupos:</p>
+                        <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Determinación automática según la fórmula</p>
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Según la fórmula que uses, se guarda en un lugar u otro:</p>
                         <ul className="text-xs space-y-1" style={{ color: "var(--platform-fg-muted)" }}>
-                          <li><strong>Cálculo por fila:</strong> sin agregaciones ni metric_0, metric_1, … No modifica la cantidad de filas. Se habilita «Crear columna en el dataset».</li>
-                          <li><strong>Cálculo agregado (métrica):</strong> usa SUM, AVERAGE, COUNT, MIN, MAX, etc. Se guarda solo como métrica; no se puede crear columna (seguridad de granularidad).</li>
+                          <li><strong>Por fila</strong> (sin SUM, AVG, COUNT…): se guarda como <strong>columna en el dataset</strong>. No modifica la cantidad de filas.</li>
+                          <li><strong>Agregado</strong> (con SUM, AVERAGE, COUNT…): se guarda como <strong>métrica en «Calculadas»</strong>. No se puede crear columna (seguridad de granularidad).</li>
                         </ul>
                         {exprValue.trim() && (
                           <p className="text-xs font-medium" style={{ color: isAggregate ? "var(--platform-accent)" : "var(--platform-fg)" }}>
-                            {isAggregate ? "→ Cálculo agregado (métrica). Guardalo como métrica; no está permitido «Crear columna»." : "→ Cálculo por fila. Opcionalmente podés crear una columna en el dataset."}
+                            {isAggregate ? "→ Se guardará como métrica en «Calculadas» (determinado por la fórmula)." : "→ Se guardará como columna en el dataset (determinado por la fórmula)."}
                           </p>
                         )}
                       </div>
@@ -2640,12 +2640,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             {formulaSyntaxError}
                           </p>
                         )}
-                        {/* Según tipo: métrica → "Guardar como métrica" (nombre en Identidad); columna → "Crear columna" (nombre + botón) */}
+                        {/* Determinación automática según la fórmula: agregada → métrica (Calculadas); por fila → columna (dataset) */}
                         {isAggregate ? (
                           <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
-                            <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Guardar como métrica</Label>
-                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Esta fórmula es agregada. Guardala en «Calculadas (métricas)» con un nombre y el botón de abajo.</p>
-                            <p className="text-xs py-1" style={{ color: "var(--platform-fg-muted)" }}>Seguridad de granularidad: al detectar agregación no se puede crear columna (no debe modificarse la cantidad de filas).</p>
+                            <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Se guardará como métrica (automático)</Label>
+                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>La fórmula usa agregación (SUM, AVG, etc.), por eso se guarda en «Calculadas (métricas)», no como columna. Indicá el nombre y guardá.</p>
                             <div className="flex flex-wrap items-center gap-2">
                               <div>
                                 <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Nombre de la métrica *</Label>
@@ -2661,8 +2660,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           </div>
                         ) : (
                           <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                            <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Crear columna en el dataset</Label>
-                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Opcional. La columna no modifica la cantidad de filas ni incluye agregaciones (seguridad de granularidad). Nombre: solo letras, números y _.</p>
+                            <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Se guardará como columna en el dataset (automático)</Label>
+                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>La fórmula no usa agregación, por eso se crea como columna en el dataset (no modifica la cantidad de filas). Nombre: solo letras, números y _.</p>
                             {grainSafetyErrorForColumn && (
                               <p className="text-xs py-1.5 px-2 rounded border" role="alert" style={{ color: "var(--platform-error, #dc2626)", borderColor: "var(--platform-error, #dc2626)", background: "var(--platform-error-muted, rgba(220,38,38,0.08))" }}>{grainSafetyErrorForColumn}</p>
                             )}
@@ -2676,14 +2675,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                 {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
                               </Button>
                             </div>
-                            <div className="mt-3 pt-3 border-t flex flex-wrap items-center gap-2" style={{ borderColor: "var(--platform-border)" }}>
-                              <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>También podés guardar como métrica en «Calculadas»:</span>
-                              <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Nombre de la métrica" className="h-9 text-sm rounded-lg w-full max-w-[180px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                              <Button type="button" variant="outline" size="sm" className="rounded-xl h-9" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={saveMetricFromCalculationStep} disabled={saving || !exprValue.trim() || !formName.trim() || !!formulaSyntaxError}>
-                                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                                {saving ? " Guardando…" : " Guardar como métrica"}
-                              </Button>
-                            </div>
                           </div>
                         )}
                         {/* Vista previa de lo que se guardará */}
@@ -2693,17 +2684,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             {isAggregate ? (
                               <ul className="text-xs space-y-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                                 <li><strong style={{ color: "var(--platform-fg)" }}>Se guardará como métrica</strong> en «Calculadas (métricas)»:</li>
-                                <li>· Nombre: <strong style={{ color: "var(--platform-fg)" }}>{formName || "(definido en paso Identidad)"}</strong></li>
+                                <li>· Nombre: <strong style={{ color: "var(--platform-fg)" }}>{formName || "—"}</strong></li>
                                 <li>· Fórmula: <code className="text-xs font-mono">{exprValue || "—"}</code></li>
                                 <li>· Agregación: <strong>{formMetrics[0]?.func ?? "SUM"}</strong></li>
                               </ul>
                             ) : (
                               <ul className="text-xs space-y-1.5" style={{ color: "var(--platform-fg-muted)" }}>
-                                <li><strong style={{ color: "var(--platform-fg)" }}>Si hacés clic en «Crear columna en el dataset»:</strong></li>
-                                <li>· Se agregará a <strong>«Columnas calculadas del dataset»</strong>:</li>
+                                <li><strong style={{ color: "var(--platform-fg)" }}>Se guardará como columna</strong> en «Columnas calculadas del dataset»:</li>
                                 <li>· Nombre de columna: <strong style={{ color: "var(--platform-fg)" }}>{(exprMetric?.alias ?? "").trim() || "—"}</strong></li>
                                 <li>· Expresión: <code className="text-xs font-mono">{exprValue || "—"}</code></li>
-                                <li className="pt-1"><strong style={{ color: "var(--platform-fg)" }}>Si solo seguís y guardás la métrica:</strong> se agregará a «Calculadas (métricas)» con nombre <strong>{formName || "(paso Identidad)"}</strong>, fórmula y agregación {formMetrics[0]?.func ?? "SUM"}.</li>
                               </ul>
                             )}
                           </div>
