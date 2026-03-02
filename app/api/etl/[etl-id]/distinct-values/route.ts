@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import postgres from "postgres";
 
 async function resolveEtlTable(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -77,6 +78,35 @@ async function resolveEtlTable(
 const MAX_ROWS = 5000;
 
 /**
+ * Lee valores distintos de una columna en etl_output vía Postgres directo.
+ * El esquema etl_output suele no tener permisos vía API Supabase; la previsualización del dataset usa esta misma vía.
+ */
+async function fetchDistinctFromEtlOutputViaPostgres(
+  tableName: string,
+  column: string
+): Promise<{ values: string[]; error?: string }> {
+  const dbUrl = process.env.SUPABASE_DB_URL;
+  if (!dbUrl) return { values: [], error: "SUPABASE_DB_URL no configurado" };
+  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
+  const safeColumn = column.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "id";
+  const sql = postgres(dbUrl);
+  try {
+    // Identificadores ya sanitizados (solo a-z0-9_); mismo patrón que metrics-data para etl_output
+    const rows = await sql.unsafe(
+      `SELECT DISTINCT "${safeColumn}" AS val FROM etl_output."${safeTable}" WHERE "${safeColumn}" IS NOT NULL AND trim("${safeColumn}"::text) != '' LIMIT ${MAX_ROWS}`
+    );
+    await sql.end();
+    const raw = Array.isArray(rows) ? rows : [];
+    const values = [...new Set(raw.map((r: any) => String(r?.val ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return { values };
+  } catch (err: unknown) {
+    try { await sql.end(); } catch { /* ignore */ }
+    const msg = err instanceof Error ? err.message : String(err);
+    return { values: [], error: msg };
+  }
+}
+
+/**
  * GET /api/etl/[etl-id]/distinct-values?column=COLUMN_NAME
  * Devuelve valores distintos de una columna de la tabla de destino del ETL (para métricas / filtros).
  * Requiere APP_ADMIN.
@@ -122,26 +152,36 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "No se encontró tabla de destino para este ETL" }, { status: 404 });
     }
 
-    // Las tablas de destino del ETL (ej. etl_output.otraprueba) suelen no tener permisos para el rol anónimo/authenticated.
-    // Usamos siempre el service role para leerlas y así evitar "permission denied".
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      return NextResponse.json(
-        { ok: false, error: "Servidor sin SUPABASE_SERVICE_ROLE_KEY. Configurá la variable para leer tablas del ETL." },
-        { status: 503 }
-      );
-    }
-    const schemaClient = createServiceRoleClient().schema(resolved.schema as "public" | "etl_output") as any;
-    const { data: rows, error } = await schemaClient
-      .from(resolved.tableName)
-      .select(column)
-      .limit(MAX_ROWS);
+    let values: string[];
 
-    if (error) {
-      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-    }
+    // El esquema etl_output suele no tener permisos vía API Supabase (permission denied).
+    // Usamos la misma vía que la previsualización del dataset: Postgres directo con SUPABASE_DB_URL.
+    if (resolved.schema === "etl_output" && process.env.SUPABASE_DB_URL) {
+      const result = await fetchDistinctFromEtlOutputViaPostgres(resolved.tableName, column);
+      if (result.error) {
+        return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
+      }
+      values = result.values;
+    } else {
+      if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        return NextResponse.json(
+          { ok: false, error: "Servidor sin SUPABASE_SERVICE_ROLE_KEY. Configurá la variable para leer tablas del ETL." },
+          { status: 503 }
+        );
+      }
+      const schemaClient = createServiceRoleClient().schema(resolved.schema as "public" | "etl_output") as any;
+      const { data: rows, error } = await schemaClient
+        .from(resolved.tableName)
+        .select(column)
+        .limit(MAX_ROWS);
 
-    const raw = (rows ?? []) as Record<string, unknown>[];
-    const values = [...new Set(raw.map((r) => r[column]).filter((v) => v != null && v !== "").map((v) => String(v)))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      if (error) {
+        return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      }
+
+      const raw = (rows ?? []) as Record<string, unknown>[];
+      values = [...new Set(raw.map((r) => r[column]).filter((v) => v != null && v !== "").map((v) => String(v)))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    }
 
     return NextResponse.json({
       ok: true,
