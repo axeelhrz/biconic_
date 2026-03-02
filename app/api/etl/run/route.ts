@@ -346,6 +346,14 @@ async function executeEtlPipeline(
     const globalCountMap = new Map<string, number>();
     const globalCountOriginalValues = new Map<string, any>();
 
+    /** Quita el byte nulo (0x00) de strings; Postgres no lo admite en UTF-8. */
+    const sanitizeForPostgres = (val: unknown): unknown => {
+      if (val == null) return val;
+      if (typeof val === "string") return val.replace(/\u0000/g, "");
+      if (Buffer.isBuffer(val)) return val.toString("utf8").replace(/\u0000/g, "");
+      return val;
+    };
+
     const insertBatch = async (batch: Record<string, any>[]) => {
       if (batch.length === 0) return;
 
@@ -470,7 +478,7 @@ async function executeEtlPipeline(
              const saneRow: Record<string, any> = {};
              for (const key in row) {
                const saneKey = key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-               saneRow[saneKey] = row[key];
+               saneRow[saneKey] = sanitizeForPostgres(row[key]);
              }
              if (body?.etlId) saneRow["etl_id"] = body.etlId;
              previewRows.push(saneRow);
@@ -488,7 +496,7 @@ async function executeEtlPipeline(
         for (const key in row) {
           const saneKey = key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
           if (allowedKeys === null || allowedKeys.has(saneKey)) {
-            saneRow[saneKey] = row[key];
+            saneRow[saneKey] = sanitizeForPostgres(row[key]);
           }
         }
         if (body?.etlId) {
