@@ -792,6 +792,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     const allowedChars = /^[a-zA-Z0-9_*+\-/().,\s'"%;^]+$/;
     if (!allowedChars.test(expr)) return "La fórmula contiene caracteres no permitidos. Usá columnas, números, operadores ( * - + / ^ ) y comillas para texto.";
     const columnsSet = new Set([...fields, ...derivedColumns.map((d) => d.name)].map((x) => x.toLowerCase()));
+    const savedMetricNamesSet = new Set((data?.savedMetrics ?? []).map((s: { name?: string }) => (s.name ?? "").toLowerCase()));
     const protectedStr = expr.replace(/'([^']*)'|"([^"]*)"/g, " __STR__ ");
     const words = protectedStr.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
     for (const w of words) {
@@ -799,10 +800,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       const upper = w.toUpperCase();
       if (KNOWN_FORMULA_IDENTIFIERS.has(upper)) continue;
       if (columnsSet.has(w.toLowerCase())) continue;
-      return `«${w}» no es una columna del dataset ni una función conocida. Revisá el nombre o agregalo en Rol BI.`;
+      if (savedMetricNamesSet.has(w.toLowerCase())) continue;
+      return `«${w}» no es una columna del dataset ni una función conocida. Revisá el nombre o usá «Insertar métrica guardada».`;
     }
     return null;
-  }, [formMetrics, fields, derivedColumns]);
+  }, [formMetrics, fields, derivedColumns, data?.savedMetrics]);
 
   /** Error de sintaxis del nombre de columna (alias): solo letras, números y _. */
   const aliasSyntaxError = useMemo(() => {
@@ -1626,6 +1628,87 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       toast.error("Error al crear la columna");
     } finally {
       setCreatingColumn(false);
+    }
+  };
+
+  /** Guardar la métrica actual desde el paso Cálculo (mismo flujo que "Crear columna" pero para métrica). */
+  const saveMetricFromCalculationStep = async () => {
+    const name = formName.trim();
+    if (!name) {
+      toast.error("Escribí un nombre para la métrica.");
+      return;
+    }
+    const firstMetric = formMetrics[0];
+    if (!firstMetric) return;
+    const expr = (firstMetric as { expression?: string })?.expression?.trim();
+    if (!expr) {
+      toast.error("Escribí una fórmula para la métrica.");
+      return;
+    }
+    if (formulaSyntaxError) {
+      toast.error(formulaSyntaxError);
+      return;
+    }
+    const metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
+    const aggregationConfig = {
+      dimension: formDimensions[0] || undefined,
+      dimension2: formDimensions[1] || undefined,
+      dimensions: formDimensions.length > 0 ? formDimensions : undefined,
+      metrics: formMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` })),
+      filters: formFilters.length ? formFilters : undefined,
+      orderBy: formOrderBy ?? undefined,
+      limit: formLimit ?? 100,
+      chartXAxis: chartXAxis || undefined,
+      chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
+      chartSeriesField: chartSeriesField || undefined,
+      chartNumberFormat: chartNumberFormat !== "number" ? chartNumberFormat : undefined,
+      chartCurrencySymbol: chartNumberFormat === "currency" ? chartCurrencySymbol : undefined,
+      chartThousandSep: chartThousandSep === false ? false : undefined,
+      chartDecimals: chartDecimals !== 2 ? chartDecimals : undefined,
+      chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
+      chartRankingEnabled: chartRankingEnabled || undefined,
+      chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
+      chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
+      chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
+      chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
+      chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
+      showDataLabels: showDataLabels || undefined,
+      interCrossFilter: interCrossFilter === false ? false : undefined,
+      interCrossFilterFields: interCrossFilterFields.length > 0 ? interCrossFilterFields : undefined,
+      interDrilldown: interDrilldown || undefined,
+      interDrilldownHierarchy: interDrilldownHierarchy.length > 0 ? interDrilldownHierarchy : undefined,
+      interDrillThrough: interDrillThrough || undefined,
+      interDrillThroughTarget: interDrillThrough && interDrillThroughTarget ? interDrillThroughTarget : undefined,
+      interTooltipFields: interTooltipFields.length > 0 ? interTooltipFields : undefined,
+      interHighlight: interHighlight === false ? false : undefined,
+    };
+    const item: SavedMetricForm = {
+      id: `sm-${Date.now()}`,
+      name,
+      metric: metricToSave,
+      aggregationConfig,
+    };
+    setSaving(true);
+    try {
+      const next = [...savedMetrics, item];
+      const res = await fetch(`/api/etl/${etlId}/metrics`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedMetrics: next }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        toast.error(json.error ?? "Error al guardar la métrica");
+        return;
+      }
+      setData((prev) => (prev ? { ...prev, savedMetrics: next } : null));
+      syncMetricsToDashboard(next);
+      toast.success(`Métrica «${name}» guardada en Calculadas (métricas).`);
+      closeForm();
+    } catch {
+      toast.error("Error al guardar la métrica");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -2528,6 +2611,29 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                               disablePortal
                             />
                           </div>
+                          <div className="flex flex-col gap-1">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Insertar métrica guardada</Label>
+                            <Select
+                              value=""
+                              onChange={(val: string) => {
+                                if (!val) return;
+                                const el = formulaInputRef.current;
+                                if (el && "value" in el) {
+                                  const input = el as HTMLInputElement;
+                                  const cur = exprValue;
+                                  const start = input.selectionStart ?? cur.length;
+                                  const end = input.selectionEnd ?? cur.length;
+                                  setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, expression: cur.slice(0, start) + val + cur.slice(end) } : m));
+                                  setTimeout(() => { input.focus(); input.setSelectionRange(start + val.length, start + val.length); }, 0);
+                                }
+                              }}
+                              options={[{ value: "", label: "Calculadas…" }, ...savedMetrics.map((s) => ({ value: s.name, label: s.name }))]}
+                              placeholder={savedMetrics.length === 0 ? "Sin métricas" : "Calculadas…"}
+                              className="min-w-[160px]"
+                              buttonClassName="h-9 text-sm"
+                              disablePortal
+                            />
+                          </div>
                         </div>
                         {formulaSyntaxError && (
                           <p className="text-sm mt-2 rounded-lg py-2 px-3 border" role="alert" style={{ color: "var(--platform-fg)", borderColor: "var(--platform-error, #dc2626)", background: "var(--platform-error-muted, rgba(220,38,38,0.08))" }}>
@@ -2536,13 +2642,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                         )}
                         {/* Según tipo: métrica → "Guardar como métrica" (nombre en Identidad); columna → "Crear columna" (nombre + botón) */}
                         {isAggregate ? (
-                          <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
+                          <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
                             <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Guardar como métrica</Label>
-                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Esta fórmula es agregada. Se guardará en «Calculadas (métricas)» con el nombre que definiste en el paso Identidad.</p>
-                            <p className="text-xs py-1" style={{ color: "var(--platform-fg-muted)" }}>Seguridad de granularidad: al detectar agregación se impide crear columna (no debe modificarse la cantidad de filas).</p>
-                            <p className="text-sm font-medium py-1.5 px-2 rounded border" style={{ color: "var(--platform-fg)", borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                              Nombre de la métrica: {formName.trim() || "(completá el nombre en el paso Identidad)"}
-                            </p>
+                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Esta fórmula es agregada. Guardala en «Calculadas (métricas)» con un nombre y el botón de abajo.</p>
+                            <p className="text-xs py-1" style={{ color: "var(--platform-fg-muted)" }}>Seguridad de granularidad: al detectar agregación no se puede crear columna (no debe modificarse la cantidad de filas).</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div>
+                                <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Nombre de la métrica *</Label>
+                                <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Ej. Ventas totales, Cantidad vendida" className="h-9 text-sm rounded-lg w-full max-w-[220px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                              </div>
+                              <div className="flex items-end">
+                                <Button type="button" className="rounded-xl h-9" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetricFromCalculationStep} disabled={saving || !exprValue.trim() || !formName.trim() || !!formulaSyntaxError}>
+                                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                  {saving ? " Guardando…" : " Guardar como métrica"}
+                                </Button>
+                              </div>
+                            </div>
                           </div>
                         ) : (
                           <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
@@ -2559,6 +2674,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                               <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim() || !(exprMetric?.alias ?? "").trim() || !!formulaSyntaxError || !!aliasSyntaxError || !!grainSafetyErrorForColumn}>
                                 {creatingColumn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                                 {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
+                              </Button>
+                            </div>
+                            <div className="mt-3 pt-3 border-t flex flex-wrap items-center gap-2" style={{ borderColor: "var(--platform-border)" }}>
+                              <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>También podés guardar como métrica en «Calculadas»:</span>
+                              <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Nombre de la métrica" className="h-9 text-sm rounded-lg w-full max-w-[180px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                              <Button type="button" variant="outline" size="sm" className="rounded-xl h-9" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={saveMetricFromCalculationStep} disabled={saving || !exprValue.trim() || !formName.trim() || !!formulaSyntaxError}>
+                                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                {saving ? " Guardando…" : " Guardar como métrica"}
                               </Button>
                             </div>
                           </div>
