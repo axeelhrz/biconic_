@@ -697,7 +697,7 @@ async function executeEtlPipeline(
               return new Promise((resolve, reject) => {
                 Firebird.attach(opts, (err: Error | null, db: any) => {
                   if (err) return reject(err);
-                  const cols = columns?.length ? columns.map((c) => /^[A-Z0-9_]+$/i.test(c) ? c.toUpperCase() : `"${c.replace(/"/g, '""')}"`).join(", ") : "*";
+                  const cols = columns?.length ? columns.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(", ") : "*";
                   const escapeFb = (v: any): string => {
                     if (v == null) return "NULL";
                     if (typeof v === "boolean") return v ? "1" : "0";
@@ -752,7 +752,10 @@ async function executeEtlPipeline(
           const joinType = (jc.joinType || "INNER").toString().toUpperCase();
 
           const leftTablePart = leftTable.includes(".") ? (leftTable.split(".").pop() || leftTable).trim().toUpperCase() : safePart(leftTable);
-          const leftFbConditions = leftConditions.map((c) => ({ ...c, column: (c.column || "").trim() })).filter((c) => (c.column ?? "").length > 0);
+          const resolveColCase = (col: string) => leftColumns.find((lc) => lc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
+          const leftFbConditions = leftConditions
+            .map((c) => ({ ...c, column: resolveColCase(c.column || "") }))
+            .filter((c) => c.column.length > 0);
           const { clause: leftClause, params: leftParams } = buildWhereClauseFirebird(leftFbConditions);
           const Firebird = require("node-firebird");
           const opts = {
@@ -779,7 +782,7 @@ async function executeEtlPipeline(
             let offset = 0;
             for (;;) {
               const cols = leftCols.length
-                ? leftCols.map((c) => /^[A-Z0-9_]+$/i.test(c) ? c.toUpperCase() : `"${c.replace(/"/g, '""')}"`).join(", ")
+                ? leftCols.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(", ")
                 : "*";
               const sql =
                 offset === 0
