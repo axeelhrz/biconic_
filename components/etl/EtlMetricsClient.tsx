@@ -812,6 +812,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     return null;
   }, [formMetrics]);
 
+  /** Seguridad de granularidad (Grain Safety): para crear columna, la expresión no debe depender de resultados agregados (metric_0, metric_1, ...). */
+  const grainSafetyErrorForColumn = useMemo(() => {
+    const expr = (formMetrics[0] as { expression?: string })?.expression?.trim() ?? "";
+    if (!expr) return null;
+    if (/\bmetric_\d+\b/i.test(expr)) return "Seguridad de granularidad: la expresión no puede depender de métricas agregadas (metric_0, metric_1, …). Creá una columna solo con columnas del dataset y funciones por fila.";
+    return null;
+  }, [formMetrics]);
+
   const getColumnDisplayKey = (col: string): string => {
     const cd = data?.columnDisplay;
     if (!cd) return col;
@@ -1573,7 +1581,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       return;
     }
     if (expressionHasAggregation(expr)) {
-      toast.error("Las fórmulas con agregación (SUM, AVERAGE, COUNTIF, etc.) no se pueden crear como columna. Guardá esta expresión como métrica (sin marcar «Crear columna»).");
+      toast.error("Seguridad de granularidad: la fórmula incluye agregaciones. No se puede crear columna (no debe modificarse la cantidad de filas). Guardala como métrica.");
+      return;
+    }
+    if (grainSafetyErrorForColumn) {
+      toast.error(grainSafetyErrorForColumn);
       return;
     }
     if (!alias) {
@@ -2434,8 +2446,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                         <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Detección automática del tipo de cálculo</p>
                         <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>El sistema analiza la fórmula y la clasifica en uno de estos grupos:</p>
                         <ul className="text-xs space-y-1" style={{ color: "var(--platform-fg-muted)" }}>
-                          <li><strong>Cálculo por fila:</strong> sin SUM, AVERAGE, COUNT, MIN, MAX, COUNTIF, SUMIF, etc. Ej: CANTIDAD * PRECIO_UNITARIO, IF(ESTADO=&quot;PAGADO&quot;, 1, 0). Se habilita «Crear columna en el dataset».</li>
-                          <li><strong>Cálculo agregado (métrica):</strong> usa SUM, AVERAGE, COUNT, MIN, MAX, COUNTIF, SUMIF, AVERAGEIF, etc. Se guarda solo como métrica; «Crear columna» se deshabilita.</li>
+                          <li><strong>Cálculo por fila:</strong> sin agregaciones ni metric_0, metric_1, … No modifica la cantidad de filas. Se habilita «Crear columna en el dataset».</li>
+                          <li><strong>Cálculo agregado (métrica):</strong> usa SUM, AVERAGE, COUNT, MIN, MAX, etc. Se guarda solo como métrica; no se puede crear columna (seguridad de granularidad).</li>
                         </ul>
                         {exprValue.trim() && (
                           <p className="text-xs font-medium" style={{ color: isAggregate ? "var(--platform-accent)" : "var(--platform-fg)" }}>
@@ -2527,6 +2539,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
                             <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Guardar como métrica</Label>
                             <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Esta fórmula es agregada. Se guardará en «Calculadas (métricas)» con el nombre que definiste en el paso Identidad.</p>
+                            <p className="text-xs py-1" style={{ color: "var(--platform-fg-muted)" }}>Seguridad de granularidad: al detectar agregación se impide crear columna (no debe modificarse la cantidad de filas).</p>
                             <p className="text-sm font-medium py-1.5 px-2 rounded border" style={{ color: "var(--platform-fg)", borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                               Nombre de la métrica: {formName.trim() || "(completá el nombre en el paso Identidad)"}
                             </p>
@@ -2534,13 +2547,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                         ) : (
                           <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                             <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Crear columna en el dataset</Label>
-                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Opcional. Creá una columna reutilizable (Rol BI, Profiling, filtros, dimensiones e «Insertar columna»). Nombre: solo letras, números y _.</p>
+                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Opcional. La columna no modifica la cantidad de filas ni incluye agregaciones (seguridad de granularidad). Nombre: solo letras, números y _.</p>
+                            {grainSafetyErrorForColumn && (
+                              <p className="text-xs py-1.5 px-2 rounded border" role="alert" style={{ color: "var(--platform-error, #dc2626)", borderColor: "var(--platform-error, #dc2626)", background: "var(--platform-error-muted, rgba(220,38,38,0.08))" }}>{grainSafetyErrorForColumn}</p>
+                            )}
                             <div className="flex flex-wrap items-center gap-2">
                               <div>
                                 <Input value={exprMetric?.alias ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura, total_linea" className="h-9 text-sm rounded-lg w-full max-w-[200px] !bg-[var(--platform-bg)]" style={{ borderColor: aliasSyntaxError ? "var(--platform-error, #dc2626)" : "var(--platform-border)", color: "var(--platform-fg)" }} />
                                 {aliasSyntaxError && <p className="text-xs mt-1" style={{ color: "var(--platform-error, #dc2626)" }}>{aliasSyntaxError}</p>}
                               </div>
-                              <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim() || !(exprMetric?.alias ?? "").trim() || !!formulaSyntaxError || !!aliasSyntaxError}>
+                              <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim() || !(exprMetric?.alias ?? "").trim() || !!formulaSyntaxError || !!aliasSyntaxError || !!grainSafetyErrorForColumn}>
                                 {creatingColumn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                                 {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
                               </Button>
@@ -2644,6 +2660,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                         <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{t === "additive" ? "Se suma en todos los ejes" : t === "semi" ? "Ej: stock (no suma en tiempo)" : "Ej: margen%, conversión"}</span>
                       </button>
                     ))}
+                  </div>
+                  <div className="rounded-lg border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Ratios y cálculos no aditivos</p>
+                    <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Si la métrica es un ratio o porcentaje, definila como <strong style={{ color: "var(--platform-fg)" }}>No aditiva (ratio)</strong>. El motor prioriza el cálculo agregado correcto.</p>
+                    <p className="text-xs mb-1" style={{ color: "var(--platform-error, #dc2626)" }}>Incorrecto: SUM(MARGEN_PCT) — sumar porcentajes por fila da resultados erróneos.</p>
+                    <p className="text-xs" style={{ color: "var(--platform-accent)" }}>Correcto: SUM(VENTA - COSTO) / SUM(VENTA) — definí dos métricas (numerador y denominador) y una fórmula ratio (metric_0 / metric_1).</p>
                   </div>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
