@@ -427,6 +427,65 @@ async function resolveFromGuidedConfig(
   };
 }
 
+/** Usa la tabla del widget "end" en layout.widgets (editor por nodos, incl. ETLs con JOIN). */
+async function resolveFromLayoutWidgets(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  layout: Record<string, unknown> | null,
+  tableReader: Awaited<ReturnType<typeof createClient>> | Awaited<ReturnType<typeof createServiceRoleClient>> | null
+): Promise<{
+  schema: string;
+  tableName: string;
+  created_at: string | null;
+  sampleData: any[];
+  rowCount: number;
+  columnsFromConfig?: string[];
+} | null> {
+  const widgets = layout?.widgets;
+  if (!Array.isArray(widgets) || widgets.length === 0) return null;
+  const endWidget = widgets.find((w: { type?: string }) => w?.type === "end");
+  if (!endWidget || typeof endWidget !== "object") return null;
+  const end = (endWidget as { end?: { target?: { table?: string } } }).end;
+  const target = end?.target && typeof end.target === "object" ? end.target as { table?: string } : undefined;
+  const rawTable = target?.table;
+  if (typeof rawTable !== "string" || !rawTable.trim()) return null;
+  const tableName = rawTable.trim().replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+  if (!tableName) return null;
+
+  for (const schemaName of ["etl_output", "public"]) {
+    try {
+      const client = (schemaName === "etl_output" && tableReader) ? tableReader : supabase;
+      const schemaClient = client.schema(schemaName as "public" | "etl_output") as any;
+      const { count, error: countErr } = await schemaClient
+        .from(tableName)
+        .select("*", { count: "exact", head: true });
+      if (countErr) continue;
+      const rowCount = count ?? 0;
+      let sampleData: any[] = [];
+      if (rowCount > 0) {
+        const { data } = await schemaClient.from(tableName).select("*").limit(500);
+        sampleData = data || [];
+      }
+      return {
+        schema: schemaName,
+        tableName,
+        created_at: null,
+        sampleData,
+        rowCount,
+      };
+    } catch {
+      continue;
+    }
+  }
+  // Tabla aún no existe (ETL no ejecutado): devolver stub para que la UI de métricas muestre el dataset configurado
+  return {
+    schema: "etl_output",
+    tableName,
+    created_at: null,
+    sampleData: [],
+    rowCount: 0,
+  };
+}
+
 /** Usa etl.output_table (tabla real creada en la última ejecución exitosa) */
 async function resolveFromOutputTable(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -529,6 +588,10 @@ export async function GET(
     if (!resolved) {
       const layout = (etlRow as { layout?: Record<string, unknown> }).layout;
       resolved = await resolveFromGuidedConfig(supabase, layout ?? null, tableReader);
+    }
+    if (!resolved) {
+      const layout = (etlRow as { layout?: Record<string, unknown> }).layout;
+      resolved = await resolveFromLayoutWidgets(supabase, layout ?? null, tableReader);
     }
 
     const etlInfo = { id: etlRow.id, title: (etlRow as any).title, name: (etlRow as any).name };

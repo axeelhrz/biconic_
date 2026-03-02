@@ -41,17 +41,35 @@ async function resolveEtlTable(
   }
 
   const layout = (etlRow as { layout?: Record<string, unknown> }).layout;
-  const end = layout?.guided_config && typeof layout.guided_config === "object"
-    ? (layout.guided_config as Record<string, unknown>).end as Record<string, unknown> | undefined
-    : undefined;
+  // guided_config (flujo guiado)
+  const guided = layout?.guided_config && typeof layout.guided_config === "object" ? layout.guided_config as Record<string, unknown> : undefined;
+  const end = guided?.end && typeof guided.end === "object" ? guided.end as Record<string, unknown> : undefined;
   const target = end?.target && typeof end.target === "object" ? end.target as Record<string, unknown> : undefined;
-  const rawTable = target?.table;
-  if (typeof rawTable !== "string" || !rawTable.trim()) return null;
-  const tableName = rawTable.trim().replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-  for (const schemaName of ["etl_output", "public"]) {
-    const schemaClient = supabase.schema(schemaName as "public" | "etl_output") as any;
-    const { error } = await schemaClient.from(tableName).select("*").limit(1);
-    if (!error) return { schema: schemaName, tableName };
+  let rawTable = target?.table;
+  if (typeof rawTable === "string" && rawTable.trim()) {
+    const tableName = rawTable.trim().replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+    for (const schemaName of ["etl_output", "public"]) {
+      const schemaClient = supabase.schema(schemaName as "public" | "etl_output") as any;
+      const { error } = await schemaClient.from(tableName).select("*").limit(1);
+      if (!error) return { schema: schemaName, tableName };
+    }
+  }
+  // layout.widgets (editor por nodos, incl. ETLs con JOIN)
+  const widgets = layout?.widgets;
+  if (Array.isArray(widgets)) {
+    const endWidget = widgets.find((w: { type?: string }) => w?.type === "end");
+    if (endWidget && typeof endWidget === "object") {
+      const endObj = (endWidget as { end?: { target?: { table?: string } } }).end;
+      rawTable = endObj?.target?.table;
+      if (typeof rawTable === "string" && rawTable.trim()) {
+        const tableName = rawTable.trim().replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+        for (const schemaName of ["etl_output", "public"]) {
+          const schemaClient = supabase.schema(schemaName as "public" | "etl_output") as any;
+          const { error } = await schemaClient.from(tableName).select("*").limit(1);
+          if (!error) return { schema: schemaName, tableName };
+        }
+      }
+    }
   }
   return null;
 }
