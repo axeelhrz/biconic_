@@ -2522,24 +2522,31 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             {formulaSyntaxError}
                           </p>
                         )}
-                        <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                          <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Crear columna en el dataset (solo cálculos por fila)</Label>
-                          <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Opcional. Si la fórmula no usa SUM, AVG, COUNT, MIN ni MAX, podés crear una columna reutilizable (Rol BI, Profiling, filtros, dimensiones e «Insertar columna»). Nombre: solo letras, números y _.</p>
-                          {isAggregate ? (
-                            <p className="text-xs py-2" style={{ color: "var(--platform-fg-muted)" }}>Esta fórmula es agregada; no se puede crear columna. Guardala como métrica en el siguiente paso.</p>
-) : (
+                        {/* Según tipo: métrica → "Guardar como métrica" (nombre en Identidad); columna → "Crear columna" (nombre + botón) */}
+                        {isAggregate ? (
+                          <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
+                            <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Guardar como métrica</Label>
+                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Esta fórmula es agregada. Se guardará en «Calculadas (métricas)» con el nombre que definiste en el paso Identidad.</p>
+                            <p className="text-sm font-medium py-1.5 px-2 rounded border" style={{ color: "var(--platform-fg)", borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                              Nombre de la métrica: {formName.trim() || "(completá el nombre en el paso Identidad)"}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                            <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Crear columna en el dataset</Label>
+                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Opcional. Creá una columna reutilizable (Rol BI, Profiling, filtros, dimensiones e «Insertar columna»). Nombre: solo letras, números y _.</p>
                             <div className="flex flex-wrap items-center gap-2">
                               <div>
                                 <Input value={exprMetric?.alias ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura, total_linea" className="h-9 text-sm rounded-lg w-full max-w-[200px] !bg-[var(--platform-bg)]" style={{ borderColor: aliasSyntaxError ? "var(--platform-error, #dc2626)" : "var(--platform-border)", color: "var(--platform-fg)" }} />
                                 {aliasSyntaxError && <p className="text-xs mt-1" style={{ color: "var(--platform-error, #dc2626)" }}>{aliasSyntaxError}</p>}
                               </div>
                               <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim() || !(exprMetric?.alias ?? "").trim() || !!formulaSyntaxError || !!aliasSyntaxError}>
-                              {creatingColumn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                              {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
+                                {creatingColumn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
                               </Button>
                             </div>
-                          )}
-                        </div>
+                          </div>
+                        )}
                         {/* Vista previa de lo que se guardará */}
                         {(exprValue.trim() || (exprMetric?.alias ?? "").trim()) && (
                           <div className="rounded-lg border p-4 mt-3" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
