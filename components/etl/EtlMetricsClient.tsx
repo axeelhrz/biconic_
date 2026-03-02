@@ -1290,8 +1290,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         borderWidth: 1,
       };
     });
+
+    if (formChartType === "pie" || formChartType === "doughnut") {
+      const yKey = yKeys[0]!;
+      const sliceColors = labels.map((label, i) => getColor(label, i));
+      return {
+        labels,
+        datasets: [{
+          data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
+          backgroundColor: sliceColors,
+          borderColor: "#fff",
+          borderWidth: 1,
+        }],
+      };
+    }
+
     return { labels, datasets };
-  }, [previewData, formDimensions, formMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors]);
+  }, [previewData, formDimensions, formMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType]);
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
