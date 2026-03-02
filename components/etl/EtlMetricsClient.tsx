@@ -1223,7 +1223,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
     if (yKeys.length === 0) return null;
 
-    const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
+    const defaultPalette = [
+      "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
+      "#06b6d4", "#84cc16", "#eab308", "#dc2626", "#a855f7", "#d946ef", "#0d9488", "#ea580c",
+      "#2563eb", "#16a34a", "#ca8a04", "#b91c1c", "#7c3aed", "#c026d3", "#0f766e", "#c2410c",
+    ];
     const colLabel = (k: string) => {
       const match = k.match(/^metric_(\d+)$/);
       if (match) {
@@ -1239,6 +1243,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       if (byLabel) return byLabel;
       if (colorKeys[idx] != null) return chartSeriesColors[colorKeys[idx]!]!;
       return defaultPalette[idx % defaultPalette.length]!;
+    };
+    const getColorByLabelStable = (label: string) => {
+      const byLabel = chartSeriesColors[label] ?? chartSeriesColors[label?.trim?.() ?? ""];
+      if (byLabel) return byLabel;
+      let hash = 0;
+      const s = String(label ?? "");
+      for (let i = 0; i < s.length; i++) hash = ((hash << 5) - hash) + s.charCodeAt(i);
+      const idx = Math.abs(hash) % defaultPalette.length;
+      return defaultPalette[idx]!;
     };
 
     let rows = [...previewData];
@@ -1293,14 +1306,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
     if (formChartType === "pie" || formChartType === "doughnut") {
       const yKey = yKeys[0]!;
-      const sliceColors = labels.map((label, i) => getColor(label, i));
+      const sliceColors = labels.map((label) => getColorByLabelStable(label));
+      const hoverColors = sliceColors.map((c) => {
+        const hex = String(c).replace(/^#/, "");
+        if (hex.length >= 6) {
+          const r = Math.min(255, (parseInt(hex.slice(0, 2), 16) || 0) + 28);
+          const g = Math.min(255, (parseInt(hex.slice(2, 4), 16) || 0) + 28);
+          const b = Math.min(255, (parseInt(hex.slice(4, 6), 16) || 0) + 28);
+          return `rgb(${r},${g},${b})`;
+        }
+        return c;
+      });
       return {
         labels,
         datasets: [{
           data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
           backgroundColor: sliceColors,
+          hoverBackgroundColor: hoverColors,
           borderColor: "#fff",
-          borderWidth: 1,
+          borderWidth: 2,
         }],
       };
     }
