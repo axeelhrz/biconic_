@@ -2398,11 +2398,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               {wizard === "B" && wizardStep === 0 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Identidad — Nombre de la métrica</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Nombre único para reutilizar en dashboards. El cálculo se define en pasos siguientes.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Nombre único para reutilizar en dashboards. Si guardás como métrica, este nombre aparecerá en «Calculadas (métricas)». El cálculo se define en pasos siguientes.</p>
                   <div className="space-y-4 mb-4">
                     <div>
                       <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Nombre *</Label>
                       <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Ej. Ventas totales" className="rounded-xl max-w-md" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }} />
+                      <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Obligatorio al guardar. Se mostrará en la lista «Calculadas (métricas)».</p>
                     </div>
                     <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                       <p className="text-xs font-medium uppercase mb-1" style={{ color: "var(--platform-fg-muted)" }}>Dataset base</p>
@@ -2539,6 +2540,28 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             </div>
                           )}
                         </div>
+                        {/* Vista previa de lo que se guardará */}
+                        {(exprValue.trim() || (exprMetric?.alias ?? "").trim()) && (
+                          <div className="rounded-lg border p-4 mt-3" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
+                            <p className="text-sm font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Vista previa de lo que se guardará</p>
+                            {isAggregate ? (
+                              <ul className="text-xs space-y-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                                <li><strong style={{ color: "var(--platform-fg)" }}>Se guardará como métrica</strong> en «Calculadas (métricas)»:</li>
+                                <li>· Nombre: <strong style={{ color: "var(--platform-fg)" }}>{formName || "(definido en paso Identidad)"}</strong></li>
+                                <li>· Fórmula: <code className="text-xs font-mono">{exprValue || "—"}</code></li>
+                                <li>· Agregación: <strong>{formMetrics[0]?.func ?? "SUM"}</strong></li>
+                              </ul>
+                            ) : (
+                              <ul className="text-xs space-y-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                                <li><strong style={{ color: "var(--platform-fg)" }}>Si hacés clic en «Crear columna en el dataset»:</strong></li>
+                                <li>· Se agregará a <strong>«Columnas calculadas del dataset»</strong>:</li>
+                                <li>· Nombre de columna: <strong style={{ color: "var(--platform-fg)" }}>{(exprMetric?.alias ?? "").trim() || "—"}</strong></li>
+                                <li>· Expresión: <code className="text-xs font-mono">{exprValue || "—"}</code></li>
+                                <li className="pt-1"><strong style={{ color: "var(--platform-fg)" }}>Si solo seguís y guardás la métrica:</strong> se agregará a «Calculadas (métricas)» con nombre <strong>{formName || "(paso Identidad)"}</strong>, fórmula y agregación {formMetrics[0]?.func ?? "SUM"}.</li>
+                              </ul>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                     );
@@ -3564,45 +3587,81 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       )}
 
       {savedMetrics.length > 0 && (
-        <section>
-          <h2 className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>
-            Métricas guardadas ({savedMetrics.length})
+        <section className="mb-6">
+          <h2 className="text-sm font-semibold mb-1" style={{ color: "var(--platform-fg)" }}>
+            Calculadas (métricas)
           </h2>
+          <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>
+            Métricas guardadas; aparecen aquí. Las columnas calculadas del dataset se listan más abajo.
+          </p>
           <ul className="space-y-2">
-            {savedMetrics.map((s) => (
+            {savedMetrics.map((s) => {
+              const expr = (s.metric as { expression?: string })?.expression?.trim();
+              const formula = (s.metric as { formula?: string })?.formula?.trim();
+              const displayExpr = expr || formula || (s.metric.field ? `${s.metric.func}(${s.metric.field})` : "—");
+              return (
+                <li
+                  key={s.id}
+                  className="flex items-center justify-between gap-4 rounded-xl border p-4"
+                  style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <span className="font-medium block" style={{ color: "var(--platform-fg)" }}>{s.name}</span>
+                    <span className="text-sm font-mono block mt-1 truncate" style={{ color: "var(--platform-fg-muted)" }} title={displayExpr}>
+                      {expr || formula ? displayExpr : `${s.metric.func}(${s.metric.field || "—"})`}
+                      {s.metric.func && (expr || formula) ? ` · Agregación: ${s.metric.func}` : ""}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      style={{ color: "var(--platform-fg-muted)" }}
+                      onClick={() => openEdit(s)}
+                      aria-label="Editar"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-red-500"
+                      onClick={() => deleteMetric(s.id)}
+                      aria-label="Eliminar"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
+      {derivedColumns.length > 0 && (
+        <section className="mb-6">
+          <h2 className="text-sm font-semibold mb-1" style={{ color: "var(--platform-fg)" }}>
+            Columnas calculadas del dataset
+          </h2>
+          <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>
+            Columnas nuevas guardadas en el dataset; disponibles en Rol BI, Profiling, filtros e «Insertar columna». No son métricas.
+          </p>
+          <ul className="space-y-2">
+            {derivedColumns.map((d) => (
               <li
-                key={s.id}
+                key={d.name}
                 className="flex items-center justify-between gap-4 rounded-xl border p-4"
                 style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
               >
-                <div>
-                  <span className="font-medium" style={{ color: "var(--platform-fg)" }}>{s.name}</span>
-                  <span className="text-sm ml-2" style={{ color: "var(--platform-fg-muted)" }}>
-                    {s.metric.func}({s.metric.field || "—"}) {s.metric.alias ? `as ${s.metric.alias}` : ""}
+                <div className="min-w-0 flex-1">
+                  <span className="font-medium block" style={{ color: "var(--platform-fg)" }}>{d.name}</span>
+                  <span className="text-sm font-mono block mt-1 truncate" style={{ color: "var(--platform-fg-muted)" }} title={d.expression}>
+                    {d.expression} · Agregación por defecto: {d.defaultAggregation}
                   </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    style={{ color: "var(--platform-fg-muted)" }}
-                    onClick={() => openEdit(s)}
-                    aria-label="Editar"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-red-500"
-                    onClick={() => deleteMetric(s.id)}
-                    aria-label="Eliminar"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
                 </div>
               </li>
             ))}
@@ -3610,9 +3669,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         </section>
       )}
 
-      {hasData && savedMetrics.length === 0 && !showForm && (
+      {hasData && savedMetrics.length === 0 && derivedColumns.length === 0 && !showForm && (
         <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-          Aún no hay métricas guardadas. Creá una con "Nueva métrica" para usarla después en tus dashboards.
+          Aún no hay métricas en «Calculadas» ni columnas calculadas. Creá una métrica con "Nueva métrica" (se guardará en Calculadas) o, en el paso Cálculo, creá una columna en el dataset.
         </p>
       )}
 
