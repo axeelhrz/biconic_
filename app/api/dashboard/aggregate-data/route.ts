@@ -95,6 +95,10 @@ const ALLOWED_OPERATORS = new Set([
   "MONTH",
   "YEAR",
   "DAY",
+  "EXACT",
+  "CONTAINS",
+  "STARTS_WITH",
+  "ENDS_WITH",
 ]);
 
 function toSqlLiteral(v: any): string {
@@ -680,6 +684,11 @@ export async function POST(req: NextRequest) {
           }
           if ((op === "IS" || op === "IS NOT") && f.value === null)
             return `${col} ${op} NULL`;
+
+          if (op === "EXACT") return `${fieldExpression} = ${toSqlLiteral(f.value)}`;
+          if (op === "CONTAINS") return `${fieldExpression}::text ILIKE '%' || ${toSqlLiteral(String(f.value ?? ""))} || '%'`;
+          if (op === "STARTS_WITH") return `${fieldExpression}::text ILIKE ${toSqlLiteral(String(f.value ?? ""))} || '%'`;
+          if (op === "ENDS_WITH") return `${fieldExpression}::text ILIKE '%' || ${toSqlLiteral(String(f.value ?? ""))}`;
 
           return `${fieldExpression} ${op} ${toSqlLiteral(f.value)}`;
         })

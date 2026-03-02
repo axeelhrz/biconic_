@@ -59,6 +59,22 @@ const AGG_FUNCS = [
   { value: "FORMULA", label: "Fórmula / ratio" },
 ];
 
+const FILTER_OPERATOR_OPTIONS = [
+  { value: "=", label: "Igual" },
+  { value: "!=", label: "Distinto" },
+  { value: ">", label: "Mayor que" },
+  { value: ">=", label: "Mayor o igual" },
+  { value: "<", label: "Menor que" },
+  { value: "<=", label: "Menor o igual" },
+  { value: "CONTAINS", label: "Contiene" },
+  { value: "STARTS_WITH", label: "Comienza por" },
+  { value: "ENDS_WITH", label: "Termina en" },
+  { value: "EXACT", label: "Coincide exactamente" },
+  { value: "LIKE", label: "LIKE" },
+  { value: "ILIKE", label: "ILIKE" },
+  { value: "IN", label: "IN" },
+];
+
 const CHART_TYPES: { value: string; label: string; icon: ComponentType<{ className?: string }>; description: string }[] = [
   { value: "bar", label: "Barras", icon: BarChart2, description: "Comparar valores por categoría" },
   { value: "horizontalBar", label: "Barras horiz.", icon: BarChart2, description: "Ideal para muchas categorías o nombres largos" },
@@ -450,6 +466,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [metricsDistinctValues, setMetricsDistinctValues] = useState<string[]>([]);
   const [metricsDistinctLoading, setMetricsDistinctLoading] = useState(false);
   const [metricsDistinctSearch, setMetricsDistinctSearch] = useState("");
+  /** Valores distintos por campo, para selector de valor en filtros (lista seleccionable). */
+  const [filterFieldValues, setFilterFieldValues] = useState<Record<string, string[]>>({});
+  const [filterFieldLoading, setFilterFieldLoading] = useState<string | null>(null);
   const [datasetRelations, setDatasetRelations] = useState<DatasetRelation[]>([]);
   const [relationFormConnectionId, setRelationFormConnectionId] = useState("");
   const [relationFormTableKey, setRelationFormTableKey] = useState("");
@@ -2805,8 +2824,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       {formFilters.map((f, i) => (
                         <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                           <Select value={f.field} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={allColumnsForRoles.map((name) => ({ value: name, label: derivedColumnsByName[name] ? `${name} (calculada)` : getSampleDisplayLabel(name) }))} placeholder="Campo" className="min-w-[120px]" buttonClassName="h-9 text-xs" disablePortal />
-                          <Select value={f.operator} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"].map((op) => ({ value: op, label: op }))} placeholder="Op" className="w-24" buttonClassName="h-9 text-xs" disablePortal />
-                          <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <Select value={f.operator} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={FILTER_OPERATOR_OPTIONS} placeholder="Op" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
+                          <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor (manual)" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          {f.field && (
+                            <>
+                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
+                                {filterFieldLoading === f.field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Cargar lista"}
+                              </Button>
+                              {filterFieldValues[f.field]?.length ? (
+                                <Select value={f.value != null ? String(f.value) : ""} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: val || null } : ff))} options={[{ value: "", label: "Elegir de la lista..." }, ...filterFieldValues[f.field].map((v) => ({ value: v, label: v }))]} placeholder="Elegir de la lista" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
+                              ) : null}
+                            </>
+                          )}
                           <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
                         </div>
                       ))}
@@ -3084,9 +3113,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           <span className="text-xs font-medium w-20 shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Campo</span>
                           <Select value={f.field} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={allColumnsForRoles.map((name) => ({ value: name, label: derivedColumnsByName[name] ? `${name} (calculada)` : getSampleDisplayLabel(name) }))} placeholder="Seleccionar campo" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
                           <span className="text-xs font-medium w-16 shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Condición</span>
-                          <Select value={f.operator} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE", "IN"].map((op) => ({ value: op, label: op }))} placeholder="Op" className="w-24" buttonClassName="h-9 text-xs" disablePortal />
+                          <Select value={f.operator} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={FILTER_OPERATOR_OPTIONS} placeholder="Op" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
                           <span className="text-xs font-medium w-12 shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Valor</span>
-                          <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor (manual)" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          {f.field && (
+                            <>
+                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
+                                {filterFieldLoading === f.field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Cargar lista"}
+                              </Button>
+                              {filterFieldValues[f.field]?.length ? (
+                                <Select value={f.value != null ? String(f.value) : ""} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: val || null } : ff))} options={[{ value: "", label: "Elegir de la lista..." }, ...filterFieldValues[f.field].map((v) => ({ value: v, label: v }))]} placeholder="Elegir de la lista" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
+                              ) : null}
+                            </>
+                          )}
                           <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))} title="Quitar filtro"><Trash2 className="h-4 w-4" /></Button>
                         </div>
                       ))}
