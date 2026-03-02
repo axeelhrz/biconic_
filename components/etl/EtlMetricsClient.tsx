@@ -432,6 +432,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [chartThousandSep, setChartThousandSep] = useState(true);
   const [chartDecimals, setChartDecimals] = useState(2);
   const [chartSortDirection, setChartSortDirection] = useState<"none" | "asc" | "desc">("none");
+  const [chartSortBy, setChartSortBy] = useState<"series" | "axis">("series");
+  const [chartAxisOrder, setChartAxisOrder] = useState<"alpha" | "date_asc" | "date_desc">("alpha");
+  const [chartScaleMode, setChartScaleMode] = useState<"auto" | "dataset" | "custom">("auto");
+  const [chartScaleMin, setChartScaleMin] = useState<string>("");
+  const [chartScaleMax, setChartScaleMax] = useState<string>("");
+  const [chartAxisStep, setChartAxisStep] = useState<string>("");
   const [chartRankingEnabled, setChartRankingEnabled] = useState(false);
   const [chartRankingTop, setChartRankingTop] = useState(5);
   const [chartRankingMetric, setChartRankingMetric] = useState("");
@@ -494,7 +500,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
     B: ["Identidad", "Cálculo", "Propiedades", "Filtros base", "Preview"],
     C: ["Métricas", "Dimensiones y Tiempo", "Filtros", "Transformaciones", "Preview"],
-    D: ["Tipo visual", "Mapeo", "Formato y colores", "Interacciones", "Guardar"],
+    D: ["Tipo visual", "Mapeo", "Formato y colores", "Guardar"],
   };
 
   const currentStepLabel = WIZARD_STEPS[wizard][wizardStep];
@@ -981,6 +987,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
           ? (cfg.chartSortDirection as "none" | "asc" | "desc")
           : "none"
       );
+      setChartSortBy((["series", "axis"] as const).includes(cfg.chartSortBy as any) ? (cfg.chartSortBy as "series" | "axis") : "series");
+      setChartAxisOrder((["alpha", "date_asc", "date_desc"] as const).includes(cfg.chartAxisOrder as any) ? (cfg.chartAxisOrder as "alpha" | "date_asc" | "date_desc") : "alpha");
+      setChartScaleMode((["auto", "dataset", "custom"] as const).includes(cfg.chartScaleMode as any) ? (cfg.chartScaleMode as "auto" | "dataset" | "custom") : "auto");
+      setChartScaleMin(typeof cfg.chartScaleMin === "string" || typeof cfg.chartScaleMin === "number" ? String(cfg.chartScaleMin) : "");
+      setChartScaleMax(typeof cfg.chartScaleMax === "string" || typeof cfg.chartScaleMax === "number" ? String(cfg.chartScaleMax) : "");
+      setChartAxisStep(typeof cfg.chartAxisStep === "string" || typeof cfg.chartAxisStep === "number" ? String(cfg.chartAxisStep) : "");
       setChartRankingEnabled(!!cfg.chartRankingEnabled);
       setChartRankingTop(cfg.chartRankingTop ?? 5);
       setChartRankingMetric(cfg.chartRankingMetric ?? "");
@@ -1256,7 +1268,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
     let rows = [...previewData];
 
-    if (chartSortDirection !== "none" && xKey) {
+    if (chartSortBy === "axis" && xKey) {
+      rows.sort((a, b) => {
+        const va = (a as Record<string, unknown>)[xKey];
+        const vb = (b as Record<string, unknown>)[xKey];
+        const sa = String(va ?? "");
+        const sb = String(vb ?? "");
+        if (chartAxisOrder === "date_asc" || chartAxisOrder === "date_desc") {
+          const ta = typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : 0;
+          const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : 0;
+          return chartAxisOrder === "date_asc" ? ta - tb : tb - ta;
+        }
+        return chartAxisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
+      });
+    } else if (chartSortDirection !== "none" && xKey && chartSortBy === "series") {
       const sortKey = yKeys[0]!;
       rows.sort((a, b) => {
         const va = Number((a as Record<string, unknown>)[sortKey] ?? 0);
@@ -1331,7 +1356,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
 
     return { labels, datasets };
-  }, [previewData, formDimensions, formMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType]);
+  }, [previewData, formDimensions, formMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType]);
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
@@ -1604,6 +1629,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       chartThousandSep: chartThousandSep === false ? false : undefined,
       chartDecimals: chartDecimals !== 2 ? chartDecimals : undefined,
       chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
+      chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
+      chartAxisOrder: chartAxisOrder !== "alpha" ? chartAxisOrder : undefined,
+      chartScaleMode: chartScaleMode !== "auto" ? chartScaleMode : undefined,
+      chartScaleMin: chartScaleMode === "custom" && chartScaleMin !== "" ? chartScaleMin : undefined,
+      chartScaleMax: chartScaleMode === "custom" && chartScaleMax !== "" ? chartScaleMax : undefined,
+      chartAxisStep: chartAxisStep !== "" ? chartAxisStep : undefined,
       chartRankingEnabled: chartRankingEnabled || undefined,
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
@@ -1771,6 +1802,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       chartThousandSep: chartThousandSep === false ? false : undefined,
       chartDecimals: chartDecimals !== 2 ? chartDecimals : undefined,
       chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
+      chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
+      chartAxisOrder: chartAxisOrder !== "alpha" ? chartAxisOrder : undefined,
+      chartScaleMode: chartScaleMode !== "auto" ? chartScaleMode : undefined,
+      chartScaleMin: chartScaleMode === "custom" && chartScaleMin !== "" ? chartScaleMin : undefined,
+      chartScaleMax: chartScaleMode === "custom" && chartScaleMax !== "" ? chartScaleMax : undefined,
+      chartAxisStep: chartAxisStep !== "" ? chartAxisStep : undefined,
       chartRankingEnabled: chartRankingEnabled || undefined,
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
@@ -3596,10 +3633,52 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                       <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Orden de datos</Label>
                       <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Se aplica en la vista previa y al guardar la métrica.</p>
-                      <div className="flex gap-2">
-                        {([["none", "Sin orden"], ["asc", "Ascendente ↑"], ["desc", "Descendente ↓"]] as [string, string][]).map(([val, lbl]) => (
-                          <button key={val} type="button" onClick={() => setChartSortDirection(val as any)} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartSortDirection === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartSortDirection === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartSortDirection === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                      <div className="flex flex-wrap gap-3 mb-2">
+                        <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Ordenar por:</span>
+                        {(["series", "axis"] as const).map((val) => (
+                          <button key={val} type="button" onClick={() => setChartSortBy(val)} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartSortBy === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartSortBy === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartSortBy === val ? "transparent" : "var(--platform-border)" }}>{val === "series" ? "Por serie (valor)" : "Por eje (categoría)"}</button>
                         ))}
+                      </div>
+                      {chartSortBy === "series" && (
+                        <div className="flex gap-2">
+                          {([["none", "Sin orden"], ["asc", "Ascendente ↑"], ["desc", "Descendente ↓"]] as [string, string][]).map(([val, lbl]) => (
+                            <button key={val} type="button" onClick={() => setChartSortDirection(val as any)} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartSortDirection === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartSortDirection === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartSortDirection === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                          ))}
+                        </div>
+                      )}
+                      {chartSortBy === "axis" && (
+                        <div className="flex gap-2">
+                          {([["alpha", "Alfabético"], ["date_asc", "Fecha ascendente"], ["date_desc", "Fecha descendente"]] as [string, string][]).map(([val, lbl]) => (
+                            <button key={val} type="button" onClick={() => setChartAxisOrder(val as any)} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartAxisOrder === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartAxisOrder === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartAxisOrder === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Personalización de Ejes: escala y graduación */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Escala del eje Y</Label>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {([["auto", "Automática"], ["dataset", "Según rangos del dataset"], ["custom", "Personalizada"]] as [string, string][]).map(([val, lbl]) => (
+                          <button key={val} type="button" onClick={() => setChartScaleMode(val as any)} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartScaleMode === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartScaleMode === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartScaleMode === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                        ))}
+                      </div>
+                      {chartScaleMode === "custom" && (
+                        <div className="flex flex-wrap items-center gap-3 mb-3">
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Mín</Label>
+                            <Input type="number" value={chartScaleMin} onChange={(e) => setChartScaleMin(e.target.value)} placeholder="Ej. 0" className="h-8 w-20 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Máx</Label>
+                            <Input type="number" value={chartScaleMax} onChange={(e) => setChartScaleMax(e.target.value)} placeholder="Ej. 100" className="h-8 w-20 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          </div>
+                        </div>
+                      )}
+                      <Label className="text-sm font-medium mb-2 block mt-3" style={{ color: "var(--platform-fg)" }}>Graduación (paso del eje)</Label>
+                      <div className="flex items-center gap-2">
+                        <Input type="number" value={chartAxisStep} onChange={(e) => setChartAxisStep(e.target.value)} placeholder="Automática (vacío)" className="h-8 w-28 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Dejar vacío para automático</span>
                       </div>
                     </div>
 
@@ -3711,138 +3790,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
                   <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Interacciones</Button>
-                  </div>
-                </section>
-              )}
-
-              {/* Wizard D3: Interacciones */}
-              {wizard === "D" && wizardStep === 3 && (
-                <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Interacciones</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Las interacciones convierten un gráfico estático en una herramienta analítica. El gráfico no recalcula lógica de negocio: genera eventos que modifican filtros y re-ejecutan análisis.</p>
-
-                  <div className="rounded-xl border p-4 mb-5" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Los eventos se disparan al hacer click, pasar el mouse, seleccionar valores, realizar drill o cambiar visualización. Aplican a todos los gráficos del dashboard que compartan dimensiones.</p>
-                  </div>
-
-                  <div className="space-y-4">
-                    {/* 7.2.1 Cross-filter */}
-                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <div className="flex items-center gap-3 mb-2">
-                        <input type="checkbox" id="interCrossFilter" checked={interCrossFilter} onChange={(e) => setInterCrossFilter(e.target.checked)} className="rounded" />
-                        <Label htmlFor="interCrossFilter" className="text-sm font-medium cursor-pointer" style={{ color: "var(--platform-fg)" }}>Cross-filter</Label>
-                      </div>
-                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Click en un elemento aplica filtro dinámico a gráficos compatibles. Ej: click en "Sucursal Norte" → filtro sucursal = Norte.</p>
-                      {interCrossFilter && formDimensions.filter(Boolean).length > 0 && (
-                        <div className="mt-3">
-                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Dimensiones que emiten filtro:</Label>
-                          <div className="space-y-1">
-                            {formDimensions.filter(Boolean).map((dim) => (
-                              <label key={dim} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg cursor-pointer" style={{ background: interCrossFilterFields.includes(dim) ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }}>
-                                <input type="checkbox" checked={interCrossFilterFields.includes(dim)} onChange={(e) => {
-                                  if (e.target.checked) setInterCrossFilterFields((prev) => [...prev, dim]);
-                                  else setInterCrossFilterFields((prev) => prev.filter((d) => d !== dim));
-                                }} className="rounded" />
-                                {getSampleDisplayLabel(dim)}
-                              </label>
-                            ))}
-                          </div>
-                          {interCrossFilterFields.length === 0 && <p className="text-[11px] mt-1" style={{ color: "var(--platform-fg-muted)" }}>Si no seleccionás ninguna, todas las dimensiones emitirán filtro.</p>}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 7.2.2 Drilldown */}
-                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <div className="flex items-center gap-3 mb-2">
-                        <input type="checkbox" id="interDrilldown" checked={interDrilldown} onChange={(e) => setInterDrilldown(e.target.checked)} className="rounded" />
-                        <Label htmlFor="interDrilldown" className="text-sm font-medium cursor-pointer" style={{ color: "var(--platform-fg)" }}>Drilldown</Label>
-                      </div>
-                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Permite bajar el nivel de agregación: Año → Mes → Día. Cambia la granularidad y re-ejecuta el análisis.</p>
-                      {interDrilldown && (
-                        <div className="mt-3">
-                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Jerarquía de drill (orden de niveles):</Label>
-                          <div className="flex flex-wrap gap-1.5 mb-2">
-                            {interDrilldownHierarchy.map((level, idx) => (
-                              <span key={level} className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg border" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
-                                {idx > 0 && <span className="mr-1" style={{ color: "var(--platform-fg-muted)" }}>→</span>}
-                                {level}
-                                <button type="button" onClick={() => setInterDrilldownHierarchy((prev) => prev.filter((l) => l !== level))} className="ml-1 opacity-60 hover:opacity-100">×</button>
-                              </span>
-                            ))}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <select onChange={(e) => { if (e.target.value && !interDrilldownHierarchy.includes(e.target.value)) setInterDrilldownHierarchy((prev) => [...prev, e.target.value]); e.target.value = ""; }} className="h-8 rounded-lg border px-2 text-xs" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                              <option value="">+ Agregar nivel</option>
-                              {["year", "quarter", "month", "week", "day"].filter((g) => !interDrilldownHierarchy.includes(g)).map((g) => (<option key={g} value={g}>{g === "year" ? "Año" : g === "quarter" ? "Trimestre" : g === "month" ? "Mes" : g === "week" ? "Semana" : "Día"}</option>))}
-                              {formDimensions.filter(Boolean).filter((d) => !interDrilldownHierarchy.includes(d)).map((d) => (<option key={d} value={d}>{getSampleDisplayLabel(d)}</option>))}
-                            </select>
-                          </div>
-                          {interDrilldownHierarchy.length === 0 && <p className="text-[11px] mt-1" style={{ color: "var(--platform-fg-muted)" }}>Agregá al menos 2 niveles para habilitar drill (ej. Año → Mes).</p>}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 7.2.3 Drill-through */}
-                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <div className="flex items-center gap-3 mb-2">
-                        <input type="checkbox" id="interDrillThrough" checked={interDrillThrough} onChange={(e) => setInterDrillThrough(e.target.checked)} className="rounded" />
-                        <Label htmlFor="interDrillThrough" className="text-sm font-medium cursor-pointer" style={{ color: "var(--platform-fg)" }}>Drill-through</Label>
-                      </div>
-                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Permite navegar a otro dashboard con el contexto (filtros) aplicados del click actual.</p>
-                      {interDrillThrough && (
-                        <div className="mt-3">
-                          <Label className="text-xs mb-1 block" style={{ color: "var(--platform-fg-muted)" }}>Dashboard destino (ID o slug):</Label>
-                          <Input value={interDrillThroughTarget} onChange={(e) => setInterDrillThroughTarget(e.target.value)} placeholder="ej. dashboard-detalle-ventas" className="h-8 rounded-lg text-xs !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                          <p className="text-[11px] mt-1" style={{ color: "var(--platform-fg-muted)" }}>Al navegar, se pasarán como parámetros los valores de las dimensiones del elemento clickeado.</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 7.2.4 Tooltip enriquecido */}
-                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Tooltip enriquecido</Label>
-                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Configurá qué información se muestra al pasar el mouse sobre un elemento. No recalcula datos.</p>
-                      <div className="space-y-1">
-                        {([["value", "Valor actual"], ["delta_pct", "Delta %"], ["comparative", "Comparativo (período anterior)"], ["metadata", "Metadata (nombre, dimensión)"]] as [string, string][]).map(([val, lbl]) => (
-                          <label key={val} className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg cursor-pointer" style={{ background: interTooltipFields.includes(val) ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }}>
-                            <input type="checkbox" checked={interTooltipFields.includes(val)} onChange={(e) => {
-                              if (e.target.checked) setInterTooltipFields((prev) => [...prev, val]);
-                              else setInterTooltipFields((prev) => prev.filter((f) => f !== val));
-                            }} className="rounded" />
-                            {lbl}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* 7.2.5 Highlight */}
-                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <div className="flex items-center gap-3">
-                        <input type="checkbox" id="interHighlight" checked={interHighlight} onChange={(e) => setInterHighlight(e.target.checked)} className="rounded" />
-                        <div>
-                          <Label htmlFor="interHighlight" className="text-sm font-medium cursor-pointer block" style={{ color: "var(--platform-fg)" }}>Highlight en hover</Label>
-                          <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Resalta elementos relacionados al pasar el mouse. Es solo visual, no modifica filtros ni datos.</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 flex justify-between">
-                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Guardar</Button>
                   </div>
                 </section>
               )}
 
-              {/* Wizard D4: Vista previa gráfico + Guardar */}
-              {wizard === "D" && wizardStep === 4 && (
+              {/* Wizard D3: Vista previa gráfico + Guardar */}
+              {wizard === "D" && wizardStep === 3 && (
                 <section className="rounded-xl border p-6 space-y-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Vista previa y guardar</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Vista previa del gráfico con los datos actuales. Guardá la métrica para usarla en dashboards.</p>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Guardar</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Previsualización exacta de cómo se verá el gráfico en el dashboard. Guardá la métrica para usarla en dashboards.</p>
                   <div className="rounded-xl border p-4 shadow-sm min-h-[260px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Gráfico (vista previa)</p>
+                    <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Así se verá en el dashboard</p>
                     {previewLoading ? (
                       <div className="flex flex-col items-center justify-center min-h-[240px] gap-3" style={{ color: "var(--platform-fg-muted)" }}>
                         <Loader2 className="h-8 w-8 animate-spin" />
@@ -3874,7 +3833,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           </div>
                         )}
                         {previewChartConfig && formChartType !== "kpi" && formChartType !== "table" && formChartType !== "map" && (() => {
-                          const axisScales = { x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } }, y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)" } } };
+                          const yValues = previewChartConfig.datasets?.flatMap((d: { data?: number[] }) => d.data ?? []) ?? [];
+                          const dataMin = yValues.length ? Math.min(...yValues) : 0;
+                          const dataMax = yValues.length ? Math.max(...yValues) : 100;
+                          const yMin = chartScaleMode === "custom" && chartScaleMin !== "" && !isNaN(Number(chartScaleMin)) ? Number(chartScaleMin) : chartScaleMode === "dataset" ? dataMin : undefined;
+                          const yMax = chartScaleMode === "custom" && chartScaleMax !== "" && !isNaN(Number(chartScaleMax)) ? Number(chartScaleMax) : chartScaleMode === "dataset" ? dataMax : undefined;
+                          const stepSize = chartAxisStep !== "" && !isNaN(Number(chartAxisStep)) ? Number(chartAxisStep) : undefined;
+                          const axisScales = {
+                            x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } },
+                            y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", ...(stepSize != null ? { stepSize } : {}) }, ...(yMin != null ? { min: yMin } : {}), ...(yMax != null ? { max: yMax } : {}) },
+                          };
                           const baseOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } } };
                           const areaData = { ...previewChartConfig, datasets: previewChartConfig.datasets.map((ds: any) => ({ ...ds, fill: true })) };
                           const scatterData = previewChartConfig.datasets.length >= 1 ? {
