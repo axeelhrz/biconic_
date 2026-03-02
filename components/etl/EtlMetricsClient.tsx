@@ -32,6 +32,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import type { SavedMetricForm, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
@@ -469,6 +470,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   /** Valores distintos por campo, para selector de valor en filtros (lista seleccionable). */
   const [filterFieldValues, setFilterFieldValues] = useState<Record<string, string[]>>({});
   const [filterFieldLoading, setFilterFieldLoading] = useState<string | null>(null);
+  const [filterListOpenId, setFilterListOpenId] = useState<string | null>(null);
+  const [filterListSearch, setFilterListSearch] = useState("");
   const [datasetRelations, setDatasetRelations] = useState<DatasetRelation[]>([]);
   const [relationFormConnectionId, setRelationFormConnectionId] = useState("");
   const [relationFormTableKey, setRelationFormTableKey] = useState("");
@@ -860,6 +863,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     return label || col;
   };
 
+  const getFilterSelectedValues = (f: AggregationFilterEdit): string[] =>
+    Array.isArray(f.value) ? f.value : (f.value != null && f.value !== "" ? [String(f.value)] : []);
+
   /** Etiqueta para mostrar en listas de medidas: columnas base o "nombre (calculada)" si es derivada. */
   const getMeasureColumnLabel = (col: string): string =>
     derivedColumnsByName[col] ? `${col} (calculada)` : getSampleDisplayLabel(col);
@@ -1083,7 +1089,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         etlId,
         dimensions: formDimensions.length > 0 ? formDimensions.filter(Boolean) : undefined,
         metrics: metricsPayload,
-        filters: formFilters.length ? formFilters.map((f) => ({ field: f.field, operator: f.operator, value: f.value })) : undefined,
+        filters: formFilters.length ? formFilters.map((f) => ({ field: f.field, operator: Array.isArray(f.value) ? "IN" : f.operator, value: f.value })) : undefined,
         orderBy: formOrderBy?.field ? formOrderBy : undefined,
         limit: formLimit ?? 100,
       };
@@ -1512,7 +1518,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       dimension2: formDimensions[1] || undefined,
       dimensions: formDimensions.length > 0 ? formDimensions : undefined,
       metrics: formMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` })),
-      filters: formFilters.length ? formFilters : undefined,
+      filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
       chartXAxis: chartXAxis || undefined,
@@ -1679,7 +1685,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       dimension2: formDimensions[1] || undefined,
       dimensions: formDimensions.length > 0 ? formDimensions : undefined,
       metrics: formMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` })),
-      filters: formFilters.length ? formFilters : undefined,
+      filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
       chartXAxis: chartXAxis || undefined,
@@ -2821,24 +2827,53 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                   </div>
                   {formFilters.length > 0 && (
                     <div className="space-y-2">
-                      {formFilters.map((f, i) => (
+                      {formFilters.map((f, i) => {
+                        const selectedArr = getFilterSelectedValues(f);
+                        const isListMode = Array.isArray(f.value);
+                        const listValues = filterFieldValues[f.field] ?? [];
+                        const filteredList = !filterListSearch.trim() ? listValues : listValues.filter((v) => String(v).toLowerCase().includes(filterListSearch.trim().toLowerCase()));
+                        return (
                         <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                           <Select value={f.field} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={allColumnsForRoles.map((name) => ({ value: name, label: derivedColumnsByName[name] ? `${name} (calculada)` : getSampleDisplayLabel(name) }))} placeholder="Campo" className="min-w-[120px]" buttonClassName="h-9 text-xs" disablePortal />
                           <Select value={f.operator} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={FILTER_OPERATOR_OPTIONS} placeholder="Op" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
-                          <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor (manual)" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <Input value={isListMode ? "" : (f.value != null ? String(f.value) : "")} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder={isListMode ? `${selectedArr.length} de lista` : "Valor (manual)"} className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                           {f.field && (
                             <>
                               <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
                                 {filterFieldLoading === f.field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Cargar lista"}
                               </Button>
-                              {filterFieldValues[f.field]?.length ? (
-                                <Select value={f.value != null ? String(f.value) : ""} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: val || null } : ff))} options={[{ value: "", label: "Elegir de la lista..." }, ...filterFieldValues[f.field].map((v) => ({ value: v, label: v }))]} placeholder="Elegir de la lista" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
+                              {listValues.length ? (
+                                <Popover open={filterListOpenId === f.id} onOpenChange={(open) => { setFilterListOpenId(open ? f.id : null); if (!open) setFilterListSearch(""); }}>
+                                  <PopoverTrigger asChild>
+                                    <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0 min-w-[120px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}>
+                                      {selectedArr.length ? `${selectedArr.length} seleccionado${selectedArr.length !== 1 ? "s" : ""}` : "Elegir de la lista…"}
+                                    </Button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-80 p-2" align="start" style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)" }}>
+                                    <div className="flex gap-1 mb-2">
+                                      <Button type="button" variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: [...listValues] } : ff))}>Seleccionar todos</Button>
+                                      <Button type="button" variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: [] } : ff))}>Quitar todo</Button>
+                                    </div>
+                                    <input type="text" placeholder="Buscar…" value={filterListOpenId === f.id ? filterListSearch : ""} onChange={(e) => setFilterListSearch(e.target.value)} className="w-full rounded border px-2 py-1.5 text-xs mb-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }} />
+                                    <div className="max-h-56 overflow-y-auto space-y-0.5">
+                                      {filteredList.map((v) => {
+                                        const checked = selectedArr.includes(v);
+                                        return (
+                                          <label key={String(v)} className="flex items-center gap-2 py-1 px-2 rounded cursor-pointer hover:bg-black/5 text-sm" style={{ color: "var(--platform-fg)" }}>
+                                            <Checkbox checked={checked} onCheckedChange={(checked) => { const next = checked ? [...selectedArr, v] : selectedArr.filter((x) => x !== v); setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: next } : ff)); }} />
+                                            <span>{String(v)}</span>
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  </PopoverContent>
+                                </Popover>
                               ) : null}
                             </>
                           )}
                           <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))}><Trash2 className="h-4 w-4" /></Button>
                         </div>
-                      ))}
+                      ); })}
                     </div>
                   )}
 
@@ -3108,27 +3143,56 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                   </div>
                   {formFilters.length > 0 ? (
                     <div className="space-y-2 mb-4">
-                      {formFilters.map((f, i) => (
+                      {formFilters.map((f, i) => {
+                        const selectedArrC = getFilterSelectedValues(f);
+                        const isListModeC = Array.isArray(f.value);
+                        const listValuesC = filterFieldValues[f.field] ?? [];
+                        const filteredListC = !filterListSearch.trim() ? listValuesC : listValuesC.filter((v) => String(v).toLowerCase().includes(filterListSearch.trim().toLowerCase()));
+                        return (
                         <div key={f.id} className="flex flex-wrap gap-2 items-center rounded-lg border p-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                           <span className="text-xs font-medium w-20 shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Campo</span>
                           <Select value={f.field} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, field: val } : ff))} options={allColumnsForRoles.map((name) => ({ value: name, label: derivedColumnsByName[name] ? `${name} (calculada)` : getSampleDisplayLabel(name) }))} placeholder="Seleccionar campo" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
                           <span className="text-xs font-medium w-16 shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Condición</span>
                           <Select value={f.operator} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: val } : ff))} options={FILTER_OPERATOR_OPTIONS} placeholder="Op" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
                           <span className="text-xs font-medium w-12 shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Valor</span>
-                          <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder="Valor (manual)" className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          <Input value={isListModeC ? "" : (f.value != null ? String(f.value) : "")} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder={isListModeC ? `${selectedArrC.length} de lista` : "Valor (manual)"} className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                           {f.field && (
                             <>
                               <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
                                 {filterFieldLoading === f.field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Cargar lista"}
                               </Button>
-                              {filterFieldValues[f.field]?.length ? (
-                                <Select value={f.value != null ? String(f.value) : ""} onChange={(val: string) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: val || null } : ff))} options={[{ value: "", label: "Elegir de la lista..." }, ...filterFieldValues[f.field].map((v) => ({ value: v, label: v }))]} placeholder="Elegir de la lista" className="min-w-[140px]" buttonClassName="h-9 text-xs" disablePortal />
+                              {listValuesC.length ? (
+                                <Popover open={filterListOpenId === f.id} onOpenChange={(open) => { setFilterListOpenId(open ? f.id : null); if (!open) setFilterListSearch(""); }}>
+                                  <PopoverTrigger asChild>
+                                    <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0 min-w-[120px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}>
+                                      {selectedArrC.length ? `${selectedArrC.length} seleccionado${selectedArrC.length !== 1 ? "s" : ""}` : "Elegir de la lista…"}
+                                    </Button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-80 p-2" align="start" style={{ background: "var(--platform-bg)", borderColor: "var(--platform-border)" }}>
+                                    <div className="flex gap-1 mb-2">
+                                      <Button type="button" variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: [...listValuesC] } : ff))}>Seleccionar todos</Button>
+                                      <Button type="button" variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: [] } : ff))}>Quitar todo</Button>
+                                    </div>
+                                    <input type="text" placeholder="Buscar…" value={filterListOpenId === f.id ? filterListSearch : ""} onChange={(e) => setFilterListSearch(e.target.value)} className="w-full rounded border px-2 py-1.5 text-xs mb-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }} />
+                                    <div className="max-h-56 overflow-y-auto space-y-0.5">
+                                      {filteredListC.map((v) => {
+                                        const checked = selectedArrC.includes(v);
+                                        return (
+                                          <label key={String(v)} className="flex items-center gap-2 py-1 px-2 rounded cursor-pointer hover:bg-black/5 text-sm" style={{ color: "var(--platform-fg)" }}>
+                                            <Checkbox checked={checked} onCheckedChange={(checked) => { const next = checked ? [...selectedArrC, v] : selectedArrC.filter((x) => x !== v); setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: next } : ff)); }} />
+                                            <span>{String(v)}</span>
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  </PopoverContent>
+                                </Popover>
                               ) : null}
                             </>
                           )}
                           <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={() => setFormFilters((prev) => prev.filter((_, ii) => ii !== i))} title="Quitar filtro"><Trash2 className="h-4 w-4" /></Button>
                         </div>
-                      ))}
+                      ); })}
                     </div>
                   ) : (
                     <p className="text-sm mb-4 rounded-lg border p-3" style={{ color: "var(--platform-fg-muted)", borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>Ningún filtro. Tocá «Agregar filtro» para restringir el análisis por campo, condición y valor.</p>
