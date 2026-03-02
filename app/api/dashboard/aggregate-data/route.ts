@@ -114,20 +114,123 @@ function quotedColumn(name: string): string {
   return s ? `"${s}"` : '""';
 }
 
-const SQL_KNOWN_FUNCTIONS = new Set(["SUM", "AVG", "COUNT", "MIN", "MAX", "NULLIF", "COALESCE", "ABS", "ROUND", "CEIL", "FLOOR", "GREATEST", "LEAST"]);
+const SQL_KNOWN_FUNCTIONS = new Set([
+  "SUM", "AVG", "AVERAGE", "COUNT", "MIN", "MAX", "COUNTIF", "SUMIF", "AVERAGEIF", "COUNTIFS", "SUMIFS",
+  "NULLIF", "COALESCE", "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN", "CEIL", "CEILING", "FLOOR", "TRUNC", "GREATEST", "LEAST",
+  "MOD", "POWER", "SQRT", "SIGN", "EXP", "LN", "LOG", "LOG10", "PI",
+  "SIN", "COS", "TAN", "FLOOR", "INT",
+  "CASE", "WHEN", "THEN", "ELSE", "END",
+  "IF", "IFERROR", "IFNA", "AND", "OR", "NOT", "TRUE", "FALSE",
+  "UPPER", "LOWER", "TRIM", "LENGTH", "LEN", "LEFT", "RIGHT", "SUBSTRING", "MID", "CONCAT", "CONCATENATE", "REPLACE", "SUBSTITUTE",
+  "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "EOMONTH", "DATEDIF", "DATEVALUE", "TIMEVALUE",
+  "VALUE", "TEXT", "REPT", "FIND", "SEARCH", "PROPER",
+]);
 
-/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO") en SQL seguro.
+/** Verifica paréntesis balanceados (ignora los que están dentro de comillas). Devuelve mensaje de error o null si está bien. */
+function checkBalancedParens(expr: string): string | null {
+  let depth = 0;
+  let inQuote: string | null = null;
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i];
+    if (inQuote) {
+      if (c === inQuote && expr[i - 1] !== "\\") inQuote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      inQuote = c;
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth < 0) return "Paréntesis de cierre ) sin apertura.";
+    }
+  }
+  if (depth !== 0) return "Faltan paréntesis de cierre.";
+  return null;
+}
+
+/** Convierte IF(cond, thenVal, elseVal) en CASE WHEN cond THEN thenVal ELSE elseVal END (soporta anidamiento por profundidad de paréntesis). */
+function expandIfToCaseWhen(expr: string): string {
+  const trimmed = expr.trim();
+  const ifStart = trimmed.search(/\bIF\s*\(/i);
+  if (ifStart === -1) return expr;
+  const start = trimmed.indexOf("(", ifStart);
+  if (start === -1) return expr;
+  let depth = 1;
+  let firstComma = -1;
+  let secondComma = -1;
+  let i = start + 1;
+  for (; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0) break;
+    } else if ((c === "," || c === ";") && depth === 1) {
+      if (firstComma === -1) firstComma = i;
+      else {
+        secondComma = i;
+        break;
+      }
+    }
+  }
+  if (firstComma === -1 || secondComma === -1) return expr;
+  const cond = trimmed.slice(start + 1, firstComma).trim();
+  const thenVal = trimmed.slice(firstComma + 1, secondComma).trim();
+  const elseVal = trimmed.slice(secondComma + 1, i).trim();
+  const caseExpr = `(CASE WHEN ${expandIfToCaseWhen(cond)} THEN ${expandIfToCaseWhen(thenVal)} ELSE ${expandIfToCaseWhen(elseVal)} END)`;
+  return trimmed.slice(0, ifStart) + caseExpr + trimmed.slice(i + 1);
+}
+
+/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO", IF(ESTADO='PAGADO',1,0)) en SQL seguro.
+ *  - Literales numéricos y cadenas entre comillas se preservan.
+ *  - ; se normaliza a , (estilo Excel).
+ *  - AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(.
+ *  - IF(cond, then, else) se convierte en CASE WHEN ... THEN ... ELSE ... END.
  *  - Funciones SQL conocidas se preservan.
  *  - Nombres de columnas calculadas (derivedLookup) se expanden a su expresión.
  *  - Demás identificadores se pasan a quotedColumn.
  */
 function expressionToSql(expression: string, derivedLookup?: Record<string, DerivedColumnRef>, _depth = 0): string | null {
   if (!expression || typeof expression !== "string") return null;
-  const s = expression.replace(/\s+/g, " ").trim();
+  let s = expression.replace(/\s+/g, " ").trim();
   if (!s) return null;
-  const allowed = /^[a-zA-Z0-9_*+\-/().,\s]+$/;
+  // Permitir literales: números, cadenas con ' o ", ^ para potencia
+  const allowed = /^[a-zA-Z0-9_*+\-/().,\s'"%;^]+$/;
   if (!allowed.test(s)) return null;
+
+  // 0) Normalizar ; a , (Excel usa ; como separador de argumentos)
+  s = s.replace(/;/g, ",");
+
+  // 1) Proteger cadenas entre comillas (simple o doble) para no tocar su contenido
+  const stringLiterals: string[] = [];
+  s = s.replace(/'([^']*)'|"([^"]*)"/g, (_, single, double) => {
+    const content = single !== undefined ? single : double;
+    const idx = stringLiterals.length;
+    stringLiterals.push(content.replace(/'/g, "''"));
+    return `__STR${idx}__`;
+  });
+
+  // 1b) Alias Excel -> SQL: AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(
+  s = s.replace(/\bAVERAGE\s*\(/gi, "AVG(");
+  s = s.replace(/\bLEN\s*\(/gi, "LENGTH(");
+  s = s.replace(/\bMID\s*\(/gi, "SUBSTRING(");
+
+  // 1c) Potencia: token ^ token -> POWER(token, token)
+  s = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*|\d+\.?\d*|__STR\d+__)\s+\^\s+([a-zA-Z_][a-zA-Z0-9_]*|\d+\.?\d*|__STR\d+__)\b/g, (_, a, b) => `POWER(${a},${b})`);
+
+  // 2) Expandir IF(cond, then, else) a CASE WHEN
+  while (/IF\s*\(/i.test(s)) {
+    const next = expandIfToCaseWhen(s);
+    if (next === s) break;
+    s = next;
+  }
+
+  // 3) Reemplazar identificadores (columnas/funciones); no tocar __STRn__ ni literales numéricos
   const out = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (_, id: string) => {
+    if (/^__STR\d+__$/.test(id)) return id;
+    if (/^\d+\.?\d*$/.test(id)) return id; // literal numérico
     if (SQL_KNOWN_FUNCTIONS.has(id.toUpperCase())) return id.toUpperCase();
     if (derivedLookup && _depth < 5) {
       const ref = derivedLookup[id.toLowerCase()];
@@ -138,14 +241,23 @@ function expressionToSql(expression: string, derivedLookup?: Record<string, Deri
     }
     return quotedColumn(id);
   });
-  return out || null;
+
+  // 4) Restaurar cadenas como literales SQL (siempre comilla simple)
+  const withStrings = out.replace(/__STR(\d+)__/g, (_, i) => {
+    const content = stringLiterals[Number(i)] ?? "";
+    return `'${content}'`;
+  });
+
+  return withStrings || null;
 }
 
-/** Si la expresión está envuelta en una función de agregación (ej. "SUM(X * Y)"), devuelve { func, inner }. */
+/** Si la expresión está envuelta en una función de agregación (ej. "SUM(X * Y)", "AVERAGE(X)"), devuelve { func, inner }. */
 function unwrapAggExpression(expr: string): { func: string; inner: string } | null {
-  const m = expr.trim().match(/^(SUM|AVG|COUNT|MIN|MAX)\s*\((.+)\)\s*$/i);
+  const m = expr.trim().match(/^(SUM|AVG|AVERAGE|COUNT|MIN|MAX)\s*\((.+)\)\s*$/i);
   if (!m) return null;
-  return { func: m[1]!.toUpperCase(), inner: m[2]!.trim() };
+  let func = m[1]!.toUpperCase();
+  if (func === "AVERAGE") func = "AVG";
+  return { func, inner: m[2]!.trim() };
 }
 
 export async function POST(req: NextRequest) {
@@ -338,9 +450,17 @@ export async function POST(req: NextRequest) {
         if (uw) expr = uw.inner;
       }
       if (expr != null && String(expr).trim() !== "") {
-        if (!expressionToSql(String(expr).trim(), derivedByName)) {
+        const exprStr = String(expr).trim();
+        const parenError = checkBalancedParens(exprStr);
+        if (parenError) {
           return NextResponse.json(
-            { error: `Métrica en posición ${i + 1}: la expresión solo puede contener nombres de columna y operadores * - + / ( ).` },
+            { error: `Métrica en posición ${i + 1}: ${parenError}` },
+            { status: 400 }
+          );
+        }
+        if (!expressionToSql(exprStr, derivedByName)) {
+          return NextResponse.json(
+            { error: `Métrica en posición ${i + 1}: la expresión no es válida. Revisá que solo uses columnas del dataset, números, operadores ( * - + / ^ ), comillas para texto, y funciones soportadas (IF, SUM, AVG, ROUND, UPPER, etc.).` },
             { status: 400 }
           );
         }

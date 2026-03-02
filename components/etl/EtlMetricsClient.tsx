@@ -93,6 +93,24 @@ const EXCEL_FUNCTIONS = [
   "metric_0", "metric_1", "metric_2", "metric_3",
 ];
 
+/** Funciones de agregación: la fórmula se clasifica como "agregado" y no puede crearse como columna. */
+const AGGREGATE_FUNCTION_NAMES = new Set([
+  "SUM", "AVG", "AVERAGE", "COUNT", "MIN", "MAX",
+  "COUNTIF", "SUMIF", "AVERAGEIF", "COUNTIFS", "SUMIFS",
+]);
+
+/** Funciones y palabras clave conocidas (por fila o agregadas) para validar que los identificadores sean válidos. */
+const KNOWN_FORMULA_IDENTIFIERS = new Set([
+  ...AGGREGATE_FUNCTION_NAMES,
+  "IF", "IFERROR", "IFNA", "NULLIF", "COALESCE", "CASE", "WHEN", "THEN", "ELSE", "END",
+  "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN", "CEIL", "CEILING", "FLOOR", "TRUNC", "GREATEST", "LEAST",
+  "MOD", "POWER", "SQRT", "SIGN", "EXP", "LN", "LOG", "LOG10", "PI", "SIN", "COS", "TAN", "INT",
+  "UPPER", "LOWER", "TRIM", "LENGTH", "LEN", "LEFT", "RIGHT", "SUBSTRING", "MID", "CONCAT", "CONCATENATE",
+  "REPLACE", "SUBSTITUTE", "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND",
+  "EOMONTH", "DATEDIF", "DATEVALUE", "TIMEVALUE", "VALUE", "TEXT", "REPT", "FIND", "SEARCH", "PROPER",
+  "AND", "OR", "NOT", "TRUE", "FALSE",
+]);
+
 /** Referencia completa de fórmulas estilo Excel para el modal de ayuda. */
 const EXCEL_FORMULAS_REFERENCIA: { categoria: string; funciones: { nombre: string; sintaxis: string; descripcion: string }[] }[] = [
   {
@@ -747,6 +765,52 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     const duplicateRows = keys.length - uniqueKeys;
     return { duplicateRows, uniqueKeys, totalRows: keys.length };
   }, [grainOption, grainCustomColumns, rawTableData, getRowValue]);
+
+  /** True si la expresión usa funciones de agregación (SUM, AVERAGE, COUNTIF, etc.). No debe crearse como columna. */
+  const expressionHasAggregation = useCallback((expr: string) => {
+    const t = (expr || "").trim();
+    return Array.from(AGGREGATE_FUNCTION_NAMES).some((fn) => new RegExp(`\\b${fn}\\s*\\(`, "i").test(t));
+  }, []);
+
+  /** Validación de sintaxis de la fórmula: paréntesis balanceados e identificadores válidos (columnas o funciones conocidas). */
+  const formulaSyntaxError = useMemo(() => {
+    const expr = (formMetrics[0] as { expression?: string })?.expression?.trim() ?? "";
+    if (!expr) return null;
+    let depth = 0;
+    let inQuote: string | null = null;
+    for (let i = 0; i < expr.length; i++) {
+      const c = expr[i];
+      if (inQuote) {
+        if (c === inQuote && expr[i - 1] !== "\\") inQuote = null;
+        continue;
+      }
+      if (c === "'" || c === '"') { inQuote = c; continue; }
+      if (c === "(") depth++;
+      else if (c === ")") { depth--; if (depth < 0) return "Paréntesis de cierre ) sin apertura."; }
+    }
+    if (depth !== 0) return "Faltan paréntesis de cierre.";
+    const allowedChars = /^[a-zA-Z0-9_*+\-/().,\s'"%;^]+$/;
+    if (!allowedChars.test(expr)) return "La fórmula contiene caracteres no permitidos. Usá columnas, números, operadores ( * - + / ^ ) y comillas para texto.";
+    const columnsSet = new Set([...fields, ...derivedColumns.map((d) => d.name)].map((x) => x.toLowerCase()));
+    const protectedStr = expr.replace(/'([^']*)'|"([^"]*)"/g, " __STR__ ");
+    const words = protectedStr.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
+    for (const w of words) {
+      if (/^\d+\.?\d*$/.test(w)) continue;
+      const upper = w.toUpperCase();
+      if (KNOWN_FORMULA_IDENTIFIERS.has(upper)) continue;
+      if (columnsSet.has(w.toLowerCase())) continue;
+      return `«${w}» no es una columna del dataset ni una función conocida. Revisá el nombre o agregalo en Rol BI.`;
+    }
+    return null;
+  }, [formMetrics, fields, derivedColumns]);
+
+  /** Error de sintaxis del nombre de columna (alias): solo letras, números y _. */
+  const aliasSyntaxError = useMemo(() => {
+    const alias = (formMetrics[0]?.alias ?? "").trim();
+    if (!alias) return null;
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias)) return "El nombre de la columna solo puede tener letras, números y _ (ej. total_linea).";
+    return null;
+  }, [formMetrics]);
 
   const getColumnDisplayKey = (col: string): string => {
     const cd = data?.columnDisplay;
@@ -1443,7 +1507,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     };
     let expr = (firstMetric as { expression?: string }).expression;
     const alias = (firstMetric.alias || "").trim();
-    const createDerivedColumn = expr && alias && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias);
+    const isAggregateExpr = expressionHasAggregation(expr || "");
+    const createDerivedColumn = !isAggregateExpr && expr && alias && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias);
     let nextDerivedColumns = derivedColumns;
     if (createDerivedColumn && expr) {
       let derivedAgg = firstMetric.func || "SUM";
@@ -1503,6 +1568,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       toast.error("Escribí una expresión (ej. CANTIDAD * PRECIO_UNITARIO) para crear la columna.");
       return;
     }
+    if (formulaSyntaxError) {
+      toast.error(formulaSyntaxError);
+      return;
+    }
+    if (expressionHasAggregation(expr)) {
+      toast.error("Las fórmulas con agregación (SUM, AVERAGE, COUNTIF, etc.) no se pueden crear como columna. Guardá esta expresión como métrica (sin marcar «Crear columna»).");
+      return;
+    }
     if (!alias) {
       toast.error("Indicá un nombre para la nueva columna (ej. factura, total_linea).");
       return;
@@ -1511,7 +1584,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       toast.error("El nombre de la columna solo puede tener letras, números y _ (ej. factura).");
       return;
     }
-    // Extraer expresión interna si viene con SUM(...), AVG(...), etc.
+    // Expresión por fila: sin agregación; se guarda como columna calculada
     let derivedAgg = (m?.func as string) || "SUM";
     const aggMatch = expr.match(/^\s*(SUM|AVG|COUNT|MIN|MAX)\s*\((.+)\)\s*$/i);
     if (aggMatch) {
@@ -2348,16 +2421,30 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               {wizard === "B" && wizardStep === 1 && (
                 <section className="rounded-xl border p-6 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Cálculo de la métrica</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Escribí la fórmula con nombres de columnas (estilo Excel). Usá «Insertar columna» para agregar medidas. Elegí la función (Suma, Promedio, etc.) y creá columnas calculadas reutilizables.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Escribí la fórmula con nombres de columnas (estilo Excel). Podés usar números, literales entre comillas e IF(condición, valor_si_verdadero, valor_si_falso). Diferenciá entre cálculo por fila y cálculo agregado.</p>
 
                   {(() => {
                     const exprMetric = formMetrics[0];
                     const exprValue = (exprMetric as { expression?: string })?.expression ?? "";
+                    const isAggregate = expressionHasAggregation(exprValue);
                     return (
                     <div className="space-y-4">
+                      <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                        <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Detección automática del tipo de cálculo</p>
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>El sistema analiza la fórmula y la clasifica en uno de estos grupos:</p>
+                        <ul className="text-xs space-y-1" style={{ color: "var(--platform-fg-muted)" }}>
+                          <li><strong>Cálculo por fila:</strong> sin SUM, AVERAGE, COUNT, MIN, MAX, COUNTIF, SUMIF, etc. Ej: CANTIDAD * PRECIO_UNITARIO, IF(ESTADO=&quot;PAGADO&quot;, 1, 0). Se habilita «Crear columna en el dataset».</li>
+                          <li><strong>Cálculo agregado (métrica):</strong> usa SUM, AVERAGE, COUNT, MIN, MAX, COUNTIF, SUMIF, AVERAGEIF, etc. Se guarda solo como métrica; «Crear columna» se deshabilita.</li>
+                        </ul>
+                        {exprValue.trim() && (
+                          <p className="text-xs font-medium" style={{ color: isAggregate ? "var(--platform-accent)" : "var(--platform-fg)" }}>
+                            {isAggregate ? "→ Cálculo agregado (métrica). Guardalo como métrica; no está permitido «Crear columna»." : "→ Cálculo por fila. Opcionalmente podés crear una columna en el dataset."}
+                          </p>
+                        )}
+                      </div>
                       <div>
                         <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Fórmulas predeterminadas (estilo Excel)</Label>
-                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Escribí la expresión con nombres de columnas (ej. CANTIDAD * PRECIO_UNITARIO). Usá «Insertar columna» para agregar medidas. Después elegí Suma, Promedio, etc.</p>
+                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Escribí la expresión con nombres de columnas (ej. CANTIDAD * PRECIO_UNITARIO o IF(ESTADO=&quot;PAGADO&quot;, 1, 0)). Usá «Insertar columna» para medidas ya creadas.</p>
                         <div className="flex flex-wrap gap-2 mb-3">
                           {[" * ", " / ", " + ", " - ", " * 100 / "].map((op) => (
                             <button key={op} type="button" onClick={() => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, expression: ((m as { expression?: string }).expression ?? "") + op } : m))} className="px-2 py-1.5 rounded text-xs border font-mono" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}>{op.trim()}</button>
@@ -2429,16 +2516,28 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             />
                           </div>
                         </div>
+                        {formulaSyntaxError && (
+                          <p className="text-sm mt-2 rounded-lg py-2 px-3 border" role="alert" style={{ color: "var(--platform-fg)", borderColor: "var(--platform-error, #dc2626)", background: "var(--platform-error-muted, rgba(220,38,38,0.08))" }}>
+                            {formulaSyntaxError}
+                          </p>
+                        )}
                         <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                          <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Nombre de la nueva columna</Label>
-                          <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Obligatorio. Solo letras, números y _. La columna aparecerá en Rol BI, Profiling, filtros, dimensiones e «Insertar columna».</p>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Input value={exprMetric?.alias ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura, total_linea" className="h-9 text-sm rounded-lg w-full max-w-[200px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                            <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim()}>
+                          <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Crear columna en el dataset (solo cálculos por fila)</Label>
+                          <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>Opcional. Si la fórmula no usa SUM, AVG, COUNT, MIN ni MAX, podés crear una columna reutilizable (Rol BI, Profiling, filtros, dimensiones e «Insertar columna»). Nombre: solo letras, números y _.</p>
+                          {isAggregate ? (
+                            <p className="text-xs py-2" style={{ color: "var(--platform-fg-muted)" }}>Esta fórmula es agregada; no se puede crear columna. Guardala como métrica en el siguiente paso.</p>
+) : (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div>
+                                <Input value={exprMetric?.alias ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura, total_linea" className="h-9 text-sm rounded-lg w-full max-w-[200px] !bg-[var(--platform-bg)]" style={{ borderColor: aliasSyntaxError ? "var(--platform-error, #dc2626)" : "var(--platform-border)", color: "var(--platform-fg)" }} />
+                                {aliasSyntaxError && <p className="text-xs mt-1" style={{ color: "var(--platform-error, #dc2626)" }}>{aliasSyntaxError}</p>}
+                              </div>
+                              <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim() || !(exprMetric?.alias ?? "").trim() || !!formulaSyntaxError || !!aliasSyntaxError}>
                               {creatingColumn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                               {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
-                            </Button>
-                          </div>
+                              </Button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -2450,7 +2549,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     <p className="text-sm font-medium mb-2" style={{ color: "var(--platform-fg)" }}>Previsualización del resultado</p>
                     <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Verificá que el cálculo devuelve el valor esperado antes de seguir.</p>
                     <div className="flex flex-wrap gap-2 mb-3">
-                      <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
+                      <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={previewLoading || formMetrics.length === 0 || !!formulaSyntaxError} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
                         {previewLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
                         Actualizar previsualización
                       </Button>
@@ -2496,7 +2595,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
                   <div className="flex justify-between pt-2">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Propiedades</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext} disabled={!!formulaSyntaxError}>
+                      Siguiente: Propiedades
+                    </Button>
                   </div>
                 </section>
               )}
