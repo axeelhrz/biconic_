@@ -419,6 +419,8 @@ export async function POST(req: NextRequest) {
         } catch { /* ignore */ }
       }
     }
+    /** Por nombre de métrica guardada (ETL): field/expression/func para expandir cuando el request usa el nombre como "field". */
+    const savedMetricByName: Record<string, { field: string; func: string; alias: string; expression?: string }> = {};
     if (etlIdForLookup) {
       try {
         const { data: etlRow } = await supabase
@@ -431,6 +433,24 @@ export async function POST(req: NextRequest) {
           const cfg = (layout?.dataset_config ?? layout?.datasetConfig) as Record<string, unknown> | undefined;
           const raw = cfg?.derivedColumns ?? cfg?.derived_columns;
           if (Array.isArray(raw)) addDerivedFromArray(raw);
+          const savedList = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
+          for (const sm of savedList) {
+            const s = sm as { name?: string; metric?: { field?: string; func?: string; alias?: string; expression?: string }; aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] } };
+            const name = String(s?.name ?? "").trim().toLowerCase();
+            if (!name) continue;
+            const topMetric = s?.metric;
+            const cfgMetrics = s?.aggregationConfig?.metrics;
+            const firstMetric = Array.isArray(cfgMetrics) && cfgMetrics.length > 0 ? cfgMetrics[0] : topMetric;
+            if (!firstMetric) continue;
+            const field = String(firstMetric?.field ?? "").trim();
+            const expression = (firstMetric as { expression?: string }).expression;
+            savedMetricByName[name] = {
+              field,
+              func: String(firstMetric?.func ?? "SUM").toUpperCase(),
+              alias: String(firstMetric?.alias ?? name),
+              ...(expression && String(expression).trim() && { expression: String(expression).trim() }),
+            };
+          }
         }
       } catch { /* ignore */ }
     }
@@ -478,13 +498,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 1. Construcción de Métricas. Columnas calculadas: field -> expression + func.
+    // 1. Construcción de Métricas. Columnas calculadas: field -> expression + func. Si field es nombre de métrica guardada, expandir.
     const metricClauses = metricsBase
       .map((m) => {
         const i = body.metrics.indexOf(m);
         const derived: DerivedColumnRef | undefined = getDerived(m.field);
+        const savedMetric = m.field && !derived ? savedMetricByName[String(m.field).trim().toLowerCase()] : undefined;
 
-        // Resolver expresión: prioridad derived > metric.expression (defensivo)
+        // Resolver expresión: prioridad derived > metric.expression > métrica guardada por nombre (defensivo)
         let resolvedExpr = "";
         if (derived) {
           resolvedExpr = derived.expression;
@@ -493,14 +514,30 @@ export async function POST(req: NextRequest) {
         if (metricExpr && metricExpr.trim()) {
           resolvedExpr = metricExpr.trim();
         }
+        if (!resolvedExpr && savedMetric?.expression) {
+          resolvedExpr = savedMetric.expression;
+        }
 
         // Si está envuelta en agregación, extraer
-        let func = (m.func || derived?.defaultAggregation || "SUM").toString().toUpperCase();
+        let func = (m.func || derived?.defaultAggregation || savedMetric?.func || "SUM").toString().toUpperCase();
         if (resolvedExpr) {
           const unwrapped = unwrapAggExpression(resolvedExpr);
           if (unwrapped) {
             resolvedExpr = unwrapped.inner;
             if (!m.func || m.func === "SUM") func = unwrapped.func;
+          }
+        }
+
+        // Campo efectivo: si no hay expresión y el field es una métrica guardada, usar el field de esa métrica
+        const effectiveField = (!resolvedExpr && savedMetric?.field) ? savedMetric.field : m.field;
+        const derivedForField = getDerived(effectiveField);
+        if (!resolvedExpr && derivedForField?.expression) {
+          resolvedExpr = derivedForField.expression;
+          if (!func || func === "SUM") func = (derivedForField.defaultAggregation || "SUM").toUpperCase();
+          const unwrapped = unwrapAggExpression(resolvedExpr);
+          if (unwrapped) {
+            resolvedExpr = unwrapped.inner;
+            func = unwrapped.func;
           }
         }
 
@@ -513,7 +550,7 @@ export async function POST(req: NextRequest) {
           if (derived) {
             console.warn("[aggregate-data] FALLTHROUGH: derived col", m.field, "expr:", derived.expression, "resolvedExpr:", resolvedExpr);
           }
-          const col = quotedColumn(m.field!);
+          const col = quotedColumn(effectiveField!);
           if (m.cast === "sanitize")
             return `regexp_replace(${col}::text, '[^0-9\\.-]', '', 'g')::numeric`;
           if (m.cast === "numeric") return `${col}::numeric`;
@@ -788,7 +825,8 @@ export async function POST(req: NextRequest) {
           userMsg = `Error interno: la columna «${colName}» fue encontrada como derivada (expr: ${isDerived.expression}) pero el SQL generado no la expandió. Contactá soporte.`;
         } else {
           const availableDerived = Object.keys(derivedByName).join(", ") || "(ninguna)";
-          userMsg = `La columna «${colName}» no existe en la tabla ni como columna calculada. Columnas calculadas disponibles: ${availableDerived}. Creala en Métricas → Fórmula → Crear columna.`;
+          const savedNames = Object.keys(savedMetricByName).length ? ` Métricas guardadas del ETL: ${Object.keys(savedMetricByName).join(", ")}.` : "";
+          userMsg = `La columna «${colName}» no existe en la tabla ni como columna calculada. Columnas calculadas disponibles: ${availableDerived}. Creala en Métricas → Fórmula → Crear columna. Si «${colName}» es una métrica guardada, definila en el ETL en Métricas (nombre, campo o expresión).${savedNames}`;
         }
       }
       return NextResponse.json(
