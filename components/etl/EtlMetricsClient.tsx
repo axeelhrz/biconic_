@@ -242,7 +242,27 @@ const EXCEL_FORMULAS_REFERENCIA: { categoria: string; funciones: { nombre: strin
   },
 ];
 
-type ColumnRole = "key" | "time" | "dimension" | "measure";
+type ColumnRole = "key" | "time" | "dimension" | "measure" | "geo";
+type GeoType = "country" | "province" | "city" | "address" | "lat_lon";
+
+const GEO_TYPE_LABELS: Record<GeoType, string> = {
+  country: "País",
+  province: "Provincia / Estado",
+  city: "Ciudad",
+  address: "Dirección / Domicilio",
+  lat_lon: "Latitud / Longitud",
+};
+
+/** Sugiere tipo geo por nombre de columna (detección automática). */
+function suggestGeoTypeByColumnName(colName: string): GeoType | null {
+  const n = colName.replace(/\./g, "_").toLowerCase();
+  if (/pais|country|nation|naci[oó]n/i.test(n)) return "country";
+  if (/provincia|estado|state|region|departamento/i.test(n)) return "province";
+  if (/ciudad|city|localidad|municipio|town/i.test(n)) return "city";
+  if (/direccion|domicilio|address|calle|street|domicilio/i.test(n)) return "address";
+  if (/lat|lon|longitud|latitude|longitude|coord/i.test(n)) return "lat_lon";
+  return null;
+}
 
 type MetricsDataResponse = {
   ok: boolean;
@@ -358,7 +378,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [grainOption, setGrainOption] = useState<string>("");
   /** Columnas elegidas cuando el grain es "Personalizado" (clave única = concatenación de estas columnas). */
   const [grainCustomColumns, setGrainCustomColumns] = useState<string[]>([]);
-  const [columnRoles, setColumnRoles] = useState<Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }>>({});
+  const [columnRoles, setColumnRoles] = useState<Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>>({});
   const [calcType, setCalcType] = useState<"simple" | "count" | "ratio" | "formula">("formula");
   const [metricAdditivity, setMetricAdditivity] = useState<"additive" | "semi" | "non">("additive");
   const [analysisTimeRange, setAnalysisTimeRange] = useState("12");
@@ -513,7 +533,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       if (typeof cfg.datasetHasTime === "boolean") setDatasetHasTime(cfg.datasetHasTime);
       if (typeof cfg.timeColumn === "string" && cfg.timeColumn) setTimeColumn(cfg.timeColumn);
       if (typeof cfg.periodicity === "string" && cfg.periodicity) setPeriodicity(cfg.periodicity);
-      if (cfg.columnRoles && typeof cfg.columnRoles === "object") setColumnRoles(cfg.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }>);
+      if (cfg.columnRoles && typeof cfg.columnRoles === "object") setColumnRoles(cfg.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>);
       if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
     }
     if (Array.isArray((cfg as { derivedColumns?: DerivedColumn[] }).derivedColumns)) setDerivedColumns((cfg as { derivedColumns: DerivedColumn[] }).derivedColumns);
@@ -635,13 +655,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     if (allFields.length > 0 && Object.keys(columnRoles).length === 0) {
       const numeric = new Set(data?.fields?.numeric ?? []);
       const date = new Set(data?.fields?.date ?? []);
-      const initial: Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean }> = {};
+      const initial: Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }> = {};
       allFields.forEach((f) => {
         let role: ColumnRole = "dimension";
         let aggregation = "—";
+        let geoType: GeoType | undefined;
         if (date.has(f)) role = "time";
         else if (numeric.has(f)) { role = "measure"; aggregation = "sum"; }
-        initial[f] = { role, aggregation, label: f, visible: true };
+        else {
+          const suggested = suggestGeoTypeByColumnName(f);
+          if (suggested != null) { role = "geo"; geoType = suggested; }
+        }
+        initial[f] = { role, aggregation, label: f, visible: true, ...(geoType != null && { geoType }) };
       });
       setColumnRoles(initial);
     }
@@ -2047,14 +2072,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               {wizard === "A" && wizardStep === 3 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Clasificación BI de columnas (roles)</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Definí qué columnas son dimensión, medida o clave. Controla lo que aparece en métricas.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Definí qué columnas son dimensión, medida, clave o geo. El rol <strong>geo</strong> permite identificar columnas de ubicación (país, provincia, ciudad, dirección, lat/lon); si el nombre de la columna coincide, se sugiere automáticamente.</p>
                   <div className="overflow-x-auto rounded-xl border mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <table className="w-full text-sm">
                       <thead style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
                         <tr>
                           <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna</th>
                           <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Rol BI</th>
-                          <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Agregación</th>
+                          <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Agregación / Tipo geo</th>
                           <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Etiqueta</th>
                           <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Visible</th>
                         </tr>
@@ -2063,15 +2088,29 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                         {allColumnsForRoles.map((col) => {
                           const isDerived = derivedColumnsByName[col];
                           const r = columnRoles[col] ?? { role: (isDerived ? "measure" : "dimension") as ColumnRole, aggregation: isDerived ? "sum" : "—", label: col, visible: true };
+                          const geoType = (r as { geoType?: GeoType }).geoType ?? "country";
                           return (
                             <tr key={col} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
                               <td className="px-3 py-2 font-medium">{col}{isDerived ? <span className="text-xs ml-1" style={{ color: "var(--platform-fg-muted)" }}>(calculada)</span> : null}</td>
                               <td className="px-3 py-2">
-                                <select value={r.role} onChange={(e) => setColumnRoles((prev) => ({ ...prev, [col]: { ...prev[col], role: e.target.value as ColumnRole } }))} className="h-8 rounded border px-2 text-xs w-full max-w-[120px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                                <select
+                                  value={r.role}
+                                  onChange={(e) => {
+                                    const newRole = e.target.value as ColumnRole;
+                                    const suggested = newRole === "geo" ? suggestGeoTypeByColumnName(col) : null;
+                                    setColumnRoles((prev) => ({
+                                      ...prev,
+                                      [col]: { ...prev[col], role: newRole, ...(newRole === "geo" && { geoType: suggested ?? "country" }) },
+                                    }));
+                                  }}
+                                  className="h-8 rounded border px-2 text-xs w-full max-w-[120px]"
+                                  style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                                >
                                   <option value="key">key</option>
                                   <option value="time">time</option>
                                   <option value="dimension">dimension</option>
                                   <option value="measure">measure</option>
+                                  <option value="geo">geo</option>
                                 </select>
                               </td>
                               <td className="px-3 py-2">
@@ -2082,6 +2121,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                     <option value="min">min</option>
                                     <option value="max">max</option>
                                     <option value="none">none</option>
+                                  </select>
+                                ) : r.role === "geo" ? (
+                                  <select
+                                    value={geoType}
+                                    onChange={(e) => setColumnRoles((prev) => ({ ...prev, [col]: { ...prev[col], geoType: e.target.value as GeoType } }))}
+                                    className="h-8 rounded border px-2 text-xs max-w-[160px]"
+                                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                                  >
+                                    {(Object.entries(GEO_TYPE_LABELS) as [GeoType, string][]).map(([value, label]) => (
+                                      <option key={value} value={value}>{label}</option>
+                                    ))}
                                   </select>
                                 ) : <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>—</span>}
                               </td>
@@ -2226,12 +2276,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           const keys = allCols.filter((c) => (columnRoles[c]?.role ?? "dimension") === "key");
                           const timeCols = allCols.filter((c) => (columnRoles[c]?.role ?? "dimension") === "time");
                           const dims = allCols.filter((c) => (columnRoles[c]?.role ?? "dimension") === "dimension");
+                          const geoCols = allCols.filter((c) => (columnRoles[c]?.role ?? "dimension") === "geo");
                           const measures = allCols.filter((c) => (columnRoles[c]?.role ?? "dimension") === "measure");
                           return (
                             <>
                               {keys.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Key: {keys.map((c) => getSampleDisplayLabel(c)).join(", ")}</li>}
                               {timeCols.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Tiempo: {timeCols.map((c) => getSampleDisplayLabel(c)).join(", ")}</li>}
                               {dims.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Dimensiones: {dims.length} — {dims.slice(0, 5).map((c) => getSampleDisplayLabel(c)).join(", ")}{dims.length > 5 ? "…" : ""}</li>}
+                              {geoCols.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Geo: {geoCols.map((c) => { const r = columnRoles[c] as { geoType?: GeoType }; const gt = r?.geoType ? GEO_TYPE_LABELS[r.geoType] : "—"; return `${getSampleDisplayLabel(c)} (${gt})`; }).join(", ")}</li>}
                               {measures.length > 0 && <li className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> Medidas: {measures.length} — {measures.slice(0, 5).map((c) => { const r = columnRoles[c]; const agg = r?.aggregation && r.aggregation !== "—" ? r.aggregation : "sum"; return `${getMeasureColumnLabel(c)} (${agg})`; }).join(", ")}{measures.length > 5 ? "…" : ""}</li>}
                             </>
                           );
@@ -2369,7 +2421,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                   setTimeout(() => { input.focus(); input.setSelectionRange(start + val.length, start + val.length); }, 0);
                                 }
                               }}
-                              options={[{ value: "", label: "Dimensión…" }, ...fields.filter((c) => { const role = columnRoles[c]?.role ?? "dimension"; return role === "dimension" || role === "key" || role === "time"; }).map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]}
+                              options={[{ value: "", label: "Dimensión…" }, ...fields.filter((c) => { const role = columnRoles[c]?.role ?? "dimension"; return role === "dimension" || role === "key" || role === "time" || role === "geo"; }).map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]}
                               placeholder="Dimensión…"
                               className="min-w-[140px]"
                               buttonClassName="h-9 text-sm"
