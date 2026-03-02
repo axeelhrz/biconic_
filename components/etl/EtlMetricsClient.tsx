@@ -684,6 +684,45 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const dateFieldSet = new Set(data?.fields?.date ?? []);
   const numericFieldSet = new Set(data?.fields?.numeric ?? []);
 
+  /** Obtiene el valor de una columna en una fila (misma resolución que la tabla: col, col con _, etc.). */
+  const getRowValue = useCallback((row: Record<string, unknown>, col: string): unknown => {
+    if (derivedColumnsByName[col]) return undefined;
+    const keys = Object.keys(row);
+    if (row[col] !== undefined && row[col] !== null) return row[col];
+    const colNorm = col.replace(/\./g, "_").toLowerCase();
+    const key = keys.find((k) => k.replace(/\./g, "_").toLowerCase() === colNorm);
+    if (key !== undefined) return row[key];
+    const withUnderscore = col.replace(/\./g, "_");
+    if (row[withUnderscore] !== undefined && row[withUnderscore] !== null) return row[withUnderscore];
+    if (row[withUnderscore.toLowerCase()] !== undefined && row[withUnderscore.toLowerCase()] !== null) return row[withUnderscore.toLowerCase()];
+    return undefined;
+  }, [derivedColumnsByName]);
+
+  /** Columnas que en la muestra tienen 100% de valores únicos (sugerencia orientativa para Grain). */
+  const suggestedUniqueColumns = useMemo(() => {
+    if (rawTableData.length === 0) return new Set<string>();
+    const set = new Set<string>();
+    for (const f of fields) {
+      if (derivedColumnsByName[f]) continue;
+      const vals = rawTableData.map((r) => getRowValue(r as Record<string, unknown>, f));
+      const uniq = new Set(vals.map((v) => String(v ?? "")));
+      if (uniq.size === rawTableData.length) set.add(f);
+    }
+    return set;
+  }, [fields, rawTableData, getRowValue, derivedColumnsByName]);
+
+  /** Valida el grain seleccionado: cuenta duplicados en la muestra. { duplicateRows, uniqueKeys } o null si no hay grain válido. */
+  const grainValidation = useMemo(() => {
+    const cols = grainOption === "_custom" ? grainCustomColumns : grainOption ? [grainOption] : [];
+    if (cols.length === 0 || rawTableData.length === 0) return null;
+    const keys = rawTableData.map((r) =>
+      cols.map((c) => String(getRowValue(r as Record<string, unknown>, c) ?? "\x00")).join("\x01")
+    );
+    const uniqueKeys = new Set(keys).size;
+    const duplicateRows = keys.length - uniqueKeys;
+    return { duplicateRows, uniqueKeys, totalRows: keys.length };
+  }, [grainOption, grainCustomColumns, rawTableData, getRowValue]);
+
   const getColumnDisplayKey = (col: string): string => {
     const cd = data?.columnDisplay;
     if (!cd) return col;
@@ -1834,16 +1873,24 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               {/* Wizard A1: Grain — obligatorio */}
               {wizard === "A" && wizardStep === 1 && (() => {
                 const hasValidGrain = (grainOption !== "" && grainOption !== "_custom") || (grainOption === "_custom" && grainCustomColumns.length > 0);
+                const hasDuplicates = grainValidation != null && grainValidation.duplicateRows > 0;
+                const canAdvanceGrain = hasValidGrain && !hasDuplicates;
                 return (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Grain técnico (clave única)</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Elegí una columna o varias (concatenadas) que identifiquen de forma única cada fila. Es obligatorio para avanzar.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Elegí una columna o varias (concatenadas) que identifiquen de forma única cada fila. Se valida que no haya duplicados con la combinación elegida.</p>
+                  {rawTableData.length > 0 && (
+                    <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Sugerencias basadas en la muestra actual ({rawTableData.length} filas). Las columnas con 100% de valores únicos se marcan como sugeridas (orientativo).</p>
+                  )}
                   <div className="space-y-2 mb-4">
                     {fields.map((f) => (
                       <label key={f} className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors" style={{ borderColor: grainOption === f ? "var(--platform-accent)" : "var(--platform-border)", background: grainOption === f ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
                         <input type="radio" name="grain" checked={grainOption === f} onChange={() => setGrainOption(f)} className="rounded-full" />
                         <span className="font-medium" style={{ color: "var(--platform-fg)" }}>{getSampleDisplayLabel(f)}</span>
                         <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>1 columna</span>
+                        {suggestedUniqueColumns.has(f) && (
+                          <span className="text-xs px-1.5 py-0.5 rounded font-medium" style={{ background: "var(--platform-accent-dim)", color: "var(--platform-accent)" }}>Sugerido (100% únicos en muestra)</span>
+                        )}
                       </label>
                     ))}
                     <label className="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors" style={{ borderColor: grainOption === "_custom" ? "var(--platform-accent)" : "var(--platform-border)", background: grainOption === "_custom" ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
@@ -1884,6 +1931,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       )}
                     </div>
                   )}
+                  {hasValidGrain && grainValidation != null && (
+                    <div className="mb-4">
+                      {hasDuplicates ? (
+                        <div className="rounded-xl border p-4 flex items-start gap-3" style={{ borderColor: "var(--platform-error, #dc2626)", background: "rgba(220, 38, 38, 0.06)" }}>
+                          <span className="text-lg" aria-hidden>⚠️</span>
+                          <div>
+                            <p className="font-medium text-sm mb-1" style={{ color: "var(--platform-error, #dc2626)" }}>Se detectaron registros duplicados con la clave elegida</p>
+                            <p className="text-sm mb-1" style={{ color: "var(--platform-fg-muted)" }}>
+                              En la muestra: <strong>{grainValidation.duplicateRows}</strong> fila(s) duplicada(s) (claves repetidas). <strong>{grainValidation.uniqueKeys}</strong> claves únicas en {grainValidation.totalRows} filas.
+                            </p>
+                            <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí otra columna o combinación que identifique de forma única cada fila para poder avanzar.</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-sm py-2" style={{ color: "var(--platform-fg-muted)" }}>
+                          ✓ Sin duplicados en la muestra ({grainValidation.totalRows} filas, {grainValidation.uniqueKeys} claves únicas).
+                        </p>
+                      )}
+                    </div>
+                  )}
                   {!hasValidGrain && (grainOption === "_custom" && grainCustomColumns.length === 0) && (
                     <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná al menos una columna en Personalizado para continuar.</p>
                   )}
@@ -1892,9 +1959,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     <Button
                       type="button"
                       className="rounded-xl"
-                      style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                      onClick={() => { if (hasValidGrain) goNext(); else toast.error("Elegí una columna o varias (Personalizado) como clave única para avanzar."); }}
-                      disabled={!hasValidGrain}
+                      style={{ background: canAdvanceGrain ? "var(--platform-accent)" : "var(--platform-bg-elevated)", color: canAdvanceGrain ? "var(--platform-bg)" : "var(--platform-fg-muted)" }}
+                      onClick={() => {
+                        if (!hasValidGrain) { toast.error("Elegí una columna o varias (Personalizado) como clave única para avanzar."); return; }
+                        if (hasDuplicates) { toast.error("Corregí la definición del grain: hay duplicados con la clave elegida. No se puede avanzar hasta que sea única."); return; }
+                        goNext();
+                      }}
+                      disabled={!canAdvanceGrain}
                     >
                       Siguiente: Tiempo
                     </Button>
