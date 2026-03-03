@@ -61,6 +61,8 @@ type AggregationConfig = {
   dateDimension?: string;
   /** Colores por alias de serie (ej. resultado, resultado_prev) para barras, líneas, torta. */
   chartSeriesColors?: Record<string, string>;
+  /** Tipo de gráfico (bar, line, pie, doughnut, kpi, table) para que coincida con la previsualización de la métrica. */
+  chartType?: string;
 };
 type StudioWidget = {
   id: string;
@@ -683,7 +685,7 @@ export function AdminDashboardStudio({
           orderBy: cfg.orderBy as { field: string; direction: "ASC" | "DESC" } | undefined,
           limit: (cfg.limit as number) ?? 100,
           chartSeriesColors: cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? (cfg.chartSeriesColors as Record<string, string>) : undefined,
-          chartType: chartType as string,
+          chartType,
         },
         excludeGlobalFilters: false,
         dataSourceId: null,
