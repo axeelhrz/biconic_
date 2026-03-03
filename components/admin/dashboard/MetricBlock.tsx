@@ -45,6 +45,7 @@ export type ChartConfig = {
     label: string;
     data: number[];
     backgroundColor?: string | string[];
+    hoverBackgroundColor?: string | string[];
     borderColor?: string | string[];
     borderWidth?: number;
     fill?: boolean;
@@ -102,6 +103,38 @@ const CHART_OPTIONS = {
     y: { grid: { color: "rgba(255,255,255,0.06)" }, ticks: { maxTicksLimit: 5, font: { size: 10 }, color: "#71717a" } },
   },
 };
+
+const legendTextColor = "#a1a1aa";
+function buildPieDoughnutLegend(chartConfig: ChartConfig | null | undefined): Record<string, unknown> {
+  const ds0 = chartConfig?.datasets?.[0];
+  if (!ds0 || !Array.isArray(ds0.backgroundColor) || !chartConfig?.labels?.length) {
+    return { display: true, position: "right" as const, labels: { color: legendTextColor, font: { size: 12, color: legendTextColor } } };
+  }
+  return {
+    display: true,
+    position: "right" as const,
+    labels: {
+      color: legendTextColor,
+      font: { size: 12, color: legendTextColor },
+      padding: 12,
+      usePointStyle: false,
+      generateLabels: () =>
+        chartConfig.labels.map((label, i) => {
+          const bg = (ds0.backgroundColor as string[])[i] ?? (typeof ds0.backgroundColor === "string" ? ds0.backgroundColor : "#0ea5e9");
+          return {
+            text: String(label || ""),
+            fillStyle: typeof bg === "string" ? bg : "#0ea5e9",
+            strokeStyle: "#fff",
+            lineWidth: 1,
+            hidden: false,
+            index: i,
+            datasetIndex: 0,
+            fontColor: legendTextColor,
+          };
+        }),
+    },
+  };
+}
 
 export function MetricBlock({
   id,
@@ -268,8 +301,8 @@ export function MetricBlock({
               <div className="h-[220px] w-full">
                 {chartType === "bar" && <Bar data={chartConfig} options={CHART_OPTIONS} />}
                 {chartType === "line" && <Line data={chartConfig} options={CHART_OPTIONS} />}
-                {chartType === "pie" && <Pie data={chartConfig} options={CHART_OPTIONS} />}
-                {chartType === "doughnut" && <Doughnut data={chartConfig} options={CHART_OPTIONS} />}
+                {chartType === "pie" && <Pie data={chartConfig} options={{ ...CHART_OPTIONS, plugins: { ...CHART_OPTIONS.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
+                {chartType === "doughnut" && <Doughnut data={chartConfig} options={{ ...CHART_OPTIONS, plugins: { ...CHART_OPTIONS.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
               </div>
             )}
           </>

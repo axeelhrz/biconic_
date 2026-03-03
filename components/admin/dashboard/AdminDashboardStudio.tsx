@@ -430,25 +430,60 @@ export function AdminDashboardStudio({
           }
           const dim = agg.dimension || Object.keys(dataArray[0] || {})[0];
           const labels = dataArray.map((r: Record<string, unknown>) => String(r[dim] ?? ""));
-          const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+          const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
           const seriesColors = (agg as { chartSeriesColors?: Record<string, string> }).chartSeriesColors;
           const colorKeys = seriesColors ? Object.keys(seriesColors) : [];
           const getColor = (label: string, idx: number) => {
-            const c = seriesColors?.[label] ?? seriesColors?.[colorKeys[idx]!];
+            const c = seriesColors?.[label] ?? seriesColors?.[label?.trim?.() ?? ""] ?? seriesColors?.[colorKeys[idx]!];
             return c ?? defaultPalette[idx % defaultPalette.length]!;
           };
-          const datasets = agg.metrics.map((metric, idx) => {
-            const alias = metric.alias || (metric.func === "FORMULA" ? "formula" : `${metric.func}_${metric.field}`);
-            const data = dataArray.map((r: Record<string, unknown>) => Number(r[alias] ?? 0));
-            const color = getColor(alias, idx);
-            return {
+          const getColorByLabelStable = (label: string) => {
+            const c = seriesColors?.[label] ?? seriesColors?.[label?.trim?.() ?? ""];
+            if (c) return c;
+            let hash = 0;
+            const s = String(label ?? "");
+            for (let i = 0; i < s.length; i++) hash = ((hash << 5) - hash) + s.charCodeAt(i);
+            return defaultPalette[Math.abs(hash) % defaultPalette.length]!;
+          };
+          const effectiveChartType = (agg as { chartType?: string }).chartType || widget.type || "bar";
+          const isPieOrDoughnut = effectiveChartType === "pie" || effectiveChartType === "doughnut";
+          let datasets: ChartConfig["datasets"];
+          if (isPieOrDoughnut && agg.metrics.length > 0) {
+            const firstMetric = agg.metrics[0]!;
+            const alias = firstMetric.alias || (firstMetric.func === "FORMULA" ? "formula" : `${firstMetric.func}_${firstMetric.field}`);
+            const sliceColors = labels.map((l) => getColorByLabelStable(l));
+            const hoverColors = sliceColors.map((c) => {
+              const hex = String(c).replace(/^#/, "");
+              if (hex.length >= 6) {
+                const r = Math.min(255, (parseInt(hex.slice(0, 2), 16) || 0) + 28);
+                const g = Math.min(255, (parseInt(hex.slice(2, 4), 16) || 0) + 28);
+                const b = Math.min(255, (parseInt(hex.slice(4, 6), 16) || 0) + 28);
+                return `rgb(${r},${g},${b})`;
+              }
+              return c;
+            });
+            datasets = [{
               label: alias,
-              data,
-              backgroundColor: color + "99",
-              borderColor: color,
-              borderWidth: 1,
-            };
-          });
+              data: dataArray.map((r: Record<string, unknown>) => Number(r[alias] ?? 0)),
+              backgroundColor: sliceColors,
+              hoverBackgroundColor: hoverColors,
+              borderColor: "#fff",
+              borderWidth: 2,
+            }];
+          } else {
+            datasets = agg.metrics.map((metric, idx) => {
+              const alias = metric.alias || (metric.func === "FORMULA" ? "formula" : `${metric.func}_${metric.field}`);
+              const data = dataArray.map((r: Record<string, unknown>) => Number(r[alias] ?? 0));
+              const color = getColor(alias, idx);
+              return {
+                label: alias,
+                data,
+                backgroundColor: color + "99",
+                borderColor: color,
+                borderWidth: 1,
+              };
+            });
+          }
           const config: ChartConfig = {
             labels,
             datasets: datasets.length > 0 ? datasets : [{ label: "valor", data: [], backgroundColor: defaultPalette[0], borderColor: "#fff", borderWidth: 1 }],
