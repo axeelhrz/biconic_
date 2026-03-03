@@ -49,6 +49,8 @@ export type AggregationConfigEdit = {
   comparePeriod?: "previous_year" | "previous_month";
   /** Columna de fecha para YTD o comparePeriod. */
   dateDimension?: string;
+  chartType?: string;
+  chartSeriesColors?: Record<string, string>;
 };
 
 export type MetricConfigWidget = {
@@ -73,11 +75,13 @@ const CHART_TYPES: { value: string; label: string }[] = [
   { value: "bar", label: "Barras verticales" },
   { value: "horizontalBar", label: "Barras horizontales" },
   { value: "line", label: "Líneas" },
+  { value: "area", label: "Área" },
   { value: "pie", label: "Circular (pie)" },
   { value: "doughnut", label: "Dona" },
   { value: "kpi", label: "KPI (número)" },
   { value: "table", label: "Tabla" },
   { value: "combo", label: "Combo (barras + línea)" },
+  { value: "scatter", label: "Dispersión" },
 ];
 
 const AGG_FUNCS: { value: string; label: string }[] = [
@@ -209,8 +213,14 @@ export function MetricConfigPanel({
         <div>
           <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tipo de gráfico</Label>
           <select
-            value={widget.type}
-            onChange={(e) => onUpdate({ type: e.target.value })}
+            value={(widget.aggregationConfig as any)?.chartType || widget.type}
+            onChange={(e) => {
+              const newType = e.target.value;
+              onUpdate({
+                type: newType,
+                aggregationConfig: { ...agg, chartType: newType },
+              });
+            }}
             className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
           >
             {CHART_TYPES.map((t) => (
@@ -232,7 +242,7 @@ export function MetricConfigPanel({
           </select>
         </div>
 
-        {(widget.type === "pie" || widget.type === "doughnut") && (
+        {(((widget.aggregationConfig as any)?.chartType || widget.type) === "pie" || ((widget.aggregationConfig as any)?.chartType || widget.type) === "doughnut") && (
           <div>
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Etiquetas en gráfico</Label>
             <select
@@ -246,7 +256,7 @@ export function MetricConfigPanel({
           </div>
         )}
 
-        {["bar", "horizontalBar", "line", "pie", "doughnut", "combo"].includes(widget.type) && (
+        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes((widget.aggregationConfig as any)?.chartType || widget.type) && (
           <div>
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Color del gráfico</Label>
             <div className="mt-1.5 flex items-center gap-2">
@@ -266,7 +276,7 @@ export function MetricConfigPanel({
           </div>
         )}
 
-        {widget.type === "kpi" && (
+        {((widget.aggregationConfig as any)?.chartType || widget.type) === "kpi" && (
           <div className="space-y-3">
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">KPI — línea secundaria</Label>
             <Input

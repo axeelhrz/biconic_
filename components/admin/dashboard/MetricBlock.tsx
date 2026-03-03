@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { Loader2, Play, Trash2, MoreHorizontal } from "lucide-react";
-import { Bar, Line, Pie, Doughnut } from "react-chartjs-2";
+import { Bar, Line, Pie, Doughnut, Scatter } from "react-chartjs-2";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -49,6 +49,7 @@ export type ChartConfig = {
     borderColor?: string | string[];
     borderWidth?: number;
     fill?: boolean;
+    type?: "bar" | "line";
   }>;
 };
 
@@ -72,7 +73,7 @@ type MetricBlockProps = {
   state?: MetricBlockState;
   insight?: string;
   chartConfig?: ChartConfig | null;
-  chartType?: "bar" | "line" | "pie" | "doughnut" | "kpi" | "table";
+  chartType?: "bar" | "horizontalBar" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter";
   isLoading?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
@@ -299,10 +300,14 @@ export function MetricBlock({
             )}
             {chartType !== "kpi" && chartType !== "table" && chartConfig && (
               <div className="h-[220px] w-full">
-                {chartType === "bar" && <Bar data={chartConfig} options={CHART_OPTIONS} />}
-                {chartType === "line" && <Line data={chartConfig} options={CHART_OPTIONS} />}
-                {chartType === "pie" && <Pie data={chartConfig} options={{ ...CHART_OPTIONS, plugins: { ...CHART_OPTIONS.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
-                {chartType === "doughnut" && <Doughnut data={chartConfig} options={{ ...CHART_OPTIONS, plugins: { ...CHART_OPTIONS.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
+                {chartType === "bar" && <Bar data={chartConfig as any} options={CHART_OPTIONS} />}
+                {chartType === "horizontalBar" && <Bar data={chartConfig as any} options={{ ...CHART_OPTIONS, indexAxis: "y" as const }} />}
+                {chartType === "line" && <Line data={chartConfig as any} options={CHART_OPTIONS} />}
+                {chartType === "area" && <Line data={{ ...chartConfig, datasets: chartConfig.datasets.map((ds) => ({ ...ds, fill: true })) } as any} options={CHART_OPTIONS} />}
+                {chartType === "pie" && <Pie data={chartConfig as any} options={{ ...CHART_OPTIONS, plugins: { ...CHART_OPTIONS.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
+                {chartType === "doughnut" && <Doughnut data={chartConfig as any} options={{ ...CHART_OPTIONS, plugins: { ...CHART_OPTIONS.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
+                {chartType === "combo" && <Bar data={chartConfig as any} options={CHART_OPTIONS} />}
+                {chartType === "scatter" && <Scatter data={chartConfig as any} options={CHART_OPTIONS} />}
               </div>
             )}
           </>

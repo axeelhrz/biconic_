@@ -54,7 +54,7 @@ import {
   Title,
 } from "chart.js";
 import ChartDataLabels from "chartjs-plugin-datalabels";
-import { Bar, Line, Pie, Doughnut } from "react-chartjs-2";
+import { Bar, Line, Pie, Doughnut, Scatter } from "react-chartjs-2";
 
 ChartJS.register(
   CategoryScale,
@@ -81,6 +81,7 @@ export type WidgetType =
   | "bar"
   | "horizontalBar"
   | "line"
+  | "area"
   | "pie"
   | "doughnut"
   | "combo"
@@ -88,7 +89,8 @@ export type WidgetType =
   | "kpi"
   | "filter"
   | "image"
-  | "text";
+  | "text"
+  | "scatter";
 
 type ChartJSDatasetType = "bar" | "line" | "pie" | "doughnut";
 
@@ -127,6 +129,8 @@ type AggregationConfig = {
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
   dateDimension?: string;
+  chartType?: string;
+  chartSeriesColors?: Record<string, string>;
 };
 
 type ChartConfig = {
@@ -1616,22 +1620,33 @@ export function DashboardViewer({
           ? [accentColor, ...palette]
           : palette;
 
+        const resolvedType = (widget.aggregationConfig as any)?.chartType || widget.type;
+        const seriesColors: Record<string, string> | undefined = (widget.aggregationConfig as any)?.chartSeriesColors;
+        const getSeriesColor = (alias: string, idx: number): string => {
+          if (seriesColors?.[alias]) return seriesColors[alias];
+          if (seriesColors?.[alias?.trim?.() ?? ""]) return seriesColors[alias.trim()];
+          return effectivePalette[idx % effectivePalette.length];
+        };
+        const getSliceColor = (label: string, idx: number): string => {
+          if (seriesColors?.[label]) return seriesColors[label];
+          if (seriesColors?.[label?.trim?.() ?? ""]) return seriesColors[label.trim()];
+          return effectivePalette[idx % effectivePalette.length];
+        };
+
         let config: ChartConfig | undefined;
-        if (
-          ["bar", "horizontalBar", "line", "pie", "doughnut", "combo"].includes(
-            widget.type
-          )
-        ) {
+        const CHART_TYPES = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
+        if (CHART_TYPES.includes(resolvedType)) {
           let datasets: ChartConfig["datasets"];
-          if (widget.type === "combo") {
+          const isPieOrDoughnut = resolvedType === "pie" || resolvedType === "doughnut";
+          if (resolvedType === "combo") {
             datasets = [
               {
                 label: effectiveValueFields[0] || "Barras",
                 data: dataArray.map((row) =>
                   Number(row?.[effectiveValueFields![0]] ?? 0)
                 ),
-                backgroundColor: effectivePalette[0] + "80",
-                borderColor: effectivePalette[0],
+                backgroundColor: getSeriesColor(effectiveValueFields[0] || "Barras", 0) + "80",
+                borderColor: getSeriesColor(effectiveValueFields[0] || "Barras", 0),
                 borderWidth: 2,
                 type: "bar",
               },
@@ -1644,33 +1659,36 @@ export function DashboardViewer({
                     ] ?? 0
                   )
                 ),
-                backgroundColor: effectivePalette[1] + "20",
-                borderColor: effectivePalette[1],
+                backgroundColor: getSeriesColor(effectiveValueFields[1] || "Línea", 1) + "20",
+                borderColor: getSeriesColor(effectiveValueFields[1] || "Línea", 1),
                 borderWidth: 2,
                 type: "line",
                 fill: false,
               },
             ];
+          } else if (isPieOrDoughnut) {
+            const firstField = effectiveValueFields[0];
+            datasets = [{
+              label: firstField,
+              data: dataArray.map((row: any) => Number(row?.[firstField] ?? 0)),
+              backgroundColor: labels.map((l, j) => getSliceColor(l, j)),
+              borderColor: "#fff",
+              borderWidth: 2,
+            }];
           } else {
             datasets = effectiveValueFields.map((field, i) => ({
               label: field,
               data: dataArray.map((row: any) => Number(row?.[field] ?? 0)),
               backgroundColor:
-                widget.type === "pie" || widget.type === "doughnut"
-                  ? labels.map(
-                      (_, j) => effectivePalette[j % effectivePalette.length]
-                    )
-                  : effectivePalette[i % effectivePalette.length] +
-                    (widget.type === "line" ? "" : "80"),
-              borderColor:
-                widget.type === "pie" || widget.type === "doughnut"
-                  ? "#fff"
-                  : effectivePalette[i % effectivePalette.length],
+                getSeriesColor(field, i) +
+                (resolvedType === "line" || resolvedType === "area" ? "" : "80"),
+              borderColor: getSeriesColor(field, i),
               borderWidth: 2,
+              ...(resolvedType === "area" ? { fill: true } : {}),
             }));
           }
           config = { labels, datasets };
-        } else if (widget.type === "kpi") {
+        } else if (resolvedType === "kpi") {
           const valueField = effectiveValueFields[0];
           const sum = dataArray.reduce(
             (acc, row) => acc + Number(row?.[valueField] ?? 0),
@@ -2704,10 +2722,11 @@ export function DashboardViewer({
           <section data-role="canvas" className="client-view-canvas">
             {(() => {
               const sorted = [...widgets].sort((a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x));
+              const getEffectiveType = (w: any) => (w.aggregationConfig as any)?.chartType || w.type;
               const metricWidgets = sorted.filter((w) => w.type !== "image");
-              const kpiWidgets = metricWidgets.filter((w) => w.type === "kpi");
-              const tableWidgets = metricWidgets.filter((w) => w.type === "table");
-              const restWidgets = metricWidgets.filter((w) => w.type !== "kpi" && w.type !== "table");
+              const kpiWidgets = metricWidgets.filter((w) => getEffectiveType(w) === "kpi");
+              const tableWidgets = metricWidgets.filter((w) => getEffectiveType(w) === "table");
+              const restWidgets = metricWidgets.filter((w) => getEffectiveType(w) !== "kpi" && getEffectiveType(w) !== "table");
 
               const renderClientWidget = (w: typeof metricWidgets[0], opts: { gridColumn?: string; slotClass?: string }) => {
                 const minH = (w as any).minHeight;
@@ -2718,7 +2737,7 @@ export function DashboardViewer({
                       ...(opts.gridColumn ? { gridColumn: opts.gridColumn } : {}),
                       ...(minH ? { minHeight: minH } : {}),
                     }}
-                    className={`client-view-widget flex flex-col min-h-0 ${w.type === "kpi" ? "client-view-kpi-widget" : ""} ${opts.slotClass ?? ""}`}
+                    className={`client-view-widget flex flex-col min-h-0 ${((w.aggregationConfig as any)?.chartType || w.type) === "kpi" ? "client-view-kpi-widget" : ""} ${opts.slotClass ?? ""}`}
                   >
                       <div className="client-view-widget-header">
                         <span className="truncate">{w.title || w.type}</span>
@@ -2772,76 +2791,98 @@ export function DashboardViewer({
                             )}
                           </div>
                         )}
-                        {w.config && ["bar", "horizontalBar", "line", "pie", "doughnut", "combo"].includes(w.type) && (
-                          <div className="w-full flex-1 client-view-chart-wrap relative">
-                            {w.type === "bar" || w.type === "combo" ? (
-                              <Bar
-                                data={w.config as any}
-                                options={{
-                                  ...buildChartOptions("bar", w.chartStyle, w.labelDisplayMode),
-                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
-                                  plugins: {
-                                    ...(buildChartOptions("bar", w.chartStyle, w.labelDisplayMode).plugins as object),
-                                    datalabels: { color: isLightBg ? "#374151" : "#fff" },
-                                  },
-                                  scales: {
-                                    x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
-                                    y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
-                                  },
-                                }}
-                              />
-                            ) : w.type === "horizontalBar" ? (
-                              <Bar
-                                data={w.config as any}
-                                options={{
-                                  ...buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode),
-                                  indexAxis: "y",
-                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
-                                  plugins: {
-                                    ...(buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode).plugins as object),
-                                    datalabels: { color: isLightBg ? "#374151" : "#fff" },
-                                  },
-                                  scales: {
-                                    x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
-                                    y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
-                                  },
-                                }}
-                              />
-                            ) : w.type === "line" ? (
-                              <Line
-                                data={w.config as any}
-                                options={{
-                                  ...buildChartOptions("line", w.chartStyle, w.labelDisplayMode),
-                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
-                                  plugins: { datalabels: { color: isLightBg ? "#374151" : "#fff" } },
-                                  scales: {
-                                    x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
-                                    y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
-                                  },
-                                }}
-                              />
-                            ) : w.type === "pie" ? (
-                              <Pie
-                                data={w.config as any}
-                                options={{
-                                  ...buildChartOptions("pie", w.chartStyle, w.labelDisplayMode),
-                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
-                                  plugins: { datalabels: { color: isLightBg ? "#374151" : "#fff" } },
-                                }}
-                              />
-                            ) : w.type === "doughnut" ? (
-                              <Doughnut
-                                data={w.config as any}
-                                options={{
-                                  ...buildChartOptions("doughnut", w.chartStyle, w.labelDisplayMode),
-                                  layout: { padding: w.chartStyle?.layoutPadding ?? 16 },
-                                  plugins: { datalabels: { color: isLightBg ? "#374151" : "#fff" } },
-                                }}
-                              />
-                            ) : null}
-                          </div>
-                        )}
-                        {w.type === "kpi" && (
+                        {(() => {
+                          const ct = (w.aggregationConfig as any)?.chartType || w.type;
+                          const RENDERABLE = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
+                          if (!w.config || !RENDERABLE.includes(ct)) return null;
+                          const dlColor = isLightBg ? "#374151" : "#fff";
+                          const scalesXY = {
+                            x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
+                            y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
+                          };
+                          const pad = w.chartStyle?.layoutPadding ?? 16;
+                          return (
+                            <div className="w-full flex-1 client-view-chart-wrap relative">
+                              {ct === "bar" || ct === "combo" ? (
+                                <Bar
+                                  data={w.config as any}
+                                  options={{
+                                    ...buildChartOptions("bar", w.chartStyle, w.labelDisplayMode),
+                                    layout: { padding: pad },
+                                    plugins: {
+                                      ...(buildChartOptions("bar", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                      datalabels: { color: dlColor },
+                                    },
+                                    scales: scalesXY,
+                                  }}
+                                />
+                              ) : ct === "horizontalBar" ? (
+                                <Bar
+                                  data={w.config as any}
+                                  options={{
+                                    ...buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode),
+                                    indexAxis: "y",
+                                    layout: { padding: pad },
+                                    plugins: {
+                                      ...(buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode).plugins as object),
+                                      datalabels: { color: dlColor },
+                                    },
+                                    scales: scalesXY,
+                                  }}
+                                />
+                              ) : ct === "line" ? (
+                                <Line
+                                  data={w.config as any}
+                                  options={{
+                                    ...buildChartOptions("line", w.chartStyle, w.labelDisplayMode),
+                                    layout: { padding: pad },
+                                    plugins: { datalabels: { color: dlColor } },
+                                    scales: scalesXY,
+                                  }}
+                                />
+                              ) : ct === "area" ? (
+                                <Line
+                                  data={{ ...(w.config as any), datasets: ((w.config as any).datasets || []).map((ds: any) => ({ ...ds, fill: true })) }}
+                                  options={{
+                                    ...buildChartOptions("line", w.chartStyle, w.labelDisplayMode),
+                                    layout: { padding: pad },
+                                    plugins: { datalabels: { color: dlColor } },
+                                    scales: scalesXY,
+                                  }}
+                                />
+                              ) : ct === "pie" ? (
+                                <Pie
+                                  data={w.config as any}
+                                  options={{
+                                    ...buildChartOptions("pie", w.chartStyle, w.labelDisplayMode),
+                                    layout: { padding: pad },
+                                    plugins: { datalabels: { color: dlColor } },
+                                  }}
+                                />
+                              ) : ct === "doughnut" ? (
+                                <Doughnut
+                                  data={w.config as any}
+                                  options={{
+                                    ...buildChartOptions("doughnut", w.chartStyle, w.labelDisplayMode),
+                                    layout: { padding: pad },
+                                    plugins: { datalabels: { color: dlColor } },
+                                  }}
+                                />
+                              ) : ct === "scatter" ? (
+                                <Scatter
+                                  data={w.config as any}
+                                  options={{
+                                    ...buildChartOptions("bar", w.chartStyle, w.labelDisplayMode),
+                                    layout: { padding: pad },
+                                    plugins: { datalabels: { color: dlColor } },
+                                    scales: scalesXY,
+                                  }}
+                                />
+                              ) : null}
+                            </div>
+                          );
+                        })()}
+                        {((w.aggregationConfig as any)?.chartType || w.type) === "kpi" && (
                           <div className="client-view-kpi-body">
                             <div className="client-view-kpi-left">
                               <div
@@ -2898,7 +2939,7 @@ export function DashboardViewer({
                             ) : null}
                           </div>
                         )}
-                        {w.type === "table" && w.rows && (
+                        {((w.aggregationConfig as any)?.chartType || w.type) === "table" && w.rows && (
                           <div className="w-full overflow-auto">
                             <table className="w-full text-sm">
                               <thead>

@@ -37,6 +37,7 @@ export type AggregationConfigEdit = {
   enabled: boolean;
   dimension?: string;
   dimension2?: string;
+  dimensions?: string[];
   metrics: AggregationMetricEdit[];
   filters?: AggregationFilterEdit[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
@@ -44,6 +45,28 @@ export type AggregationConfigEdit = {
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
   dateDimension?: string;
+  chartType?: string;
+  chartXAxis?: string;
+  chartYAxes?: string[];
+  chartSeriesField?: string;
+  chartNumberFormat?: string;
+  chartCurrencySymbol?: string;
+  chartThousandSep?: boolean;
+  chartDecimals?: number;
+  chartSortDirection?: string;
+  chartSortBy?: string;
+  chartAxisOrder?: string;
+  chartScaleMode?: string;
+  chartScaleMin?: string | number;
+  chartScaleMax?: string | number;
+  chartAxisStep?: string | number;
+  chartRankingEnabled?: boolean;
+  chartRankingTop?: number;
+  chartRankingMetric?: string;
+  chartPinnedDimensions?: string[];
+  chartColorScheme?: string;
+  chartSeriesColors?: Record<string, string>;
+  showDataLabels?: boolean;
 };
 
 export type AddMetricFormConfig = {
@@ -118,11 +141,13 @@ const CHART_TYPES: { value: string; label: string }[] = [
   { value: "bar", label: "Barras verticales" },
   { value: "horizontalBar", label: "Barras horizontales" },
   { value: "line", label: "Líneas" },
+  { value: "area", label: "Área" },
   { value: "pie", label: "Circular (pie)" },
   { value: "doughnut", label: "Dona" },
   { value: "kpi", label: "KPI (número)" },
   { value: "table", label: "Tabla" },
   { value: "combo", label: "Combo (barras + línea)" },
+  { value: "scatter", label: "Dispersión" },
 ];
 
 const AGG_FUNCS = [
@@ -195,13 +220,39 @@ export function AddMetricConfigForm({
       const cfg = saved.aggregationConfig;
       const newMetrics = (cfg.metrics ?? [saved.metric]).map((m, i) => ({ ...m, id: `m-${Date.now()}-${i}` }));
       const newFilters = (cfg.filters ?? []).map((f, i) => ({ ...f, id: f.id || `f-${Date.now()}-${i}` }));
+      if (cfg.chartType) {
+        updateForm({ type: cfg.chartType });
+      }
       updateAgg({
         dimension: cfg.dimension ?? agg.dimension,
         dimension2: cfg.dimension2 ?? agg.dimension2,
+        dimensions: cfg.dimensions ?? undefined,
         metrics: newMetrics,
         filters: newFilters.length ? newFilters : agg.filters,
         orderBy: cfg.orderBy ?? agg.orderBy,
         limit: cfg.limit ?? agg.limit,
+        chartType: cfg.chartType,
+        chartXAxis: cfg.chartXAxis,
+        chartYAxes: cfg.chartYAxes,
+        chartSeriesField: cfg.chartSeriesField,
+        chartNumberFormat: cfg.chartNumberFormat,
+        chartCurrencySymbol: cfg.chartCurrencySymbol,
+        chartThousandSep: cfg.chartThousandSep,
+        chartDecimals: cfg.chartDecimals,
+        chartSortDirection: cfg.chartSortDirection,
+        chartSortBy: cfg.chartSortBy,
+        chartAxisOrder: cfg.chartAxisOrder,
+        chartScaleMode: cfg.chartScaleMode,
+        chartScaleMin: cfg.chartScaleMin,
+        chartScaleMax: cfg.chartScaleMax,
+        chartAxisStep: cfg.chartAxisStep,
+        chartRankingEnabled: cfg.chartRankingEnabled,
+        chartRankingTop: cfg.chartRankingTop,
+        chartRankingMetric: cfg.chartRankingMetric,
+        chartPinnedDimensions: cfg.chartPinnedDimensions,
+        chartColorScheme: cfg.chartColorScheme,
+        chartSeriesColors: cfg.chartSeriesColors,
+        showDataLabels: cfg.showDataLabels,
       });
     } else {
       updateAgg({

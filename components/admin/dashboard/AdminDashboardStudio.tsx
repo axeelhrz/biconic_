@@ -653,6 +653,10 @@ export function AdminDashboardStudio({
     (config: AddMetricFormConfig) => {
       const id = `metric-${Date.now()}`;
       const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
+      const aggWithChartType = {
+        ...config.aggregationConfig,
+        chartType: config.aggregationConfig.chartType || config.type,
+      };
       const newWidget: StudioWidget = {
         id,
         type: config.type,
@@ -665,7 +669,7 @@ export function AdminDashboardStudio({
         gridSpan: config.gridSpan ?? 2,
         minHeight: undefined,
         pageId: activePageId ?? "page-1",
-        aggregationConfig: config.aggregationConfig,
+        aggregationConfig: aggWithChartType,
         excludeGlobalFilters: config.excludeGlobalFilters,
         color: config.color,
         labelDisplayMode: config.labelDisplayMode,
@@ -719,6 +723,9 @@ export function AdminDashboardStudio({
           filters: Array.isArray(cfg.filters) ? cfg.filters : undefined,
           orderBy: cfg.orderBy as { field: string; direction: "ASC" | "DESC" } | undefined,
           limit: (cfg.limit as number) ?? 100,
+          cumulative: (cfg.cumulative as AggregationConfig["cumulative"]) ?? undefined,
+          comparePeriod: (cfg.comparePeriod as AggregationConfig["comparePeriod"]) ?? undefined,
+          dateDimension: (cfg.dateDimension as string) ?? undefined,
           chartSeriesColors: cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? (cfg.chartSeriesColors as Record<string, string>) : undefined,
           chartType,
         },
@@ -966,12 +973,13 @@ export function AdminDashboardStudio({
                 const chartTypeRaw =
                   (w.aggregationConfig as { chartType?: string })?.chartType
                   || chartTypeFromSaved
-                  || (w.type === "horizontalBar" ? "bar" : w.type)
+                  || w.type
                   || "bar";
-                const chartType: "bar" | "line" | "pie" | "doughnut" | "kpi" | "table" =
-                  ["bar", "line", "pie", "doughnut", "kpi", "table"].includes(chartTypeRaw) ? chartTypeRaw as "bar" | "line" | "pie" | "doughnut" | "kpi" | "table" : "bar";
+                type SupportedChartType = "bar" | "horizontalBar" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter";
+                const SUPPORTED_CHART_TYPES: string[] = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "kpi", "table", "combo", "scatter"];
+                const chartType: SupportedChartType = SUPPORTED_CHART_TYPES.includes(chartTypeRaw) ? chartTypeRaw as SupportedChartType : "bar";
                 let kpiValue: string | number | undefined;
-                if (w.type === "kpi" && w.config?.datasets?.[0]?.data?.[0] != null) {
+                if (chartType === "kpi" && w.config?.datasets?.[0]?.data?.[0] != null) {
                   kpiValue = w.config.datasets[0].data[0];
                 }
                 const span = Math.min(4, Math.max(1, w.gridSpan ?? 2));
