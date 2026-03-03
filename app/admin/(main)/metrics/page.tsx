@@ -6,6 +6,14 @@ import { useRouter } from "next/navigation";
 import { Plus, Search, Pencil, BarChart3, Loader2, ChevronRight, Database, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { searchEtls } from "@/app/admin/(main)/dashboard/actions";
 
@@ -22,6 +30,7 @@ export default function AdminMetricsPage() {
   const [etlOptionsLoading, setEtlOptionsLoading] = useState(false);
   const [selectedEtlId, setSelectedEtlId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ etlId: string; metricId: string; metricName: string } | null>(null);
 
   const fetchMetrics = useCallback(async () => {
     setLoading(true);
@@ -64,8 +73,17 @@ export default function AdminMetricsPage() {
     }
   };
 
-  const deleteMetric = useCallback(async (etlId: string, metricId: string, metricName: string) => {
-    if (!confirm(`¿Eliminar la métrica "${metricName}"? Esta acción no se puede deshacer.`)) return;
+  const openDeleteModal = useCallback((etlId: string, metricId: string, metricName: string) => {
+    setDeleteTarget({ etlId, metricId, metricName });
+  }, []);
+
+  const closeDeleteModal = useCallback(() => {
+    if (!deletingId) setDeleteTarget(null);
+  }, [deletingId]);
+
+  const confirmDeleteMetric = useCallback(async () => {
+    if (!deleteTarget) return;
+    const { etlId, metricId, metricName } = deleteTarget;
     setDeletingId(metricId);
     try {
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
@@ -79,13 +97,14 @@ export default function AdminMetricsPage() {
         return;
       }
       toast.success("Métrica eliminada");
+      setDeleteTarget(null);
       await fetchMetrics();
     } catch {
       toast.error("Error al eliminar la métrica.");
     } finally {
       setDeletingId(null);
     }
-  }, [fetchMetrics]);
+  }, [deleteTarget, fetchMetrics]);
 
   const totalMetrics = etls.reduce((acc, e) => acc + (e.savedMetrics?.length ?? 0), 0);
   const etlsWithMetrics = etls.filter((e) => (e.savedMetrics?.length ?? 0) > 0);
@@ -288,6 +307,46 @@ export default function AdminMetricsPage() {
         </div>
       )}
 
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && closeDeleteModal()}>
+        <DialogContent className="sm:max-w-md" style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: "var(--platform-fg)" }}>
+              Eliminar métrica
+            </DialogTitle>
+            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
+              ¿Eliminar la métrica <strong style={{ color: "var(--platform-fg)" }}>{deleteTarget?.metricName}</strong>? Esta acción no se puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={closeDeleteModal}
+              disabled={!!deletingId}
+              className="rounded-xl"
+              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmDeleteMetric}
+              disabled={!!deletingId}
+              className="rounded-xl bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deletingId ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Eliminando...
+                </>
+              ) : (
+                "Eliminar"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {loading ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin" style={{ color: "var(--platform-accent)" }} />
@@ -367,7 +426,7 @@ export default function AdminMetricsPage() {
                       </Link>
                       <button
                         type="button"
-                        onClick={() => deleteMetric(etl.id, m.id, m.name)}
+                        onClick={() => openDeleteModal(etl.id, m.id, m.name)}
                         disabled={deletingId === m.id}
                         className="p-1.5 rounded-lg transition-colors hover:bg-red-500/10 disabled:opacity-50"
                         style={{ color: "var(--platform-fg-muted)" }}
