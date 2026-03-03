@@ -635,21 +635,26 @@ export async function POST(req: NextRequest) {
       const gran = body.dateGroupBy.granularity.toLowerCase().replace(/[^a-z]/g, "");
       const validGran = ["day", "week", "month", "year"].includes(gran) ? gran : "month";
       dateGroupByExpr = `DATE_TRUNC('${validGran}', ${dgCol}::timestamp)`;
-      const dateParts = [`${dateGroupByExpr}::text AS "periodo"`];
-      if (dimList.length > 0) {
-        dateParts.push(
-          ...dimList.map((d) => {
-            const col = quotedColumn(d);
-            const alias = (d || "").trim().replace(/"/g, '""');
-            return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
-          })
-        );
-      }
+      // No agregar columna "periodo": la dimensión temporal usa el nombre del campo (ej. FECHA_COMPRA) con valores agrupados por granularidad.
+      const timeField = (body.dateGroupBy.field || "").trim().replace(/"/g, '""');
+      const dateParts =
+        dimList.length > 0
+          ? dimList.map((d) => {
+              const alias = (d || "").trim().replace(/"/g, '""');
+              if (alias === body.dateGroupBy!.field?.trim() || normalizeStr(alias) === normalizeStr(body.dateGroupBy!.field || "")) {
+                return `${dateGroupByExpr}::text AS "${alias}"`;
+              }
+              const col = quotedColumn(d);
+              return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
+            })
+          : [`${dateGroupByExpr}::text AS "${timeField}"`];
       dimensionSelectClause = dateParts.join(", ");
       const groupParts = [dateGroupByExpr];
       if (dimList.length > 0) {
         groupParts.push(
-          ...dimList.map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
+          ...dimList
+            .filter((d) => (d || "").trim() !== (body.dateGroupBy!.field || "").trim() && normalizeStr((d || "").trim()) !== normalizeStr(body.dateGroupBy!.field || ""))
+            .map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
         );
       }
       dimensionGroupByClause = groupParts.join(", ");

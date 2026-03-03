@@ -423,6 +423,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [analysisDateFrom, setAnalysisDateFrom] = useState("");
   const [analysisDateTo, setAnalysisDateTo] = useState("");
   const [analysisGranularity, setAnalysisGranularity] = useState("month");
+  /** Formato de visualización de fechas en la vista previa (dimensiones temporales). */
+  const [analysisDateFormat, setAnalysisDateFormat] = useState<"short" | "monthYear" | "year" | "datetime">("short");
   const [transformCompare, setTransformCompare] = useState<"none" | "mom" | "yoy" | "fixed">("none");
   const [transformCompareFixedValue, setTransformCompareFixedValue] = useState("");
   const [transformShowDelta, setTransformShowDelta] = useState(true);
@@ -930,6 +932,33 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     if (chartNumberFormat === "currency") return `${chartCurrencySymbol}${formatted}`;
     return `${formatted}${suffix}`;
   }, [chartNumberFormat, chartDecimals, chartThousandSep, chartCurrencySymbol]);
+
+  /** Formatea un valor de celda como fecha en la vista previa cuando la columna es de tipo fecha (dimensión temporal o columna fecha). */
+  const formatPreviewDateValue = useCallback(
+    (value: unknown, columnKey: string): string | null => {
+      if (value == null || value === "") return null;
+      const isDateCol =
+        (timeColumn && (columnKey === timeColumn || columnKey.trim().toLowerCase() === timeColumn.trim().toLowerCase())) ||
+        dateFields.some((f) => f.trim().toLowerCase() === (columnKey || "").trim().toLowerCase());
+      if (!isDateCol) {
+        const s = String(value).trim();
+        if (!/^\d{4}-\d{2}-\d{2}/.test(s) && !/^\d{1,2}\/\d{1,2}\/\d{4}/.test(s)) return null;
+      }
+      let date: Date | null = null;
+      if (value instanceof Date) date = value;
+      else if (typeof value === "string") date = new Date(value);
+      else if (typeof value === "number") date = value > 1e10 ? new Date(value) : new Date(1899, 11, 30 + (value | 0));
+      if (!date || isNaN(date.getTime())) return null;
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+      if (analysisDateFormat === "short") return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`;
+      if (analysisDateFormat === "monthYear") return `${months[date.getMonth()]} ${date.getFullYear()}`;
+      if (analysisDateFormat === "year") return String(date.getFullYear());
+      if (analysisDateFormat === "datetime") return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`;
+    },
+    [timeColumn, dateFields, analysisDateFormat]
+  );
 
   const formatSampleCell = (col: string, value: unknown): string => {
     if (value === null || value === undefined) return "";
@@ -2972,14 +3001,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                 const keys = Object.keys(raw);
                                 return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{keys.map((k, i) => {
                                   const v = raw[k];
-                                  let display: string;
-                                  if (k === "periodo" && typeof v === "string") {
-                                    const d = new Date(v);
-                                    display = !isNaN(d.getTime()) ? d.toLocaleDateString("es-AR", { year: "numeric", month: "short" }) : v;
-                                  } else {
-                                    display = typeof v === "number" ? formatNumber(v) : String(v ?? "");
-                                  }
-                                  return (<td key={i} className="py-1.5 px-2">{display}</td>);
+                                  const dateDisplay = formatPreviewDateValue(v, k);
+                                  const display = dateDisplay ?? (typeof v === "number" ? formatNumber(v) : String(v ?? ""));
+                                  return (<td key={i} className="py-1.5 px-2 tabular-nums">{display}</td>);
                                 })}</tr>);
                               })}</tbody>
                             </table>
@@ -3189,7 +3213,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       <div className="rounded-xl border p-4 col-span-2 overflow-auto max-h-[180px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <table className="w-full text-xs" style={{ color: "var(--platform-fg)" }}>
                           <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left py-1 px-2">{k}</th>))}</tr></thead>
-                          <tbody>{previewData.slice(0, 5).map((row, idx) => (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{Object.values(row).map((v, i) => (<td key={i} className="py-1 px-2">{String(v ?? "")}</td>))}</tr>))}</tbody>
+                          <tbody>{previewData.slice(0, 5).map((row, idx) => {
+                            const raw = row as Record<string, unknown>;
+                            const keys = Object.keys(raw);
+                            return (
+                            <tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>
+                              {keys.map((k, i) => {
+                                const v = raw[k];
+                                const dateDisplay = formatPreviewDateValue(v, k);
+                                const num = typeof v === "number" ? v : (v != null && v !== "" ? Number(v) : NaN);
+                                const display = dateDisplay ?? (!isNaN(num) ? formatNumber(num) : String(v ?? ""));
+                                return (<td key={i} className="py-1 px-2 tabular-nums">{display}</td>);
+                              })}
+                            </tr>
+                          ); })}</tbody>
                         </table>
                       </div>
                     </div>
@@ -3313,6 +3350,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                   disablePortal
                                 />
                               </div>
+                            </div>
+                            <div className="mb-4">
+                              <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Formato de fecha en vista previa</Label>
+                              <Select
+                                value={analysisDateFormat}
+                                onChange={(v: string) => setAnalysisDateFormat(v as typeof analysisDateFormat)}
+                                options={[
+                                  { value: "short", label: "dd/MM/yyyy" },
+                                  { value: "monthYear", label: "Mes Año (ej. Oct 2025)" },
+                                  { value: "year", label: "Solo año" },
+                                  { value: "datetime", label: "dd/MM/yyyy HH:mm" },
+                                ]}
+                                placeholder="Formato…"
+                                className="w-full"
+                                buttonClassName="h-9 text-sm"
+                                disablePortal
+                              />
                             </div>
                             {analysisTimeRange === "custom" && (
                               <div className="grid grid-cols-2 gap-3 mb-4">
@@ -3494,6 +3548,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                 const transformLabel = transformCompare === "mom" ? "Período anterior (MoM)" : transformCompare === "yoy" ? "Año anterior (YoY)" : transformCompare === "fixed" ? `Valor fijo (${transformCompareFixedValue})` : null;
                 const formatCell = (k: string, v: unknown): string => {
                   if (v == null) return "—";
+                  const dateDisplay = formatPreviewDateValue(v, k);
+                  if (dateDisplay != null) return dateDisplay;
                   if (typeof v !== "number") return String(v);
                   if (k.endsWith("_delta_pct") || k.endsWith("_var_pct_fijo")) {
                     const sign = v > 0 ? "+" : "";
@@ -3923,9 +3979,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           <div className="overflow-auto max-h-[200px] text-sm">
                             <table className="w-full">
                               <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left py-2 px-3 font-medium">{k}</th>))}</tr></thead>
-                              <tbody style={{ color: "var(--platform-fg)" }}>{previewData.slice(0, 5).map((row, idx) => (
-                                <tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{Object.values(row).map((v, i) => (<td key={i} className="py-2 px-3">{String(v ?? "")}</td>))}</tr>
-                              ))}</tbody>
+                              <tbody style={{ color: "var(--platform-fg)" }}>{previewData.slice(0, 5).map((row, idx) => {
+                                const raw = row as Record<string, unknown>;
+                                const keys = Object.keys(raw);
+                                return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{keys.map((k, i) => {
+                                  const v = raw[k];
+                                  const dateDisplay = formatPreviewDateValue(v, k);
+                                  const num = typeof v === "number" ? v : (v != null && v !== "" ? Number(v) : NaN);
+                                  const display = dateDisplay ?? (!isNaN(num) ? formatNumber(num) : String(v ?? ""));
+                                  return (<td key={i} className="py-2 px-3 tabular-nums">{display}</td>);
+                                })}</tr>);
+                              })}</tbody>
                             </table>
                           </div>
                         )}
