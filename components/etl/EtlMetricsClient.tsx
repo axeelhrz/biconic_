@@ -1377,7 +1377,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       });
     }
 
-    if (chartRankingEnabled && chartRankingTop > 0) {
+    const isTimeSeriesX = !!xKey && (xKey === timeColumn || timeColumn?.trim().toLowerCase() === xKey.trim().toLowerCase() || dateFields.some((f) => f.trim().toLowerCase() === (xKey || "").trim().toLowerCase()));
+    if (chartRankingEnabled && chartRankingTop > 0 && !isTimeSeriesX) {
       const rKey = chartRankingMetric && keys.includes(chartRankingMetric) ? chartRankingMetric : yKeys[0]!;
       rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
       rows = rows.slice(0, chartRankingTop);
@@ -1414,11 +1415,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     const datasets = yKeys.map((alias, idx) => {
       const label = colLabel(alias);
       const color = getColor(label, idx);
+      const isBarOrHorizontalBar = formChartType === "bar" || formChartType === "horizontalBar";
+      const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
+      const barColors = oneMetricManyCategories
+        ? labels.map((l) => getColorByLabelStable(l))
+        : null;
       return {
         label,
         data: rows.map((r) => Number((r as Record<string, unknown>)[alias] ?? 0)),
-        backgroundColor: color + "99",
-        borderColor: color,
+        backgroundColor: barColors ? barColors.map((c) => c + "99") : color + "99",
+        borderColor: barColors ? barColors : color,
         borderWidth: 1,
       };
     });
@@ -1450,7 +1456,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
 
     return { labels, datasets };
-  }, [previewData, formDimensions, formMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue]);
+  }, [previewData, formDimensions, formMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue, dateFields]);
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
@@ -1501,16 +1507,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const chartDimensionColumns = useMemo(() => chartAvailableColumns.filter((c) => {
     if (/^metric_\d+/.test(c.key)) return false;
     if (c.key.endsWith("_prev") || c.key.endsWith("_delta") || c.key.endsWith("_delta_pct") || c.key.endsWith("_acumulado") || c.key.endsWith("_vs_fijo") || c.key.endsWith("_var_pct_fijo")) return false;
-    return true;
-  }), [chartAvailableColumns]);
-
-  const chartNumericColumns = useMemo(() => chartAvailableColumns.filter((c) => {
-    if (/^metric_\d+/.test(c.key)) return true;
-    const metricAliases = formMetrics.map((m) => m.alias || m.field || "").filter(Boolean);
-    if (metricAliases.includes(c.key)) return true;
-    if (c.key.endsWith("_prev") || c.key.endsWith("_delta") || c.key.endsWith("_delta_pct") || c.key.endsWith("_acumulado") || c.key.endsWith("_vs_fijo") || c.key.endsWith("_var_pct_fijo")) return true;
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    if (formDimensions.some((d) => norm(d) === norm(c.key))) return true;
+    if (timeColumn && norm(timeColumn) === norm(c.key)) return true;
+    if (dateFields.some((f) => norm(f) === norm(c.key))) return true;
     return false;
-  }), [chartAvailableColumns, formMetrics]);
+  }), [chartAvailableColumns, formDimensions, timeColumn, dateFields]);
+
+  const chartNumericColumns = useMemo(() => {
+    const isDimensionKey = (key: string) => chartDimensionColumns.some((d) => d.key === key);
+    const isTransformCol = (key: string) =>
+      key.endsWith("_prev") || key.endsWith("_delta") || key.endsWith("_delta_pct") || key.endsWith("_acumulado") || key.endsWith("_vs_fijo") || key.endsWith("_var_pct_fijo");
+    return chartAvailableColumns.filter((c) => {
+      if (/^metric_\d+/.test(c.key)) return true;
+      const metricAliases = formMetrics.map((m) => m.alias || m.field || "").filter(Boolean);
+      if (metricAliases.includes(c.key)) return true;
+      if (isTransformCol(c.key)) return true;
+      if (!isDimensionKey(c.key)) return true;
+      return false;
+    });
+  }, [chartAvailableColumns, formMetrics, chartDimensionColumns]);
 
   const lastChartTypeForMappingRef = useRef<string | null>(null);
   useEffect(() => {
@@ -3682,69 +3698,89 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               {wizard === "D" && wizardStep === 1 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Mapeo de campos</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Según el tipo <strong>{CHART_TYPES.find((t) => t.value === formChartType)?.label ?? formChartType}</strong>: se sugieren Eje X, Eje Y y Serie. Podés ajustarlos manualmente.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Asigná las columnas de tus datos al gráfico tipo <strong>{CHART_TYPES.find((t) => t.value === formChartType)?.label ?? formChartType}</strong>. Solo aparecen opciones según los datos de la vista previa.</p>
 
-                  {chartAvailableColumns.length === 0 && (
-                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}>
-                      <p className="text-xs" style={{ color: "var(--platform-accent)" }}>No hay datos de preview. Volvé al paso Preview y actualizá la vista previa primero.</p>
+                  {chartAvailableColumns.length === 0 ? (
+                    <div className="rounded-xl border border-dashed p-6 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                      <BarChart2 className="h-10 w-10 mx-auto mb-3 opacity-50" style={{ color: "var(--platform-fg-muted)" }} />
+                      <p className="text-sm font-medium mb-1" style={{ color: "var(--platform-fg)" }}>Sin datos para mapear</p>
+                      <p className="text-xs mb-4 max-w-sm mx-auto" style={{ color: "var(--platform-fg-muted)" }}>Volvé al paso <strong>Preview</strong> en Análisis (Dimensiones y tiempo → Filtros → Transformaciones → Preview) y tocá «Actualizar vista previa» para cargar los datos.</p>
+                      <Button type="button" variant="outline" size="sm" className="rounded-xl" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={goPrev}>← Volver a Tipo de gráfico</Button>
                     </div>
+                  ) : (
+                    <>
+                      <div className="rounded-lg border p-3 mb-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                        <span className="font-medium" style={{ color: "var(--platform-fg-muted)" }}>Datos disponibles:</span>
+                        <span style={{ color: "var(--platform-fg)" }}><strong>{previewData?.length ?? 0}</strong> filas</span>
+                        <span style={{ color: "var(--platform-fg)" }}><strong>{chartDimensionColumns.length}</strong> dimensión{chartDimensionColumns.length !== 1 ? "es" : ""} (categorías/tiempo): {chartDimensionColumns.length ? chartDimensionColumns.map((c) => c.label).join(", ") : "—"}</span>
+                        <span style={{ color: "var(--platform-fg)" }}><strong>{chartNumericColumns.length}</strong> métrica{chartNumericColumns.length !== 1 ? "s" : ""} (valores): {chartNumericColumns.length ? chartNumericColumns.map((c) => c.label).join(", ") : "—"}</span>
+                      </div>
+
+                      <div className="space-y-5">
+                        <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                          <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg)" }}>1. Eje X — Categorías o tiempo</Label>
+                          <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Columna que define las etiquetas (ej. vendedor, fecha, región). En KPI no se usa.</p>
+                          {chartDimensionColumns.length === 0 ? (
+                            <p className="text-xs py-2" style={{ color: "var(--platform-fg-muted)" }}>No hay dimensiones en los datos. Este gráfico se verá como KPI (un solo valor).</p>
+                          ) : (
+                            <select value={chartXAxis} onChange={(e) => setChartXAxis(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                              <option value="">— Sin eje X (KPI)</option>
+                              {chartDimensionColumns.map((c) => (<option key={c.key} value={c.key}>{c.label}</option>))}
+                            </select>
+                          )}
+                        </div>
+
+                        <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                          <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg)" }}>2. Eje Y — Valores a graficar</Label>
+                          <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná una o más métricas (columnas numéricas) que se mostrarán en el gráfico.</p>
+                          {chartNumericColumns.length === 0 ? (
+                            <p className="text-xs py-2" style={{ color: "var(--platform-accent)" }}>No hay métricas en los datos. Revisá el paso Cálculo y definí al menos una métrica para el análisis.</p>
+                          ) : (
+                            <div className="space-y-1.5 max-h-[200px] overflow-y-auto">
+                              {chartNumericColumns.map((c) => {
+                                const checked = chartYAxes.includes(c.key);
+                                return (
+                                  <label key={c.key} className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-lg cursor-pointer transition-colors hover:opacity-90" style={{ background: checked ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }}>
+                                    <input type="checkbox" checked={checked} onChange={(e) => {
+                                      if (e.target.checked) setChartYAxes((prev) => [...prev, c.key]);
+                                      else setChartYAxes((prev) => prev.filter((k) => k !== c.key));
+                                    }} className="rounded" />
+                                    {c.label}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {chartYAxes.length === 0 && chartNumericColumns.length > 0 && <p className="text-xs mt-2" style={{ color: "var(--platform-accent)" }}>Seleccioná al menos una métrica.</p>}
+                        </div>
+
+                        {chartDimensionColumns.length >= 2 && (
+                          <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                            <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg)" }}>3. Serie (opcional) — Agrupar por color</Label>
+                            <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Si tenés más de una dimensión, podés usar una como serie para ver varias líneas o barras por categoría.</p>
+                            <select value={chartSeriesField} onChange={(e) => setChartSeriesField(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                              <option value="">— Sin serie</option>
+                              {chartDimensionColumns.filter((c) => c.key !== chartXAxis).map((c) => (<option key={c.key} value={c.key}>{c.label}</option>))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-5 rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                        <p className="text-xs font-medium uppercase mb-2" style={{ color: "var(--platform-fg-muted)" }}>Resumen del mapeo</p>
+                        <div className="flex flex-wrap gap-4 text-sm" style={{ color: "var(--platform-fg)" }}>
+                          <span><strong>X:</strong> {chartXAxis ? chartAvailableColumns.find((c) => c.key === chartXAxis)?.label ?? chartXAxis : "— (KPI)"}</span>
+                          <span><strong>Y:</strong> {chartYAxes.length > 0 ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k).join(", ") : "—"}</span>
+                          {chartSeriesField && <span><strong>Serie:</strong> {chartAvailableColumns.find((c) => c.key === chartSeriesField)?.label ?? chartSeriesField}</span>}
+                        </div>
+                      </div>
+
+                      <div className="mt-6 flex justify-between">
+                        <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
+                        <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext} disabled={chartNumericColumns.length > 0 && chartYAxes.length === 0}>Siguiente: Formato</Button>
+                      </div>
+                    </>
                   )}
-
-                  <div className="space-y-5">
-                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Eje X (categorías / tiempo)</Label>
-                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>La columna que define las etiquetas del eje horizontal.</p>
-                      <select value={chartXAxis} onChange={(e) => setChartXAxis(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                        <option value="">— Sin eje X (KPI)</option>
-                        {chartDimensionColumns.map((c) => (<option key={c.key} value={c.key}>{c.label}</option>))}
-                      </select>
-                    </div>
-
-                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Eje Y (valores / métricas)</Label>
-                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná una o varias columnas numéricas para graficar.</p>
-                      <div className="space-y-1.5 max-h-[200px] overflow-y-auto">
-                        {chartNumericColumns.map((c) => {
-                          const checked = chartYAxes.includes(c.key);
-                          return (
-                            <label key={c.key} className="flex items-center gap-2 text-sm py-1 px-2 rounded-lg cursor-pointer transition-colors" style={{ background: checked ? "var(--platform-accent-dim)" : "transparent", color: "var(--platform-fg)" }}>
-                              <input type="checkbox" checked={checked} onChange={(e) => {
-                                if (e.target.checked) setChartYAxes((prev) => [...prev, c.key]);
-                                else setChartYAxes((prev) => prev.filter((k) => k !== c.key));
-                              }} className="rounded" />
-                              {c.label}
-                            </label>
-                          );
-                        })}
-                      </div>
-                      {chartYAxes.length === 0 && <p className="text-xs mt-2" style={{ color: "var(--platform-accent)" }}>Seleccioná al menos una métrica.</p>}
-                    </div>
-
-                    {chartDimensionColumns.length >= 2 && (
-                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Serie (agrupación por color)</Label>
-                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Si tenés más de una dimensión, podés usar una como serie: cada valor único genera una línea/barra distinta.</p>
-                        <select value={chartSeriesField} onChange={(e) => setChartSeriesField(e.target.value)} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                          <option value="">— Sin serie</option>
-                          {chartDimensionColumns.filter((c) => c.key !== chartXAxis).map((c) => (<option key={c.key} value={c.key}>{c.label}</option>))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-4 rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                    <p className="text-xs font-medium uppercase mb-1" style={{ color: "var(--platform-fg-muted)" }}>Resumen del mapeo</p>
-                    <div className="flex flex-wrap gap-4 text-sm" style={{ color: "var(--platform-fg)" }}>
-                      <span><strong>X:</strong> {chartXAxis ? chartAvailableColumns.find((c) => c.key === chartXAxis)?.label ?? chartXAxis : "— (KPI)"}</span>
-                      <span><strong>Y:</strong> {chartYAxes.length > 0 ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k).join(", ") : "—"}</span>
-                      {chartSeriesField && <span><strong>Serie:</strong> {chartAvailableColumns.find((c) => c.key === chartSeriesField)?.label ?? chartSeriesField}</span>}
-                    </div>
-                  </div>
-
-                  <div className="mt-6 flex justify-between">
-                    <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Formato</Button>
-                  </div>
                 </section>
               )}
 
@@ -3963,18 +3999,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               {wizard === "D" && wizardStep === 3 && (
                 <section className="rounded-xl border p-6 space-y-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Guardar</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Previsualización exacta de cómo se verá el gráfico en el dashboard. Guardá la métrica para usarla en dashboards.</p>
-                  <div className="rounded-xl border p-4 shadow-sm min-h-[260px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Así se verá en el dashboard</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Previsualización de cómo se verá el gráfico en el dashboard. Guardá la métrica para usarla en dashboards.</p>
+                  <div className="rounded-xl border overflow-hidden shadow-sm" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <div className="px-4 py-2 border-b flex items-center justify-between" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                      <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{formName || "Métrica"}</p>
+                      <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Vista previa</span>
+                    </div>
+                    <div className="p-4 min-h-[320px]">
                     {previewLoading ? (
-                      <div className="flex flex-col items-center justify-center min-h-[240px] gap-3" style={{ color: "var(--platform-fg-muted)" }}>
+                      <div className="flex flex-col items-center justify-center min-h-[300px] gap-3" style={{ color: "var(--platform-fg-muted)" }}>
                         <Loader2 className="h-8 w-8 animate-spin" />
                         <span className="text-sm">Cargando vista previa…</span>
                       </div>
                     ) : !previewData || previewData.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center min-h-[240px] gap-3 rounded-lg border border-dashed p-6" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                      <div className="flex flex-col items-center justify-center min-h-[300px] gap-3 rounded-lg border border-dashed p-6" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
                         <BarChart2 className="h-12 w-12 opacity-50" />
-                        <p className="text-sm text-center">Tocá «Actualizar vista previa» para cargar datos y ver el gráfico.</p>
+                        <p className="text-sm text-center">No hay datos para previsualizar. Volvé al paso <strong>Preview</strong> en Análisis y tocá «Actualizar vista previa».</p>
                         <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={fetchPreview} disabled={formMetrics.length === 0} style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}>
                           Actualizar vista previa
                         </Button>
@@ -3982,12 +4022,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     ) : (
                       <>
                         {formChartType === "kpi" && previewKpiValue != null && (
-                          <div className="flex items-center justify-center min-h-[100px]">
-                            <span className="text-3xl font-bold tabular-nums" style={{ color: "var(--platform-fg)" }}>{formatNumber(previewKpiValue)}</span>
+                          <div className="flex flex-col items-center justify-center min-h-[260px] gap-1">
+                            <span className="text-4xl font-bold tabular-nums" style={{ color: "var(--platform-fg)" }}>{formatNumber(previewKpiValue)}</span>
+                            <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>{chartYAxes[0] ? (chartAvailableColumns.find((c) => c.key === chartYAxes[0])?.label ?? chartYAxes[0]) : formMetrics[0]?.alias || formMetrics[0]?.field || ""}</span>
                           </div>
                         )}
                         {formChartType === "table" && (
-                          <div className="overflow-auto max-h-[200px] text-sm">
+                          <div className="overflow-auto max-h-[280px] text-sm">
                             <table className="w-full">
                               <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left py-2 px-3 font-medium">{k}</th>))}</tr></thead>
                               <tbody style={{ color: "var(--platform-fg)" }}>{previewData.slice(0, 5).map((row, idx) => {
@@ -4011,19 +4052,45 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           const yMin = chartScaleMode === "custom" && chartScaleMin !== "" && !isNaN(Number(chartScaleMin)) ? Number(chartScaleMin) : chartScaleMode === "dataset" ? dataMin : undefined;
                           const yMax = chartScaleMode === "custom" && chartScaleMax !== "" && !isNaN(Number(chartScaleMax)) ? Number(chartScaleMax) : chartScaleMode === "dataset" ? dataMax : undefined;
                           const stepSize = chartAxisStep !== "" && !isNaN(Number(chartAxisStep)) ? Number(chartAxisStep) : undefined;
+                          const axisColor = "#64748b";
+                          const gridColor = "#e2e8f0";
                           const axisScales = {
-                            x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } },
-                            y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", ...(stepSize != null ? { stepSize } : {}) }, ...(yMin != null ? { min: yMin } : {}), ...(yMax != null ? { max: yMax } : {}) },
+                            x: {
+                              display: true,
+                              grid: { color: gridColor },
+                              ticks: { color: axisColor, maxTicksLimit: 8, font: { size: 11 } },
+                              title: { display: false },
+                            },
+                            y: {
+                              display: true,
+                              grid: { color: gridColor },
+                              ticks: { color: axisColor, font: { size: 11 }, ...(stepSize != null ? { stepSize } : {}) },
+                              ...(yMin != null ? { min: yMin } : {}),
+                              ...(yMax != null ? { max: yMax } : {}),
+                              title: { display: false },
+                            },
                           };
-                          let legendTextColor = "rgba(255,255,255,0.9)";
+                          let legendTextColor = "#334155";
                           if (typeof document !== "undefined") {
                             const v = getComputedStyle(document.documentElement).getPropertyValue("--platform-fg")?.trim() || "";
                             if (v && (v.startsWith("#") || v.startsWith("rgb"))) legendTextColor = v;
                           }
+                          const legendOpts = {
+                            display: true,
+                            position: "top" as const,
+                            align: "center" as const,
+                            labels: {
+                              color: legendTextColor,
+                              font: { size: 12 },
+                              padding: 16,
+                              usePointStyle: true,
+                              pointStyle: "circle",
+                            },
+                          };
                           const dataLabelsPluginOpts = showDataLabels
                             ? {
                                 display: true,
-                                color: legendTextColor,
+                                color: legendTextColor || "#334155",
                                 font: { size: 11, weight: "bold" as const },
                                 formatter: (value: unknown, ctx: { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
                                   const n = Number(value);
@@ -4043,7 +4110,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             responsive: true,
                             maintainAspectRatio: false,
                             layout: { padding: showDataLabels ? 8 : 0 },
-                            plugins: { legend: { display: true }, datalabels: dataLabelsPluginOpts },
+                            plugins: { legend: legendOpts, datalabels: dataLabelsPluginOpts },
                           };
                           const areaData = { ...previewChartConfig, datasets: previewChartConfig.datasets.map((ds: any) => ({ ...ds, fill: true })) };
                           const scatterData = previewChartConfig.datasets.length >= 1 ? {
@@ -4081,7 +4148,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             },
                           } : { display: true, position: "right", labels: { color: legendTextColor, font: { size: 12, color: legendTextColor } } };
                           return (
-                            <div className="h-[240px] w-full" style={{ color: "var(--platform-fg)" }}>
+                            <div className="h-[320px] w-full" style={{ color: "var(--platform-fg)" }}>
                               {formChartType === "bar" && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
                               {formChartType === "horizontalBar" && <Bar data={previewChartConfig} options={{ ...baseOpts, indexAxis: "y" as const, scales: { x: axisScales.x, y: { ...axisScales.y, ticks: { ...axisScales.y.ticks, maxTicksLimit: 12 } } } }} />}
                               {formChartType === "line" && <Line data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
@@ -4095,14 +4162,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           );
                         })()}
                         {formChartType === "map" && (
-                          <div className="flex flex-col items-center justify-center min-h-[200px] rounded-lg border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                          <div className="flex flex-col items-center justify-center min-h-[280px] rounded-lg border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                             <MapPin className="h-10 w-10 mb-3" style={{ color: "var(--platform-accent)" }} />
                             <p className="text-sm font-medium mb-1" style={{ color: "var(--platform-fg)" }}>Visualización de mapa</p>
                             <p className="text-xs text-center max-w-sm" style={{ color: "var(--platform-fg-muted)" }}>El mapa se renderizará en el dashboard con los datos geográficos de las dimensiones seleccionadas (país, provincia, ciudad, coordenadas).</p>
                           </div>
                         )}
+                        {previewData && previewData.length > 0 && (
+                          <p className="text-xs mt-3 pt-3 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                            Vista previa con <strong>{previewData.length}</strong> fila{previewData.length !== 1 ? "s" : ""} de datos · Tipo: {CHART_TYPES.find((t) => t.value === formChartType)?.label ?? formChartType}
+                          </p>
+                        )}
                       </>
                     )}
+                    </div>
                   </div>
                   <div className="flex justify-between items-center">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
