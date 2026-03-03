@@ -1100,14 +1100,41 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       for (const d of fromApi) mergedByName.set(d.name.toLowerCase(), { name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" });
       const derivedToSend = Array.from(mergedByName.values());
       const derivedByNameForPayload = Object.fromEntries(derivedToSend.map((d) => [d.name.toLowerCase(), d]));
+      const savedByName = (name: string) => savedMetrics.find((s) => (s.name || "").trim().toLowerCase() === String(name || "").trim().toLowerCase());
+      const getSavedFirstMetric = (s: SavedMetricForm) => (s.aggregationConfig?.metrics?.[0] ?? (s as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric) as { field?: string; func?: string; alias?: string; expression?: string } | undefined;
       const metricsPayload = formMetrics.map((m) => {
-        const rawExpr = ((m as { expression?: string }).expression ?? "").trim();
-        const derived = m.field ? derivedByNameForPayload[String(m.field).trim().toLowerCase()] ?? derivedColumnsByName[m.field] : undefined;
-        const effectiveExpr = rawExpr || derived?.expression || "";
+        let rawExpr = ((m as { expression?: string }).expression ?? "").trim();
+        let fieldStr = m.field != null ? String(m.field).trim() : "";
+        let func = m.func;
+        const derived = fieldStr ? derivedByNameForPayload[fieldStr.toLowerCase()] ?? derivedColumnsByName[fieldStr] : undefined;
+        let effectiveExpr = rawExpr || derived?.expression || "";
+        const savedByField = fieldStr ? savedByName(fieldStr) : undefined;
+        const savedByExpr = rawExpr && !derived ? savedByName(rawExpr) : undefined;
+        if (savedByField && !effectiveExpr) {
+          const first = getSavedFirstMetric(savedByField);
+          if (first) {
+            const ex = (first as { expression?: string }).expression?.trim();
+            const f = String((first as { field?: string }).field ?? "").trim();
+            if (ex) effectiveExpr = ex;
+            if (f && f.toLowerCase() !== (savedByField.name || "").trim().toLowerCase()) fieldStr = f;
+            if (first.func) func = first.func;
+          }
+        }
+        if (savedByExpr && rawExpr === rawExpr.trim() && !derived && savedByName(rawExpr)) {
+          const first = getSavedFirstMetric(savedByExpr);
+          if (first) {
+            const ex = (first as { expression?: string }).expression?.trim();
+            const f = String((first as { field?: string }).field ?? "").trim();
+            if (ex) effectiveExpr = ex;
+            else if (f) effectiveExpr = f;
+            if (f && !fieldStr) fieldStr = f;
+            if (first.func) func = first.func;
+          }
+        }
         return {
-          field: m.field || "",
-          func: m.func,
-          alias: m.alias || m.field || "valor",
+          field: fieldStr || "",
+          func,
+          alias: m.alias || m.field || fieldStr || "valor",
           ...(m.condition ? { condition: m.condition } : {}),
           ...(m.formula ? { formula: m.formula } : {}),
           ...(effectiveExpr ? { expression: effectiveExpr } : {}),
@@ -1170,7 +1197,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     } finally {
       setPreviewLoading(false);
     }
-  }, [etlId, tableNameForPreview, formDimensions, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, wizard, timeColumn, analysisGranularity, analysisTimeRange, analysisDateFrom, analysisDateTo, transformCompare, transformCompareFixedValue]);
+  }, [etlId, tableNameForPreview, formDimensions, formMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, wizard, timeColumn, analysisGranularity, analysisTimeRange, analysisDateFrom, analysisDateTo, transformCompare, transformCompareFixedValue, savedMetrics]);
 
   const fetchPreviewRef = useRef(fetchPreview);
   fetchPreviewRef.current = fetchPreview;

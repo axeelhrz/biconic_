@@ -360,8 +360,19 @@ export function AdminDashboardStudio({
             .map(({ id, ...m }) => {
               if (m.func === "FORMULA")
                 return { formula: m.formula || "", alias: m.alias || "formula", field: "" };
-              const expr = (m as { expression?: string }).expression;
-              const fieldStr = m.field != null ? String(m.field).trim() : "";
+              let expr = (m as { expression?: string }).expression;
+              let fieldStr = m.field != null ? String(m.field).trim() : "";
+              const savedByName = savedMetrics.find((s) => (s.name || "").trim().toLowerCase() === fieldStr.toLowerCase());
+              if (savedByName && !expr) {
+                const first = (savedByName as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
+                  ?? (savedByName as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric;
+                if (first) {
+                  const ex = (first as { expression?: string }).expression;
+                  if (ex && String(ex).trim()) expr = String(ex).trim();
+                  const f = String((first as { field?: string }).field ?? "").trim();
+                  if (f && f.toLowerCase() !== (savedByName.name || "").trim().toLowerCase()) fieldStr = f;
+                }
+              }
               const derived = fieldStr ? derivedByName[fieldStr.toLowerCase()] : undefined;
               const effectiveExpr = (expr && String(expr).trim()) || derived?.expression || "";
               const hasField = fieldStr !== "";
@@ -486,7 +497,7 @@ export function AdminDashboardStudio({
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout]
+    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout, savedMetrics]
   );
 
   useEffect(() => {

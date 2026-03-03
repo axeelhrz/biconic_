@@ -454,6 +454,11 @@ export async function POST(req: NextRequest) {
               } else {
                 field = alias;
               }
+              if (!field || field.toLowerCase() === name) {
+                const agg = s?.aggregationConfig as { dimension?: string; dimension2?: string; dimensions?: string[] } | undefined;
+                const dim = (agg?.dimension && String(agg.dimension).trim()) || (agg?.dimension2 && String(agg.dimension2).trim()) || (Array.isArray(agg?.dimensions) && agg.dimensions[0] && String(agg.dimensions[0]).trim()) || "";
+                if (dim && dim.toLowerCase() !== name) field = dim;
+              }
             }
             savedMetricByName[name] = {
               field,
