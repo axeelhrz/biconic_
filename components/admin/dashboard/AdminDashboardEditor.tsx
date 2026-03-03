@@ -539,9 +539,10 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
               tableName: fullTableName,
               etlId,
               dimension: aggConfig.dimension,
-              dimensions: (aggConfig as { dimensions?: string[] }).dimensions?.length
-                ? (aggConfig as { dimensions: string[] }).dimensions
-                : undefined,
+              ...(Array.isArray((aggConfig as { dimensions?: string[] }).dimensions) &&
+                (aggConfig as { dimensions?: string[] }).dimensions!.length > 0
+                  ? { dimensions: (aggConfig as { dimensions?: string[] }).dimensions }
+                  : {}),
               metrics: aggConfig.metrics.map(({ id, ...rest }) => {
                 const cast =
                   rest.numericCast && rest.numericCast !== "none"
