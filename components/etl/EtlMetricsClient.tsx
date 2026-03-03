@@ -3875,17 +3875,35 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           } : previewChartConfig;
                           const radarData = { labels: previewChartConfig.labels, datasets: previewChartConfig.datasets.map((ds: any) => ({ ...ds, fill: true, backgroundColor: ds.backgroundColor, borderColor: ds.borderColor })) };
                           const ds0 = previewChartConfig.datasets?.[0];
+                          let legendTextColor = "rgba(255,255,255,0.9)";
+                          if (typeof document !== "undefined") {
+                            const v = getComputedStyle(document.documentElement).getPropertyValue("--platform-fg")?.trim() || "";
+                            if (v && (v.startsWith("#") || v.startsWith("rgb"))) legendTextColor = v;
+                          }
                           const pieDoughnutLegendOpts: Record<string, unknown> = (ds0 && Array.isArray(ds0.backgroundColor) && previewChartConfig.labels?.length) ? {
                             display: true,
                             position: "right",
                             labels: {
+                              color: legendTextColor,
+                              font: { size: 12, color: legendTextColor },
+                              padding: 12,
+                              usePointStyle: false,
                               generateLabels: () =>
                                 (previewChartConfig.labels as string[]).map((label, i) => {
                                   const bg = (ds0.backgroundColor as string[])[i] ?? ds0.backgroundColor?.[0] ?? "#0ea5e9";
-                                  return { text: label, fillStyle: typeof bg === "string" ? bg : "#0ea5e9", strokeStyle: "#fff", lineWidth: 1, hidden: false, index: i };
+                                  return {
+                                    text: String(label || ""),
+                                    fillStyle: typeof bg === "string" ? bg : "#0ea5e9",
+                                    strokeStyle: "#fff",
+                                    lineWidth: 1,
+                                    hidden: false,
+                                    index: i,
+                                    datasetIndex: 0,
+                                    fontColor: legendTextColor,
+                                  };
                                 }),
                             },
-                          } : { display: true, position: "right" };
+                          } : { display: true, position: "right", labels: { color: legendTextColor, font: { size: 12, color: legendTextColor } } };
                           return (
                             <div className="h-[240px] w-full" style={{ color: "var(--platform-fg)" }}>
                               {formChartType === "bar" && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
