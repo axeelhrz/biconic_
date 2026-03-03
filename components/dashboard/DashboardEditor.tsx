@@ -496,8 +496,10 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
             (aggConfig as any).dimensions?.length > 0
               ? (aggConfig as any).dimensions
               : [aggConfig.dimension, (aggConfig as any).dimension2].filter(Boolean);
+          const etlIdForAgg = widget.source?.etlId ?? etlData?.etl?.id;
           const bodyPayload: Record<string, unknown> = {
             tableName: fullTableName,
+            ...(etlIdForAgg ? { etlId: etlIdForAgg } : {}),
             dimension: aggConfig.dimension,
             metrics: aggConfig.metrics.map(({ id, ...rest }) => {
               const cast =
