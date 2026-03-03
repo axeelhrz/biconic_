@@ -37,20 +37,31 @@ export type AggregationFilterEdit = {
 export type AggregationConfigEdit = {
   enabled: boolean;
   dimension?: string;
-  /** Segunda dimensión para análisis multidimensional (ej. mes + categoría). */
   dimension2?: string;
+  dimensions?: string[];
   metrics: AggregationMetricEdit[];
   filters?: AggregationFilterEdit[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
-  /** Acumulado: running_sum = total acumulado, ytd = año hasta la fecha. */
   cumulative?: "none" | "running_sum" | "ytd";
-  /** Comparación temporal: añade _prev y _var_pct vs período anterior. */
   comparePeriod?: "previous_year" | "previous_month";
-  /** Columna de fecha para YTD o comparePeriod. */
   dateDimension?: string;
   chartType?: string;
   chartSeriesColors?: Record<string, string>;
+  chartXAxis?: string;
+  chartYAxes?: string[];
+  chartSeriesField?: string;
+  chartNumberFormat?: string;
+  chartCurrencySymbol?: string;
+  chartThousandSep?: boolean;
+  chartDecimals?: number;
+  chartSortDirection?: string;
+  chartSortBy?: string;
+  chartRankingEnabled?: boolean;
+  chartRankingTop?: number;
+  chartRankingMetric?: string;
+  chartColorScheme?: string;
+  showDataLabels?: boolean;
 };
 
 export type MetricConfigWidget = {

@@ -119,7 +119,6 @@ type AggregationMetric = {
 type AggregationConfig = {
   enabled: boolean;
   dimension?: string;
-  /** Múltiples dimensiones (GROUP BY) */
   dimensions?: string[];
   dimension2?: string;
   metrics: AggregationMetric[];
@@ -131,6 +130,16 @@ type AggregationConfig = {
   dateDimension?: string;
   chartType?: string;
   chartSeriesColors?: Record<string, string>;
+  chartXAxis?: string;
+  chartYAxes?: string[];
+  chartSeriesField?: string;
+  chartNumberFormat?: string;
+  chartSortDirection?: string;
+  chartSortBy?: string;
+  chartRankingEnabled?: boolean;
+  chartRankingTop?: number;
+  chartRankingMetric?: string;
+  showDataLabels?: boolean;
 };
 
 type ChartConfig = {
@@ -857,6 +866,23 @@ export function DashboardViewer({
           } else {
             setCompanyLogoUrl(null);
           }
+
+          const etlId = etlData?.etl?.id;
+          if (etlId && !cancelled) {
+            try {
+              const metricsRes = await fetch(`/api/etl/${etlId}/metrics`);
+              const metricsJson = await metricsRes.json();
+              if (metricsJson?.ok && Array.isArray(metricsJson?.data?.datasetConfig?.derivedColumns) && metricsJson.data.datasetConfig.derivedColumns.length > 0) {
+                setDerivedColumnsFromLayout((prev) => {
+                  const byName = new Set(prev.map((d) => d.name.toLowerCase()));
+                  const newOnes = (metricsJson.data.datasetConfig.derivedColumns as { name: string; expression: string; defaultAggregation: string }[]).filter((d) => !byName.has(d.name.toLowerCase()));
+                  return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
+                });
+              }
+            } catch {
+              // ignore
+            }
+          }
         }
       } catch (e: any) {
         console.error("[DashboardViewer] No se pudo cargar el dashboard:", e);
@@ -1568,137 +1594,159 @@ export function DashboardViewer({
           type: inferType(sample[k]),
         }));
 
-        let effectiveLabelField: string | undefined;
-        let effectiveValueFields: string[] | undefined;
-        const aggConfig2 = widget.aggregationConfig;
-        if (aggConfig2 && aggConfig2.enabled) {
-          effectiveLabelField = aggConfig2.dimension;
-          effectiveValueFields = aggConfig2.metrics
-            .map((m) => m.alias || `${m.func}(${m.field})`)
-            .filter(Boolean) as string[];
-        } else {
-          effectiveLabelField = widget.source?.labelField;
-          effectiveValueFields = widget.source?.valueFields;
-          const keys = Object.keys(sample);
-          const numericKeys = keys.filter(
-            (k) => typeof (sample as any)[k] === "number"
-          );
-          const stringKeys = keys.filter(
-            (k) => typeof (sample as any)[k] === "string"
-          );
-          if (!effectiveLabelField)
-            effectiveLabelField = stringKeys[0] || keys[0];
-          if (!effectiveValueFields || effectiveValueFields.length === 0) {
-            effectiveValueFields =
-              numericKeys.length > 0
-                ? numericKeys
-                : keys.filter((k) => k !== effectiveLabelField).slice(0, 1);
-          }
-        }
-        if (!effectiveValueFields || effectiveValueFields.length === 0) return;
+        const agg = widget.aggregationConfig;
+        const resolvedType = (agg as any)?.chartType || widget.type;
 
-        const labels = effectiveLabelField
-          ? dataArray.map((row: any) =>
-              String(row?.[effectiveLabelField!] ?? "")
-            )
-          : ["Total"];
-        const palette = [
-          "#10b981",
-          "#06b6d4",
-          "#3b82f6",
-          "#f59e0b",
-          "#ef4444",
-          "#8b5cf6",
-          "#14b8a6",
-          "#0ea5e9",
-          "#22c55e",
+        const defaultPalette = [
+          "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899",
+          "#14b8a6", "#f97316", "#06b6d4", "#3b82f6", "#22c55e", "#a855f7",
         ];
         const accentColor = (dashboardTheme as DashboardTheme).accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor;
-        const effectivePalette = widget.color
-          ? [widget.color, ...palette]
+        const basePalette = widget.color
+          ? [widget.color, ...defaultPalette]
           : accentColor
-          ? [accentColor, ...palette]
-          : palette;
-
-        const resolvedType = (widget.aggregationConfig as any)?.chartType || widget.type;
-        const seriesColors: Record<string, string> | undefined = (widget.aggregationConfig as any)?.chartSeriesColors;
-        const getSeriesColor = (alias: string, idx: number): string => {
-          if (seriesColors?.[alias]) return seriesColors[alias];
-          if (seriesColors?.[alias?.trim?.() ?? ""]) return seriesColors[alias.trim()];
-          return effectivePalette[idx % effectivePalette.length];
+          ? [accentColor, ...defaultPalette]
+          : defaultPalette;
+        const cfgSeriesColors: Record<string, string> | undefined = (agg as any)?.chartSeriesColors;
+        const cfgColorKeys = cfgSeriesColors ? Object.keys(cfgSeriesColors) : [];
+        const getColor = (label: string, idx: number) => {
+          const c = cfgSeriesColors?.[label] ?? cfgSeriesColors?.[label?.trim?.() ?? ""] ?? cfgSeriesColors?.[cfgColorKeys[idx]!];
+          return c ?? basePalette[idx % basePalette.length]!;
         };
-        const getSliceColor = (label: string, idx: number): string => {
-          if (seriesColors?.[label]) return seriesColors[label];
-          if (seriesColors?.[label?.trim?.() ?? ""]) return seriesColors[label.trim()];
-          return effectivePalette[idx % effectivePalette.length];
+        const getColorStable = (label: string) => {
+          const c = cfgSeriesColors?.[label] ?? cfgSeriesColors?.[label?.trim?.() ?? ""];
+          if (c) return c;
+          let hash = 0;
+          const s = String(label ?? "");
+          for (let i = 0; i < s.length; i++) hash = ((hash << 5) - hash) + s.charCodeAt(i);
+          return basePalette[Math.abs(hash) % basePalette.length]!;
         };
 
+        const resultKeys = Object.keys(sample);
+        const metricAliases = agg?.enabled && agg.metrics.length > 0
+          ? agg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
+          : [];
+
+        const xKey = ((agg as any)?.chartXAxis && resultKeys.includes((agg as any).chartXAxis))
+          ? (agg as any).chartXAxis as string
+          : (agg?.dimension || widget.source?.labelField || resultKeys.find((k) => !metricAliases.includes(k) && typeof (sample as any)[k] === "string") || resultKeys[0]);
+
+        let yKeys: string[] = [];
+        if ((agg as any)?.chartYAxes && (agg as any).chartYAxes.length > 0) {
+          yKeys = ((agg as any).chartYAxes as string[]).filter((k: string) => resultKeys.includes(k));
+        }
+        if (yKeys.length === 0 && metricAliases.length > 0) {
+          yKeys = metricAliases.filter((k) => resultKeys.includes(k));
+        }
+        if (yKeys.length === 0) {
+          const numKeys = resultKeys.filter((k) => typeof (sample as any)[k] === "number");
+          yKeys = numKeys.length > 0
+            ? numKeys
+            : resultKeys.filter((k) => k !== xKey).slice(0, 1);
+        }
+        if (yKeys.length === 0) return;
+
+        let rows = [...dataArray];
+        if ((agg as any)?.chartSortDirection && (agg as any).chartSortDirection !== "none") {
+          const sortField = (agg as any).chartSortBy === "dimension" ? xKey : (yKeys[0] || xKey);
+          const dir = (agg as any).chartSortDirection === "asc" ? 1 : -1;
+          rows.sort((a: any, b: any) => {
+            const va = Number(a[sortField!] ?? 0);
+            const vb = Number(b[sortField!] ?? 0);
+            return isNaN(va) || isNaN(vb)
+              ? String(a[sortField!] ?? "").localeCompare(String(b[sortField!] ?? "")) * dir
+              : (va - vb) * dir;
+          });
+        }
+        if ((agg as any)?.chartRankingEnabled && (agg as any)?.chartRankingTop > 0) {
+          rows = rows.slice(0, (agg as any).chartRankingTop);
+        }
+
+        const isPieOrDoughnut = resolvedType === "pie" || resolvedType === "doughnut";
+        const seriesField = (agg as any)?.chartSeriesField;
         let config: ChartConfig | undefined;
-        const CHART_TYPES = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
-        if (CHART_TYPES.includes(resolvedType)) {
-          let datasets: ChartConfig["datasets"];
-          const isPieOrDoughnut = resolvedType === "pie" || resolvedType === "doughnut";
-          if (resolvedType === "combo") {
-            datasets = [
-              {
-                label: effectiveValueFields[0] || "Barras",
-                data: dataArray.map((row) =>
-                  Number(row?.[effectiveValueFields![0]] ?? 0)
-                ),
-                backgroundColor: getSeriesColor(effectiveValueFields[0] || "Barras", 0) + "80",
-                borderColor: getSeriesColor(effectiveValueFields[0] || "Barras", 0),
+
+        if (resolvedType === "kpi") {
+          const valueField = yKeys[0];
+          const sum = rows.reduce((acc, row) => acc + Number(row?.[valueField] ?? 0), 0);
+          config = { labels: ["Total"], datasets: [{ label: valueField, data: [sum] }] };
+        } else if (seriesField && resultKeys.includes(seriesField) && !isPieOrDoughnut) {
+          const uniqueX = [...new Set(rows.map((r: any) => String(r[xKey!] ?? "")))];
+          const seriesValues = [...new Set(rows.map((r: any) => String(r[seriesField] ?? "")))];
+          config = {
+            labels: uniqueX,
+            datasets: seriesValues.map((sv, idx) => {
+              const color = getColor(sv, idx);
+              return {
+                label: sv,
+                data: uniqueX.map((xv) => {
+                  const match = rows.find((r: any) => String(r[xKey!] ?? "") === xv && String(r[seriesField] ?? "") === sv);
+                  return match ? Number((match as any)[yKeys[0]!] ?? 0) : 0;
+                }),
+                backgroundColor: color + "99",
+                borderColor: color,
                 borderWidth: 2,
-                type: "bar",
-              },
-              {
-                label: effectiveValueFields[1] || "Línea",
-                data: dataArray.map((row) =>
-                  Number(
-                    row?.[
-                      effectiveValueFields![1] || effectiveValueFields![0]
-                    ] ?? 0
-                  )
-                ),
-                backgroundColor: getSeriesColor(effectiveValueFields[1] || "Línea", 1) + "20",
-                borderColor: getSeriesColor(effectiveValueFields[1] || "Línea", 1),
-                borderWidth: 2,
-                type: "line",
-                fill: false,
-              },
-            ];
-          } else if (isPieOrDoughnut) {
-            const firstField = effectiveValueFields[0];
-            datasets = [{
-              label: firstField,
-              data: dataArray.map((row: any) => Number(row?.[firstField] ?? 0)),
-              backgroundColor: labels.map((l, j) => getSliceColor(l, j)),
+              };
+            }),
+          };
+        } else if (isPieOrDoughnut) {
+          const labels = rows.map((r: any) => String(r[xKey!] ?? ""));
+          const firstYKey = yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
+          const sliceColors = labels.map((l) => getColorStable(l));
+          config = {
+            labels,
+            datasets: [{
+              label: firstYKey!,
+              data: rows.map((r: any) => Number(r[firstYKey!] ?? 0)),
+              backgroundColor: sliceColors,
               borderColor: "#fff",
               borderWidth: 2,
-            }];
-          } else {
-            datasets = effectiveValueFields.map((field, i) => ({
-              label: field,
-              data: dataArray.map((row: any) => Number(row?.[field] ?? 0)),
-              backgroundColor:
-                getSeriesColor(field, i) +
-                (resolvedType === "line" || resolvedType === "area" ? "" : "80"),
-              borderColor: getSeriesColor(field, i),
-              borderWidth: 2,
-              ...(resolvedType === "area" ? { fill: true } : {}),
-            }));
-          }
-          config = { labels, datasets };
-        } else if (resolvedType === "kpi") {
-          const valueField = effectiveValueFields[0];
-          const sum = dataArray.reduce(
-            (acc, row) => acc + Number(row?.[valueField] ?? 0),
-            0
-          );
+            }],
+          };
+        } else if (resolvedType === "combo" && yKeys.length >= 2) {
+          const labels = rows.map((r: any) => String(r[xKey!] ?? ""));
           config = {
-            labels: ["Total"],
-            datasets: [{ label: valueField, data: [sum] }],
+            labels,
+            datasets: [
+              {
+                label: yKeys[0]!,
+                data: rows.map((r: any) => Number(r[yKeys[0]!] ?? 0)),
+                backgroundColor: getColor(yKeys[0]!, 0) + "80",
+                borderColor: getColor(yKeys[0]!, 0),
+                borderWidth: 2,
+                type: "bar" as const,
+              },
+              {
+                label: yKeys[1]!,
+                data: rows.map((r: any) => Number(r[yKeys[1]!] ?? 0)),
+                backgroundColor: getColor(yKeys[1]!, 1) + "20",
+                borderColor: getColor(yKeys[1]!, 1),
+                borderWidth: 2,
+                type: "line" as const,
+                fill: false,
+              },
+            ],
+          };
+        } else {
+          const labels = rows.map((r: any) => String(r[xKey!] ?? ""));
+          config = {
+            labels,
+            datasets: yKeys.map((alias, idx) => {
+              const color = getColor(alias, idx);
+              return {
+                label: alias,
+                data: rows.map((r: any) => Number(r[alias] ?? 0)),
+                backgroundColor: resolvedType === "area" ? color + "40" : color + "99",
+                borderColor: color,
+                borderWidth: resolvedType === "line" || resolvedType === "area" ? 2 : 1,
+                ...(resolvedType === "area" ? { fill: true } : {}),
+              };
+            }),
           };
         }
+
+        const effectiveLabelField = xKey;
+        const effectiveValueFields = yKeys;
 
         setWidgets((prev) =>
           prev.map((w) =>
@@ -2795,7 +2843,9 @@ export function DashboardViewer({
                           const ct = (w.aggregationConfig as any)?.chartType || w.type;
                           const RENDERABLE = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
                           if (!w.config || !RENDERABLE.includes(ct)) return null;
+                          const showLabels = !!(w.aggregationConfig as any)?.showDataLabels;
                           const dlColor = isLightBg ? "#374151" : "#fff";
+                          const dlDisplay = showLabels ? "auto" : false;
                           const scalesXY = {
                             x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
                             y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
@@ -2811,7 +2861,7 @@ export function DashboardViewer({
                                     layout: { padding: pad },
                                     plugins: {
                                       ...(buildChartOptions("bar", w.chartStyle, w.labelDisplayMode).plugins as object),
-                                      datalabels: { color: dlColor },
+                                      datalabels: { color: dlColor, display: dlDisplay },
                                     },
                                     scales: scalesXY,
                                   }}
@@ -2825,7 +2875,7 @@ export function DashboardViewer({
                                     layout: { padding: pad },
                                     plugins: {
                                       ...(buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode).plugins as object),
-                                      datalabels: { color: dlColor },
+                                      datalabels: { color: dlColor, display: dlDisplay },
                                     },
                                     scales: scalesXY,
                                   }}
@@ -2836,7 +2886,7 @@ export function DashboardViewer({
                                   options={{
                                     ...buildChartOptions("line", w.chartStyle, w.labelDisplayMode),
                                     layout: { padding: pad },
-                                    plugins: { datalabels: { color: dlColor } },
+                                    plugins: { datalabels: { color: dlColor, display: dlDisplay } },
                                     scales: scalesXY,
                                   }}
                                 />
@@ -2846,7 +2896,7 @@ export function DashboardViewer({
                                   options={{
                                     ...buildChartOptions("line", w.chartStyle, w.labelDisplayMode),
                                     layout: { padding: pad },
-                                    plugins: { datalabels: { color: dlColor } },
+                                    plugins: { datalabels: { color: dlColor, display: dlDisplay } },
                                     scales: scalesXY,
                                   }}
                                 />
@@ -2856,7 +2906,7 @@ export function DashboardViewer({
                                   options={{
                                     ...buildChartOptions("pie", w.chartStyle, w.labelDisplayMode),
                                     layout: { padding: pad },
-                                    plugins: { datalabels: { color: dlColor } },
+                                    plugins: { datalabels: { color: dlColor, display: dlDisplay } },
                                   }}
                                 />
                               ) : ct === "doughnut" ? (
@@ -2865,7 +2915,7 @@ export function DashboardViewer({
                                   options={{
                                     ...buildChartOptions("doughnut", w.chartStyle, w.labelDisplayMode),
                                     layout: { padding: pad },
-                                    plugins: { datalabels: { color: dlColor } },
+                                    plugins: { datalabels: { color: dlColor, display: dlDisplay } },
                                   }}
                                 />
                               ) : ct === "scatter" ? (
@@ -2874,7 +2924,7 @@ export function DashboardViewer({
                                   options={{
                                     ...buildChartOptions("bar", w.chartStyle, w.labelDisplayMode),
                                     layout: { padding: pad },
-                                    plugins: { datalabels: { color: dlColor } },
+                                    plugins: { datalabels: { color: dlColor, display: dlDisplay } },
                                     scales: scalesXY,
                                   }}
                                 />
@@ -3185,7 +3235,8 @@ export function DashboardViewer({
                     {placements.map(({ widget: w, row, col, span }) => {
                       const isFilterList =
                         w.type === "filter" && filterDisplayModes[w.id] === "list";
-                      const currentSpan = (w.gridSpan ?? (w.type === "kpi" ? 1 : w.type === "table" ? 2 : 2)) as 1 | 2 | 4;
+                      const _et = (w.aggregationConfig as any)?.chartType || w.type;
+                      const currentSpan = (w.gridSpan ?? (_et === "kpi" ? 1 : _et === "table" ? 2 : 2)) as 1 | 2 | 4;
                       const isDragging = draggedWidgetId === w.id;
                       const isDropTarget = dropTargetWidgetId === w.id;
 
@@ -3290,8 +3341,8 @@ export function DashboardViewer({
                     </div>
                     <div
                       className={`admin-view-card-body flex-1 flex flex-col min-h-0 p-5 relative bg-white ${
-                        w.type === "filter" ? "min-h-[100px]" : w.type === "kpi" ? "min-h-[160px]" : w.type === "table" ? "min-h-[420px]" : "min-h-[320px]"
-                      } ${w.type === "kpi" ? "overflow-visible" : ""}`}
+                        _et === "filter" ? "min-h-[100px]" : _et === "kpi" ? "min-h-[160px]" : _et === "table" ? "min-h-[420px]" : "min-h-[320px]"
+                      } ${_et === "kpi" ? "overflow-visible" : ""}`}
                     >
                       {w.isLoading && (
                         <div className="absolute inset-0 bg-white/90 z-10 flex items-center justify-center rounded-b-2xl">
@@ -3299,9 +3350,10 @@ export function DashboardViewer({
                         </div>
                       )}
                       {(() => {
+                        const ct = (w.aggregationConfig as any)?.chartType || w.type;
                         if (
                           !w.config &&
-                          w.type !== "table" &&
+                          ct !== "table" &&
                           w.type !== "filter" &&
                           w.type !== "image" &&
                           w.type !== "text"
@@ -3455,7 +3507,7 @@ export function DashboardViewer({
                         }
                         const chartOpts = (t: "bar" | "line" | "pie" | "doughnut" | "horizontalBar") =>
                           buildChartOptions(t, w.chartStyle, w.labelDisplayMode);
-                        if (["bar", "combo"].includes(w.type)) {
+                        if (["bar", "combo"].includes(ct)) {
                           return (
                             <div className="w-full flex-1 min-h-[280px] relative">
                               <Bar
@@ -3494,7 +3546,7 @@ export function DashboardViewer({
                             </div>
                           );
                         }
-                        if (w.type === "horizontalBar") {
+                        if (ct === "horizontalBar") {
                           return (
                             <div className="w-full flex-1 min-h-[280px] relative">
                               <Bar
@@ -3534,7 +3586,7 @@ export function DashboardViewer({
                             </div>
                           );
                         }
-                        if (w.type === "line") {
+                        if (ct === "line" || ct === "area") {
                           return (
                             <div className="w-full flex-1 min-h-[280px] relative">
                               <Line
@@ -3560,7 +3612,7 @@ export function DashboardViewer({
                             </div>
                           );
                         }
-                        if (w.type === "pie") {
+                        if (ct === "pie") {
                           return (
                             <div className="w-full flex-1 min-h-[280px] relative">
                               <Pie
@@ -3580,7 +3632,7 @@ export function DashboardViewer({
                             </div>
                           );
                         }
-                        if (w.type === "doughnut") {
+                        if (ct === "doughnut") {
                           return (
                             <div className="w-full flex-1 min-h-[280px] relative">
                               <Doughnut
@@ -3600,7 +3652,7 @@ export function DashboardViewer({
                             </div>
                           );
                         }
-                        if (w.type === "kpi") {
+                        if (ct === "kpi") {
                           const value = w.config?.datasets?.[0]?.data?.[0] ?? 0;
                           const { display, full } = formatKpiDisplay(Number(value));
                           const useCompact = full.length > 10;
@@ -3624,7 +3676,7 @@ export function DashboardViewer({
                             </div>
                           );
                         }
-                        if (w.type === "table") {
+                        if (ct === "table") {
                           const cols = w.columns || [];
                           const rows = w.rows || [];
                           return (
@@ -3658,6 +3710,26 @@ export function DashboardViewer({
                               {rows.length > 100 && (
                                 <div className="text-xs text-slate-500 mt-2">Mostrando 100 filas.</div>
                               )}
+                            </div>
+                          );
+                        }
+                        if (ct === "scatter") {
+                          return (
+                            <div className="w-full flex-1 min-h-[280px] relative">
+                              <Scatter
+                                data={w.config as any}
+                                options={{
+                                  ...chartOpts("bar"),
+                                  plugins: {
+                                    ...(chartOpts("bar").plugins as object),
+                                    datalabels: { display: false },
+                                  },
+                                  scales: {
+                                    x: { display: true, grid: { color: "#e2e8f0" }, ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } } },
+                                    y: { display: true, grid: { color: "#e2e8f0" }, ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } } },
+                                  },
+                                }}
+                              />
                             </div>
                           );
                         }
@@ -4037,9 +4109,10 @@ export function DashboardViewer({
                           </div>
                         );
                       }
+                      const ct2 = (w.aggregationConfig as any)?.chartType || w.type;
                       const chartOpts = (t: "bar" | "line" | "pie" | "doughnut" | "horizontalBar") =>
                         buildChartOptions(t, w.chartStyle, w.labelDisplayMode);
-                      if (["bar", "combo"].includes(w.type)) {
+                      if (["bar", "combo"].includes(ct2)) {
                         return (
                           <div className="w-full flex-1 min-h-[120px] relative">
                             <Bar
@@ -4077,7 +4150,7 @@ export function DashboardViewer({
                           </div>
                         );
                       }
-                      if (w.type === "horizontalBar") {
+                      if (ct2 === "horizontalBar") {
                         return (
                           <div className="w-full flex-1 min-h-[120px] relative">
                             <Bar
@@ -4116,11 +4189,11 @@ export function DashboardViewer({
                           </div>
                         );
                       }
-                      if (w.type === "line") {
+                      if (ct2 === "line" || ct2 === "area") {
                         return (
                           <div className="w-full flex-1 min-h-[120px] relative">
                             <Line
-                              data={w.config as any}
+                              data={ct2 === "area" ? { ...(w.config as any), datasets: ((w.config as any)?.datasets || []).map((ds: any) => ({ ...ds, fill: true })) } : w.config as any}
                               options={{
                                 ...chartOpts("line"),
                                 elements: {
@@ -4145,7 +4218,7 @@ export function DashboardViewer({
                           </div>
                         );
                       }
-                      if (w.type === "pie") {
+                      if (ct2 === "pie") {
                         return (
                           <div className="w-full flex-1 min-h-[120px] relative">
                             <Pie
@@ -4164,7 +4237,7 @@ export function DashboardViewer({
                           </div>
                         );
                       }
-                      if (w.type === "doughnut") {
+                      if (ct2 === "doughnut") {
                         return (
                           <div className="w-full flex-1 min-h-[120px] relative">
                             <Doughnut
@@ -4177,6 +4250,26 @@ export function DashboardViewer({
                                     ...(chartOpts("doughnut").plugins as any).datalabels,
                                     color: "#ffffff",
                                   },
+                                },
+                              }}
+                            />
+                          </div>
+                        );
+                      }
+                      if (ct2 === "scatter") {
+                        return (
+                          <div className="w-full flex-1 min-h-[120px] relative">
+                            <Scatter
+                              data={w.config as any}
+                              options={{
+                                ...chartOpts("bar"),
+                                plugins: {
+                                  ...(chartOpts("bar").plugins as object),
+                                  datalabels: { display: false },
+                                },
+                                scales: {
+                                  x: { display: true, grid: { color: "#eee" }, ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } } },
+                                  y: { display: true, grid: { color: "#eee" }, ticks: { font: { size: w.chartStyle?.fontSize ?? 11 } } },
                                 },
                               }}
                             />
@@ -4211,7 +4304,7 @@ export function DashboardViewer({
                           </div>
                         );
                       }
-                      if (w.type === "kpi") {
+                      if (ct2 === "kpi") {
                         const value = w.config?.datasets?.[0]?.data?.[0] ?? 0;
                         const { display, full } = formatKpiDisplay(Number(value));
                         const useCompact = full.length > 10;
@@ -4231,7 +4324,7 @@ export function DashboardViewer({
                           </div>
                         );
                       }
-                      if (w.type === "table") {
+                      if (ct2 === "table") {
                         const cols = w.columns || [];
                         const rows = w.rows || [];
                         return (

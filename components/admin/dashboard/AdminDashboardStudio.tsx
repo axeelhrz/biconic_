@@ -52,6 +52,7 @@ type AggregationConfig = {
   enabled: boolean;
   dimension?: string;
   dimension2?: string;
+  dimensions?: string[];
   metrics: AggregationMetric[];
   filters?: AggregationFilter[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
@@ -59,10 +60,22 @@ type AggregationConfig = {
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
   dateDimension?: string;
-  /** Colores por alias de serie (ej. resultado, resultado_prev) para barras, líneas, torta. */
   chartSeriesColors?: Record<string, string>;
-  /** Tipo de gráfico (bar, line, pie, doughnut, kpi, table) para que coincida con la previsualización de la métrica. */
   chartType?: string;
+  chartXAxis?: string;
+  chartYAxes?: string[];
+  chartSeriesField?: string;
+  chartNumberFormat?: string;
+  chartCurrencySymbol?: string;
+  chartThousandSep?: boolean;
+  chartDecimals?: number;
+  chartSortDirection?: string;
+  chartSortBy?: string;
+  chartRankingEnabled?: boolean;
+  chartRankingTop?: number;
+  chartRankingMetric?: string;
+  chartColorScheme?: string;
+  showDataLabels?: boolean;
 };
 type StudioWidget = {
   id: string;
@@ -217,7 +230,7 @@ export function AdminDashboardStudio({
     return () => { cancelled = true; };
   }, [dashboardId]);
 
-  // Cargar métricas reutilizables de los ETLs del dashboard y fusionar con las del layout (solo tras cargar layout)
+  // Cargar métricas reutilizables y columnas derivadas de los ETLs del dashboard (solo tras cargar layout)
   useEffect(() => {
     if (!layoutLoaded || !etlData || etlLoading || etlMetricsMergedRef.current) return;
     const etlIds = new Set<string>();
@@ -228,12 +241,16 @@ export function AdminDashboardStudio({
     let cancelled = false;
     (async () => {
       const all: SavedMetric[] = [];
+      const allDerived: { name: string; expression: string; defaultAggregation: string }[] = [];
       for (const etlId of etlIds) {
         try {
           const res = await fetch(`/api/etl/${etlId}/metrics`);
           const json = await res.json();
           if (json.ok && Array.isArray(json.data?.savedMetrics)) {
             all.push(...(json.data.savedMetrics as SavedMetric[]));
+          }
+          if (json.ok && Array.isArray(json.data?.datasetConfig?.derivedColumns)) {
+            allDerived.push(...(json.data.datasetConfig.derivedColumns as { name: string; expression: string; defaultAggregation: string }[]));
           }
         } catch {
           // ignore per-ETL errors
@@ -245,6 +262,13 @@ export function AdminDashboardStudio({
         const fromEtl = all.filter((m) => !byName.has(m.name));
         return fromEtl.length > 0 ? [...prev, ...fromEtl] : prev;
       });
+      if (allDerived.length > 0) {
+        setDerivedColumnsFromLayout((prev) => {
+          const byName = new Set(prev.map((d) => d.name.toLowerCase()));
+          const newOnes = allDerived.filter((d) => !byName.has(d.name.toLowerCase()));
+          return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
+        });
+      }
     })();
     return () => {
       cancelled = true;
@@ -338,6 +362,148 @@ export function AdminDashboardStudio({
     [etlData?.etl?.id, etlData?.dataSources, etlData?.primarySourceId]
   );
 
+  const buildChartConfigFromAgg = useCallback(
+    (agg: AggregationConfig, dataArray: Record<string, unknown>[], widgetType?: string): ChartConfig => {
+      const defaultPalette = [
+        "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899",
+        "#14b8a6", "#f97316", "#06b6d4", "#3b82f6", "#22c55e", "#a855f7",
+        "#eab308", "#64748b", "#db2777", "#0d9488", "#7c3aed", "#dc2626",
+        "#2563eb", "#059669", "#d97706", "#4f46e5", "#e11d48", "#0891b2",
+      ];
+      const seriesColors = agg.chartSeriesColors;
+      const colorKeys = seriesColors ? Object.keys(seriesColors) : [];
+      const getColor = (label: string, idx: number) => {
+        const c = seriesColors?.[label] ?? seriesColors?.[label?.trim?.() ?? ""] ?? seriesColors?.[colorKeys[idx]!];
+        return c ?? defaultPalette[idx % defaultPalette.length]!;
+      };
+      const getColorByLabelStable = (label: string) => {
+        const c = seriesColors?.[label] ?? seriesColors?.[label?.trim?.() ?? ""];
+        if (c) return c;
+        let hash = 0;
+        const s = String(label ?? "");
+        for (let i = 0; i < s.length; i++) hash = ((hash << 5) - hash) + s.charCodeAt(i);
+        return defaultPalette[Math.abs(hash) % defaultPalette.length]!;
+      };
+
+      const effectiveChartType = agg.chartType || widgetType || "bar";
+      const isPieOrDoughnut = effectiveChartType === "pie" || effectiveChartType === "doughnut";
+      const resultKeys = Object.keys(dataArray[0] || {});
+      const metricAliases = agg.metrics.map((m) => m.alias || (m.func === "FORMULA" ? "formula" : `${m.func}_${m.field}`));
+
+      const xKey = (agg.chartXAxis && resultKeys.includes(agg.chartXAxis))
+        ? agg.chartXAxis
+        : agg.dimension || resultKeys.find((k) => !metricAliases.includes(k)) || resultKeys[0];
+      const yKeys = (agg.chartYAxes && agg.chartYAxes.length > 0)
+        ? agg.chartYAxes.filter((k) => resultKeys.includes(k))
+        : metricAliases.filter((k) => resultKeys.includes(k));
+      if (yKeys.length === 0) {
+        const fallback = resultKeys.filter((k) => k !== xKey);
+        yKeys.push(...(fallback.length > 0 ? fallback : resultKeys));
+      }
+
+      let rows = [...dataArray];
+      if (agg.chartSortDirection && agg.chartSortDirection !== "none") {
+        const sortField = agg.chartSortBy === "dimension" ? xKey : (yKeys[0] || xKey);
+        const dir = agg.chartSortDirection === "asc" ? 1 : -1;
+        rows.sort((a, b) => {
+          const va = Number(a[sortField!] ?? 0);
+          const vb = Number(b[sortField!] ?? 0);
+          return isNaN(va) || isNaN(vb)
+            ? String(a[sortField!] ?? "").localeCompare(String(b[sortField!] ?? "")) * dir
+            : (va - vb) * dir;
+        });
+      }
+      if (agg.chartRankingEnabled && agg.chartRankingTop && agg.chartRankingTop > 0) {
+        rows = rows.slice(0, agg.chartRankingTop);
+      }
+
+      const seriesField = agg.chartSeriesField;
+      let labels: string[];
+      let datasets: ChartConfig["datasets"];
+
+      if (seriesField && resultKeys.includes(seriesField) && !isPieOrDoughnut) {
+        const uniqueX = [...new Set(rows.map((r) => String(r[xKey!] ?? "")))];
+        labels = uniqueX;
+        const seriesValues = [...new Set(rows.map((r) => String(r[seriesField] ?? "")))];
+        datasets = seriesValues.map((sv, idx) => {
+          const color = getColor(sv, idx);
+          return {
+            label: sv,
+            data: uniqueX.map((xv) => {
+              const match = rows.find((r) => String(r[xKey!] ?? "") === xv && String(r[seriesField] ?? "") === sv);
+              return match ? Number(match[yKeys[0]!] ?? 0) : 0;
+            }),
+            backgroundColor: color + "99",
+            borderColor: color,
+            borderWidth: 1,
+          };
+        });
+      } else if (isPieOrDoughnut) {
+        labels = rows.map((r) => String(r[xKey!] ?? ""));
+        const firstYKey = yKeys[0] || metricAliases[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
+        const sliceColors = labels.map((l) => getColorByLabelStable(l));
+        const hoverColors = sliceColors.map((c) => {
+          const hex = String(c).replace(/^#/, "");
+          if (hex.length >= 6) {
+            const r = Math.min(255, (parseInt(hex.slice(0, 2), 16) || 0) + 28);
+            const g = Math.min(255, (parseInt(hex.slice(2, 4), 16) || 0) + 28);
+            const b = Math.min(255, (parseInt(hex.slice(4, 6), 16) || 0) + 28);
+            return `rgb(${r},${g},${b})`;
+          }
+          return c;
+        });
+        datasets = [{
+          label: firstYKey!,
+          data: rows.map((r) => Number(r[firstYKey!] ?? 0)),
+          backgroundColor: sliceColors,
+          hoverBackgroundColor: hoverColors,
+          borderColor: "#fff",
+          borderWidth: 2,
+        }];
+      } else if (effectiveChartType === "combo" && yKeys.length >= 2) {
+        labels = rows.map((r) => String(r[xKey!] ?? ""));
+        datasets = [
+          {
+            label: yKeys[0]!,
+            data: rows.map((r) => Number(r[yKeys[0]!] ?? 0)),
+            backgroundColor: getColor(yKeys[0]!, 0) + "80",
+            borderColor: getColor(yKeys[0]!, 0),
+            borderWidth: 2,
+            type: "bar" as const,
+          },
+          {
+            label: yKeys[1]!,
+            data: rows.map((r) => Number(r[yKeys[1]!] ?? 0)),
+            backgroundColor: getColor(yKeys[1]!, 1) + "20",
+            borderColor: getColor(yKeys[1]!, 1),
+            borderWidth: 2,
+            type: "line" as const,
+            fill: false,
+          },
+        ];
+      } else {
+        labels = rows.map((r) => String(r[xKey!] ?? ""));
+        datasets = yKeys.map((alias, idx) => {
+          const color = getColor(alias, idx);
+          return {
+            label: alias,
+            data: rows.map((r) => Number(r[alias] ?? 0)),
+            backgroundColor: effectiveChartType === "area" ? color + "40" : color + "99",
+            borderColor: color,
+            borderWidth: effectiveChartType === "line" || effectiveChartType === "area" ? 2 : 1,
+            ...(effectiveChartType === "area" ? { fill: true } : {}),
+          };
+        });
+      }
+
+      return {
+        labels,
+        datasets: datasets.length > 0 ? datasets : [{ label: "valor", data: [], backgroundColor: defaultPalette[0], borderColor: "#fff", borderWidth: 1 }],
+      };
+    },
+    []
+  );
+
   const loadMetricData = useCallback(
     async (widgetId: string) => {
       const widget = widgets.find((w) => w.id === widgetId);
@@ -354,7 +520,9 @@ export function AdminDashboardStudio({
       try {
         const agg = widget.aggregationConfig;
         if (agg?.enabled && agg.metrics.length > 0) {
-          const dimensions = [agg.dimension, agg.dimension2].filter(Boolean) as string[];
+          const dimensions = (agg as any).dimensions?.length > 0
+            ? (agg as any).dimensions as string[]
+            : [agg.dimension, agg.dimension2].filter(Boolean) as string[];
           const derivedByName = Object.fromEntries(
             derivedColumnsFromLayout.map((d) => [d.name.toLowerCase().trim(), d])
           );
@@ -428,66 +596,7 @@ export function AdminDashboardStudio({
             );
             return;
           }
-          const dim = agg.dimension || Object.keys(dataArray[0] || {})[0];
-          const labels = dataArray.map((r: Record<string, unknown>) => String(r[dim] ?? ""));
-          const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
-          const seriesColors = (agg as { chartSeriesColors?: Record<string, string> }).chartSeriesColors;
-          const colorKeys = seriesColors ? Object.keys(seriesColors) : [];
-          const getColor = (label: string, idx: number) => {
-            const c = seriesColors?.[label] ?? seriesColors?.[label?.trim?.() ?? ""] ?? seriesColors?.[colorKeys[idx]!];
-            return c ?? defaultPalette[idx % defaultPalette.length]!;
-          };
-          const getColorByLabelStable = (label: string) => {
-            const c = seriesColors?.[label] ?? seriesColors?.[label?.trim?.() ?? ""];
-            if (c) return c;
-            let hash = 0;
-            const s = String(label ?? "");
-            for (let i = 0; i < s.length; i++) hash = ((hash << 5) - hash) + s.charCodeAt(i);
-            return defaultPalette[Math.abs(hash) % defaultPalette.length]!;
-          };
-          const effectiveChartType = (agg as { chartType?: string }).chartType || widget.type || "bar";
-          const isPieOrDoughnut = effectiveChartType === "pie" || effectiveChartType === "doughnut";
-          let datasets: ChartConfig["datasets"];
-          if (isPieOrDoughnut && agg.metrics.length > 0) {
-            const firstMetric = agg.metrics[0]!;
-            const alias = firstMetric.alias || (firstMetric.func === "FORMULA" ? "formula" : `${firstMetric.func}_${firstMetric.field}`);
-            const sliceColors = labels.map((l) => getColorByLabelStable(l));
-            const hoverColors = sliceColors.map((c) => {
-              const hex = String(c).replace(/^#/, "");
-              if (hex.length >= 6) {
-                const r = Math.min(255, (parseInt(hex.slice(0, 2), 16) || 0) + 28);
-                const g = Math.min(255, (parseInt(hex.slice(2, 4), 16) || 0) + 28);
-                const b = Math.min(255, (parseInt(hex.slice(4, 6), 16) || 0) + 28);
-                return `rgb(${r},${g},${b})`;
-              }
-              return c;
-            });
-            datasets = [{
-              label: alias,
-              data: dataArray.map((r: Record<string, unknown>) => Number(r[alias] ?? 0)),
-              backgroundColor: sliceColors,
-              hoverBackgroundColor: hoverColors,
-              borderColor: "#fff",
-              borderWidth: 2,
-            }];
-          } else {
-            datasets = agg.metrics.map((metric, idx) => {
-              const alias = metric.alias || (metric.func === "FORMULA" ? "formula" : `${metric.func}_${metric.field}`);
-              const data = dataArray.map((r: Record<string, unknown>) => Number(r[alias] ?? 0));
-              const color = getColor(alias, idx);
-              return {
-                label: alias,
-                data,
-                backgroundColor: color + "99",
-                borderColor: color,
-                borderWidth: 1,
-              };
-            });
-          }
-          const config: ChartConfig = {
-            labels,
-            datasets: datasets.length > 0 ? datasets : [{ label: "valor", data: [], backgroundColor: defaultPalette[0], borderColor: "#fff", borderWidth: 1 }],
-          };
+          const config = buildChartConfigFromAgg(agg, dataArray, widget.type);
           setWidgets((prev) =>
             prev.map((w) => (w.id === widgetId ? { ...w, config, rows: dataArray, isLoading: false } : w))
           );
@@ -534,7 +643,7 @@ export function AdminDashboardStudio({
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout, savedMetrics]
+    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout, savedMetrics, buildChartConfigFromAgg]
   );
 
   useEffect(() => {
@@ -711,6 +820,7 @@ export function AdminDashboardStudio({
           enabled: true,
           dimension: dims[0] || undefined,
           dimension2: dims[1] || undefined,
+          dimensions: dims.length > 0 ? dims : undefined,
           metrics: metricsArr.map((m: any) => ({
             id: m.id || `m-${Date.now()}`,
             field: m.field || "",
@@ -720,7 +830,7 @@ export function AdminDashboardStudio({
             formula: m.formula,
             expression: m.expression,
           })),
-          filters: Array.isArray(cfg.filters) ? cfg.filters : undefined,
+          filters: Array.isArray(cfg.filters) ? (cfg.filters as AggregationFilter[]) : undefined,
           orderBy: cfg.orderBy as { field: string; direction: "ASC" | "DESC" } | undefined,
           limit: (cfg.limit as number) ?? 100,
           cumulative: (cfg.cumulative as AggregationConfig["cumulative"]) ?? undefined,
@@ -728,6 +838,20 @@ export function AdminDashboardStudio({
           dateDimension: (cfg.dateDimension as string) ?? undefined,
           chartSeriesColors: cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? (cfg.chartSeriesColors as Record<string, string>) : undefined,
           chartType,
+          chartXAxis: (cfg.chartXAxis as string) || undefined,
+          chartYAxes: Array.isArray(cfg.chartYAxes) ? (cfg.chartYAxes as string[]) : undefined,
+          chartSeriesField: (cfg.chartSeriesField as string) || undefined,
+          chartNumberFormat: (cfg.chartNumberFormat as string) || undefined,
+          chartCurrencySymbol: (cfg.chartCurrencySymbol as string) || undefined,
+          chartThousandSep: cfg.chartThousandSep != null ? (cfg.chartThousandSep as boolean) : undefined,
+          chartDecimals: cfg.chartDecimals != null ? (cfg.chartDecimals as number) : undefined,
+          chartSortDirection: (cfg.chartSortDirection as string) || undefined,
+          chartSortBy: (cfg.chartSortBy as string) || undefined,
+          chartRankingEnabled: (cfg.chartRankingEnabled as boolean) || undefined,
+          chartRankingTop: (cfg.chartRankingTop as number) || undefined,
+          chartRankingMetric: (cfg.chartRankingMetric as string) || undefined,
+          chartColorScheme: (cfg.chartColorScheme as string) || undefined,
+          showDataLabels: (cfg.showDataLabels as boolean) || undefined,
         },
         excludeGlobalFilters: false,
         dataSourceId: null,
