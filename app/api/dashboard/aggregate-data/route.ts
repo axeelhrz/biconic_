@@ -231,12 +231,12 @@ function expressionToSql(expression: string, derivedLookup?: Record<string, Deri
     s = next;
   }
 
-  // 3) Reemplazar identificadores (columnas/funciones); no tocar __STRn__ ni literales numéricos
-  const out = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (_, id: string) => {
+  // 3) Reemplazar identificadores (columnas/funciones). Primero prefijos join (primary.X, join_N.X) como un solo identificador para no interpretar "primary" como tabla.
+  const out = s.replace(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*|[a-zA-Z_][a-zA-Z0-9_]*)\b/g, (id: string) => {
     if (/^__STR\d+__$/.test(id)) return id;
     if (/^\d+\.?\d*$/.test(id)) return id; // literal numérico
     if (SQL_KNOWN_FUNCTIONS.has(id.toUpperCase())) return id.toUpperCase();
-    if (derivedLookup && _depth < 5) {
+    if (derivedLookup && _depth < 5 && !/\./.test(id)) {
       const ref = derivedLookup[id.toLowerCase()];
       if (ref?.expression) {
         const inner = expressionToSql(ref.expression, derivedLookup, _depth + 1);
