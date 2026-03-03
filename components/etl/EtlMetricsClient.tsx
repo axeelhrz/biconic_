@@ -3875,25 +3875,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           } : previewChartConfig;
                           const radarData = { labels: previewChartConfig.labels, datasets: previewChartConfig.datasets.map((ds: any) => ({ ...ds, fill: true, backgroundColor: ds.backgroundColor, borderColor: ds.borderColor })) };
                           const ds0 = previewChartConfig.datasets?.[0];
-                          const pieDoughnutLegendOpts = (ds0 && Array.isArray(ds0.backgroundColor) && previewChartConfig.labels?.length) ? {
+                          const pieDoughnutLegendOpts: Record<string, unknown> = (ds0 && Array.isArray(ds0.backgroundColor) && previewChartConfig.labels?.length) ? {
                             display: true,
-                            position: "right" as const,
+                            position: "right",
                             labels: {
-                              generateLabels: (_chart: unknown, _opts: unknown) =>
+                              generateLabels: () =>
                                 (previewChartConfig.labels as string[]).map((label, i) => {
                                   const bg = (ds0.backgroundColor as string[])[i] ?? ds0.backgroundColor?.[0] ?? "#0ea5e9";
                                   return { text: label, fillStyle: typeof bg === "string" ? bg : "#0ea5e9", strokeStyle: "#fff", lineWidth: 1, hidden: false, index: i };
                                 }),
                             },
-                          } : { display: true, position: "right" as const };
+                          } : { display: true, position: "right" };
                           return (
                             <div className="h-[240px] w-full" style={{ color: "var(--platform-fg)" }}>
                               {formChartType === "bar" && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
                               {formChartType === "horizontalBar" && <Bar data={previewChartConfig} options={{ ...baseOpts, indexAxis: "y" as const, scales: { x: axisScales.x, y: { ...axisScales.y, ticks: { ...axisScales.y.ticks, maxTicksLimit: 12 } } } }} />}
                               {formChartType === "line" && <Line data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
                               {formChartType === "area" && <Line data={areaData} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "pie" && <Pie data={previewChartConfig} options={{ ...baseOpts, plugins: { legend: pieDoughnutLegendOpts } }} />}
-                              {formChartType === "doughnut" && <Doughnut data={previewChartConfig} options={{ ...baseOpts, plugins: { legend: pieDoughnutLegendOpts } }} />}
+                              {formChartType === "pie" && <Pie data={previewChartConfig} options={{ ...baseOpts, plugins: { legend: pieDoughnutLegendOpts } } as any} />}
+                              {formChartType === "doughnut" && <Doughnut data={previewChartConfig} options={{ ...baseOpts, plugins: { legend: pieDoughnutLegendOpts } } as any} />}
                               {formChartType === "scatter" && <Scatter data={scatterData as { datasets: { label: string; data: { x: number; y: number }[]; backgroundColor: string; borderColor: string }[] }} options={{ ...baseOpts, scales: axisScales }} />}
                               {formChartType === "combo" && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
                               {!["bar", "horizontalBar", "line", "area", "pie", "doughnut", "scatter", "combo", "kpi", "table", "map"].includes(formChartType) && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
