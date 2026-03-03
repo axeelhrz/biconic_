@@ -112,9 +112,21 @@ function toSqlLiteral(v: any): string {
 const normalizeStr = (str: string) =>
   str ? str.replace(/\s+/g, "").toUpperCase() : "";
 
+/** Convierte nombre de columna del front (primary.COL, join_N.COL) al nombre físico en la tabla ETL (primary_col, join_n_col). */
+function displayColumnToPhysical(name: string): string {
+  const n = (name || "").trim();
+  if (/^primary\.[a-zA-Z_][a-zA-Z0-9_]*$/i.test(n))
+    return "primary_" + n.slice(8).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+  const joinMatch = n.match(/^join_(\d+)\.[a-zA-Z_][a-zA-Z0-9_]*$/i);
+  if (joinMatch)
+    return `join_${joinMatch[1]}_` + n.slice(joinMatch[0].indexOf(".") + 1).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+  return n.replace(/"/g, '""').toLowerCase();
+}
+
 /** En Postgres los identificadores sin comillas se guardan en minúsculas; normalizar para que "ID" coincida con "id". */
 function quotedColumn(name: string): string {
-  const s = (name || "").trim().replace(/"/g, '""').toLowerCase();
+  const physical = displayColumnToPhysical(name);
+  const s = physical.replace(/"/g, '""').toLowerCase();
   return s ? `"${s}"` : '""';
 }
 
