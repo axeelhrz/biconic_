@@ -1192,12 +1192,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       if (wizard === "C" && timeColumn) {
         if (analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo) {
           body.dateRangeFilter = { field: timeColumn, from: analysisDateFrom, to: analysisDateTo };
-        } else {
+        } else if (analysisTimeRange && analysisTimeRange !== "0") {
           const rangeNum = Number(analysisTimeRange);
           if (rangeNum > 0) {
-            body.dateRangeFilter = { field: timeColumn, last: rangeNum, unit: rangeNum <= 30 ? "days" : "months" };
+            const unit = analysisTimeRange === "7" || analysisTimeRange === "30" ? "days" : "months";
+            body.dateRangeFilter = { field: timeColumn, last: rangeNum, unit };
           }
         }
+        // Si no se elige rango (valor "0" o vacío), no se envía dateRangeFilter: se traen todos los datos.
         if (analysisGranularity && includePeriodInResult) {
           body.dateGroupBy = { field: timeColumn, granularity: analysisGranularity };
         }
@@ -3602,7 +3604,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
                     Tabla final resultante con la configuración actual.
                     {timeColumn && analysisGranularity ? ` Agrupando por ${analysisGranularity === "month" ? "mes" : analysisGranularity === "week" ? "semana" : analysisGranularity === "day" ? "día" : "año"} (${getSampleDisplayLabel(timeColumn)}).` : ""}
-                    {analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo ? ` Rango: ${analysisDateFrom} a ${analysisDateTo}.` : analysisTimeRange && Number(analysisTimeRange) > 0 ? ` Últimos ${analysisTimeRange} ${Number(analysisTimeRange) <= 30 ? "días" : "meses"} (respecto a los datos).` : ""}
+                    {analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo ? ` Rango: ${analysisDateFrom} a ${analysisDateTo}.` : analysisTimeRange && analysisTimeRange !== "0" && Number(analysisTimeRange) > 0 ? ` Últimos ${analysisTimeRange} ${analysisTimeRange === "7" || analysisTimeRange === "30" ? "días" : "meses"} (respecto a los datos).` : timeColumn ? " Sin filtro de fecha: se muestran todos los datos." : ""}
                   </p>
                   {transformLabel && (
                     <div className="rounded-lg border p-3 mb-4 flex items-center gap-2" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
