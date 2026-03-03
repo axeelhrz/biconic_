@@ -844,7 +844,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     const columnsSet = new Set([...fields, ...derivedColumns.map((d) => d.name)].map((x) => x.toLowerCase()));
     const savedMetricNamesSet = new Set((data?.savedMetrics ?? []).map((s: { name?: string }) => (s.name ?? "").toLowerCase()));
     const protectedStr = expr.replace(/'([^']*)'|"([^"]*)"/g, " __STR__ ");
-    const words = protectedStr.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
+    const prefixedCols = protectedStr.match(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
+    const restStr = protectedStr.replace(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g, " ");
+    const simpleWords = restStr.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
+    const words = [...prefixedCols, ...simpleWords];
     for (const w of words) {
       if (/^\d+\.?\d*$/.test(w)) continue;
       const upper = w.toUpperCase();
