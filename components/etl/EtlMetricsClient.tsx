@@ -1123,8 +1123,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       if (derivedToSend.length > 0) {
         body.derivedColumns = derivedToSend.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" }));
       }
-      if (wizard === "C" && timeColumn && analysisGranularity) {
-        body.dateGroupBy = { field: timeColumn, granularity: analysisGranularity };
+      const includePeriodInResult = formDimensions.some((d) => d && String(d).trim() === timeColumn);
+      if (wizard === "C" && timeColumn) {
         if (analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo) {
           body.dateRangeFilter = { field: timeColumn, from: analysisDateFrom, to: analysisDateTo };
         } else {
@@ -1132,6 +1132,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
           if (rangeNum > 0) {
             body.dateRangeFilter = { field: timeColumn, last: rangeNum, unit: rangeNum <= 30 ? "days" : "months" };
           }
+        }
+        if (analysisGranularity && includePeriodInResult) {
+          body.dateGroupBy = { field: timeColumn, granularity: analysisGranularity };
         }
       }
       if (wizard === "C" && transformCompare !== "none") {
