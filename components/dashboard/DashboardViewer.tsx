@@ -140,6 +140,7 @@ type AggregationConfig = {
   chartRankingTop?: number;
   chartRankingMetric?: string;
   showDataLabels?: boolean;
+  chartAxisOrder?: string;
 };
 
 type ChartConfig = {
@@ -1369,6 +1370,13 @@ export function DashboardViewer({
               : [aggConfig.dimension, (aggConfig as any).dimension2].filter(
                   Boolean
                 );
+          const metricAliasesForApi = (aggConfig.metrics || []).map((m: any) => m.alias || (m.func === "FORMULA" ? "formula" : `${m.func}_${m.field}`)).filter(Boolean);
+          const rankingLimit = (aggConfig as any).chartRankingEnabled && (aggConfig as any).chartRankingTop > 0
+            ? (aggConfig as any).chartRankingTop
+            : undefined;
+          const rankingOrderBy = rankingLimit && ((aggConfig as any).chartRankingMetric || metricAliasesForApi[0])
+            ? { field: (aggConfig as any).chartRankingMetric || metricAliasesForApi[0], direction: "DESC" as const }
+            : undefined;
           const bodyPayload: Record<string, unknown> = {
             tableName: fullTableName,
             dimension: aggConfig.dimension,
@@ -1390,8 +1398,8 @@ export function DashboardViewer({
               return { ...base, cast };
             }),
             filters: preparedFilters,
-            orderBy: aggConfig.orderBy,
-            limit: aggConfig.limit || 1000,
+            orderBy: rankingOrderBy || aggConfig.orderBy,
+            limit: rankingLimit ?? aggConfig.limit ?? 1000,
           };
           if (dimensionsArray.length > 0) bodyPayload.dimensions = dimensionsArray;
           if ((aggConfig as any).cumulative && (aggConfig as any).cumulative !== "none")
@@ -1647,19 +1655,37 @@ export function DashboardViewer({
         if (yKeys.length === 0) return;
 
         let rows = [...dataArray];
-        if ((agg as any)?.chartSortDirection && (agg as any).chartSortDirection !== "none") {
+        if ((agg as any)?.chartRankingEnabled && (agg as any)?.chartRankingTop > 0) {
+          const rKey = ((agg as any).chartRankingMetric && resultKeys.includes((agg as any).chartRankingMetric))
+            ? (agg as any).chartRankingMetric
+            : (yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0]);
+          if (rKey) {
+            rows.sort((a: any, b: any) => Number(b?.[rKey] ?? 0) - Number(a?.[rKey] ?? 0));
+          }
+          rows = rows.slice(0, (agg as any).chartRankingTop);
+        } else if ((agg as any)?.chartSortDirection && (agg as any).chartSortDirection !== "none") {
           const sortField = (agg as any).chartSortBy === "dimension" ? xKey : (yKeys[0] || xKey);
           const dir = (agg as any).chartSortDirection === "asc" ? 1 : -1;
+          const axisOrder = (agg as any).chartAxisOrder;
           rows.sort((a: any, b: any) => {
+            if (sortField === xKey && axisOrder && ["alpha", "date_asc", "date_desc"].includes(axisOrder)) {
+              const va = a[xKey!];
+              const vb = b[xKey!];
+              const sa = String(va ?? "");
+              const sb = String(vb ?? "");
+              if (axisOrder === "date_asc" || axisOrder === "date_desc") {
+                const ta = typeof va === "string" || typeof va === "number" ? new Date(va).getTime() : 0;
+                const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb).getTime() : 0;
+                return axisOrder === "date_asc" ? ta - tb : tb - ta;
+              }
+              return axisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
+            }
             const va = Number(a[sortField!] ?? 0);
             const vb = Number(b[sortField!] ?? 0);
             return isNaN(va) || isNaN(vb)
               ? String(a[sortField!] ?? "").localeCompare(String(b[sortField!] ?? "")) * dir
               : (va - vb) * dir;
           });
-        }
-        if ((agg as any)?.chartRankingEnabled && (agg as any)?.chartRankingTop > 0) {
-          rows = rows.slice(0, (agg as any).chartRankingTop);
         }
 
         const isPieOrDoughnut = resolvedType === "pie" || resolvedType === "doughnut";
@@ -1729,20 +1755,37 @@ export function DashboardViewer({
           };
         } else {
           const labels = rows.map((r: any) => String(r[xKey!] ?? ""));
-          config = {
-            labels,
-            datasets: yKeys.map((alias, idx) => {
-              const color = getColor(alias, idx);
-              return {
+          const isBarOrHorizontalBar = resolvedType === "bar" || resolvedType === "horizontalBar";
+          const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
+          if (oneMetricManyCategories) {
+            const alias = yKeys[0]!;
+            const barColors = labels.map((l) => getColorStable(l));
+            config = {
+              labels,
+              datasets: [{
                 label: alias,
                 data: rows.map((r: any) => Number(r[alias] ?? 0)),
-                backgroundColor: resolvedType === "area" ? color + "40" : color + "99",
-                borderColor: color,
-                borderWidth: resolvedType === "line" || resolvedType === "area" ? 2 : 1,
-                ...(resolvedType === "area" ? { fill: true } : {}),
-              };
-            }),
-          };
+                backgroundColor: barColors.map((c) => c + "99"),
+                borderColor: barColors,
+                borderWidth: 2,
+              }],
+            };
+          } else {
+            config = {
+              labels,
+              datasets: yKeys.map((alias, idx) => {
+                const color = getColor(alias, idx);
+                return {
+                  label: alias,
+                  data: rows.map((r: any) => Number(r[alias] ?? 0)),
+                  backgroundColor: resolvedType === "area" ? color + "40" : color + "99",
+                  borderColor: color,
+                  borderWidth: resolvedType === "line" || resolvedType === "area" ? 2 : 1,
+                  ...(resolvedType === "area" ? { fill: true } : {}),
+                };
+              }),
+            };
+          }
         }
 
         const effectiveLabelField = xKey;
@@ -2846,11 +2889,16 @@ export function DashboardViewer({
                           const showLabels = !!(w.aggregationConfig as any)?.showDataLabels;
                           const dlColor = isLightBg ? "#374151" : "#fff";
                           const dlDisplay = showLabels ? "auto" : false;
-                          const scalesXY = {
-                            x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
-                            y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } },
-                          };
-                          const pad = w.chartStyle?.layoutPadding ?? 16;
+                          const usePreviewStyle = !!(w.aggregationConfig as any)?.chartType;
+                          const PREVIEW_AXIS = "#64748b";
+                          const PREVIEW_GRID = "#e2e8f0";
+                          const scalesXY = usePreviewStyle
+                            ? {
+                                x: { display: true, grid: { color: PREVIEW_GRID }, ticks: { color: PREVIEW_AXIS, maxTicksLimit: 8, font: { size: 11 } }, title: { display: false } },
+                                y: { display: true, grid: { color: PREVIEW_GRID }, ticks: { color: PREVIEW_AXIS, font: { size: 11 }, maxTicksLimit: 8 }, title: { display: false } },
+                              }
+                            : { x: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } }, y: { grid: { color: chartGridColor }, ticks: { color: chartAxisColor } } };
+                          const pad = w.chartStyle?.layoutPadding ?? (usePreviewStyle ? 8 : 16);
                           return (
                             <div className="w-full flex-1 client-view-chart-wrap relative">
                               {ct === "bar" || ct === "combo" ? (
@@ -2877,7 +2925,9 @@ export function DashboardViewer({
                                       ...(buildChartOptions("horizontalBar", w.chartStyle, w.labelDisplayMode).plugins as object),
                                       datalabels: { color: dlColor, display: dlDisplay },
                                     },
-                                    scales: scalesXY,
+                                    scales: usePreviewStyle
+                                      ? { ...scalesXY, y: { ...scalesXY.y, ticks: { ...(scalesXY.y as any).ticks, maxTicksLimit: 12 } } }
+                                      : scalesXY,
                                   }}
                                 />
                               ) : ct === "line" ? (

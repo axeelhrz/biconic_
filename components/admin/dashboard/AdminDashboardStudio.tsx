@@ -76,6 +76,10 @@ type AggregationConfig = {
   chartRankingMetric?: string;
   chartColorScheme?: string;
   showDataLabels?: boolean;
+  chartAxisOrder?: string;
+  chartScaleMode?: string;
+  chartScaleMin?: string | number;
+  chartScaleMax?: string | number;
 };
 type StudioWidget = {
   id: string;
@@ -402,19 +406,37 @@ export function AdminDashboardStudio({
       }
 
       let rows = [...dataArray];
-      if (agg.chartSortDirection && agg.chartSortDirection !== "none") {
+      if (agg.chartRankingEnabled && agg.chartRankingTop && agg.chartRankingTop > 0) {
+        const rKey = (agg.chartRankingMetric && resultKeys.includes(agg.chartRankingMetric))
+          ? agg.chartRankingMetric
+          : (yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0]);
+        if (rKey) {
+          rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
+        }
+        rows = rows.slice(0, agg.chartRankingTop);
+      } else if (agg.chartSortDirection && agg.chartSortDirection !== "none") {
         const sortField = agg.chartSortBy === "dimension" ? xKey : (yKeys[0] || xKey);
         const dir = agg.chartSortDirection === "asc" ? 1 : -1;
+        const axisOrder = (agg as { chartAxisOrder?: string }).chartAxisOrder;
         rows.sort((a, b) => {
+          if (sortField === xKey && axisOrder && ["alpha", "date_asc", "date_desc"].includes(axisOrder)) {
+            const va = (a as Record<string, unknown>)[xKey!];
+            const vb = (b as Record<string, unknown>)[xKey!];
+            const sa = String(va ?? "");
+            const sb = String(vb ?? "");
+            if (axisOrder === "date_asc" || axisOrder === "date_desc") {
+              const ta = typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : 0;
+              const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : 0;
+              return axisOrder === "date_asc" ? ta - tb : tb - ta;
+            }
+            return axisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
+          }
           const va = Number(a[sortField!] ?? 0);
           const vb = Number(b[sortField!] ?? 0);
           return isNaN(va) || isNaN(vb)
             ? String(a[sortField!] ?? "").localeCompare(String(b[sortField!] ?? "")) * dir
             : (va - vb) * dir;
         });
-      }
-      if (agg.chartRankingEnabled && agg.chartRankingTop && agg.chartRankingTop > 0) {
-        rows = rows.slice(0, agg.chartRankingTop);
       }
 
       const seriesField = agg.chartSeriesField;
@@ -483,17 +505,31 @@ export function AdminDashboardStudio({
         ];
       } else {
         labels = rows.map((r) => String(r[xKey!] ?? ""));
-        datasets = yKeys.map((alias, idx) => {
-          const color = getColor(alias, idx);
-          return {
+        const isBarOrHorizontalBar = effectiveChartType === "bar" || effectiveChartType === "horizontalBar";
+        const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
+        if (oneMetricManyCategories) {
+          const alias = yKeys[0]!;
+          const barColors = labels.map((l) => getColorByLabelStable(l));
+          datasets = [{
             label: alias,
             data: rows.map((r) => Number(r[alias] ?? 0)),
-            backgroundColor: effectiveChartType === "area" ? color + "40" : color + "99",
-            borderColor: color,
-            borderWidth: effectiveChartType === "line" || effectiveChartType === "area" ? 2 : 1,
-            ...(effectiveChartType === "area" ? { fill: true } : {}),
-          };
-        });
+            backgroundColor: barColors.map((c) => c + "99"),
+            borderColor: barColors,
+            borderWidth: 1,
+          }];
+        } else {
+          datasets = yKeys.map((alias, idx) => {
+            const color = getColor(alias, idx);
+            return {
+              label: alias,
+              data: rows.map((r) => Number(r[alias] ?? 0)),
+              backgroundColor: effectiveChartType === "area" ? color + "40" : color + "99",
+              borderColor: color,
+              borderWidth: effectiveChartType === "line" || effectiveChartType === "area" ? 2 : 1,
+              ...(effectiveChartType === "area" ? { fill: true } : {}),
+            };
+          });
+        }
       }
 
       return {
@@ -565,6 +601,13 @@ export function AdminDashboardStudio({
           }
           const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
           const widgetEtlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
+          const metricAliasesForApi = metricsPayload.map((m: Record<string, unknown>) => m.alias as string).filter(Boolean);
+          const rankingLimit = agg.chartRankingEnabled && agg.chartRankingTop && agg.chartRankingTop > 0
+            ? agg.chartRankingTop
+            : undefined;
+          const rankingOrderBy = rankingLimit && (agg.chartRankingMetric || metricAliasesForApi[0])
+            ? { field: agg.chartRankingMetric || metricAliasesForApi[0], direction: "DESC" as const }
+            : undefined;
           const res = await fetch("/api/dashboard/aggregate-data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -575,8 +618,8 @@ export function AdminDashboardStudio({
               dimensions: dimensions.length > 0 ? dimensions : undefined,
               metrics: metricsPayload,
               filters: [...(agg.filters || []), ...filters],
-              orderBy: agg.orderBy,
-              limit: agg.limit || 100,
+              orderBy: rankingOrderBy || agg.orderBy,
+              limit: rankingLimit ?? agg.limit ?? 100,
               cumulative: agg.cumulative || "none",
               comparePeriod: agg.comparePeriod || undefined,
               dateDimension: agg.dateDimension || undefined,
@@ -852,6 +895,7 @@ export function AdminDashboardStudio({
           chartRankingMetric: (cfg.chartRankingMetric as string) || undefined,
           chartColorScheme: (cfg.chartColorScheme as string) || undefined,
           showDataLabels: (cfg.showDataLabels as boolean) || undefined,
+          chartAxisOrder: (cfg.chartAxisOrder as string) || undefined,
         },
         excludeGlobalFilters: false,
         dataSourceId: null,

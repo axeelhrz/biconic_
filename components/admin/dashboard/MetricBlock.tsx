@@ -92,20 +92,38 @@ const STATE_LABELS: Record<MetricBlockState, string> = {
   cambio: "Cambio",
 };
 
+const PREVIEW_AXIS_COLOR = "#64748b";
+const PREVIEW_GRID_COLOR = "#e2e8f0";
 const CHART_OPTIONS = {
   responsive: true,
   maintainAspectRatio: false,
+  layout: { padding: 8 },
   plugins: {
-    legend: { display: false },
+    legend: {
+      display: true,
+      position: "top" as const,
+      align: "center" as const,
+      labels: { color: PREVIEW_AXIS_COLOR, font: { size: 12 }, padding: 16, usePointStyle: true, pointStyle: "circle" },
+    },
     tooltip: { enabled: true },
   },
   scales: {
-    x: { grid: { display: false }, ticks: { maxTicksLimit: 6, font: { size: 10 }, color: "#71717a" } },
-    y: { grid: { color: "rgba(255,255,255,0.06)" }, ticks: { maxTicksLimit: 5, font: { size: 10 }, color: "#71717a" } },
+    x: {
+      display: true,
+      grid: { color: PREVIEW_GRID_COLOR },
+      ticks: { color: PREVIEW_AXIS_COLOR, maxTicksLimit: 8, font: { size: 11 } },
+      title: { display: false },
+    },
+    y: {
+      display: true,
+      grid: { color: PREVIEW_GRID_COLOR },
+      ticks: { color: PREVIEW_AXIS_COLOR, font: { size: 11 }, maxTicksLimit: 8 },
+      title: { display: false },
+    },
   },
 };
 
-const legendTextColor = "#a1a1aa";
+const legendTextColor = "#334155";
 function buildPieDoughnutLegend(chartConfig: ChartConfig | null | undefined): Record<string, unknown> {
   const ds0 = chartConfig?.datasets?.[0];
   if (!ds0 || !Array.isArray(ds0.backgroundColor) || !chartConfig?.labels?.length) {
@@ -301,7 +319,7 @@ export function MetricBlock({
             {chartType !== "kpi" && chartType !== "table" && chartConfig && (
               <div className="h-[220px] w-full">
                 {chartType === "bar" && <Bar data={chartConfig as any} options={CHART_OPTIONS} />}
-                {chartType === "horizontalBar" && <Bar data={chartConfig as any} options={{ ...CHART_OPTIONS, indexAxis: "y" as const }} />}
+                {chartType === "horizontalBar" && <Bar data={chartConfig as any} options={{ ...CHART_OPTIONS, indexAxis: "y" as const, scales: { ...CHART_OPTIONS.scales, y: { ...CHART_OPTIONS.scales.y, ticks: { ...CHART_OPTIONS.scales.y.ticks, maxTicksLimit: 12 } } } }} />}
                 {chartType === "line" && <Line data={chartConfig as any} options={CHART_OPTIONS} />}
                 {chartType === "area" && <Line data={{ ...chartConfig, datasets: chartConfig.datasets.map((ds) => ({ ...ds, fill: true })) } as any} options={CHART_OPTIONS} />}
                 {chartType === "pie" && <Pie data={chartConfig as any} options={{ ...CHART_OPTIONS, plugins: { ...CHART_OPTIONS.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
