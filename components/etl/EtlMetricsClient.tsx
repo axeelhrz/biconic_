@@ -1305,6 +1305,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     const xKey = chartXAxis && keys.includes(chartXAxis) ? chartXAxis : (() => {
       const firstDim = formDimensions[0];
       if (firstDim && keys.includes(firstDim)) return firstDim;
+      if (timeColumn && keys.includes(timeColumn)) return timeColumn;
+      const dimByNorm = (k: string) => timeColumn && k.trim().toLowerCase() === timeColumn.trim().toLowerCase();
+      const timeMatch = keys.find(dimByNorm);
+      if (timeMatch) return timeMatch;
       const metricKeys = keys.filter((k) => /^metric_\d+$/.test(k));
       return metricKeys.length === keys.length ? undefined : keys[0];
     })();
@@ -1379,9 +1383,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       rows = rows.slice(0, chartRankingTop);
     }
 
+    const formatLabel = (v: unknown, colKey: string) => {
+      const formatted = formatPreviewDateValue(v, colKey);
+      return formatted ?? String(v ?? "");
+    };
+
     if (chartSeriesField && keys.includes(chartSeriesField) && xKey) {
       const seriesValues = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[chartSeriesField] ?? "")))];
-      const xValues = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? "")))];
+      const xValuesRaw = [...new Set(rows.map((r) => (r as Record<string, unknown>)[xKey]))];
+      const xValues = xValuesRaw.map((xv) => String(xv ?? ""));
+      const labels = xValues.map((xv) => formatLabel(xv, xKey));
       const yField = yKeys[0]!;
       const datasets = seriesValues.map((sv, idx) => {
         const color = getColor(sv, idx);
@@ -1396,10 +1407,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
           borderWidth: 1,
         };
       });
-      return { labels: xValues, datasets };
+      return { labels, datasets };
     }
 
-    const labels = xKey != null ? rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? "")) : rows.map((_, i) => (i === 0 ? "Total" : ""));
+    const labels = xKey != null ? rows.map((r) => formatLabel((r as Record<string, unknown>)[xKey], xKey)) : rows.map((_, i) => (i === 0 ? "Total" : ""));
     const datasets = yKeys.map((alias, idx) => {
       const label = colLabel(alias);
       const color = getColor(label, idx);
@@ -1439,7 +1450,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
 
     return { labels, datasets };
-  }, [previewData, formDimensions, formMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType]);
+  }, [previewData, formDimensions, formMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue]);
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
