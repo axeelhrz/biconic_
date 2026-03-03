@@ -32,6 +32,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
@@ -472,6 +473,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     applyToOtherDashboards: boolean;
   };
   const [dashboardFilters, setDashboardFilters] = useState<DynamicFilter[]>([]);
+  /** IDs de métricas que el usuario eligió incluir en el dashboard (no se crea/sincroniza hasta que pulse "Crear dashboard" / "Sincronizar"). */
+  const [selectedMetricIdsForDashboard, setSelectedMetricIdsForDashboard] = useState<string[]>([]);
 
   const [metricsDistinctColumn, setMetricsDistinctColumn] = useState<string | null>(null);
   const [metricsDistinctValues, setMetricsDistinctValues] = useState<string[]>([]);
@@ -499,6 +502,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [formulasHelpOpen, setFormulasHelpOpen] = useState(false);
   /** Columnas calculadas (ej. factura = CANTIDAD * PRECIO_UNITARIO); se guardan en dataset y aparecen como medidas. */
   const [derivedColumns, setDerivedColumns] = useState<DerivedColumn[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<{ type: "metric"; id: string; name: string } | { type: "derived"; name: string } | null>(null);
 
   const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
     A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
@@ -1516,8 +1520,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     setWizardStep(0);
   };
 
-  const syncMetricsToDashboard = useCallback(async (metrics: SavedMetricForm[]) => {
+  const syncMetricsToDashboard = useCallback(async (metrics: SavedMetricForm[], fullSavedMetrics?: SavedMetricForm[]) => {
     if (!etlId || metrics.length === 0) return;
+    const metricsToPersist = fullSavedMetrics ?? metrics;
     setDashboardSyncing(true);
     try {
       let dbId = linkedDashboardId;
@@ -1635,11 +1640,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         return;
       }
 
-      // 6. Persistir el dashboardId en el ETL
+      // 6. Persistir el dashboardId en el ETL (guardamos todas las métricas del ETL, no solo las sincronizadas al dashboard)
       await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ savedMetrics: metrics, dashboardId: dbId, dashboardFilters }),
+        body: JSON.stringify({ savedMetrics: metricsToPersist, dashboardId: dbId, dashboardFilters }),
       });
 
       toast.success(linkedDashboardId ? "Dashboard sincronizado" : "Dashboard creado y sincronizado");
@@ -1748,7 +1753,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       if (createDerivedColumn) toast.success(`Se creó la columna «${alias}» en el dataset; la podés usar en «Insertar columna» en otras métricas.`, { duration: 6000 });
       setData((prev) => (prev ? { ...prev, savedMetrics: next, datasetConfig: datasetConfigToSave ?? prev.datasetConfig } : null));
       if (createDerivedColumn) setDerivedColumns(nextDerivedColumns);
-      syncMetricsToDashboard(next);
       closeForm();
     } catch (e) {
       toast.error("Error al guardar");
@@ -1896,7 +1900,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         return;
       }
       setData((prev) => (prev ? { ...prev, savedMetrics: next } : null));
-      syncMetricsToDashboard(next);
       toast.success(`Métrica «${name}» guardada en Calculadas (métricas).`);
       closeForm();
     } catch {
@@ -1907,7 +1910,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   };
 
   const deleteMetric = async (id: string) => {
-    if (!confirm("¿Eliminar esta métrica?")) return;
     const next = savedMetrics.filter((s) => s.id !== id);
     setSaving(true);
     try {
@@ -1923,7 +1925,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       }
       toast.success("Métrica eliminada");
       setData((prev) => (prev ? { ...prev, savedMetrics: next } : null));
-    } catch (e) {
+      setDeleteTarget(null);
+    } catch {
       toast.error("Error al eliminar");
     } finally {
       setSaving(false);
@@ -1931,7 +1934,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   };
 
   const deleteDerivedColumn = async (name: string) => {
-    if (!confirm(`¿Eliminar la columna calculada «${name}»?`)) return;
     const nextDerived = derivedColumns.filter((d) => d.name !== name);
     const datasetConfigToSave = {
       ...(data?.datasetConfig && typeof data.datasetConfig === "object" ? (data.datasetConfig as Record<string, unknown>) : {}),
@@ -1952,12 +1954,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       setDerivedColumns(nextDerived);
       setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfigToSave } : null));
       toast.success("Columna calculada eliminada");
+      setDeleteTarget(null);
     } catch {
       toast.error("Error al eliminar la columna calculada");
     } finally {
       setSaving(false);
     }
   };
+
+  const closeDeleteModal = useCallback(() => {
+    if (!saving) setDeleteTarget(null);
+  }, [saving]);
+
+  const confirmDeleteFromModal = useCallback(async () => {
+    if (!deleteTarget) return;
+    if (deleteTarget.type === "metric") await deleteMetric(deleteTarget.id);
+    else await deleteDerivedColumn(deleteTarget.name);
+  }, [deleteTarget]);
 
   const PERIODICITY_OPTIONS = [
     { value: "Diaria", label: "Diaria" },
@@ -2689,7 +2702,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           {derivedColumns.map((d) => (
                             <li key={d.name} className="flex items-center justify-between gap-2">
                               <span><span style={{ color: "var(--platform-accent)" }}>✓</span> <strong>{d.name}</strong> = {d.expression} ({d.defaultAggregation})</span>
-                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-red-500 hover:bg-red-500/10" onClick={() => deleteDerivedColumn(d.name)} disabled={saving} title="Eliminar columna calculada" aria-label={`Eliminar ${d.name}`}><Trash2 className="h-3.5 w-3.5" /></Button>
+                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-red-500 hover:bg-red-500/10" onClick={() => setDeleteTarget({ type: "derived", name: d.name })} disabled={saving} title="Eliminar columna calculada" aria-label={`Eliminar ${d.name}`}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </li>
                           ))}
                         </ul>
@@ -4073,7 +4086,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 text-red-500"
-                      onClick={() => deleteMetric(s.id)}
+                      onClick={() => setDeleteTarget({ type: "metric", id: s.id, name: s.name || "Métrica" })}
                       aria-label="Eliminar"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -4112,7 +4125,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                   variant="ghost"
                   size="icon"
                   className="h-9 w-9 shrink-0 text-red-500 hover:bg-red-500/10"
-                  onClick={() => deleteDerivedColumn(d.name)}
+                  onClick={() => setDeleteTarget({ type: "derived", name: d.name })}
                   disabled={saving}
                   title="Eliminar columna calculada"
                   aria-label={`Eliminar ${d.name}`}
@@ -4138,13 +4151,43 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>Dashboard</h2>
-                <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Las métricas creadas se insertan automáticamente como widgets en el dashboard vinculado.</p>
+                <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí qué métricas incluir y creá o sincronizá el dashboard cuando hayas terminado de configurar. El dashboard se crea solo al apretar Crear dashboard.</p>
               </div>
               {linkedDashboardId && (
                 <Link href={`/admin/dashboard/${linkedDashboardId}`} className="text-xs font-medium underline" style={{ color: "var(--platform-accent)" }}>
                   Abrir dashboard →
                 </Link>
               )}
+            </div>
+
+            {/* Selección de métricas a incluir en el dashboard */}
+            <div className="rounded-lg border p-3 mb-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+              <h3 className="text-sm font-medium mb-2" style={{ color: "var(--platform-fg)" }}>Métricas a incluir en el dashboard</h3>
+              <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Marcá las métricas que querés que aparezcan como widgets. Solo estas se subirán al crear o sincronizar.</p>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {savedMetrics.map((m) => (
+                  <label key={m.id} className="inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 cursor-pointer text-sm" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)", background: selectedMetricIdsForDashboard.includes(m.id) ? "var(--platform-accent-muted, rgba(59, 130, 246, 0.15))" : "transparent" }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedMetricIdsForDashboard.includes(m.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedMetricIdsForDashboard((prev) => [...prev, m.id]);
+                        else setSelectedMetricIdsForDashboard((prev) => prev.filter((id) => id !== m.id));
+                      }}
+                      className="rounded border-gray-400"
+                    />
+                    <span>{m.name}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="ghost" size="sm" className="rounded-lg text-xs h-7" style={{ color: "var(--platform-fg-muted)" }} onClick={() => setSelectedMetricIdsForDashboard(savedMetrics.map((m) => m.id))}>
+                  Seleccionar todas
+                </Button>
+                <Button type="button" variant="ghost" size="sm" className="rounded-lg text-xs h-7" style={{ color: "var(--platform-fg-muted)" }} onClick={() => setSelectedMetricIdsForDashboard([])}>
+                  Quitar todas
+                </Button>
+              </div>
             </div>
 
             <div className="rounded-lg border p-3 mb-4 flex flex-wrap items-center gap-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
@@ -4181,10 +4224,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                 </div>
               )}
               <div className="flex items-center gap-2">
-                <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{savedMetrics.length} métrica{savedMetrics.length !== 1 ? "s" : ""} como widgets</span>
+                <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{selectedMetricIdsForDashboard.length} de {savedMetrics.length} métrica{savedMetrics.length !== 1 ? "s" : ""} seleccionada{savedMetrics.length !== 1 ? "s" : ""}</span>
                 {dashboardSyncing && <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--platform-accent)" }} />}
               </div>
-              <Button type="button" variant="outline" size="sm" className="rounded-lg text-xs" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={() => syncMetricsToDashboard(savedMetrics)} disabled={dashboardSyncing}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-lg text-xs"
+                style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
+                onClick={() => {
+                  const metricsToSync = savedMetrics.filter((m) => selectedMetricIdsForDashboard.includes(m.id));
+                  if (metricsToSync.length === 0) {
+                    toast.error("Seleccioná al menos una métrica para incluir en el dashboard.");
+                    return;
+                  }
+                  syncMetricsToDashboard(metricsToSync, savedMetrics);
+                }}
+                disabled={dashboardSyncing}
+              >
                 {linkedDashboardId ? "Sincronizar" : "Crear dashboard"}
               </Button>
             </div>
@@ -4274,7 +4332,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
               {dashboardFilters.length > 0 && (
                 <div className="mt-3 flex justify-end">
-                  <Button type="button" variant="outline" size="sm" className="rounded-lg text-xs" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={() => syncMetricsToDashboard(savedMetrics)} disabled={dashboardSyncing}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg text-xs"
+                    style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
+                    onClick={() => {
+                      const metricsToSync = savedMetrics.filter((m) => selectedMetricIdsForDashboard.includes(m.id));
+                      if (metricsToSync.length === 0) {
+                        toast.error("Seleccioná al menos una métrica para incluir en el dashboard.");
+                        return;
+                      }
+                      syncMetricsToDashboard(metricsToSync, savedMetrics);
+                    }}
+                    disabled={dashboardSyncing}
+                  >
                     {dashboardSyncing && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
                     Guardar filtros en dashboard
                   </Button>
@@ -4284,6 +4357,55 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
           </div>
         </section>
       )}
+
+      {/* Modal de confirmación para eliminar métrica o columna calculada */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && closeDeleteModal()}>
+        <DialogContent className="sm:max-w-md rounded-2xl" style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: "var(--platform-fg)" }}>
+              {deleteTarget?.type === "metric" ? "Eliminar métrica" : "Eliminar columna calculada"}
+            </DialogTitle>
+            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
+              {deleteTarget && (
+                <>
+                  ¿Eliminar {deleteTarget.type === "metric" ? "la métrica" : "la columna calculada"}{" "}
+                  <strong style={{ color: "var(--platform-fg)" }}>
+                    {deleteTarget.type === "metric" ? deleteTarget.name : deleteTarget.name}
+                  </strong>
+                  ? Esta acción no se puede deshacer.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={closeDeleteModal}
+              disabled={saving}
+              className="rounded-xl"
+              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmDeleteFromModal}
+              disabled={saving}
+              className="rounded-xl bg-red-600 hover:bg-red-700 text-white"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Eliminando...
+                </>
+              ) : (
+                "Eliminar"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Modal de ayuda: todas las fórmulas de Excel */}
       <Dialog open={formulasHelpOpen} onOpenChange={setFormulasHelpOpen}>
