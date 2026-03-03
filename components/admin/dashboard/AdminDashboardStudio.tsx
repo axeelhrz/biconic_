@@ -928,11 +928,13 @@ export function AdminDashboardStudio({
                     : "Ejecutá para actualizar";
                 const savedForTitle = savedMetrics.find((s) => (s.name || "").trim() === (w.title || "").trim());
                 const chartTypeFromSaved = (savedForTitle?.aggregationConfig as { chartType?: string })?.chartType ?? (savedForTitle as { chartType?: string })?.chartType;
-                const chartType =
+                const chartTypeRaw =
                   (w.aggregationConfig as { chartType?: string })?.chartType
                   || chartTypeFromSaved
-                  || (w.type === "horizontalBar" ? "bar" : (w.type as "bar" | "line" | "pie" | "doughnut" | "kpi" | "table"))
+                  || (w.type === "horizontalBar" ? "bar" : w.type)
                   || "bar";
+                const chartType: "bar" | "line" | "pie" | "doughnut" | "kpi" | "table" =
+                  ["bar", "line", "pie", "doughnut", "kpi", "table"].includes(chartTypeRaw) ? chartTypeRaw as "bar" | "line" | "pie" | "doughnut" | "kpi" | "table" : "bar";
                 let kpiValue: string | number | undefined;
                 if (w.type === "kpi" && w.config?.datasets?.[0]?.data?.[0] != null) {
                   kpiValue = w.config.datasets[0].data[0];
