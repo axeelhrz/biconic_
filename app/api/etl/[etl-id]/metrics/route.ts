@@ -153,3 +153,71 @@ export async function PUT(
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }
+
+/**
+ * DELETE /api/etl/[etl-id]/metrics
+ * Body: { metricId: string }
+ * Elimina una métrica del ETL (la quita de layout.saved_metrics).
+ * Requiere APP_ADMIN.
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ "etl-id": string }> }
+): Promise<NextResponse> {
+  try {
+    const supabase = await createClient();
+    const auth = await requireAdmin(supabase);
+    if (!auth.ok) {
+      return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
+    }
+
+    const awaitedParams = await params;
+    const etlId = awaitedParams["etl-id"];
+    if (!etlId) {
+      return NextResponse.json({ ok: false, error: "etl-id requerido" }, { status: 400 });
+    }
+
+    const body = await request.json().catch(() => ({}));
+    const metricId = typeof body.metricId === "string" ? body.metricId.trim() : "";
+    if (!metricId) {
+      return NextResponse.json({ ok: false, error: "metricId requerido en el body" }, { status: 400 });
+    }
+
+    const adminClient = createServiceRoleClient();
+    const { data: etlRow, error: fetchError } = await adminClient
+      .from("etl")
+      .select("layout")
+      .eq("id", etlId)
+      .single();
+
+    if (fetchError || !etlRow) {
+      return NextResponse.json({ ok: false, error: "ETL no encontrado" }, { status: 404 });
+    }
+
+    const currentLayout = (etlRow as { layout?: { saved_metrics?: { id?: string }[] } })?.layout ?? {};
+    const savedMetrics = Array.isArray(currentLayout.saved_metrics) ? currentLayout.saved_metrics : [];
+    const updated = savedMetrics.filter((m) => (m as { id?: string }).id !== metricId);
+    if (updated.length === savedMetrics.length) {
+      return NextResponse.json({ ok: false, error: "Métrica no encontrada" }, { status: 404 });
+    }
+
+    const updatedLayout = {
+      ...currentLayout,
+      saved_metrics: updated,
+    };
+
+    const { error: updateError } = await adminClient
+      .from("etl")
+      .update({ layout: updatedLayout })
+      .eq("id", etlId);
+
+    if (updateError) {
+      return NextResponse.json({ ok: false, error: updateError.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Error al eliminar métrica";
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+  }
+}

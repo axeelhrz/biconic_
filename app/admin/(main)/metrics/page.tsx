@@ -3,9 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus, Search, Pencil, BarChart3, Loader2, ChevronRight, Database, Sparkles } from "lucide-react";
+import { Plus, Search, Pencil, BarChart3, Loader2, ChevronRight, Database, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { toast } from "sonner";
 import { searchEtls } from "@/app/admin/(main)/dashboard/actions";
 
 type SavedMetric = { id: string; name: string; metric: { func?: string; field?: string; alias?: string } };
@@ -20,6 +21,7 @@ export default function AdminMetricsPage() {
   const [etlOptions, setEtlOptions] = useState<{ id: string; title: string }[]>([]);
   const [etlOptionsLoading, setEtlOptionsLoading] = useState(false);
   const [selectedEtlId, setSelectedEtlId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fetchMetrics = useCallback(async () => {
     setLoading(true);
@@ -61,6 +63,29 @@ export default function AdminMetricsPage() {
       router.push(`/admin/etl/${selectedEtlId}/metrics`);
     }
   };
+
+  const deleteMetric = useCallback(async (etlId: string, metricId: string, metricName: string) => {
+    if (!confirm(`¿Eliminar la métrica "${metricName}"? Esta acción no se puede deshacer.`)) return;
+    setDeletingId(metricId);
+    try {
+      const res = await fetch(`/api/etl/${etlId}/metrics`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ metricId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        toast.error(json.error || "No se pudo eliminar la métrica.");
+        return;
+      }
+      toast.success("Métrica eliminada");
+      await fetchMetrics();
+    } catch {
+      toast.error("Error al eliminar la métrica.");
+    } finally {
+      setDeletingId(null);
+    }
+  }, [fetchMetrics]);
 
   const totalMetrics = etls.reduce((acc, e) => acc + (e.savedMetrics?.length ?? 0), 0);
   const etlsWithMetrics = etls.filter((e) => (e.savedMetrics?.length ?? 0) > 0);
@@ -329,16 +354,33 @@ export default function AdminMetricsPage() {
                     <span className="font-medium text-sm" style={{ color: "var(--platform-fg)" }}>
                       {m.name}
                     </span>
-                    <span className="text-xs truncate max-w-[50%]" style={{ color: "var(--platform-fg-muted)" }}>
+                    <span className="text-xs truncate max-w-[40%]" style={{ color: "var(--platform-fg-muted)" }}>
                       {m.metric?.func}({m.metric?.field ?? "—"}) {m.metric?.alias ? `as ${m.metric.alias}` : ""}
                     </span>
-                    <Link
-                      href={`/admin/etl/${etl.id}/metrics`}
-                      className="text-sm font-medium shrink-0"
-                      style={{ color: "var(--platform-accent)" }}
-                    >
-                      Editar
-                    </Link>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Link
+                        href={`/admin/etl/${etl.id}/metrics`}
+                        className="text-sm font-medium"
+                        style={{ color: "var(--platform-accent)" }}
+                      >
+                        Editar
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => deleteMetric(etl.id, m.id, m.name)}
+                        disabled={deletingId === m.id}
+                        className="p-1.5 rounded-lg transition-colors hover:bg-red-500/10 disabled:opacity-50"
+                        style={{ color: "var(--platform-fg-muted)" }}
+                        title="Eliminar métrica"
+                        aria-label={`Eliminar ${m.name}`}
+                      >
+                        {deletingId === m.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
