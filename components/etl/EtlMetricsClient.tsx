@@ -1930,6 +1930,35 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
   };
 
+  const deleteDerivedColumn = async (name: string) => {
+    if (!confirm(`¿Eliminar la columna calculada «${name}»?`)) return;
+    const nextDerived = derivedColumns.filter((d) => d.name !== name);
+    const datasetConfigToSave = {
+      ...(data?.datasetConfig && typeof data.datasetConfig === "object" ? (data.datasetConfig as Record<string, unknown>) : {}),
+      derivedColumns: nextDerived.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" })),
+    };
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/etl/${etlId}/metrics`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedMetrics: savedMetrics, datasetConfig: datasetConfigToSave }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        toast.error(json.error ?? "Error al eliminar la columna calculada");
+        return;
+      }
+      setDerivedColumns(nextDerived);
+      setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfigToSave } : null));
+      toast.success("Columna calculada eliminada");
+    } catch {
+      toast.error("Error al eliminar la columna calculada");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const PERIODICITY_OPTIONS = [
     { value: "Diaria", label: "Diaria" },
     { value: "Semanal", label: "Semanal" },
@@ -2656,9 +2685,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Columnas calculadas</p>
                         <p className="text-sm mb-1.5" style={{ color: "var(--platform-fg)" }}>Creadas desde métricas con fórmula; disponibles en «Insertar columna».</p>
-                        <ul className="space-y-1 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        <ul className="space-y-1.5 text-sm" style={{ color: "var(--platform-fg)" }}>
                           {derivedColumns.map((d) => (
-                            <li key={d.name} className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> <strong>{d.name}</strong> = {d.expression} ({d.defaultAggregation})</li>
+                            <li key={d.name} className="flex items-center justify-between gap-2">
+                              <span><span style={{ color: "var(--platform-accent)" }}>✓</span> <strong>{d.name}</strong> = {d.expression} ({d.defaultAggregation})</span>
+                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-red-500 hover:bg-red-500/10" onClick={() => deleteDerivedColumn(d.name)} disabled={saving} title="Eliminar columna calculada" aria-label={`Eliminar ${d.name}`}><Trash2 className="h-3.5 w-3.5" /></Button>
+                            </li>
                           ))}
                         </ul>
                       </div>
@@ -4075,6 +4107,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     {d.expression} · Agregación por defecto: {d.defaultAggregation}
                   </span>
                 </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 text-red-500 hover:bg-red-500/10"
+                  onClick={() => deleteDerivedColumn(d.name)}
+                  disabled={saving}
+                  title="Eliminar columna calculada"
+                  aria-label={`Eliminar ${d.name}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
               </li>
             ))}
           </ul>
