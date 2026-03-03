@@ -537,7 +537,11 @@ export function AdminDashboardEditor({ dashboardId }: DashboardEditorProps) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               tableName: fullTableName,
+              etlId,
               dimension: aggConfig.dimension,
+              dimensions: (aggConfig as { dimensions?: string[] }).dimensions?.length
+                ? (aggConfig as { dimensions: string[] }).dimensions
+                : undefined,
               metrics: aggConfig.metrics.map(({ id, ...rest }) => {
                 const cast =
                   rest.numericCast && rest.numericCast !== "none"

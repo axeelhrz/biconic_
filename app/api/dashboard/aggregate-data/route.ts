@@ -130,6 +130,13 @@ function quotedColumn(name: string): string {
   return s ? `"${s}"` : '""';
 }
 
+/** Cast a numérico que devuelve NULL si el valor no es un número válido (evita "invalid input syntax for type numeric"). */
+function safeNumericCast(expr: string): string {
+  const e = expr.trim();
+  const pattern = "'^[[:space:]]*[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?[[:space:]]*$'";
+  return `(CASE WHEN (${e})::text ~ ${pattern} THEN ((${e})::text)::numeric ELSE NULL END)`;
+}
+
 const SQL_KNOWN_FUNCTIONS = new Set([
   "SUM", "AVG", "AVERAGE", "COUNT", "MIN", "MAX", "COUNTIF", "SUMIF", "AVERAGEIF", "COUNTIFS", "SUMIFS",
   "NULLIF", "COALESCE", "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN", "CEIL", "CEILING", "FLOOR", "TRUNC", "GREATEST", "LEAST",
@@ -572,16 +579,24 @@ export async function POST(req: NextRequest) {
         const fieldExpr = (() => {
           if (resolvedExpr) {
             const sqlExpr = expressionToSql(resolvedExpr, derivedByName);
-            if (sqlExpr) return `(${sqlExpr})::numeric`;
+            if (sqlExpr) return safeNumericCast(`(${sqlExpr})`);
             console.warn("[aggregate-data] expressionToSql returned null for:", resolvedExpr);
           }
           if (derived) {
             console.warn("[aggregate-data] FALLTHROUGH: derived col", m.field, "expr:", derived.expression, "resolvedExpr:", resolvedExpr);
           }
+          // Si la métrica guardada no pudo resolverse a un campo real (field === nombre), evitar columna inexistente
+          const isSavedNameAsColumn = savedMetric && String(effectiveField || "").trim().toLowerCase() === String(m.field || "").trim().toLowerCase();
+          if (isSavedNameAsColumn && (func === "COUNT" || func.startsWith("COUNT(DISTINCT"))) {
+            return "1";
+          }
+          if (isSavedNameAsColumn) {
+            return "0";
+          }
           const col = quotedColumn(effectiveField!);
           if (m.cast === "sanitize")
-            return `regexp_replace(${col}::text, '[^0-9\\.-]', '', 'g')::numeric`;
-          if (m.cast === "numeric") return `${col}::numeric`;
+            return safeNumericCast(`regexp_replace(${col}::text, '[^0-9\\.-]', '', 'g')`);
+          if (m.cast === "numeric") return safeNumericCast(col);
           return col;
         })();
 
@@ -699,7 +714,7 @@ export async function POST(req: NextRequest) {
           } else {
             fieldExpression =
               f.cast === "numeric"
-                ? `${col}::numeric`
+                ? safeNumericCast(col)
                 : col;
           }
 
