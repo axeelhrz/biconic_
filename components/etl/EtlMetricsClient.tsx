@@ -19,6 +19,7 @@ import {
   Legend,
   Filler,
 } from "chart.js";
+import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,7 +48,8 @@ ChartJS.register(
   ArcElement,
   Tooltip,
   Legend,
-  Filler
+  Filler,
+  ChartDataLabels
 );
 
 const AGG_FUNCS = [
@@ -3863,7 +3865,36 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             x: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", maxTicksLimit: 8 } },
                             y: { grid: { color: "var(--platform-border)" }, ticks: { color: "var(--platform-fg-muted)", ...(stepSize != null ? { stepSize } : {}) }, ...(yMin != null ? { min: yMin } : {}), ...(yMax != null ? { max: yMax } : {}) },
                           };
-                          const baseOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } } };
+                          let legendTextColor = "rgba(255,255,255,0.9)";
+                          if (typeof document !== "undefined") {
+                            const v = getComputedStyle(document.documentElement).getPropertyValue("--platform-fg")?.trim() || "";
+                            if (v && (v.startsWith("#") || v.startsWith("rgb"))) legendTextColor = v;
+                          }
+                          const dataLabelsPluginOpts = showDataLabels
+                            ? {
+                                display: true,
+                                color: legendTextColor,
+                                font: { size: 11, weight: "bold" as const },
+                                formatter: (value: unknown, ctx: { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
+                                  const n = Number(value);
+                                  if (formChartType === "pie" || formChartType === "doughnut") {
+                                    const data = ctx?.chart?.data?.datasets?.[0]?.data;
+                                    if (Array.isArray(data)) {
+                                      const total = data.reduce((a: number, b: unknown) => a + Number(b), 0);
+                                      const pct = total ? (n / total) * 100 : 0;
+                                      return `${pct.toFixed(1)}%`;
+                                    }
+                                  }
+                                  return formatNumber(n);
+                                },
+                              }
+                            : { display: false };
+                          const baseOpts = {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            layout: { padding: showDataLabels ? 8 : 0 },
+                            plugins: { legend: { display: true }, datalabels: dataLabelsPluginOpts },
+                          };
                           const areaData = { ...previewChartConfig, datasets: previewChartConfig.datasets.map((ds: any) => ({ ...ds, fill: true })) };
                           const scatterData = previewChartConfig.datasets.length >= 1 ? {
                             datasets: [{
@@ -3875,11 +3906,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           } : previewChartConfig;
                           const radarData = { labels: previewChartConfig.labels, datasets: previewChartConfig.datasets.map((ds: any) => ({ ...ds, fill: true, backgroundColor: ds.backgroundColor, borderColor: ds.borderColor })) };
                           const ds0 = previewChartConfig.datasets?.[0];
-                          let legendTextColor = "rgba(255,255,255,0.9)";
-                          if (typeof document !== "undefined") {
-                            const v = getComputedStyle(document.documentElement).getPropertyValue("--platform-fg")?.trim() || "";
-                            if (v && (v.startsWith("#") || v.startsWith("rgb"))) legendTextColor = v;
-                          }
                           const pieDoughnutLegendOpts: Record<string, unknown> = (ds0 && Array.isArray(ds0.backgroundColor) && previewChartConfig.labels?.length) ? {
                             display: true,
                             position: "right",
@@ -3910,8 +3936,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                               {formChartType === "horizontalBar" && <Bar data={previewChartConfig} options={{ ...baseOpts, indexAxis: "y" as const, scales: { x: axisScales.x, y: { ...axisScales.y, ticks: { ...axisScales.y.ticks, maxTicksLimit: 12 } } } }} />}
                               {formChartType === "line" && <Line data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
                               {formChartType === "area" && <Line data={areaData} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "pie" && <Pie data={previewChartConfig} options={{ ...baseOpts, plugins: { legend: pieDoughnutLegendOpts } } as any} />}
-                              {formChartType === "doughnut" && <Doughnut data={previewChartConfig} options={{ ...baseOpts, plugins: { legend: pieDoughnutLegendOpts } } as any} />}
+                              {formChartType === "pie" && <Pie data={previewChartConfig} options={{ ...baseOpts, plugins: { ...baseOpts.plugins, legend: pieDoughnutLegendOpts } } as any} />}
+                              {formChartType === "doughnut" && <Doughnut data={previewChartConfig} options={{ ...baseOpts, plugins: { ...baseOpts.plugins, legend: pieDoughnutLegendOpts } } as any} />}
                               {formChartType === "scatter" && <Scatter data={scatterData as { datasets: { label: string; data: { x: number; y: number }[]; backgroundColor: string; borderColor: string }[] }} options={{ ...baseOpts, scales: axisScales }} />}
                               {formChartType === "combo" && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
                               {!["bar", "horizontalBar", "line", "area", "pie", "doughnut", "scatter", "combo", "kpi", "table", "map"].includes(formChartType) && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
