@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { Json } from "@/lib/supabase/database.types";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 
@@ -348,7 +349,7 @@ async function propagateMetricsToDashboards(
 
       const { error: updateErr } = await adminClient
         .from("dashboard")
-        .update({ layout: updatedLayout })
+        .update({ layout: updatedLayout as Json })
         .eq("id", dashboardId);
 
       if (updateErr) {
