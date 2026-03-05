@@ -161,11 +161,17 @@ export function buildWhereClauseMy(conds: FilterCondition[] = []) {
   return { clause: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
 }
 
+// Firebird: identificador sin comillas para que el motor lo pase a mayúsculas y coincida con columnas creadas sin comillas (evita -206 Column unknown por diferencias de casing).
+function firebirdUnquotedIdent(name: string): string {
+  const s = (name || "").replace(/[^A-Za-z0-9_]/g, "_").toUpperCase();
+  return s || "COL";
+}
+
 // WHERE clause for Firebird (positional ? params)
 export function buildWhereClauseFirebird(conds: FilterCondition[] = []) {
   const params: any[] = [];
   const parts = conds.map((c) => {
-    const col = `"${(c.column || "").replace(/"/g, '""')}"`;
+    const col = firebirdUnquotedIdent(c.column || "");
     switch (c.operator) {
       case "is null":
         return `${col} IS NULL`;

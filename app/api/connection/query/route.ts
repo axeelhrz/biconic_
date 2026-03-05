@@ -86,10 +86,15 @@ function buildWhereClausePg(conds: FilterCondition[]) {
   return { clause, params };
 }
 
+function firebirdUnquotedIdent(name: string): string {
+  const s = (name || "").replace(/[^A-Za-z0-9_]/g, "_").toUpperCase();
+  return s || "COL";
+}
+
 function buildWhereClauseFirebird(conds: FilterCondition[]) {
   const params: any[] = [];
   const parts = conds.map((c) => {
-    const col = `"${(c.column || "").replace(/"/g, '""')}"`;
+    const col = firebirdUnquotedIdent(c.column || "");
     switch (c.operator) {
       case "is null":
         return `${col} IS NULL`;
@@ -403,15 +408,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const tablePart = table.includes(".")
         ? table.split(".", 2).map((s) => `"${s.replace(/"/g, '""')}"`).join(".")
         : `"${tableName.replace(/"/g, '""')}"`;
-      const cols =
-        columns && columns.length
-          ? columns.map((c) => `"${(c || "").replace(/"/g, '""')}"`).join(", ")
-          : "*";
+      // Firebird: usar siempre SELECT * para evitar -206 (Column unknown) por nombre/casing distinto al de la base.
+      const cols = "*";
       const { clause, params } = buildWhereClauseFirebird(conditions || []);
       const limitNum = Math.max(0, Math.min(Number(limit) || 100, ETL_MAX_ROWS_CEILING));
       const offsetNum = Math.max(0, Number(offset) || 0);
       const sql = `SELECT FIRST ${limitNum} SKIP ${offsetNum} ${cols} FROM ${tablePart} ${clause}`;
       const allParams = [...params];
+      const wantColumns = (columns && columns.length ? columns : null) as string[] | null;
       return await new Promise<NextResponse>((resolve, reject) => {
         const opts = {
           host,
@@ -435,17 +439,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               resolve(NextResponse.json({ ok: false, error: errQ.message }, { status: 400 }));
               return;
             }
+            let outRows = rows || [];
+            if (wantColumns && wantColumns.length > 0 && outRows.length > 0) {
+              const keys = Object.keys(outRows[0] as object);
+              const keyMap = Object.fromEntries(keys.map((k) => [k.toUpperCase(), k]));
+              outRows = outRows.map((r: Record<string, unknown>) => {
+                const out: Record<string, unknown> = {};
+                for (const c of wantColumns) {
+                  const cu = (c || "").toUpperCase();
+                  const actualKey = keyMap[cu] ?? (Object.prototype.hasOwnProperty.call(r, c) ? c : null);
+                  if (actualKey != null && Object.prototype.hasOwnProperty.call(r, actualKey)) out[c] = r[actualKey];
+                }
+                return out;
+              });
+            }
             let total: number | undefined = undefined;
             if (count) {
               const countSql = `SELECT COUNT(*) AS c FROM ${tablePart} ${clause}`;
               db.query(countSql, params, (errC: Error | null, cntRows: any[]) => {
                 if (!errC && cntRows?.[0]) total = Number((cntRows[0] as any).C ?? (cntRows[0] as any).c);
                 detach();
-                resolve(NextResponse.json({ ok: true, rows: rows || [], total }));
+                resolve(NextResponse.json({ ok: true, rows: outRows, total }));
               });
             } else {
               detach();
-              resolve(NextResponse.json({ ok: true, rows: rows || [], total }));
+              resolve(NextResponse.json({ ok: true, rows: outRows, total }));
             }
           });
         });

@@ -707,7 +707,8 @@ async function executeEtlPipeline(
               return new Promise((resolve, reject) => {
                 Firebird.attach(opts, (err: Error | null, db: any) => {
                   if (err) return reject(err);
-                  const cols = columns?.length ? columns.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(", ") : "*";
+                  // Firebird: SELECT * para evitar -206 (Column unknown) por nombre/casing.
+                  const cols = "*";
                   const escapeFb = (v: any): string => {
                     if (v == null) return "NULL";
                     if (typeof v === "boolean") return v ? "1" : "0";
@@ -791,9 +792,8 @@ async function executeEtlPipeline(
             );
             let offset = 0;
             for (;;) {
-              const cols = leftCols.length
-                ? leftCols.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(", ")
-                : "*";
+              // Firebird: SELECT * para evitar -206 (Column unknown) por nombre/casing.
+              const cols = "*";
               const sql =
                 offset === 0
                   ? `SELECT FIRST ${pageSize} ${cols} FROM ${leftTablePart} ${leftClause}`
