@@ -142,14 +142,12 @@ export async function POST(req: NextRequest) {
         ? decryptConnectionPassword((conn as any).db_password_encrypted)
         : (conn as any).db_password ?? process.env.FLEXXUS_PASSWORD ?? "";
       const Firebird = require("node-firebird");
-      // Firebird: solo nombre de tabla/relación (sin esquema) para evitar "Token unknown" con el punto en FROM
+      // Firebird: SELECT * para evitar -206 (Column unknown) por nombre/casing distinto; extraemos valores distintos en JS
       const tableNameOnly = tableQualified.trim().includes(".")
         ? tableQualified.trim().split(".").pop()!.trim()
         : tableQualified.trim();
       const relationName = /^[A-Z0-9_]+$/i.test(tableNameOnly) ? tableNameOnly.toUpperCase() : `"${tableNameOnly.replace(/"/g, '""')}"`;
-      const colNameOnly = columnName.trim().includes(".") ? columnName.trim().split(".").pop()!.trim() : columnName.trim();
-      const colPart = /^[A-Z0-9_]+$/i.test(colNameOnly) ? colNameOnly.toUpperCase() : `"${colNameOnly.replace(/"/g, '""')}"`;
-      const sql = `SELECT FIRST ${MAX_VALUES} DISTINCT ${colPart} AS val FROM ${relationName} WHERE ${colPart} IS NOT NULL ORDER BY 1`;
+      const sql = `SELECT FIRST ${MAX_VALUES} * FROM ${relationName}`;
       return await new Promise<NextResponse>((resolve) => {
         const opts = {
           host: (conn as any).db_host || "localhost",
@@ -170,10 +168,24 @@ export async function POST(req: NextRequest) {
               resolve(NextResponse.json({ ok: false, error: errQ.message }, { status: 400 }));
               return;
             }
-            const values = (rows || []).map((r: any) => {
-              const v = r?.VAL ?? r?.val;
-              return v != null ? String(v) : "";
-            });
+            const rawRows = rows || [];
+            const colLower = columnName.trim().toLowerCase().replace(/^[^.]*\./, "");
+            const key = rawRows[0] && typeof rawRows[0] === "object"
+              ? Object.keys(rawRows[0]).find((k) => k.toLowerCase() === colLower) ?? columnName.trim()
+              : columnName.trim();
+            const seen = new Set<string>();
+            const values: string[] = [];
+            for (const r of rawRows) {
+              const v = r && typeof r === "object" ? (r[key] ?? r[colLower]) : null;
+              if (v != null && v !== "") {
+                const s = String(v);
+                if (!seen.has(s)) {
+                  seen.add(s);
+                  values.push(s);
+                }
+              }
+            }
+            values.sort((a, b) => a.localeCompare(b, "es"));
             resolve(NextResponse.json({ ok: true, values }));
           });
         });
