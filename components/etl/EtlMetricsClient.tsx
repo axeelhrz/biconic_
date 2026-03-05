@@ -4006,10 +4006,37 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       )}
                     </div>
 
-                    {/* Colores: vinculado al tipo de gráfico (porciones en torta/dona, series en bar/line) */}
+                    {/* Colores: vinculado al tipo de gráfico (porciones en torta/dona, series en bar/line, categorías por barra) */}
                     <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                       <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Colores</Label>
-                      <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Según el tipo <strong>{CHART_TYPES.find((t) => t.value === formChartType)?.label ?? formChartType}</strong>: {formChartType === "pie" || formChartType === "doughnut" ? "cada porción (categoría del Eje X)." : chartSeriesField ? "cada serie." : "cada métrica del Eje Y."}</p>
+                      {(() => {
+                        const isBarOneMetricManyCategories =
+                          (formChartType === "bar" || formChartType === "horizontalBar") &&
+                          !chartSeriesField &&
+                          chartYAxes.length === 1 &&
+                          Array.isArray(previewChartConfig?.labels) &&
+                          previewChartConfig.labels.length > 0;
+                        const colorLabelsDesc =
+                          formChartType === "pie" || formChartType === "doughnut"
+                            ? "cada porción (categoría del Eje X)."
+                            : chartSeriesField
+                              ? "cada serie."
+                              : isBarOneMetricManyCategories
+                                ? "cada categoría del Eje X (cada barra)."
+                                : "cada métrica del Eje Y.";
+                        const colorLabels: string[] =
+                          formChartType === "pie" || formChartType === "doughnut"
+                            ? ((previewChartConfig?.labels as string[]) ?? [])
+                            : chartSeriesField && previewChartConfig?.datasets?.length
+                              ? previewChartConfig.datasets.map((d: { label?: string }) => d.label ?? "")
+                              : isBarOneMetricManyCategories && previewChartConfig?.labels?.length
+                                ? (previewChartConfig.labels as string[])
+                                : chartYAxes.length > 0
+                                  ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k)
+                                  : effectiveFormMetrics.map((m) => m.alias || m.field || "Métrica");
+                        return (
+                          <>
+                      <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Según el tipo <strong>{CHART_TYPES.find((t) => t.value === formChartType)?.label ?? formChartType}</strong>: {colorLabelsDesc}</p>
                       {(() => {
                         const defaultPaletteColors = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16"];
                         const presetPalettes: { name: string; colors: string[] }[] = [
@@ -4019,13 +4046,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           { name: "Cálido", colors: ["#dc2626", "#ea580c", "#d97706", "#ca8a04", "#65a30d", "#16a34a"] },
                           { name: "Frío", colors: ["#1d4ed8", "#2563eb", "#0284c7", "#0891b2", "#0d9488", "#059669"] },
                         ];
-                        const colorLabels: string[] = formChartType === "pie" || formChartType === "doughnut"
-                          ? ((previewChartConfig?.labels as string[]) ?? [])
-                          : chartSeriesField && previewChartConfig?.datasets?.length
-                            ? previewChartConfig.datasets.map((d: { label?: string }) => d.label ?? "")
-                            : chartYAxes.length > 0
-                              ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k)
-                              : effectiveFormMetrics.map((m) => m.alias || m.field || "Métrica");
                         return (
                           <>
                             <div className="flex flex-wrap gap-2 mb-3">
@@ -4063,6 +4083,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             {chartColorScheme !== "auto" && colorLabels.length === 0 && (
                               <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Actualizá la vista previa en el paso anterior para ver las categorías o series y asignar colores.</p>
                             )}
+                          </>
+                        );
+                      })()}
                           </>
                         );
                       })()}
@@ -4278,6 +4301,73 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     )}
                     </div>
                   </div>
+                  {/* Colores en vista previa (misma lógica que paso Formato) */}
+                  {previewData && previewData.length > 0 && !["kpi", "table", "map"].includes(formChartType) && (() => {
+                    const defaultPaletteColors = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16"];
+                    const presetPalettes: { name: string; colors: string[] }[] = [
+                      { name: "Predeterminado", colors: ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"] },
+                      { name: "Corporativo", colors: ["#1e40af", "#0369a1", "#0891b2", "#059669", "#65a30d", "#ca8a04"] },
+                      { name: "Pastel", colors: ["#93c5fd", "#86efac", "#fde68a", "#fca5a5", "#c4b5fd", "#f9a8d4"] },
+                      { name: "Cálido", colors: ["#dc2626", "#ea580c", "#d97706", "#ca8a04", "#65a30d", "#16a34a"] },
+                      { name: "Frío", colors: ["#1d4ed8", "#2563eb", "#0284c7", "#0891b2", "#0d9488", "#059669"] },
+                    ];
+                    const isBarOneMetricManyCategories =
+                      (formChartType === "bar" || formChartType === "horizontalBar") &&
+                      !chartSeriesField &&
+                      chartYAxes.length === 1 &&
+                      Array.isArray(previewChartConfig?.labels) &&
+                      previewChartConfig.labels.length > 0;
+                    const colorLabelsD3: string[] =
+                      formChartType === "pie" || formChartType === "doughnut"
+                        ? ((previewChartConfig?.labels as string[]) ?? [])
+                        : chartSeriesField && previewChartConfig?.datasets?.length
+                          ? previewChartConfig.datasets.map((d: { label?: string }) => d.label ?? "")
+                          : isBarOneMetricManyCategories && previewChartConfig?.labels?.length
+                            ? (previewChartConfig.labels as string[])
+                            : chartYAxes.length > 0
+                              ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k)
+                              : effectiveFormMetrics.map((m) => m.alias || m.field || "Métrica");
+                    return (
+                      <div className="mt-4 rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Colores</Label>
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {presetPalettes.map((p) => (
+                            <button key={p.name} type="button" onClick={() => {
+                              const newColors: Record<string, string> = {};
+                              colorLabelsD3.forEach((s, i) => { newColors[s] = p.colors[i % p.colors.length]!; });
+                              setChartSeriesColors(newColors);
+                              setChartColorScheme("fixed");
+                            }} className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 border transition-all" style={{ borderColor: "var(--platform-border)" }}>
+                              <div className="flex gap-0.5">{p.colors.slice(0, 6).map((c, i) => (<div key={i} className="w-4 h-4 rounded-sm" style={{ background: c }} />))}</div>
+                              <span className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>{p.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex gap-2 mb-3">
+                          {([["auto", "Automático"], ["fixed", "Personalizado"]] as [string, string][]).map(([val, lbl]) => (
+                            <button key={val} type="button" onClick={() => setChartColorScheme(val)} className="rounded-lg px-3 py-1.5 text-xs font-medium border transition-all" style={{ background: chartColorScheme === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartColorScheme === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartColorScheme === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                          ))}
+                        </div>
+                        {chartColorScheme !== "auto" && colorLabelsD3.length > 0 && (
+                          <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {colorLabelsD3.map((label, idx) => {
+                              const color = chartSeriesColors[label] || defaultPaletteColors[idx % defaultPaletteColors.length]!;
+                              return (
+                                <div key={label || idx} className="flex items-center gap-3">
+                                  <input type="color" value={color} onChange={(e) => setChartSeriesColors((prev) => ({ ...prev, [label]: e.target.value }))} className="w-8 h-8 rounded cursor-pointer border-0 p-0" style={{ background: "transparent" }} />
+                                  <div className="w-6 h-6 rounded-md border shrink-0" style={{ background: color, borderColor: "var(--platform-border)" }} />
+                                  <span className="text-sm truncate" style={{ color: "var(--platform-fg)" }}>{label || "(sin nombre)"}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {chartColorScheme !== "auto" && colorLabelsD3.length === 0 && (
+                          <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná «Personalizado» cuando haya categorías o series para asignar un color a cada una.</p>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="flex justify-between items-center">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
                     <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>
