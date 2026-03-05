@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
+import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
 type FilterCondition = {
   column: string;
@@ -288,7 +289,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         { status: 400 }
       );
 
-    if (!limit || limit < 1 || limit > 1000) limit = 50;
+    if (!limit || limit < 1 || limit > ETL_MAX_ROWS_CEILING) limit = 50;
     if (!offset || offset < 0) offset = 0;
 
     // Auth

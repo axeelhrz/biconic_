@@ -21,6 +21,7 @@ import {
   getValue,
   CastTargetType
 } from "@/lib/etl/transformations";
+import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
 // ===================================================================
 // TIPOS Y DEFINICIONES
@@ -702,7 +703,7 @@ async function executeEtlPipeline(
                 password: pwd || "",
                 lowercase_keys: false,
               };
-              const limit = 500000;
+              const limit = ETL_MAX_ROWS_CEILING;
               return new Promise((resolve, reject) => {
                 Firebird.attach(opts, (err: Error | null, db: any) => {
                   if (err) return reject(err);
@@ -966,7 +967,7 @@ async function executeEtlPipeline(
             try {
               const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
               const { clause, params } = buildWhereClausePg(conditions);
-              const limitVal = limit ?? 500000;
+              const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
               const offsetVal = offset ?? 0;
               const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause} ORDER BY 1 ASC LIMIT ${limitVal} OFFSET ${offsetVal}`;
               const res = await pgClient.query(q, params);
@@ -990,7 +991,7 @@ async function executeEtlPipeline(
             try {
               const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
               const { clause, params } = buildWhereClausePg(conditions);
-              const limitVal = limit ?? 500000;
+              const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
               const offsetVal = offset ?? 0;
               const q = `SELECT ${sel} FROM ${quoteQualified(physicalTable)} ${clause} ORDER BY 1 ASC LIMIT ${limitVal} OFFSET ${offsetVal}`;
               const res = await excelClient.query(q, params);

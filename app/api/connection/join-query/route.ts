@@ -3,6 +3,7 @@ import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
 import { randomUUID } from "crypto";
+import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
 // --- TIPOS DE DATOS ---
 type FilterCondition = {
@@ -378,7 +379,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     log("Cuerpo de la petición (sanitizado):", sanitizedBody);
 
     let { limit, offset } = body;
-    if (!limit || limit < 1 || limit > 1000) limit = 50;
+    if (!limit || limit < 1 || limit > ETL_MAX_ROWS_CEILING) limit = 50;
     if (!offset || offset < 0) offset = 0;
 
     log("Autenticando usuario...");

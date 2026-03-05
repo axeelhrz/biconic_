@@ -3,6 +3,7 @@ import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
+import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
 type FilterCondition = {
   column: string;
@@ -195,7 +196,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         { ok: false, error: "Tabla requerida" },
         { status: 400 }
       );
-    if (!limit || limit < 1 || limit > 1000) limit = 50;
+    if (!limit || limit < 1 || limit > ETL_MAX_ROWS_CEILING) limit = 50;
     if (!offset || offset < 0) offset = 0;
 
     // Auth
@@ -407,7 +408,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           ? columns.map((c) => `"${(c || "").replace(/"/g, '""')}"`).join(", ")
           : "*";
       const { clause, params } = buildWhereClauseFirebird(conditions || []);
-      const limitNum = Math.max(0, Math.min(Number(limit) || 100, 10000));
+      const limitNum = Math.max(0, Math.min(Number(limit) || 100, ETL_MAX_ROWS_CEILING));
       const offsetNum = Math.max(0, Number(offset) || 0);
       const sql = `SELECT FIRST ${limitNum} SKIP ${offsetNum} ${cols} FROM ${tablePart} ${clause}`;
       const allParams = [...params];

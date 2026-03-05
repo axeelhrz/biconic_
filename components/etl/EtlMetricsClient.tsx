@@ -505,7 +505,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [relationFormJoinType, setRelationFormJoinType] = useState<"INNER" | "LEFT">("LEFT");
   const [connectionTables, setConnectionTables] = useState<{ schema: string; name: string; columns: { name: string }[] }[]>([]);
   const [connectionTablesLoading, setConnectionTablesLoading] = useState(false);
-  /** Límite de filas para profiling del dataset: 200, 500, 5000 o "unlimited" (hasta 50k). */
+  /** Límite de filas para profiling del dataset: 200, 500, 5000 o "unlimited" (sin límite práctico; techo alto en backend). */
   const [profileRowLimit, setProfileRowLimit] = useState<200 | 500 | 5000 | "unlimited">(500);
   const [otherTableColumnsLoaded, setOtherTableColumnsLoaded] = useState<string[]>([]);
   const [otherTableColumnsLoading, setOtherTableColumnsLoading] = useState(false);

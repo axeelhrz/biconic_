@@ -20,6 +20,7 @@ import {
   inferColumnTypes,
   CastTargetType
 } from "@/lib/etl/transformations";
+import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
 // Reuse types from run/route.ts (duplicated here for independence)
 type FilterCondition = {
@@ -165,7 +166,7 @@ export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   let body: RunBody | null = null;
-  const PREVIEW_LIMIT = 1000;
+  const PREVIEW_MAX_ROWS = ETL_MAX_ROWS_CEILING;
 
   try {
     body = (await req.json()) as RunBody | null;
@@ -204,7 +205,7 @@ export async function POST(req: NextRequest) {
       };
     }
 
-    // Generator restricted to a HARD LIMIT of 1000 rows
+    // Generator can return up to PREVIEW_MAX_ROWS (practical no-limit for large DBs)
     async function* dataSourceGenerator() {
       if (!body) return;
 
@@ -259,7 +260,7 @@ export async function POST(req: NextRequest) {
         const runOne = async (client: PgClient, src: typeof left, tableQ: string) => {
           const { clause, params } = buildWhereClausePg(src.filter?.conditions || []);
           const sel = src.filter?.columns?.length ? src.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
-          const q = `SELECT ${sel} FROM ${quoteQualified(tableQ)} ${clause} ORDER BY 1 ASC LIMIT ${Math.floor(PREVIEW_LIMIT / 2)}`;
+          const q = `SELECT ${sel} FROM ${quoteQualified(tableQ)} ${clause} ORDER BY 1 ASC LIMIT ${PREVIEW_MAX_ROWS}`;
           const res = await client.query(q, params);
           return (res.rows || []).map((r: Record<string, any>) => {
             const out: Record<string, any> = {};
@@ -278,7 +279,7 @@ export async function POST(req: NextRequest) {
           const rightSel = rightSrc.filter?.columns?.length ? rightSrc.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
           const leftQ = `SELECT ${leftSel} FROM ${quoteQualified(leftTableQ)} ${leftClause}`;
           const rightQ = `SELECT ${rightSel} FROM ${quoteQualified(rightTableQ)} ${rightClauseOffset}`;
-          const unionSql = `(${leftQ}) UNION ALL (${rightQ}) ORDER BY 1 ASC LIMIT ${PREVIEW_LIMIT}`;
+          const unionSql = `(${leftQ}) UNION ALL (${rightQ}) ORDER BY 1 ASC LIMIT ${PREVIEW_MAX_ROWS}`;
           const res = await client.query(unionSql, [...leftParams, ...rightParams]);
           return (res.rows || []).map((r: Record<string, any>) => {
             const out: Record<string, any> = {};
@@ -328,7 +329,7 @@ export async function POST(req: NextRequest) {
             clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
             idx++;
           }
-          const limit = Math.floor(PREVIEW_LIMIT / 2);
+          const limit = PREVIEW_MAX_ROWS;
           const Firebird = require("node-firebird");
           const opts = {
             host: conn.db_host || "localhost",
@@ -489,7 +490,7 @@ export async function POST(req: NextRequest) {
               conditions: FilterCondition[]
             ): Promise<Record<string, any>[]> => {
               const connType = (conn.type || "").toLowerCase();
-              const limit = Math.min(PREVIEW_LIMIT, 500);
+              const limit = Math.min(PREVIEW_MAX_ROWS, body.limit ?? PREVIEW_MAX_ROWS);
               const normalize = (row: Record<string, any>) => {
                 const out: Record<string, any> = {};
                 for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
@@ -609,7 +610,7 @@ export async function POST(req: NextRequest) {
               }
             }
 
-            if (joined.length) yield { rows: joined.slice(0, PREVIEW_LIMIT), query: `JOIN (${leftTable} + ${rightTable}) en memoria` };
+            if (joined.length) yield { rows: joined.slice(0, PREVIEW_MAX_ROWS), query: `JOIN (${leftTable} + ${rightTable}) en memoria` };
             return;
           }
 
@@ -662,7 +663,7 @@ export async function POST(req: NextRequest) {
             const baseQuery = `SELECT ${selectParts.join(", ")} FROM ${lQ} AS l ${joinClause} ${whereClause}`;
 
             // STRICT LIMIT for preview with deterministic ordering
-            const limitQuery = `${baseQuery} ORDER BY 1 ASC LIMIT ${PREVIEW_LIMIT}`;
+            const limitQuery = `${baseQuery} ORDER BY 1 ASC LIMIT ${PREVIEW_MAX_ROWS}`;
             
             const res = await client1.query(limitQuery, params);
             if (res.rows.length) yield { rows: res.rows, query: baseQuery };
@@ -762,7 +763,7 @@ export async function POST(req: NextRequest) {
               if (pos === -1) break;
               clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
             }
-            const limit = Math.min(PREVIEW_LIMIT, 1000);
+            const limit = Math.min(PREVIEW_MAX_ROWS, body.limit ?? PREVIEW_MAX_ROWS);
             const Firebird = require("node-firebird");
             const fbUser = String((conn as any).db_user ?? "").trim();
             if (!fbUser) throw new Error("La conexión Firebird no tiene usuario definido. Revisá que la conexión tenga usuario guardado. Si la creaste con usuario y contraseña, asegurate de que ENCRYPTION_KEY en el servidor sea la misma que cuando se creó.");
@@ -838,7 +839,7 @@ export async function POST(req: NextRequest) {
           }
 
           const BATCH_SIZE = 5000;
-          const MAX_SCAN_LIMIT = 100000;
+          const MAX_SCAN_LIMIT = PREVIEW_MAX_ROWS;
           let offset = 0;
           let totalFixedScanned = 0;
 
@@ -1089,9 +1090,7 @@ export async function POST(req: NextRequest) {
       }
       
       // Stop if we hit the limit (already limited by SQL but good safety)
-      const maxRows = body.inferTypes
-        ? Math.min(body.limit || 200, 500)
-        : PREVIEW_LIMIT;
+      const maxRows = body.limit ?? PREVIEW_MAX_ROWS;
       if (allPreviewRows.length >= maxRows) break;
     }
 

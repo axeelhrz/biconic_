@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import postgres from "postgres";
+import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
 /** Timeout mayor para lectura vía Postgres directo (etl_output) y tablas grandes. */
 export const maxDuration = 30;
@@ -261,8 +262,8 @@ async function fetchColumnTypesFromSchema(
   }
 }
 
-/** Límite máximo de filas para profiling "sin límite" (evitar saturar memoria/tiempo). */
-const MAX_PROFILE_ROWS = 50_000;
+/** Límite máximo de filas para profiling "sin límite" (techo alto para bases muy grandes). */
+const MAX_PROFILE_ROWS = ETL_MAX_ROWS_CEILING;
 
 /** Lee count y filas de etl_output vía Postgres directo (el esquema suele no estar expuesto en la API Supabase). */
 async function fetchFromEtlOutputViaPostgres(
