@@ -578,13 +578,15 @@ export function DashboardViewer({
     const borderColor = themeMerged.cardBorderColor ?? DEFAULT_DASHBOARD_THEME.cardBorderColor;
     const borderWidth = themeMerged.cardBorderWidth ?? DEFAULT_DASHBOARD_THEME.cardBorderWidth ?? 1;
     const radius = themeMerged.cardBorderRadius ?? DEFAULT_DASHBOARD_THEME.cardBorderRadius ?? 20;
+    const textColor = themeMerged.textColor ?? DEFAULT_DASHBOARD_THEME.textColor;
+    const textMutedColor = themeMerged.textMutedColor ?? DEFAULT_DASHBOARD_THEME.textMutedColor;
     return {
       "--client-font": themeMerged.fontFamily ?? DEFAULT_DASHBOARD_THEME.fontFamily,
       "--client-accent": themeMerged.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor,
       "--client-bg": bg,
       "--client-card": cardBg,
-      "--client-text": themeMerged.textColor ?? DEFAULT_DASHBOARD_THEME.textColor,
-      "--client-text-muted": themeMerged.textMutedColor ?? DEFAULT_DASHBOARD_THEME.textMutedColor,
+      "--client-text": textColor,
+      "--client-text-muted": textMutedColor,
       "--client-border": borderColor,
       "--client-border-width": `${borderWidth}px`,
       "--client-radius": `${radius}px`,
@@ -592,6 +594,8 @@ export function DashboardViewer({
       "--platform-border": borderColor,
       "--platform-card-border-width": `${borderWidth}px`,
       "--platform-card-radius": `${radius}px`,
+      "--platform-fg": textColor,
+      "--platform-fg-muted": textMutedColor,
     } as React.CSSProperties;
   }, [useClientTheme, themeMerged]);
 
@@ -716,6 +720,7 @@ export function DashboardViewer({
                   filterValue={filterValues[widget.id]}
                   onFilterChange={handleFilterChange}
                   minHeight={widget.minHeight ?? 240}
+                  darkChartTheme={useClientTheme}
                 />
               </div>
             ))}

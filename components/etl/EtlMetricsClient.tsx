@@ -544,15 +544,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     else if (wizard === "D") { setWizard("C"); setWizardStep(WIZARD_STEPS.C.length - 1); }
   };
 
-  const fetchData = useCallback(async (opts?: { silent?: boolean; sampleRows?: number; unlimited?: boolean }) => {
+  const fetchData = useCallback(async (opts?: { silent?: boolean; sampleRows?: number; unlimited?: boolean; bustCache?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     try {
       // Pedir muestra para Profiling; unlimited=1 permite hasta 50k filas sin límite artificial
       const unlimited = opts?.unlimited === true;
       const sampleRows = opts?.sampleRows ?? 500;
-      const url = unlimited
+      let url = unlimited
         ? `/api/etl/${etlId}/metrics-data?unlimited=1`
         : `/api/etl/${etlId}/metrics-data?sampleRows=${Math.min(50000, Math.max(0, sampleRows))}`;
+      if (opts?.bustCache) url += `&_t=${Date.now()}`;
       const res = await fetch(url);
       const json: MetricsDataResponse = await res.json();
       if (!res.ok || !json.ok || !json.data) {
@@ -561,7 +562,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       }
       setData(json.data);
       setEtlData(buildEtlDataFromMetricsResponse(json.data));
-      if (Array.isArray(json.data?.rawRows)) setRawTableData(json.data.rawRows);
+      // Nueva referencia para forzar re-render y evitar caché en la tabla
+      setRawTableData(Array.isArray(json.data?.rawRows) ? [...json.data.rawRows] : []);
     } catch {
       toast.error("Error al cargar métricas");
     } finally {
@@ -2429,7 +2431,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       <option value={5000}>5.000</option>
                       <option value="unlimited">Sin límite (hasta 50.000)</option>
                     </select>
-                    <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => fetchData({ silent: true, ...(profileRowLimit === "unlimited" ? { unlimited: true } : { sampleRows: profileRowLimit }) })} disabled={loading}>
+                    <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => fetchData({ bustCache: true, ...(profileRowLimit === "unlimited" ? { unlimited: true } : { sampleRows: profileRowLimit }) })} disabled={loading}>
                       {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Recargar muestra
                     </Button>
                   </div>

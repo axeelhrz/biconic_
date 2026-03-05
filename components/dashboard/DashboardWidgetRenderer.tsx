@@ -95,43 +95,54 @@ export interface DashboardWidgetRendererWidget {
 
 const AXIS_COLOR = "var(--platform-fg-muted, #64748b)";
 const GRID_COLOR = "var(--platform-border, #e2e8f0)";
+const AXIS_COLOR_DARK = "rgba(255, 255, 255, 0.85)";
+const GRID_COLOR_DARK = "rgba(255, 255, 255, 0.12)";
+const DATALABEL_COLOR_DARK = "rgba(255, 255, 255, 0.95)";
 
-const CHART_OPTIONS_BASE = {
-  responsive: true,
-  maintainAspectRatio: false,
-  layout: { padding: 8 },
-  plugins: {
-    legend: {
-      display: true,
-      position: "top" as const,
-      labels: { color: AXIS_COLOR, font: { size: 12 }, padding: 16 },
+function getChartOptionsBase(darkTheme: boolean) {
+  const axisColor = darkTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
+  const gridColor = darkTheme ? GRID_COLOR_DARK : GRID_COLOR;
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    layout: { padding: 8 },
+    plugins: {
+      legend: {
+        display: true,
+        position: "top" as const,
+        labels: { color: axisColor, font: { size: 12 }, padding: 16 },
+      },
+      tooltip: { enabled: true },
     },
-    tooltip: { enabled: true },
-  },
-  scales: {
-    x: {
-      display: true,
-      grid: { color: GRID_COLOR },
-      ticks: { color: AXIS_COLOR, maxTicksLimit: 8, font: { size: 11 } },
+    scales: {
+      x: {
+        display: true,
+        grid: { color: gridColor },
+        ticks: { color: axisColor, maxTicksLimit: 8, font: { size: 11 } },
+      },
+      y: {
+        display: true,
+        grid: { color: gridColor },
+        ticks: { color: axisColor, font: { size: 11 }, maxTicksLimit: 8 },
+      },
     },
-    y: {
-      display: true,
-      grid: { color: GRID_COLOR },
-      ticks: { color: AXIS_COLOR, font: { size: 11 }, maxTicksLimit: 8 },
-    },
-  },
-};
+  };
+}
 
-function buildPieDoughnutLegend(chartConfig: ChartConfig | null | undefined): Record<string, unknown> {
+function buildPieDoughnutLegend(
+  chartConfig: ChartConfig | null | undefined,
+  darkTheme: boolean
+): Record<string, unknown> {
+  const axisColor = darkTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
   const ds0 = chartConfig?.datasets?.[0];
   if (!ds0 || !Array.isArray(ds0.backgroundColor) || !chartConfig?.labels?.length) {
-    return { display: true, position: "right" as const, labels: { color: AXIS_COLOR } };
+    return { display: true, position: "right" as const, labels: { color: axisColor } };
   }
   return {
     display: true,
     position: "right" as const,
     labels: {
-      color: AXIS_COLOR,
+      color: axisColor,
       padding: 12,
       generateLabels: () =>
         chartConfig.labels.map((label, i) => {
@@ -172,6 +183,8 @@ interface DashboardWidgetRendererProps {
   minHeight?: number;
   /** Clases CSS adicionales para el contenedor */
   className?: string;
+  /** Tema oscuro: leyendas, ejes y etiquetas en color claro para fondo oscuro */
+  darkChartTheme?: boolean;
 }
 
 export function DashboardWidgetRenderer({
@@ -181,6 +194,7 @@ export function DashboardWidgetRenderer({
   onFilterChange,
   minHeight = 240,
   className = "",
+  darkChartTheme = false,
 }: DashboardWidgetRendererProps) {
   const effectiveMinHeight = widget.minHeight ?? minHeight;
   const chartType = (widget.type === "kpi" || widget.type === "table" ? widget.type : (widget.aggregationConfig as { chartType?: string } | undefined)?.chartType ?? widget.type) as WidgetChartType;
@@ -209,24 +223,40 @@ export function DashboardWidgetRenderer({
     const style = (widget.chartStyle as ChartStyleConfig | undefined) ?? undefined;
     const labelMode = widget.labelDisplayMode ?? "percent";
     const type = chartType === "horizontalBar" ? "horizontalBar" : chartType === "area" ? "line" : (chartType as "bar" | "line" | "pie" | "doughnut");
+    const optionsBase = getChartOptionsBase(darkChartTheme);
     if (type === "pie" || type === "doughnut") {
       const base = buildChartOptions(type, style, labelMode) as Record<string, unknown>;
+      const baseDatalabels = (base.plugins as { datalabels?: Record<string, unknown> })?.datalabels ?? {};
+      const plugins = {
+        ...optionsBase.plugins,
+        ...(base.plugins as object),
+        legend: buildPieDoughnutLegend(chartConfig ?? undefined, darkChartTheme),
+        datalabels: {
+          ...baseDatalabels,
+          ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
+        },
+      };
       return {
         ...base,
-        ...CHART_OPTIONS_BASE,
-        plugins: {
-          ...CHART_OPTIONS_BASE.plugins,
-          ...(base.plugins as object),
-          legend: buildPieDoughnutLegend(chartConfig ?? undefined),
-        },
+        ...optionsBase,
+        plugins,
       };
     }
     if (type === "bar" || type === "horizontalBar" || type === "line") {
       const built = buildChartOptions(type, style, "value") as Record<string, unknown>;
-      return { ...CHART_OPTIONS_BASE, ...built };
+      const builtPlugins = built.plugins as Record<string, unknown> | undefined;
+      const builtDatalabels = builtPlugins?.datalabels as Record<string, unknown> | undefined ?? {};
+      const plugins = {
+        ...optionsBase.plugins,
+        ...builtPlugins,
+        ...(darkChartTheme && {
+          datalabels: { ...builtDatalabels, color: DATALABEL_COLOR_DARK },
+        }),
+      };
+      return { ...optionsBase, ...built, plugins };
     }
-    return CHART_OPTIONS_BASE;
-  }, [chartType, chartConfig, widget.chartStyle, widget.labelDisplayMode]);
+    return optionsBase;
+  }, [chartType, chartConfig, widget.chartStyle, widget.labelDisplayMode, darkChartTheme]);
 
   return (
     <Card
