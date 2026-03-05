@@ -305,6 +305,10 @@ export function ETLEditor({
   const [progress, setProgress] = useState(0);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [runStartTime, setRunStartTime] = useState<Date | null>(null);
+  /** Timestamp (ms) de la última actualización de progreso; para detectar runs colgados por timeout. */
+  const lastProgressAtRef = useRef<number>(0);
+  const [showStuckWarning, setShowStuckWarning] = useState(false);
+  const [markingAsFailed, setMarkingAsFailed] = useState(false);
 
   const [castDetectLoading, setCastDetectLoading] = useState(false);
   const [castDetectError, setCastDetectError] = useState<string | null>(null);
@@ -330,14 +334,16 @@ export function ETLEditor({
            }
 
            if (data && isMounted) {
-              // Only resume if the headers run is actually started/running.
-              // Logic requested: fetch last run -> check if started -> show modal.
-              if (data.status === "started") {
+              // Only resume if the last run is actually started/running.
+              if (data.status === "started" || data.status === "running") {
                   console.log("Found active run:", data);
                   setActiveRunId(data.id);
                   setActiveRunStatus(data.status as any);
                   setProgress(data.rows_processed || 0);
                   setRunStartTime(new Date(data.created_at));
+                  const updatedAt = (data as { updated_at?: string }).updated_at || data.created_at;
+                  lastProgressAtRef.current = updatedAt ? new Date(updatedAt).getTime() : Date.now();
+                  setShowStuckWarning(false);
               } else {
                  console.log("Last run is not started (" + data.status + "), ignoring.");
               }
@@ -373,8 +379,10 @@ export function ETLEditor({
                  const newRow = payload.new as any;
                  if (newRow) {
                      console.log("Run update:", newRow.status, newRow.rows_processed);
-                     if (typeof newRow.rows_processed === 'number') {
+                     if (typeof newRow.rows_processed === "number") {
                         setProgress(newRow.rows_processed);
+                        const updatedAt = newRow.updated_at ? new Date(newRow.updated_at).getTime() : Date.now();
+                        lastProgressAtRef.current = updatedAt;
                      }
                      if (newRow.status) {
                         setActiveRunStatus(newRow.status);
@@ -389,6 +397,21 @@ export function ETLEditor({
         supabase.removeChannel(channel);
      };
   }, [activeRunId, etlId]);
+
+  // 3. Detección de run colgado (timeout): si lleva >2 min sin cambio de progreso, mostrar aviso y opción "Marcar como fallido"
+  const STUCK_THRESHOLD_MS = 2 * 60 * 1000;
+  const STUCK_CHECK_INTERVAL_MS = 30 * 1000;
+  useEffect(() => {
+    if (!activeRunId || (activeRunStatus !== "started" && activeRunStatus !== "running")) {
+      setShowStuckWarning(false);
+      return;
+    }
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - lastProgressAtRef.current;
+      setShowStuckWarning(elapsed > STUCK_THRESHOLD_MS);
+    }, STUCK_CHECK_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [activeRunId, activeRunStatus]);
 
   // Zoom placeholder (ui only)
   const [zoom, setZoom] = useState(initialZoom ?? 1);
@@ -6040,7 +6063,7 @@ export function ETLEditor({
           </DialogHeader>
           
           <div className="flex flex-col items-center justify-center p-4 gap-4">
-              {(activeRunStatus === 'started' || activeRunStatus === 'running') && (
+              {(activeRunStatus === "started" || activeRunStatus === "running") && (
                   <div className="w-full space-y-2">
                        <div className="flex justify-between text-sm text-gray-600">
                           <span className="flex items-center gap-2"><Loader2 className="h-3 w-3 animate-spin"/> Procesando...</span>
@@ -6050,6 +6073,52 @@ export function ETLEditor({
                        <div className="text-xs text-gray-400 text-center pt-1">
                           No cierre esta ventana hasta que finalice.
                        </div>
+                       {showStuckWarning && (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-3 space-y-2">
+                            <p className="text-sm text-amber-800 dark:text-amber-200">
+                              Posible timeout: el proceso pudo haberse interrumpido (p. ej. en bases muy grandes). Si no avanza, podés marcarlo como fallido.
+                            </p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="w-full border-amber-300 dark:border-amber-700"
+                              disabled={markingAsFailed || !etlId || !activeRunId}
+                              onClick={async () => {
+                                if (!etlId || !activeRunId) return;
+                                setMarkingAsFailed(true);
+                                try {
+                                  const res = await fetch(`/api/etl/${etlId}/mark-run-failed`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ runId: activeRunId }),
+                                  });
+                                  const data = await res.json().catch(() => ({}));
+                                  if (res.ok && data.ok) {
+                                    toast.success("Run marcado como fallido.");
+                                    setActiveRunStatus("failed");
+                                    setShowStuckWarning(false);
+                                  } else {
+                                    toast.error(data?.error || "Error al marcar como fallido");
+                                  }
+                                } catch (e) {
+                                  toast.error("Error de conexión");
+                                } finally {
+                                  setMarkingAsFailed(false);
+                                }
+                              }}
+                            >
+                              {markingAsFailed ? (
+                                <>
+                                  <Loader2 className="h-3 w-3 animate-spin mr-2" />
+                                  Marcando…
+                                </>
+                              ) : (
+                                "Marcar como fallido"
+                              )}
+                            </Button>
+                          </div>
+                       )}
                   </div>
               )}
 
