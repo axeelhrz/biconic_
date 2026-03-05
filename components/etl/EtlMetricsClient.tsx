@@ -1876,6 +1876,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         return;
       }
       toast.success(editingId ? "Métrica actualizada" : "Métrica creada");
+      if (editingId) toast.success("También se actualizó en los dashboards que la utilizan.", { duration: 4000 });
       if (createDerivedColumn) toast.success(`Se creó la columna «${alias}» en el dataset; la podés usar en «Insertar columna» en otras métricas.`, { duration: 6000 });
       setData((prev) => (prev ? { ...prev, savedMetrics: next, datasetConfig: datasetConfigToSave ?? prev.datasetConfig } : null));
       if (createDerivedColumn) setDerivedColumns(nextDerivedColumns);
