@@ -217,7 +217,11 @@ export function MetricBlock({
             <DropdownMenuContent
               align="end"
               sideOffset={6}
-              className="metric-block-dropdown w-56 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-surface)] shadow-lg py-1.5"
+              className="metric-block-dropdown w-56 rounded-xl border border-[var(--studio-border)] shadow-lg py-1.5"
+              style={{
+                backgroundColor: "var(--studio-surface, #141419)",
+                opacity: 1,
+              }}
               onClick={(e) => e.stopPropagation()}
             >
               <DropdownMenuLabel className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--studio-fg-muted)]">

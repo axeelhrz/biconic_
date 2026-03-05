@@ -410,6 +410,13 @@
     opacity: 1;
   }
 }
+/* Fondo opaco del desplegable (el portal puede quedar fuera del tema) */
+.metric-block-dropdown {
+  background: var(--studio-surface, #141419) !important;
+  background-color: var(--studio-surface, #141419) !important;
+  opacity: 1 !important;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--studio-border, rgba(255,255,255,0.08));
+}
 .metric-block-dropdown .metric-block-dropdown-item {
   cursor: pointer;
 }
