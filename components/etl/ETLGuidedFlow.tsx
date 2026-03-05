@@ -262,6 +262,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewLoadedOnceRef = useRef<boolean>(false);
+  const fetchPreviewRef = useRef<() => void>(() => {});
 
   const previewRowsFilteredByExcluded = useMemo(() => {
     if (!previewRows || previewRows.length === 0) return previewRows ?? [];
@@ -1043,6 +1044,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         setPreviewLoading(false);
       });
   }, [buildGuidedConfigBody, connectionId, selectedTable]);
+
+  fetchPreviewRef.current = fetchPreview;
 
   useEffect(() => {
     const t = setTimeout(() => fetchPreview(), 0);
@@ -2774,7 +2777,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   size="sm"
                   className="shrink-0 h-8 gap-1.5"
                   style={{ borderColor: "var(--platform-border)" }}
-                  onClick={() => fetchPreview()}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    fetchPreviewRef.current();
+                  }}
                   disabled={previewLoading || !connectionId || !selectedTable}
                   title={connectionId && selectedTable ? "Actualizar vista previa" : "Elegí conexión y tabla para habilitar"}
                 >
