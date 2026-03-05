@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
-import { Plus, Check } from "lucide-react";
+import { Plus, Check, BarChart2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,10 +25,10 @@ import {
 import { StudioHeader, type DashboardStatus, type StudioMode } from "./StudioHeader";
 import { StudioAppearanceBar } from "./StudioAppearanceBar";
 import { StudioPageTabs } from "./StudioPageTabs";
-import { StudioEmptyState, STUDIO_INTENTS, type StudioIntent } from "./StudioEmptyState";
+import { StudioEmptyState } from "./StudioEmptyState";
 import { MetricBlock, type MetricBlockState } from "./MetricBlock";
 import type { ChartConfig } from "./MetricBlock";
-import { AddMetricConfigForm, type AddMetricFormConfig, type SavedMetricForm } from "./AddMetricConfigForm";
+import type { SavedMetricForm } from "./AddMetricConfigForm";
 
 type SavedMetric = SavedMetricForm;
 
@@ -113,17 +113,6 @@ type StudioWidget = {
 type StudioPage = { id: string; name: string };
 type GlobalFilter = { id: string; field: string; operator: string; value: unknown };
 
-const INTENT_TO_TYPE_AND_TITLE: Record<
-  StudioIntent,
-  { type: string; title: string; purpose: string }
-> = {
-  detectar_cambios: { type: "line", title: "Cambios relevantes", purpose: "Ver qué está cambiando" },
-  comparar_periodos: { type: "bar", title: "Comparación de períodos", purpose: "Antes vs ahora" },
-  señales_negativas: { type: "bar", title: "Señales negativas", purpose: "Alertas y valores que bajan" },
-  medir_impacto: { type: "kpi", title: "Impacto", purpose: "Efecto de una acción o campaña" },
-  explorar_distribucion: { type: "doughnut", title: "Distribución", purpose: "Cómo se reparten los valores" },
-};
-
 interface AdminDashboardStudioProps {
   dashboardId: string;
   title: string;
@@ -147,14 +136,14 @@ export function AdminDashboardStudio({
   const [isDirty, setIsDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [addMetricOpen, setAddMetricOpen] = useState(false);
-  const [addMetricStep, setAddMetricStep] = useState<"list" | "intent" | "config">("list");
+  const [addMetricStep, setAddMetricStep] = useState<"list">("list");
   const [addSourceOpen, setAddSourceOpen] = useState(false);
   const [addSourceQuery, setAddSourceQuery] = useState("");
   const [addSourceEtls, setAddSourceEtls] = useState<{ id: string; title: string }[]>([]);
   const [addSourceLoading, setAddSourceLoading] = useState(false);
   const [addSourceSaving, setAddSourceSaving] = useState(false);
   const [addSourceSelected, setAddSourceSelected] = useState<string | null>(null);
-  const [addMetricInitialIntent, setAddMetricInitialIntent] = useState<StudioIntent | "blank" | null>(null);
+  const [addMetricInitialIntent, setAddMetricInitialIntent] = useState<string | null>(null);
   const [pages, setPages] = useState<StudioPage[]>([{ id: "page-1", name: "Página 1" }]);
   const [activePageId, setActivePageId] = useState<string | null>("page-1");
   const [savedMetrics, setSavedMetrics] = useState<SavedMetric[]>([]);
@@ -789,84 +778,6 @@ export function AdminDashboardStudio({
     }
   }, [widgets, activePageId, loadMetricData]);
 
-  const getInitialFormConfig = useCallback(
-    (intentOrBlank: StudioIntent | "blank"): AddMetricFormConfig => {
-      const sources = etlData?.dataSources;
-      const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
-      const fields = sources?.length
-        ? (sources.find((s) => s.id === primaryId) ?? sources[0])?.fields?.all ?? etlData?.fields?.all ?? []
-        : etlData?.fields?.all ?? [];
-      const dimension = fields[0] || "id";
-      const metricField = fields.find((_, i) => i > 0) || dimension;
-      const baseAgg: AggregationConfig = {
-        enabled: true,
-        dimension,
-        metrics: [{ id: `m-${Date.now()}`, field: metricField, func: "COUNT", alias: "total" }],
-        orderBy: { field: dimension, direction: "DESC" },
-        limit: 10,
-      };
-      if (intentOrBlank === "blank") {
-        return {
-          title: "Nueva métrica",
-          type: "bar",
-          gridSpan: 2,
-          color: "#22d3ee",
-          aggregationConfig: baseAgg,
-          dataSourceId: primaryId,
-        };
-      }
-      const { type: chartType, title: semanticTitle } = INTENT_TO_TYPE_AND_TITLE[intentOrBlank];
-      return {
-        title: semanticTitle,
-        type: chartType,
-        gridSpan: chartType === "kpi" ? 1 : 2,
-        color: "#22d3ee",
-        aggregationConfig: baseAgg,
-        dataSourceId: primaryId,
-      };
-    },
-    [etlData]
-  );
-
-  const createMetricFromFormConfig = useCallback(
-    (config: AddMetricFormConfig) => {
-      const id = `metric-${Date.now()}`;
-      const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
-      const aggWithChartType = {
-        ...config.aggregationConfig,
-        chartType: config.aggregationConfig.chartType || config.type,
-      };
-      const newWidget: StudioWidget = {
-        id,
-        type: config.type,
-        title: config.title,
-        x: 0,
-        y: 0,
-        w: 400,
-        h: 280,
-        gridOrder: currentPageWidgets.length,
-        gridSpan: config.gridSpan ?? 2,
-        minHeight: undefined,
-        pageId: activePageId ?? "page-1",
-        aggregationConfig: aggWithChartType,
-        excludeGlobalFilters: config.excludeGlobalFilters,
-        color: config.color,
-        labelDisplayMode: config.labelDisplayMode,
-        kpiSecondaryLabel: config.kpiSecondaryLabel,
-        kpiSecondaryValue: config.kpiSecondaryValue,
-        dataSourceId: config.dataSourceId ?? null,
-      };
-      setWidgets((prev) => [...prev, newWidget]);
-      setSelectedId(null);
-      setIsDirty(true);
-      setAddMetricOpen(false);
-      setAddMetricStep("list");
-      setAddMetricInitialIntent(null);
-      if (etlData) setTimeout(() => loadMetricData(id), 300);
-    },
-    [etlData, widgets, activePageId, loadMetricData]
-  );
-
   /** Añade al dashboard una métrica ya creada (del ETL). */
   const addSavedMetricToDashboard = useCallback(
     (saved: SavedMetricForm) => {
@@ -942,10 +853,9 @@ export function AdminDashboardStudio({
     [widgets, activePageId, etlData, loadMetricData]
   );
 
-  const openAddMetricConfig = useCallback((intentOrBlank: StudioIntent | "blank") => {
+  const openAddMetricList = useCallback(() => {
     setAddMetricOpen(true);
-    setAddMetricInitialIntent(intentOrBlank);
-    setAddMetricStep("config");
+    setAddMetricStep("list");
   }, []);
 
   const closeAddMetricModal = useCallback(() => {
@@ -1188,7 +1098,7 @@ export function AdminDashboardStudio({
         <div className="flex flex-1 min-h-0 overflow-auto min-w-0">
         {widgetsForCurrentPage.length === 0 && sortedWidgets.length === 0 ? (
           <StudioEmptyState
-            onSelectIntent={openAddMetricConfig}
+            onAddMetrics={openAddMetricList}
             etlId={etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId ?? null}
           />
         ) : (
@@ -1313,106 +1223,56 @@ export function AdminDashboardStudio({
         open={addMetricOpen}
         onOpenChange={(open) => {
           setAddMetricOpen(open);
-          if (!open) {
-            setAddMetricStep("list");
-            setAddMetricInitialIntent(null);
-          }
+          if (open) setAddMetricStep("list");
+          if (!open) setAddMetricInitialIntent(null);
         }}
       >
         <DialogContent className="studio-modal-content border-0 p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col">
-          {addMetricStep === "config" && addMetricInitialIntent != null ? (
-            <div className="studio-modal-inner p-6 overflow-auto">
-              <AddMetricConfigForm
-                initialValues={getInitialFormConfig(addMetricInitialIntent)}
-                etlData={etlData ?? null}
-                onSave={createMetricFromFormConfig}
-                onBack={() => {
-                  setAddMetricStep("intent");
-                  setAddMetricInitialIntent(null);
-                }}
-                savedMetrics={savedMetrics}
-                onSaveMetricAsTemplate={saveMetricAsTemplate}
-              />
-            </div>
-          ) : addMetricStep === "list" ? (
-            <>
-              <div className="studio-modal-inner p-6 pb-4">
-                <DialogHeader>
-                  <DialogTitle>Añadir métrica</DialogTitle>
-                  <DialogDescription>
-                    Elegí una métrica ya creada para este ETL o creá una nueva.
-                  </DialogDescription>
-                </DialogHeader>
-                {savedMetrics.length > 0 ? (
-                  <div className="mt-4 space-y-2 max-h-[280px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
-                    {savedMetrics.map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => addSavedMetricToDashboard(m)}
-                        className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
-                        style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
-                      >
-                        <span className="font-medium truncate">{m.name}</span>
-                        <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir al dashboard</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm" style={{ color: "var(--studio-fg-muted)" }}>
-                    No hay métricas creadas para este ETL. Creá una desde la página de métricas o desde cero aquí.
-                  </p>
-                )}
+          <div className="studio-modal-inner p-6 pb-4">
+            <DialogHeader>
+              <DialogTitle>Añadir métrica</DialogTitle>
+              <DialogDescription>
+                Elegí una métrica ya creada para agregar al dashboard. Para crear nuevas métricas, andá a la pestaña de métricas del ETL.
+              </DialogDescription>
+            </DialogHeader>
+            {savedMetrics.length > 0 ? (
+              <div className="mt-4 space-y-2 max-h-[280px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
+                {savedMetrics.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => addSavedMetricToDashboard(m)}
+                    className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
+                    style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
+                  >
+                    <span className="font-medium truncate">{m.name}</span>
+                    <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir al dashboard</span>
+                  </button>
+                ))}
               </div>
-              <div className="studio-modal-cta p-4 pt-0 border-t" style={{ borderColor: "var(--studio-border)" }}>
-                <Button type="button" variant="outline" className="w-full" onClick={() => setAddMetricStep("intent")}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Crear nueva métrica
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="studio-modal-inner p-6">
-                <DialogHeader>
-                  <DialogTitle>Crear nueva métrica</DialogTitle>
-                  <DialogDescription>
-                    ¿Qué querés entender? Elegí una intención o creá una métrica desde cero.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="studio-modal-intents">
-                  {STUDIO_INTENTS.map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className="studio-modal-intent-card group"
-                        onClick={() => openAddMetricConfig(item.id)}
-                      >
-                        <span className="studio-intent-icon">
-                          <Icon className="h-5 w-5" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <span className="studio-intent-label block">{item.label}</span>
-                          <span className="studio-intent-desc block">{item.description}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="studio-modal-cta p-4 border-t" style={{ borderColor: "var(--studio-border)" }}>
-                <Button type="button" variant="outline" className="w-full" onClick={() => openAddMetricConfig("blank")}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Crear métrica vacía
-                </Button>
-                <button type="button" className="w-full mt-2 text-sm underline" style={{ color: "var(--studio-fg-muted)" }} onClick={() => setAddMetricStep("list")}>
-                  ← Volver a métricas del ETL
-                </button>
-              </div>
-            </>
-          )}
+            ) : (
+              <p className="mt-3 text-sm" style={{ color: "var(--studio-fg-muted)" }}>
+                No hay métricas creadas para este ETL. Creá métricas en la página de métricas del ETL.
+              </p>
+            )}
+          </div>
+          <div className="studio-modal-cta p-4 pt-0 border-t" style={{ borderColor: "var(--studio-border)" }}>
+            {(etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId) ? (
+              <Link
+                href={`/admin/etl/${etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId}/metrics`}
+                className="inline-flex items-center justify-center gap-2 w-full rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:opacity-90"
+                style={{ borderColor: "var(--studio-border)", color: "var(--studio-accent)" }}
+                onClick={() => setAddMetricOpen(false)}
+              >
+                <BarChart2 className="h-4 w-4" />
+                Ir a métricas del ETL para crear nuevas
+              </Link>
+            ) : (
+              <p className="text-sm" style={{ color: "var(--studio-fg-muted)" }}>
+                Añadí una fuente de datos al dashboard para poder crear métricas.
+              </p>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
