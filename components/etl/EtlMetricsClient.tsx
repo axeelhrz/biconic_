@@ -434,6 +434,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [analysisSelectedMetricIds, setAnalysisSelectedMetricIds] = useState<string[]>([]);
   /** Nombre al guardar una nueva métrica desde el paso B (Preview). */
   const [metricNameToSave, setMetricNameToSave] = useState("");
+  /** Tras guardar métrica o columna en B, mostrar acciones «Crear otra» / «Ir a Análisis». */
+  const [afterSaveInB, setAfterSaveInB] = useState<null | "metric" | "column">(null);
   const [transformCompare, setTransformCompare] = useState<"none" | "mom" | "yoy" | "fixed">("none");
   const [transformCompareFixedValue, setTransformCompareFixedValue] = useState("");
   const [transformShowDelta, setTransformShowDelta] = useState(true);
@@ -1136,9 +1138,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
   const tableNameForPreview = data?.schema && data?.tableName ? `${data.schema}.${data.tableName}` : null;
 
-  /** En Análisis (C) con métricas seleccionadas, usa esas; si no, usa formMetrics (ej. métrica recién creada en B). */
+  /** En Análisis (C) o Gráfico (D) con métricas seleccionadas, usa esas; si no, usa formMetrics (ej. métrica recién creada en B). */
   const effectiveFormMetrics = useMemo((): AggregationMetricEdit[] => {
-    if (wizard === "C" && analysisSelectedMetricIds.length > 0) {
+    if ((wizard === "C" || wizard === "D") && analysisSelectedMetricIds.length > 0) {
       return analysisSelectedMetricIds
         .map((id) => savedMetrics.find((s) => s.id === id))
         .filter((s): s is SavedMetricForm => s != null)
@@ -1632,6 +1634,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     setWizard("A");
     setAnalysisSelectedMetricIds([]);
     setWizardStep(0);
+    setAfterSaveInB(null);
   };
 
   const syncMetricsToDashboard = useCallback(async (metrics: SavedMetricForm[], fullSavedMetrics?: SavedMetricForm[]) => {
@@ -1944,6 +1947,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfigToSave } : null));
       setColumnRoles((prev) => ({ ...prev, [colName]: { role: "measure", aggregation: "sum", label: colName, visible: true } }));
       toast.success(`Columna «${colName}» creada. Aparece en Rol BI, Profiling e «Insertar columna».`);
+      setAfterSaveInB("column");
     } catch {
       toast.error("Error al crear la columna");
     } finally {
@@ -1951,11 +1955,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
   };
 
-  /** Guardar la métrica actual desde el paso B (Cálculo/Preview). El nombre se toma de metricNameToSave (paso Preview). */
+  /** Guardar la métrica actual desde el paso B (Cálculo/Preview). El nombre se toma de formName (Cálculo) o metricNameToSave (Preview). */
   const saveMetricFromCalculationStep = async () => {
-    const name = metricNameToSave.trim();
+    const name = (metricNameToSave || formName).trim();
     if (!name) {
-      toast.error("Escribí un nombre para la métrica en el paso Preview (Nombre al guardar).");
+      toast.error("Escribí un nombre para la métrica (campo «Nombre de la métrica»).");
       return;
     }
     const firstMetric = formMetrics[0];
@@ -2032,7 +2036,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       }
       setData((prev) => (prev ? { ...prev, savedMetrics: next } : null));
       toast.success(`Métrica «${name}» guardada en Calculadas (métricas).`);
-      closeForm();
+      setAfterSaveInB("metric");
     } catch {
       toast.error("Error al guardar la métrica");
     } finally {
@@ -2254,7 +2258,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                 <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={closeForm}>Cancelar</Button>
                 {canPrev && <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>}
                 {(wizard === "D" && wizardStep === WIZARD_STEPS.D.length - 1) ? (
-                  <Button type="button" size="sm" className="rounded-lg" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {editingId ? "Guardar cambios" : "Crear métrica"}</Button>
+                  <Button type="button" size="sm" className="rounded-lg" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? "Guardar análisis" : "Crear métrica"}</Button>
                 ) : (
                   canNext && (
                     <Button
@@ -2877,6 +2881,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Cálculo de la métrica</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Escribí la fórmula con nombres de columnas (estilo Excel). Podés usar números, literales entre comillas e IF(condición, valor_si_verdadero, valor_si_falso). Diferenciá entre cálculo por fila y cálculo agregado.</p>
 
+                  {afterSaveInB && (
+                    <div className="rounded-lg border p-3 flex flex-wrap items-center gap-3" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
+                      <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
+                        {afterSaveInB === "metric" ? "Métrica guardada." : "Columna creada."}
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" size="sm" className="rounded-xl h-8" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={() => { setFormName(""); setAfterSaveInB(null); }}>
+                          {afterSaveInB === "metric" ? "Crear otra métrica" : "Crear otra columna"}
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" className="rounded-xl h-8" style={{ borderColor: "var(--platform-border)" }} onClick={() => { setAfterSaveInB(null); setWizard("C"); setWizardStep(0); }}>
+                          Ir a Análisis
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
                   {(() => {
                     const exprMetric = formMetrics[0];
                     const exprValue = (exprMetric as { expression?: string })?.expression ?? "";
@@ -2998,43 +3018,42 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             {formulaSyntaxError}
                           </p>
                         )}
-                        {/* Determinación automática según la fórmula: agregada → métrica (Calculadas); por fila → columna (dataset) */}
-                        {isAggregate ? (
-                          <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
-                            <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Se guardará como métrica (automático)</Label>
-                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>La fórmula usa agregación (SUM, AVG, etc.), por eso se guarda en «Calculadas (métricas)», no como columna. Indicá el nombre y guardá.</p>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <div>
-                                <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Nombre de la métrica *</Label>
-                                <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Ej. Ventas totales, Cantidad vendida" className="h-9 text-sm rounded-lg w-full max-w-[220px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                              </div>
-                              <div className="flex items-end">
-                                <Button type="button" className="rounded-xl h-9" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetricFromCalculationStep} disabled={saving || !exprValue.trim() || !formName.trim() || !!formulaSyntaxError}>
-                                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                                  {saving ? " Guardando…" : " Guardar como métrica"}
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                            <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Se guardará como columna en el dataset (automático)</Label>
-                            <p className="text-xs mb-1" style={{ color: "var(--platform-fg-muted)" }}>La fórmula no usa agregación, por eso se crea como columna en el dataset (no modifica la cantidad de filas). Nombre: solo letras, números y _.</p>
-                            {grainSafetyErrorForColumn && (
-                              <p className="text-xs py-1.5 px-2 rounded border" role="alert" style={{ color: "var(--platform-error, #dc2626)", borderColor: "var(--platform-error, #dc2626)", background: "var(--platform-error-muted, rgba(220,38,38,0.08))" }}>{grainSafetyErrorForColumn}</p>
-                            )}
-                            <div className="flex flex-wrap items-center gap-2">
-                              <div>
-                                <Input value={exprMetric?.alias ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura, total_linea" className="h-9 text-sm rounded-lg w-full max-w-[200px] !bg-[var(--platform-bg)]" style={{ borderColor: aliasSyntaxError ? "var(--platform-error, #dc2626)" : "var(--platform-border)", color: "var(--platform-fg)" }} />
-                                {aliasSyntaxError && <p className="text-xs mt-1" style={{ color: "var(--platform-error, #dc2626)" }}>{aliasSyntaxError}</p>}
-                              </div>
-                              <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim() || !(exprMetric?.alias ?? "").trim() || !!formulaSyntaxError || !!aliasSyntaxError || !!grainSafetyErrorForColumn}>
+                        {/* Opción explícita: Columna o Métrica. Sugerencia automática según fórmula. */}
+                        <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                          <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Definí cómo guardar</Label>
+                          <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>
+                            {exprValue.trim() ? (
+                              isAggregate
+                                ? "Sugerencia automática: se guardará como métrica (la fórmula usa agregación). Podés usar el botón «Guardar como métrica»."
+                                : "Sugerencia automática: se puede guardar como columna (fórmula por fila). Elegí «Crear columna» o «Guardar como métrica»."
+                            ) : "Escribí una fórmula y elegí si guardar como columna en el dataset o como métrica en «Calculadas»."}
+                          </p>
+                          {grainSafetyErrorForColumn && (
+                            <p className="text-xs py-1.5 px-2 rounded border" role="alert" style={{ color: "var(--platform-error, #dc2626)", borderColor: "var(--platform-error, #dc2626)", background: "var(--platform-error-muted, rgba(220,38,38,0.08))" }}>{grainSafetyErrorForColumn}</p>
+                          )}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label className="text-xs block" style={{ color: "var(--platform-fg-muted)" }}>Nombre de columna (para «Crear columna»)</Label>
+                              <Input value={exprMetric?.alias ?? ""} onChange={(e) => setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, alias: e.target.value } : m))} placeholder="Ej. factura, total_linea" className="h-9 text-sm rounded-lg w-full max-w-[220px] !bg-[var(--platform-bg)]" style={{ borderColor: aliasSyntaxError ? "var(--platform-error, #dc2626)" : "var(--platform-border)", color: "var(--platform-fg)" }} />
+                              {aliasSyntaxError && <p className="text-xs" style={{ color: "var(--platform-error, #dc2626)" }}>{aliasSyntaxError}</p>}
+                              <Button type="button" className="rounded-xl h-9" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={createColumnFromFormula} disabled={creatingColumn || !exprValue.trim() || !(exprMetric?.alias ?? "").trim() || !!formulaSyntaxError || !!aliasSyntaxError || !!grainSafetyErrorForColumn || isAggregate} title={isAggregate ? "La fórmula usa agregación; usá «Guardar como métrica»." : undefined}>
                                 {creatingColumn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                                {creatingColumn ? " Creando…" : " Crear columna en el dataset"}
+                                {creatingColumn ? " Creando…" : " Crear columna"}
+                              </Button>
+                              {isAggregate && exprValue.trim() && (
+                                <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Fórmula con agregación: solo disponible «Guardar como métrica».</p>
+                              )}
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-xs block" style={{ color: "var(--platform-fg-muted)" }}>Nombre de la métrica (para «Guardar como métrica»)</Label>
+                              <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Ej. Ventas totales, Cantidad vendida" className="h-9 text-sm rounded-lg w-full max-w-[220px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                              <Button type="button" className="rounded-xl h-9" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetricFromCalculationStep} disabled={saving || !exprValue.trim() || !formName.trim() || !!formulaSyntaxError}>
+                                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                {saving ? " Guardando…" : " Guardar como métrica"}
                               </Button>
                             </div>
                           </div>
-                        )}
+                        </div>
                         {/* Vista previa de lo que se guardará */}
                         {(exprValue.trim() || (exprMetric?.alias ?? "").trim()) && (
                           <div className="rounded-lg border p-4 mt-3" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
@@ -4122,7 +4141,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               {wizard === "D" && wizardStep === 3 && (
                 <section className="rounded-xl border p-6 space-y-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Guardar</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Previsualización de cómo se verá el gráfico en el dashboard. Guardá la métrica para usarla en dashboards.</p>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Previsualización de cómo se verá el gráfico en el dashboard. {analysisSelectedMetricIds.length > 0 ? "Guardá el análisis para usarlo en dashboards." : "Guardá la métrica para usarla en dashboards."}</p>
                   <div className="rounded-xl border overflow-hidden shadow-sm" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <div className="px-4 py-2 border-b flex items-center justify-between" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                       <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{formName || "Métrica"}</p>
@@ -4372,7 +4391,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
                     <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>
                       {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                      {editingId ? "Guardar cambios" : "Crear métrica"}
+                      {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? "Guardar análisis" : "Crear métrica"}
                     </Button>
                   </div>
                 </section>
