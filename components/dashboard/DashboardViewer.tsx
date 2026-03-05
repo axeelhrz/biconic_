@@ -614,13 +614,13 @@ export function DashboardViewer({
 
   return (
     <div
-      className={`flex flex-col h-full w-full ${rootClassName}`}
+      className={`flex flex-col h-full w-full ${rootClassName}${useClientTheme ? " client-view-root" : ""}`}
       data-theme={useClientTheme ? "client" : undefined}
       style={{ ...themeVars, ...wrapperBackground }}
     >
       {!hideHeader && (
         <header
-          className="flex flex-shrink-0 items-center justify-between gap-4 border-b px-4 py-3"
+          className={`flex flex-shrink-0 items-center justify-between gap-4 border-b px-4 py-3${useClientTheme ? " client-view-header" : ""}`}
           style={{
             borderColor: "var(--platform-border, var(--client-border, #e2e8f0))",
             background: "var(--platform-bg-elevated, var(--client-header-bg, transparent))",
@@ -644,6 +644,7 @@ export function DashboardViewer({
         </header>
       )}
 
+      <div className={useClientTheme ? "client-view-body flex flex-1 flex-col min-h-0" : "flex flex-1 flex-col min-h-0"}>
       {globalFilters.length > 0 && (
         <div
           className="flex flex-shrink-0 flex-wrap items-center gap-2 px-4 py-2"
@@ -678,7 +679,7 @@ export function DashboardViewer({
         </div>
       )}
 
-      <div className="flex-1 overflow-auto p-4">
+      <div className={`flex-1 overflow-auto p-4 min-h-0${useClientTheme ? " client-view-canvas" : ""}`}>
         {!etlData && !initialWidgets?.length ? (
           <div className="flex h-48 items-center justify-center" style={{ color: "var(--platform-fg-muted)" }}>
             <Loader2 className="h-8 w-8 animate-spin" />
@@ -689,7 +690,7 @@ export function DashboardViewer({
           </div>
         ) : (
           <div
-            className="grid gap-4"
+            className={`grid gap-4${useClientTheme ? " client-view-grid" : ""}`}
             style={{
               gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
             }}
@@ -697,9 +698,13 @@ export function DashboardViewer({
             {placements.map(({ widget, row, col, span }) => (
               <div
                 key={widget.id}
+                className={useClientTheme ? "client-view-widget" : undefined}
                 style={{
                   gridColumn: `span ${span}`,
                   gridRow: row + 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  minHeight: 0,
                 }}
               >
                 <DashboardWidgetRenderer
@@ -716,6 +721,7 @@ export function DashboardViewer({
             ))}
           </div>
         )}
+      </div>
       </div>
     </div>
   );

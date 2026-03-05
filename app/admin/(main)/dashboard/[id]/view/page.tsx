@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { DashboardViewer } from "@/components/dashboard/DashboardViewer";
 import { verifyDashboardEditAccess } from "@/lib/admin/dashboard-security";
+import { ArrowLeft } from "lucide-react";
 
 import "./admin-dashboard-view.css";
 import "./client-dashboard-view.css";
@@ -47,13 +49,21 @@ export default async function AdminDashboardViewPage({ params }: PageProps) {
   return (
     <div className="admin-view-page">
       <div className="admin-view-page__accent" aria-hidden />
+      <div className="admin-view-preview-bar">
+        <span className="admin-view-preview-bar__label">Vista previa</span>
+        <Link
+          href={`/admin/dashboard/${dashboardId}`}
+          className="admin-view-preview-bar__link"
+        >
+          <ArrowLeft className="admin-view-preview-bar__icon" />
+          Editar dashboard
+        </Link>
+      </div>
       <main className="admin-view-page__main">
         <div className="admin-view-page__container">
           <DashboardViewer
             dashboardId={dashboardId}
             variant="default"
-            backHref={`/admin/dashboard/${dashboardId}`}
-            backLabel="Editar dashboard"
           />
         </div>
       </main>
