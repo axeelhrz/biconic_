@@ -1383,8 +1383,8 @@ async function executeEtlPipeline(
 // ===================================================================
 // LÓGICA PRINCIPAL DE LA API ROUTE (FIRE-AND-FORGET)
 // ===================================================================
-/** Timeout ampliado para bases muy grandes (Vercel Pro: hasta 900s). */
-export const maxDuration = 900;
+/** Timeout máximo permitido (Hobby: 300s; Pro: hasta 900s). Para más registros en plan Hobby, considerar procesar en chunks o ejecutar ETL vía cron. */
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const runId = uuidv4();
