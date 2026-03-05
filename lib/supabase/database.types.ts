@@ -3306,7 +3306,7 @@ export type Database = {
       client_member_permission_types: "VIEW" | "UPDATE"
       client_role: "admin" | "editor" | "viewer"
       client_type: "empresa" | "individuo"
-      etl_run_status: "started" | "completed" | "failed"
+      etl_run_status: "started" | "running" | "completed" | "failed"
       subscription_status:
         | "trialing"
         | "active"
@@ -3450,7 +3450,7 @@ export const Constants = {
       client_member_permission_types: ["VIEW", "UPDATE"],
       client_role: ["admin", "editor", "viewer"],
       client_type: ["empresa", "individuo"],
-      etl_run_status: ["started", "completed", "failed"],
+      etl_run_status: ["started", "running", "completed", "failed"],
       subscription_status: [
         "trialing",
         "active",
