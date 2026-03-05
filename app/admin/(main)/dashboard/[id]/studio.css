@@ -58,15 +58,23 @@
 }
 .studio-appearance-bar .studio-appearance-input,
 .studio-appearance-bar input[type="text"],
-.studio-appearance-bar input[type="number"] {
+.studio-appearance-bar input[type="number"],
+.studio-appearance-bar input[type="color"] {
   width: 100%;
   height: 2.25rem;
   padding: 0 0.75rem;
   border-radius: var(--studio-radius-sm);
   border: 1px solid var(--studio-border);
-  background: var(--studio-surface);
-  color: var(--studio-fg);
+  background: var(--studio-surface) !important;
+  color: var(--studio-fg) !important;
   font-size: 0.8125rem;
+  font-weight: 600;
+}
+.studio-appearance-bar input[type="color"] {
+  width: auto;
+  min-width: 2.75rem;
+  padding: 2px;
+  cursor: pointer;
 }
 .studio-appearance-bar .studio-appearance-input:focus,
 .studio-appearance-bar input:focus {

@@ -6,7 +6,8 @@
   --client-font: 'DM Sans', system-ui, -apple-system, sans-serif;
   --client-accent: #2dd4bf;
   --client-accent-soft: rgba(45, 212, 191, 0.12);
-  --client-border: color-mix(in srgb, var(--client-accent) 22%, transparent);
+  --client-border: rgba(255, 255, 255, 0.08);
+  --client-border-width: 1px;
   --client-bg: #111318;
   --client-bg-soft: #161a21;
   --client-card: rgba(255, 255, 255, 0.03);
@@ -15,7 +16,7 @@
   --client-text-muted: rgba(255, 255, 255, 0.5);
   --client-filters-bg: #fafafa;
   --client-header-bg: transparent;
-  --client-radius: 14px;
+  --client-radius: 20px;
   --client-header-font-size: 1.25rem;
   --client-card-title-font-size: 0.8125rem;
   --client-kpi-value-font-size: 1.25rem;
@@ -232,8 +233,8 @@
 
 [data-theme="client"] .client-view-widget {
   background: var(--client-card);
-  border-radius: var(--client-radius);
-  border: 1px solid var(--client-border);
+  border-radius: var(--client-radius, 14px);
+  border: var(--client-border-width, 1px) solid var(--client-border);
   overflow: hidden;
   display: flex;
   flex-direction: column;

@@ -47,7 +47,7 @@ export function StudioAppearanceBar({ theme, onThemeChange }: StudioAppearanceBa
               <Input
                 value={theme.backgroundColor ?? ""}
                 onChange={(e) => onThemeChange({ backgroundColor: e.target.value || undefined })}
-                className="h-9 flex-1 font-mono text-xs text-[var(--studio-fg)]"
+                className="studio-appearance-input h-9 flex-1 font-mono text-xs"
                 placeholder="#111318"
               />
             </div>
@@ -73,7 +73,7 @@ export function StudioAppearanceBar({ theme, onThemeChange }: StudioAppearanceBa
               <Input
                 value={theme.cardBackgroundColor ?? ""}
                 onChange={(e) => onThemeChange({ cardBackgroundColor: e.target.value || undefined })}
-                className="h-9 flex-1 font-mono text-xs text-[var(--studio-fg)]"
+                className="studio-appearance-input h-9 flex-1 font-mono text-xs"
                 placeholder="rgba(255,255,255,0.03)"
               />
             </div>
@@ -90,7 +90,7 @@ export function StudioAppearanceBar({ theme, onThemeChange }: StudioAppearanceBa
               <Input
                 value={theme.cardBorderColor ?? ""}
                 onChange={(e) => onThemeChange({ cardBorderColor: e.target.value || undefined })}
-                className="h-9 flex-1 font-mono text-xs text-[var(--studio-fg)]"
+                className="studio-appearance-input h-9 flex-1 font-mono text-xs"
                 placeholder="rgba(255,255,255,0.08)"
               />
             </div>

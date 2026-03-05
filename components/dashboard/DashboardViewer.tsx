@@ -573,21 +573,50 @@ export function DashboardViewer({
   const useClientTheme = !hideHeader && (variant === "default" && !backHref);
   const themeVars = useMemo(() => {
     if (!useClientTheme) return {};
+    const bg = themeMerged.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor;
+    const cardBg = themeMerged.cardBackgroundColor ?? DEFAULT_DASHBOARD_THEME.cardBackgroundColor;
+    const borderColor = themeMerged.cardBorderColor ?? DEFAULT_DASHBOARD_THEME.cardBorderColor;
+    const borderWidth = themeMerged.cardBorderWidth ?? DEFAULT_DASHBOARD_THEME.cardBorderWidth ?? 1;
+    const radius = themeMerged.cardBorderRadius ?? DEFAULT_DASHBOARD_THEME.cardBorderRadius ?? 20;
     return {
       "--client-font": themeMerged.fontFamily ?? DEFAULT_DASHBOARD_THEME.fontFamily,
       "--client-accent": themeMerged.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor,
-      "--client-bg": themeMerged.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor,
-      "--client-card": themeMerged.cardBackgroundColor ?? DEFAULT_DASHBOARD_THEME.cardBackgroundColor,
+      "--client-bg": bg,
+      "--client-card": cardBg,
       "--client-text": themeMerged.textColor ?? DEFAULT_DASHBOARD_THEME.textColor,
       "--client-text-muted": themeMerged.textMutedColor ?? DEFAULT_DASHBOARD_THEME.textMutedColor,
+      "--client-border": borderColor,
+      "--client-border-width": `${borderWidth}px`,
+      "--client-radius": `${radius}px`,
+      "--platform-surface": cardBg,
+      "--platform-border": borderColor,
+      "--platform-card-border-width": `${borderWidth}px`,
+      "--platform-card-radius": `${radius}px`,
     } as React.CSSProperties;
   }, [useClientTheme, themeMerged]);
+
+  const wrapperBackground = useMemo(() => {
+    if (!useClientTheme) return undefined;
+    const bg = themeMerged.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor;
+    const url = themeMerged.backgroundImageUrl?.trim();
+    if (url) {
+      const safeUrl = url.replace(/"/g, "%22");
+      return {
+        backgroundColor: bg,
+        backgroundImage: `url("${safeUrl}")`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+      };
+    }
+    return { backgroundColor: bg };
+  }, [useClientTheme, themeMerged.backgroundColor, themeMerged.backgroundImageUrl]);
 
   return (
     <div
       className={`flex flex-col h-full w-full ${rootClassName}`}
       data-theme={useClientTheme ? "client" : undefined}
-      style={themeVars}
+      style={{ ...themeVars, ...wrapperBackground }}
     >
       {!hideHeader && (
         <header

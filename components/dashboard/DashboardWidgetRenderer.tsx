@@ -230,11 +230,13 @@ export function DashboardWidgetRenderer({
 
   return (
     <Card
-      className={`overflow-hidden rounded-xl border transition-all ${className}`}
+      className={`overflow-hidden border transition-all ${className}`}
       style={{
         minHeight: effectiveMinHeight,
         background: "var(--platform-surface, #fff)",
         borderColor: "var(--platform-border, #e2e8f0)",
+        borderWidth: "var(--platform-card-border-width, 1px)",
+        borderRadius: "var(--platform-card-radius, 0.75rem)",
       }}
     >
       <header className="flex flex-shrink-0 items-center justify-between gap-2 border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
