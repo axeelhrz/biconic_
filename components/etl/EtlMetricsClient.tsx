@@ -507,8 +507,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [relationFormJoinType, setRelationFormJoinType] = useState<"INNER" | "LEFT">("LEFT");
   const [connectionTables, setConnectionTables] = useState<{ schema: string; name: string; columns: { name: string }[] }[]>([]);
   const [connectionTablesLoading, setConnectionTablesLoading] = useState(false);
-  /** Límite de filas para profiling del dataset: 200, 500, 5000 o "unlimited" (sin límite práctico; techo alto en backend). */
-  const [profileRowLimit, setProfileRowLimit] = useState<200 | 500 | 5000 | "unlimited">(500);
+  /** Límite de filas para profiling del dataset: 200, 500, 5000, 200k, 500k o "unlimited" (muestra completa en backend). */
+  const [profileRowLimit, setProfileRowLimit] = useState<200 | 500 | 5000 | 200000 | 500000 | "unlimited">(500);
   const [otherTableColumnsLoaded, setOtherTableColumnsLoaded] = useState<string[]>([]);
   const [otherTableColumnsLoading, setOtherTableColumnsLoading] = useState(false);
   const formulaInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
@@ -549,12 +549,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const fetchData = useCallback(async (opts?: { silent?: boolean; sampleRows?: number; unlimited?: boolean; bustCache?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     try {
-      // Pedir muestra para Profiling; unlimited=1 permite hasta 50k filas sin límite artificial
+      // Pedir muestra para Profiling; unlimited=1 usa techo alto en backend; sampleRows hasta 1M
       const unlimited = opts?.unlimited === true;
       const sampleRows = opts?.sampleRows ?? 500;
+      const cappedSample = Math.min(1_000_000, Math.max(0, sampleRows));
       let url = unlimited
         ? `/api/etl/${etlId}/metrics-data?unlimited=1`
-        : `/api/etl/${etlId}/metrics-data?sampleRows=${Math.min(50000, Math.max(0, sampleRows))}`;
+        : `/api/etl/${etlId}/metrics-data?sampleRows=${cappedSample}`;
       if (opts?.bustCache) url += `&_t=${Date.now()}`;
       const res = await fetch(url);
       const json: MetricsDataResponse = await res.json();
@@ -2426,14 +2427,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Filas para profiling:</span>
                     <select
                       value={profileRowLimit}
-                      onChange={(e) => setProfileRowLimit(e.target.value === "unlimited" ? "unlimited" : (Number(e.target.value) as 200 | 500 | 5000))}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setProfileRowLimit(v === "unlimited" ? "unlimited" : (Number(v) as 200 | 500 | 5000 | 200000 | 500000));
+                      }}
                       className="rounded-lg border text-sm h-8 px-2"
                       style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
                     >
                       <option value={200}>200</option>
                       <option value={500}>500</option>
                       <option value={5000}>5.000</option>
-                      <option value="unlimited">Sin límite (hasta 50.000)</option>
+                      <option value={200000}>200.000</option>
+                      <option value={500000}>500.000</option>
+                      <option value="unlimited">Sin límite (muestra completa)</option>
                     </select>
                     <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => fetchData({ bustCache: true, ...(profileRowLimit === "unlimited" ? { unlimited: true } : { sampleRows: profileRowLimit }) })} disabled={loading}>
                       {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Recargar muestra

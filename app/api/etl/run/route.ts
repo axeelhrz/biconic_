@@ -1383,8 +1383,8 @@ async function executeEtlPipeline(
 // ===================================================================
 // LÓGICA PRINCIPAL DE LA API ROUTE (FIRE-AND-FORGET)
 // ===================================================================
-/** Aumentar timeout en Vercel (Pro: hasta 300s). Evita FUNCTION_INVOCATION_TIMEOUT en bases gigantes. */
-export const maxDuration = 300;
+/** Timeout ampliado para bases muy grandes (Vercel Pro: hasta 900s). */
+export const maxDuration = 900;
 
 export async function POST(req: NextRequest) {
   const runId = uuidv4();
