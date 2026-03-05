@@ -17,7 +17,7 @@ import {
 } from "chart.js";
 import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Card } from "@/components/ui/card";
-import { buildChartOptions, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import { buildChartOptions, formatValue, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 
 ChartJS.register(
@@ -161,10 +161,17 @@ function buildPieDoughnutLegend(
   };
 }
 
-function formatKpiValue(value: unknown): string {
+function formatKpiValue(value: unknown, style?: ChartStyleConfig | null): string {
   if (value == null || value === "") return "—";
   const n = Number(value);
   if (Number.isNaN(n)) return String(value);
+  if (style) {
+    const format = (style.valueFormat ?? "none") as "none" | "currency" | "percent";
+    const scale = (style.valueScale ?? "none") as "none" | "K" | "M" | "Bi";
+    const decimals = style.decimals ?? 2;
+    const useGrouping = style.useGrouping !== false;
+    return formatValue(n, format, style.currencySymbol ?? "$", scale, decimals, useGrouping);
+  }
   if (Math.abs(n) >= 1e12) return `${(n / 1e12).toFixed(1)}T`;
   if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
   if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
@@ -216,8 +223,8 @@ export function DashboardWidgetRenderer({
     const valKey = keys[0];
     if (!valKey) return null;
     const sum = (widget.rows as Record<string, unknown>[]).reduce((acc, row) => acc + Number(row[valKey] ?? 0), 0);
-    return formatKpiValue(sum);
-  }, [chartType, widget.rows]);
+    return formatKpiValue(sum, widget.chartStyle as ChartStyleConfig | undefined);
+  }, [chartType, widget.rows, widget.chartStyle]);
 
   const chartOptions = useMemo(() => {
     const style = (widget.chartStyle as ChartStyleConfig | undefined) ?? undefined;

@@ -17,6 +17,10 @@ export type ChartStyleConfig = {
   /** Escala independiente del tipo: K, M, Bi. Se combina con valueFormat (ej. Moneda + M). */
   valueScale?: ValueScaleType;
   currencySymbol?: string;
+  /** Cantidad de decimales (ej. 0, 2). Por defecto 2. */
+  decimals?: number;
+  /** Separador de miles (useGrouping en toLocaleString). Por defecto true. */
+  useGrouping?: boolean;
   /** Padding interno del gráfico (px) para que no se corten etiquetas */
   layoutPadding?: number;
   /** Tamaño de fuente para etiquetas de datos */
@@ -76,16 +80,23 @@ function applyScale(
 /**
  * Formatea un valor combinando tipo (number/currency/percent) y escala (none/K/M/Bi).
  * Orden: primero escala (división + sufijo), luego tipo (prefijo $ o sufijo %).
+ * decimals y useGrouping aplican al número antes del sufijo (K/M/Bi).
  */
 export function formatValue(
   value: number,
   format: ValueFormatType = "none",
   currencySymbol: string = "$",
-  scale: ValueScaleType = "none"
+  scale: ValueScaleType = "none",
+  decimals: number = 2,
+  useGrouping: boolean = true
 ): string {
   const n = Number(value);
   const { val, suffix } = applyScale(n, scale);
-  const formatted = val.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 0 });
+  const formatted = val.toLocaleString(undefined, {
+    maximumFractionDigits: decimals,
+    minimumFractionDigits: 0,
+    useGrouping,
+  });
   const withSuffix = `${formatted}${suffix}`;
   if (format === "percent") return `${withSuffix}%`;
   if (format === "currency") return `${currencySymbol}${withSuffix}`;
@@ -103,13 +114,15 @@ export function getValueFormatter(
   const format = (style?.valueFormat ?? "none") as ValueFormatType;
   const symbol = style?.currencySymbol ?? "$";
   const scale = (style?.valueScale ?? "none") as ValueScaleType;
+  const decimals = style?.decimals ?? 2;
+  const useGrouping = style?.useGrouping !== false;
   return (value: number, ctx?: { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
     if (labelMode === "percent" && ctx?.chart?.data?.datasets?.[0]?.data) {
       const total = (ctx.chart.data.datasets[0].data as number[]).reduce((a, b) => Number(a) + Number(b), 0);
       const pct = total ? (Number(value) / total) * 100 : 0;
-      return `${pct.toFixed(1)}%`;
+      return `${pct.toFixed(Math.min(1, decimals))}%`;
     }
-    return formatValue(Number(value), format, symbol, scale);
+    return formatValue(Number(value), format, symbol, scale, decimals, useGrouping);
   };
 }
 

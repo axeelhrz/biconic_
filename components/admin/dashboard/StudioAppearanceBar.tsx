@@ -123,6 +123,57 @@ export function StudioAppearanceBar({ theme, onThemeChange }: StudioAppearanceBa
               />
             </div>
           </div>
+          <div className="sm:col-span-2 lg:col-span-3">
+            <Label className="studio-appearance-label">Tipografía — familia</Label>
+            <Input
+              value={theme.fontFamily ?? ""}
+              onChange={(e) => onThemeChange({ fontFamily: e.target.value || undefined })}
+              className="studio-appearance-input mt-1"
+              placeholder="'DM Sans', system-ui, sans-serif"
+            />
+          </div>
+          <div>
+            <Label className="studio-appearance-label">Título dashboard (rem)</Label>
+            <Input
+              type="number"
+              min={0.75}
+              max={2}
+              step={0.125}
+              value={theme.headerFontSize ?? 1.25}
+              onChange={(e) =>
+                onThemeChange({ headerFontSize: e.target.value ? parseFloat(e.target.value) : undefined })
+              }
+              className="studio-appearance-input mt-1"
+            />
+          </div>
+          <div>
+            <Label className="studio-appearance-label">Título tarjeta (rem)</Label>
+            <Input
+              type="number"
+              min={0.5}
+              max={1.5}
+              step={0.0625}
+              value={theme.cardTitleFontSize ?? 0.8125}
+              onChange={(e) =>
+                onThemeChange({ cardTitleFontSize: e.target.value ? parseFloat(e.target.value) : undefined })
+              }
+              className="studio-appearance-input mt-1"
+            />
+          </div>
+          <div>
+            <Label className="studio-appearance-label">Valor KPI (rem)</Label>
+            <Input
+              type="number"
+              min={0.75}
+              max={3}
+              step={0.125}
+              value={theme.kpiValueFontSize ?? 1.25}
+              onChange={(e) =>
+                onThemeChange({ kpiValueFontSize: e.target.value ? parseFloat(e.target.value) : undefined })
+              }
+              className="studio-appearance-input mt-1"
+            />
+          </div>
         </div>
       )}
     </div>

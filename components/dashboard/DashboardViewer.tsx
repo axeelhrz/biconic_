@@ -62,6 +62,8 @@ type AggregationConfig = {
   chartValueType?: string;
   chartValueScale?: string;
   chartCurrencySymbol?: string;
+  chartThousandSep?: boolean;
+  chartDecimals?: number;
 };
 
 export type Widget = DashboardWidgetRendererWidget & {
@@ -94,7 +96,7 @@ function computeGridPlacements(
   return placements;
 }
 
-/** Construye chartStyle desde aggregationConfig para que el renderer aplique formato (tipo + escala). */
+/** Construye chartStyle desde aggregationConfig para que el renderer aplique formato (tipo + escala + decimales). */
 function buildChartStyleFromAgg(agg: AggregationConfig | undefined): ChartStyleConfig | undefined {
   if (!agg) return undefined;
   const valueType = agg.chartValueType as string | undefined;
@@ -114,11 +116,15 @@ function buildChartStyleFromAgg(agg: AggregationConfig | undefined): ChartStyleC
         : valueScale === "BI" || valueScale === "Bi" || legacy === "BI"
           ? "Bi"
           : "none";
-  if (valueFormat === "none" && scale === "none") return undefined;
+  const decimals = agg.chartDecimals ?? 2;
+  const useGrouping = agg.chartThousandSep !== false;
+  if (valueFormat === "none" && scale === "none" && decimals === 2 && useGrouping) return undefined;
   return {
     valueFormat,
     valueScale: scale,
     currencySymbol: agg.chartCurrencySymbol ?? "$",
+    decimals,
+    useGrouping,
   };
 }
 
@@ -582,6 +588,9 @@ export function DashboardViewer({
     const textMutedColor = themeMerged.textMutedColor ?? DEFAULT_DASHBOARD_THEME.textMutedColor;
     return {
       "--client-font": themeMerged.fontFamily ?? DEFAULT_DASHBOARD_THEME.fontFamily,
+      "--client-header-font-size": `${themeMerged.headerFontSize ?? DEFAULT_DASHBOARD_THEME.headerFontSize ?? 1.25}rem`,
+      "--client-card-title-font-size": `${themeMerged.cardTitleFontSize ?? DEFAULT_DASHBOARD_THEME.cardTitleFontSize ?? 0.8125}rem`,
+      "--client-kpi-value-font-size": `${themeMerged.kpiValueFontSize ?? DEFAULT_DASHBOARD_THEME.kpiValueFontSize ?? 1.25}rem`,
       "--client-accent": themeMerged.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor,
       "--client-bg": bg,
       "--client-card": cardBg,

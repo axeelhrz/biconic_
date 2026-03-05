@@ -308,6 +308,72 @@ export function MetricConfigPanel({
         )}
 
         {!["filter", "image", "text"].includes(widget.type) && (
+          <div className="border-t border-[var(--studio-border)] pt-4 space-y-3">
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Formato de números</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Tipo</Label>
+                <select
+                  value={(agg.chartValueType as string) || "number"}
+                  onChange={(e) => updateAgg({ chartValueType: e.target.value || undefined })}
+                  className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
+                >
+                  <option value="number">Número</option>
+                  <option value="currency">Moneda</option>
+                  <option value="percent">Porcentaje</option>
+                </select>
+              </div>
+              <div>
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Escala</Label>
+                <select
+                  value={(agg.chartValueScale as string) || "none"}
+                  onChange={(e) => updateAgg({ chartValueScale: e.target.value || undefined })}
+                  className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
+                >
+                  <option value="none">Ninguna</option>
+                  <option value="K">Miles (K)</option>
+                  <option value="M">Millones (M)</option>
+                  <option value="Bi">Miles de millones (Bi)</option>
+                </select>
+              </div>
+            </div>
+            {(agg.chartValueType as string) === "currency" && (
+              <div>
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Símbolo moneda</Label>
+                <Input
+                  value={(agg.chartCurrencySymbol as string) ?? "$"}
+                  onChange={(e) => updateAgg({ chartCurrencySymbol: e.target.value || "$" })}
+                  className="mt-0.5 h-8 text-xs"
+                  placeholder="$"
+                />
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Decimales</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={6}
+                  value={agg.chartDecimals ?? 2}
+                  onChange={(e) => updateAgg({ chartDecimals: Math.min(6, Math.max(0, parseInt(e.target.value, 10) || 0)) })}
+                  className="h-8 w-14 text-xs"
+                />
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agg.chartThousandSep !== false}
+                  onChange={(e) => updateAgg({ chartThousandSep: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Separador de miles</span>
+              </label>
+            </div>
+          </div>
+        )}
+
+        {!["filter", "image", "text"].includes(widget.type) && (
           <>
             <div className="border-t border-[var(--studio-border)] pt-4">
               <div className="flex items-center justify-between mb-3">

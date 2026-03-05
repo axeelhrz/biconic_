@@ -232,6 +232,8 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
     chartValueScale: cfg.chartValueScale,
     chartNumberFormat: cfg.chartNumberFormat,
     chartCurrencySymbol: cfg.chartCurrencySymbol,
+    chartThousandSep: cfg.chartThousandSep,
+    chartDecimals: cfg.chartDecimals,
     chartSeriesColors: cfg.chartSeriesColors,
     chartRankingEnabled: cfg.chartRankingEnabled,
     chartRankingTop: cfg.chartRankingTop,

@@ -256,7 +256,7 @@
   padding: 0.4rem 0.6rem;
   border-bottom: 1px solid var(--client-border);
   font-weight: 500;
-  font-size: 0.6875rem;
+  font-size: var(--client-card-title-font-size, 0.8125rem);
   color: var(--client-text-muted);
   letter-spacing: 0.01em;
   flex-shrink: 0;
@@ -333,7 +333,7 @@
   letter-spacing: -0.02em;
   color: var(--client-text);
   line-height: 1.15;
-  font-size: clamp(0.8125rem, var(--client-kpi-value-font-size, 1.125rem), 1.25rem);
+  font-size: var(--client-kpi-value-font-size, 1.25rem);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
