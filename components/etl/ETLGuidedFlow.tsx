@@ -257,6 +257,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewRows, setPreviewRows] = useState<Record<string, unknown>[] | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewRowsProcessed, setPreviewRowsProcessed] = useState<number | null>(null);
   const [previewSortKey, setPreviewSortKey] = useState<string | null>(null);
   const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
   const previewAbortRef = useRef<AbortController | null>(null);
@@ -974,6 +975,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (!body || !connectionId || !selectedTable) {
       setPreviewRows(null);
       setPreviewError(null);
+      setPreviewRowsProcessed(null);
       return;
     }
     previewAbortRef.current?.abort();
@@ -1015,17 +1017,21 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           previewLoadedOnceRef.current = true;
           setPreviewRows(data.previewRows);
           setPreviewError(null);
+          setPreviewRowsProcessed((data as { rowsProcessed?: number }).rowsProcessed ?? data.previewRows.length);
         } else if (data.ok && !Array.isArray(data.previewRows)) {
           setPreviewRows(null);
+          setPreviewRowsProcessed(null);
           setPreviewError("La respuesta del servidor no incluyó datos de vista previa.");
         } else {
           setPreviewRows(null);
+          setPreviewRowsProcessed(null);
           setPreviewError((data as { error?: string })?.error || "Error al cargar vista previa");
         }
       })
       .catch((e: unknown) => {
         if ((e as { name?: string }).name === "AbortError") return;
         setPreviewRows(null);
+        setPreviewRowsProcessed(null);
         const msg = e instanceof Error ? e.message : "Error al cargar vista previa";
         setPreviewError(
           typeof msg === "string" && (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed"))
@@ -1039,7 +1045,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   }, [buildGuidedConfigBody, connectionId, selectedTable]);
 
   useEffect(() => {
-    const t = setTimeout(() => fetchPreview(), 200);
+    const t = setTimeout(() => fetchPreview(), 0);
     return () => clearTimeout(t);
   }, [
     fetchPreview,
@@ -2777,7 +2783,71 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 </Button>
               </div>
             </div>
-            <div className="p-2">
+            <div className="p-4 grid grid-cols-1 md:grid-cols-[minmax(240px,1fr)_2fr] gap-4">
+              {/* Resumen de configuración y datos */}
+              <div className="rounded-xl border p-4 space-y-3 shrink-0" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", height: "fit-content" }}>
+                <h4 className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>Resumen</h4>
+                <dl className="space-y-2 text-sm">
+                  <div>
+                    <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Conexión</dt>
+                    <dd className="font-medium" style={{ color: "var(--platform-fg)" }}>{connectionName || "—"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tabla</dt>
+                    <dd className="font-medium truncate" style={{ color: "var(--platform-fg)" }} title={selectedTable ?? undefined}>{selectedTable ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Columnas</dt>
+                    <dd className="font-medium" style={{ color: "var(--platform-fg)" }}>
+                      {connectionId && selectedTable
+                        ? columns.length > 0
+                          ? `${columns.length} columna${columns.length !== 1 ? "s" : ""}`
+                          : "Todas"
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Filtros</dt>
+                    <dd className="font-medium" style={{ color: "var(--platform-fg)" }}>
+                      {connectionId && selectedTable
+                        ? conditions.length > 0 || excludedValues.some((e) => e.excluded.length > 0)
+                          ? [
+                              conditions.length > 0 && `${conditions.length} condición${conditions.length !== 1 ? "es" : ""}`,
+                              excludedValues.some((e) => e.excluded.length > 0) && `${excludedValues.filter((e) => e.excluded.length > 0).length} columna(s) con exclusiones`,
+                            ].filter(Boolean).join(", ")
+                          : "Sin filtros"
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Transformación</dt>
+                    <dd className="font-medium" style={{ color: "var(--platform-fg)" }}>
+                      {buildCleanConfig() || (useUnion && unionRightItems.length > 0) || (useJoin && (joinItems.length > 0 || (joinSecondaryConnectionId && joinSecondaryTable)))
+                        ? useUnion && unionRightItems.length > 0
+                          ? `UNION con ${unionRightItems.length} tabla(s)${unionAll ? " (ALL)" : ""}${buildCleanConfig() ? " · Limpieza" : ""}`
+                          : useJoin && (joinItems.length > 0 || (joinSecondaryConnectionId && joinSecondaryTable)) && !useUnion
+                            ? `JOIN con ${joinItems.length > 0 ? joinItems.length : 1} tabla(s)${buildCleanConfig() ? " · Limpieza" : ""}`
+                            : !useUnion && !useJoin && buildCleanConfig()
+                              ? "Limpieza de nulos, texto y/o duplicados"
+                              : "—"
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Destino</dt>
+                    <dd className="font-medium" style={{ color: "var(--platform-fg)" }}>{outputTableName ? `${outputTableName} · ${outputMode === "overwrite" ? "Sobrescribir" : "Agregar"}` : "—"}</dd>
+                  </div>
+                  <div className="pt-2 border-t" style={{ borderColor: "var(--platform-border)" }}>
+                    <dt className="text-xs font-medium mb-1" style={{ color: "var(--platform-fg-muted)" }}>Datos (vista previa)</dt>
+                    <dd className="space-y-0.5">
+                      <div className="font-medium" style={{ color: "var(--platform-fg)" }}>Filas mostradas: {previewLoading ? "…" : (previewRows != null ? String(previewDisplayRows.length) : "—")}</div>
+                      <div className="font-medium" style={{ color: "var(--platform-fg)" }}>Total obtenido: {previewLoading ? "…" : previewError ? "Error al cargar" : (previewRows != null ? (previewRowsProcessed ?? previewRows.length) : "—")}</div>
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+              {/* Vista previa: tabla y mensajes */}
+              <div className="min-w-0">
               {previewError && (
                 <p className="text-sm py-4 px-3 rounded-lg" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }}>
                   {previewError}
@@ -2866,6 +2936,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   Elegí una conexión y tabla para ver aquí una vista previa de los datos.
                 </p>
               )}
+              </div>
             </div>
           </div>
         </section>
