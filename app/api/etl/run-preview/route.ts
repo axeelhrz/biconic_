@@ -490,7 +490,7 @@ export async function POST(req: NextRequest) {
               conditions: FilterCondition[]
             ): Promise<Record<string, any>[]> => {
               const connType = (conn.type || "").toLowerCase();
-              const limit = Math.min(PREVIEW_MAX_ROWS, body.limit ?? PREVIEW_MAX_ROWS);
+              const limit = Math.min(PREVIEW_MAX_ROWS, body?.limit ?? PREVIEW_MAX_ROWS);
               const normalize = (row: Record<string, any>) => {
                 const out: Record<string, any> = {};
                 for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
@@ -763,7 +763,7 @@ export async function POST(req: NextRequest) {
               if (pos === -1) break;
               clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
             }
-            const limit = Math.min(PREVIEW_MAX_ROWS, body.limit ?? PREVIEW_MAX_ROWS);
+            const limit = Math.min(PREVIEW_MAX_ROWS, body?.limit ?? PREVIEW_MAX_ROWS);
             const Firebird = require("node-firebird");
             const fbUser = String((conn as any).db_user ?? "").trim();
             if (!fbUser) throw new Error("La conexión Firebird no tiene usuario definido. Revisá que la conexión tenga usuario guardado. Si la creaste con usuario y contraseña, asegurate de que ENCRYPTION_KEY en el servidor sea la misma que cuando se creó.");
@@ -1090,7 +1090,7 @@ export async function POST(req: NextRequest) {
       }
       
       // Stop if we hit the limit (already limited by SQL but good safety)
-      const maxRows = body.limit ?? PREVIEW_MAX_ROWS;
+      const maxRows = body?.limit ?? PREVIEW_MAX_ROWS;
       if (allPreviewRows.length >= maxRows) break;
     }
 
