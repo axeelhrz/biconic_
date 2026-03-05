@@ -336,9 +336,9 @@ async function executeEtlPipeline(
     const PREVIEW_LIMIT = 5000;
 
     let rowsProcessed = 0;
-    /** Lotes más grandes = menos iteraciones y menos updates a etl_runs_log; permite llegar a ~1M filas en 300s (Hobby). */
-    const pageSize = 20000;
-    const INSERT_CHUNK_SIZE_DEFAULT = 2000;
+    /** Lotes más grandes = menos iteraciones; Pro 800s permite varios millones de filas. */
+    const pageSize = 40000;
+    const INSERT_CHUNK_SIZE_DEFAULT = 3000;
     /** Postgres limita ~65535 parámetros por query. chunkSize * numColumnas debe quedar por debajo. */
     const MAX_PARAMS_PER_QUERY = 60000;
     let tableCreated = false;
@@ -1260,8 +1260,8 @@ async function executeEtlPipeline(
     }
 
     // --- MAIN EXECUTION LOOP ---
-    /** Actualizar monitoreo cada N filas para no saturar Supabase y ganar tiempo (objetivo ~1M en 300s). */
-    const LOG_UPDATE_EVERY_ROWS = 50000;
+    /** Actualizar monitoreo cada N filas para no saturar Supabase (Pro: muchos más registros por run). */
+    const LOG_UPDATE_EVERY_ROWS = 100000;
     let lastLoggedRows = 0;
 
     for await (const rawBatch of dataSourceGenerator()) {
@@ -1306,7 +1306,7 @@ async function executeEtlPipeline(
       
       await insertBatch(transformedBatch);
 
-      // --- REALTIME UPDATE (throttled: cada LOG_UPDATE_EVERY_ROWS para permitir ~1M en 300s) ---
+      // --- REALTIME UPDATE (throttled: cada LOG_UPDATE_EVERY_ROWS) ---
       if (rowsProcessed - lastLoggedRows >= LOG_UPDATE_EVERY_ROWS) {
          try {
             await supabaseAdmin
@@ -1390,8 +1390,8 @@ async function executeEtlPipeline(
 // ===================================================================
 // LÓGICA PRINCIPAL DE LA API ROUTE (FIRE-AND-FORGET)
 // ===================================================================
-/** Timeout máximo permitido (Hobby: 300s; Pro: hasta 900s). Para más registros en plan Hobby, considerar procesar en chunks o ejecutar ETL vía cron. */
-export const maxDuration = 300;
+/** Pro (Fluid): máx 800s. Hobby: 300s. Enterprise sin Fluid: 900s. */
+export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {
   const runId = uuidv4();

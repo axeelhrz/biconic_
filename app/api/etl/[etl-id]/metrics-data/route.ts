@@ -4,8 +4,8 @@ import { createServiceRoleClient } from "@/lib/supabase/service";
 import postgres from "postgres";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
-/** Timeout para lectura de tablas grandes en monitoreo. */
-export const maxDuration = 60;
+/** Timeout para lectura de tablas grandes en monitoreo (varios millones de filas). */
+export const maxDuration = 120;
 
 type FieldsInfo = {
   all: string[];
