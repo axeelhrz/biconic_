@@ -352,7 +352,7 @@ export function DashboardWidgetRenderer({
                 )}
                 {(chartType === "line" || chartType === "area") && (
                   <Line
-                    data={chartType === "area" ? { ...chartConfig, datasets: chartConfig.datasets.map((ds) => ({ ...ds, fill: true })) } : chartConfig as never}
+                    data={chartType === "area" ? { ...chartConfig, datasets: chartConfig.datasets.map((ds) => ({ ...ds, fill: true })) } as never : chartConfig as never}
                     options={chartOptions as never}
                   />
                 )}
