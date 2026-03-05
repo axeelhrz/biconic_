@@ -348,9 +348,9 @@ async function executeEtlPipeline(
     const globalCountMap = new Map<string, number>();
     const globalCountOriginalValues = new Map<string, any>();
 
-    /** Quita el byte nulo (0x00) de strings; Postgres no lo admite en UTF-8. */
+    /** Quita el byte nulo (0x00) de strings; convierte undefined a null (postgres no admite undefined). */
     const sanitizeForPostgres = (val: unknown): unknown => {
-      if (val == null) return val;
+      if (val === undefined || val === null) return null;
       if (typeof val === "string") return val.replace(/\u0000/g, "");
       if (Buffer.isBuffer(val)) return val.toString("utf8").replace(/\u0000/g, "");
       return val;
@@ -498,7 +498,8 @@ async function executeEtlPipeline(
         for (const key in row) {
           const saneKey = key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
           if (allowedKeys === null || allowedKeys.has(saneKey)) {
-            saneRow[saneKey] = sanitizeForPostgres(row[key]);
+            const v = sanitizeForPostgres(row[key]);
+            saneRow[saneKey] = v === undefined ? null : v;
           }
         }
         if (body?.etlId) {

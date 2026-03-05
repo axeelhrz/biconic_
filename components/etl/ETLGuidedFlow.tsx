@@ -23,6 +23,7 @@ import {
   Plus,
   RotateCcw,
   List,
+  RefreshCw,
 } from "lucide-react";
 import { Connection as ServerConnection } from "@/components/connections/ConnectionsCard";
 import { Select } from "@/components/ui/Select";
@@ -1011,7 +1012,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   }, [buildGuidedConfigBody, connectionId, selectedTable]);
 
   useEffect(() => {
-    const t = setTimeout(() => fetchPreview(), 600);
+    const t = setTimeout(() => fetchPreview(), 200);
     return () => clearTimeout(t);
   }, [
     fetchPreview,
@@ -2722,17 +2723,32 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         </section>
         )}
 
-        {/* Vista previa de datos: persistente en todos los pasos, se actualiza en tiempo real */}
+        {/* Vista previa de datos: siempre visible, con botón para forzar actualización */}
         <section className="mt-8 pt-6 border-t" style={{ borderColor: "var(--platform-border)" }}>
           <div className="rounded-xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-            <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+            <div className="px-4 py-3 border-b flex items-center justify-between gap-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
               <h3 className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>Vista previa de datos</h3>
-              {previewLoading && (
-                <span className="text-xs flex items-center gap-1.5" style={{ color: "var(--platform-fg-muted)" }}>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Actualizando…
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                {previewLoading && (
+                  <span className="text-xs flex items-center gap-1.5" style={{ color: "var(--platform-fg-muted)" }}>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Actualizando…
+                  </span>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 h-8 gap-1.5"
+                  style={{ borderColor: "var(--platform-border)" }}
+                  onClick={() => fetchPreview()}
+                  disabled={previewLoading || !connectionId || !selectedTable}
+                  title={connectionId && selectedTable ? "Actualizar vista previa" : "Elegí conexión y tabla para habilitar"}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Actualizar
+                </Button>
+              </div>
             </div>
             <div className="p-2">
               {previewError && (
@@ -2809,7 +2825,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               })()}
               {!previewError && !previewLoading && (!previewRows || previewRows.length === 0) && connectionId && selectedTable && (
                 <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
-                  Completá conexión y tabla para ver la vista previa. Se actualiza automáticamente al cambiar filtros o transformaciones.
+                  Sin datos aún o la vista previa no se cargó. Tocá <strong>Actualizar</strong> arriba a la derecha para cargar la vista previa ahora.
                 </p>
               )}
               {!connectionId && !previewLoading && (
