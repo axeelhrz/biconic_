@@ -31,8 +31,8 @@ import { toast } from "sonner";
 const STEPS = [
   { id: "conexion", label: "Conexión", icon: Link2 },
   { id: "origen", label: "Origen", icon: Database },
-  { id: "columnas_tipos", label: "Columnas y tipos", icon: List },
   { id: "filtros", label: "Columnas y filtros", icon: Filter },
+  { id: "columnas_tipos", label: "Columnas y tipos", icon: List },
   { id: "transformacion", label: "Transformación", icon: Sparkles },
   { id: "destino", label: "Destino", icon: Table },
   { id: "ejecutar", label: "Ejecutar", icon: Play },
@@ -126,6 +126,8 @@ export type GuidedConfig = {
     excludeRowsColumn?: string;
     /** Nombres para mostrar, formato y tipo override por columna (ej. fecha: DD/MM/YYYY; type: Fecha|Número|Texto). */
     columnDisplay?: Record<string, { label?: string; format?: string; type?: "Fecha" | "Número" | "Texto" }>;
+    /** Columnas para formar la clave única (KEY) por concatenación, como el Grain del Dataset de Métricas */
+    keyColumns?: string[];
   };
   union?: {
     left?: { connectionId?: string | number; filter?: { table?: string; columns?: string[]; conditions?: unknown[] } };
@@ -151,6 +153,8 @@ export type GuidedConfig = {
     dedupe?: { keyColumns?: string[]; keep?: "first" | "last" };
   };
   end?: { target?: { table?: string }; mode?: "overwrite" | "append" };
+  /** Frecuencia de actualización automática (15m, 1h, 6h, 12h, 24h, 1w, 1M). */
+  schedule?: { frequency?: string; lastRunAt?: string };
 };
 
 type Props = {
@@ -177,8 +181,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [distinctValuesList, setDistinctValuesList] = useState<string[]>([]);
   const [loadingDistinct, setLoadingDistinct] = useState(false);
   const [distinctSearch, setDistinctSearch] = useState("");
+  /** Columnas para formar la KEY (clave única) por concatenación, como el Grain en Dataset de Métricas */
+  const [keyColumns, setKeyColumns] = useState<string[]>([]);
   const [outputTableName, setOutputTableName] = useState("");
   const [outputMode, setOutputMode] = useState<"overwrite" | "append">("overwrite");
+  const [scheduleFrequency, setScheduleFrequency] = useState<string>("");
   const [loadingMeta, setLoadingMeta] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState<string | null>(null);
   const [inferringTypes, setInferringTypes] = useState(false);
@@ -194,7 +201,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     replacement?: string;
     columns: string[];
   } | null>(null);
-  const defaultNullPatterns = ["NA", "-", ".", ""];
+  const defaultNullPatterns = useMemo(() => ["NA", "-", ".", ""], []);
   /** Valores predefinidos que se pueden marcar como "vacíos". El value es el texto exacto a comparar (vacío = string vacío). */
   const NULL_PRESET_OPTIONS: { value: string; label: string }[] = [
     { value: "", label: "(vacío)" },
@@ -336,9 +343,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       }
       setColumnDisplay(next);
     }
+    if (filter && Array.isArray(filter.keyColumns)) setKeyColumns(filter.keyColumns);
     const end = cfg.end;
     if (end?.target?.table) setOutputTableName(end.target.table);
     if (end?.mode) setOutputMode(end.mode);
+    const sched = cfg.schedule;
+    setScheduleFrequency(sched?.frequency ? String(sched.frequency) : "");
     const union = cfg.union;
     if (union) {
       setUseUnion(true);
@@ -714,6 +724,59 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   // Columnas de la tabla secundaria del JOIN
   const joinRightTableInfo = joinRightTables.find((t) => `${t.schema}.${t.name}` === joinSecondaryTable);
+
+  /** Columnas finales del dataset (tras selección, UNION y JOIN). Refleja exactamente la estructura que se guardará. */
+  const finalColumnsForTypes = useMemo(() => {
+    const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
+    const effectiveJoinItems =
+      joinItems.length > 0
+        ? joinItems
+        : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
+          ? [{ id: "join_0", connectionId: joinSecondaryConnectionId, table: joinSecondaryTable, joinType, leftColumn: joinLeftColumn, rightColumn: joinRightColumn, rightColumns: joinRightColumns, availableColumns: joinRightTableInfo?.columns ?? [] }]
+          : [];
+    if (effectiveJoinItems.length > 0) {
+      const primaryPart = effectiveColumns.map((colName: string) => {
+        const meta = selectedTableInfo?.columns?.find((c: { name: string }) => c.name === colName);
+        return {
+          name: `primary.${colName}`,
+          dataType: (meta as { dataType?: string })?.dataType,
+          inferredType: (meta as { inferredType?: string })?.inferredType,
+        };
+      });
+      const joinPart = effectiveJoinItems.flatMap(
+        (j: { rightColumns?: string[]; availableColumns?: { name: string; dataType?: string; inferredType?: string }[] }, i: number) =>
+          (j.rightColumns || []).map((colName: string) => {
+            const meta = (j.availableColumns ?? []).find((ac: { name: string }) => ac.name === colName);
+            return {
+              name: `join_${i}.${colName}`,
+              dataType: (meta as { dataType?: string })?.dataType,
+              inferredType: (meta as { inferredType?: string })?.inferredType,
+            };
+          })
+      );
+      return [...primaryPart, ...joinPart];
+    }
+    return effectiveColumns.map((colName: string) => {
+      const meta = selectedTableInfo?.columns?.find((c: { name: string }) => c.name === colName);
+      return {
+        name: colName,
+        dataType: (meta as { dataType?: string })?.dataType,
+        inferredType: (meta as { inferredType?: string })?.inferredType,
+      };
+    });
+  }, [
+    columns,
+    selectedTableInfo?.columns,
+    joinItems,
+    joinSecondaryConnectionId,
+    joinSecondaryTable,
+    joinLeftColumn,
+    joinRightColumn,
+    joinRightColumns,
+    joinType,
+    joinRightTableInfo?.columns,
+  ]);
+
   useEffect(() => {
     if (!joinSecondaryTable || !joinSecondaryConnectionId) {
       setJoinRightColumns([]);
@@ -751,15 +814,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const buildCleanConfig = useCallback(() => {
     const transforms: Array<{ column: string; op: string; find?: string; replaceWith?: string; patterns?: string[]; action?: "null" | "replace"; replacement?: string }> = [];
     if (nullCleanup?.columns?.length) {
+      const patterns = nullCleanup.patterns && nullCleanup.patterns.length > 0 ? nullCleanup.patterns : defaultNullPatterns;
       nullCleanup.columns.forEach((col) => {
-        transforms.push({ column: col, op: "normalize_nulls", patterns: nullCleanup.patterns, action: nullCleanup.action, replacement: nullCleanup.replacement });
+        transforms.push({ column: col, op: "normalize_nulls", patterns, action: nullCleanup.action, replacement: nullCleanup.replacement });
       });
     }
     cleanTransforms.forEach((t) => transforms.push(t));
     dataFixes.forEach((f) => transforms.push({ column: f.column, op: "replace_value", find: f.find, replaceWith: f.replaceWith }));
     if (transforms.length === 0 && !dedupe?.keyColumns?.length) return undefined;
     return { transforms, dedupe: dedupe ?? undefined };
-  }, [nullCleanup, cleanTransforms, dataFixes, dedupe, columns, selectedTableInfo?.columns]);
+  }, [nullCleanup, cleanTransforms, dataFixes, dedupe, defaultNullPatterns]);
 
   const allFilterConditions = useCallback(() => {
     const fromExcluded = excludedValues.flatMap(({ column, excluded }) =>
@@ -788,21 +852,38 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       const t = col?.inferredType ?? (col?.dataType ? dataTypeToLabel(col.dataType) : undefined);
       return t === "Fecha" || t === "Número" || t === "Texto" ? (t as "Fecha" | "Número" | "Texto") : undefined;
     };
-    for (const colName of effectiveColumns) {
-      const dispKey = columnDisplay[colName] !== undefined ? colName : Object.keys(columnDisplay).find((k) => k.toLowerCase() === colName.toLowerCase());
-      const disp = dispKey ? columnDisplay[dispKey] : undefined;
+    const effectiveJoinItemsForPayload =
+      joinItems.length > 0
+        ? joinItems
+        : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
+          ? [{ rightColumns: joinRightColumns }]
+          : [];
+    const allColumnNamesForDisplay =
+      effectiveJoinItemsForPayload.length > 0
+        ? [
+            ...effectiveColumns.map((c) => `primary.${c}`),
+            ...effectiveJoinItemsForPayload.flatMap((j: { rightColumns?: string[] }, i: number) => (j.rightColumns || []).map((c) => `join_${i}.${c}`)),
+          ]
+        : effectiveColumns;
+    for (const colName of allColumnNamesForDisplay) {
+      const unprefixed = colName.startsWith("primary.") ? colName.slice("primary.".length) : colName.replace(/^join_\d+\./, "");
+      const dispKey = columnDisplay[colName] !== undefined ? colName : columnDisplay[unprefixed] !== undefined ? unprefixed : Object.keys(columnDisplay).find((k) => k.toLowerCase() === (colName.includes(".") ? unprefixed : colName).toLowerCase());
+      const disp = dispKey ? columnDisplay[dispKey] : (colName.includes(".") ? columnDisplay[unprefixed] : undefined);
       const label = disp?.label?.trim() || undefined;
       const format = disp?.format?.trim() || undefined;
-      const type = disp?.type ?? getInferredType(colName);
+      const type = disp?.type ?? (colName.startsWith("primary.") ? getInferredType(unprefixed) : colName.startsWith("join_") ? undefined : getInferredType(colName));
       if (label || format || type) colDisplayFiltered[colName] = { label, format, type };
     }
     for (const [k, v] of Object.entries(columnDisplay)) {
-      if (v && (v.label?.trim() || v.format?.trim() || v.type) && !colDisplayFiltered[k] && !effectiveColumns.some((c) => c.toLowerCase() === k.toLowerCase())) {
+      if (v && (v.label?.trim() || v.format?.trim() || v.type) && !colDisplayFiltered[k] && !allColumnNamesForDisplay.some((c) => c === k || c.toLowerCase() === k.toLowerCase())) {
         colDisplayFiltered[k] = { label: v.label?.trim() || undefined, format: v.format?.trim() || undefined, type: v.type };
       }
     }
     if (Object.keys(colDisplayFiltered).length > 0) {
       (filterPayload as Record<string, unknown>).columnDisplay = colDisplayFiltered;
+    }
+    if (keyColumns.length > 0) {
+      (filterPayload as Record<string, unknown>).keyColumns = keyColumns;
     }
     const body: Record<string, unknown> = {
       connectionId,
@@ -858,6 +939,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       body.filter = filterPayload;
     }
     if (cleanConfig) body.clean = cleanConfig;
+    if (scheduleFrequency) body.schedule = { frequency: scheduleFrequency };
     return body;
   }, [
     connectionId,
@@ -868,7 +950,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     allFilterConditions,
     outputTableName,
     outputMode,
+    scheduleFrequency,
     distinctColumn,
+    keyColumns,
     useUnion,
     unionRightItems,
     unionAll,
@@ -1267,16 +1351,561 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         type="button"
                         className="rounded-xl"
                         style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                        onClick={() => goToStepAndSave("columnas_tipos")}
+                        onClick={() => goToStepAndSave("filtros")}
                         disabled={!canGoNextOrigen}
                       >
-                        Siguiente: Columnas y tipos <ChevronRight className="ml-2 h-4 w-4" />
+                        Siguiente: Columnas y filtros <ChevronRight className="ml-2 h-4 w-4" />
                       </Button>
                     </>
                   )}
                 </div>
               </>
             )}
+          </div>
+        )}
+        </section>
+        )}
+
+        {(step === "filtros" || isEditorMode) && (
+        <section id="seccion-filtros" className={isEditorMode ? "mb-10 pb-8 border-b" : ""} style={isEditorMode ? { borderColor: "var(--platform-border)" } : undefined}>
+        {(step === "filtros" || isEditorMode) && (
+          <div className="space-y-6 max-w-4xl">
+            <div>
+              <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
+                2b. Columnas y filtros (opcional)
+              </h3>
+              <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                Elegí qué columnas incluir y opcionalmente excluí filas con condiciones.
+              </p>
+            </div>
+            {loadingColumns === selectedTable ? (
+              <div className="flex items-center gap-2 text-sm rounded-xl border px-4 py-3" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                <Loader2 className="h-4 w-4 animate-spin" /> Cargando columnas…
+              </div>
+            ) : (selectedTableInfo?.columns?.length ?? 0) > 0 ? (
+              <div className="space-y-5">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Columnas a incluir</Label>
+                    <span className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
+                      {(() => {
+                        const allNames = (selectedTableInfo?.columns ?? []).map((x) => x.name);
+                        return columns.length === 0 ? "Ninguna" : columns.length === allNames.length ? "Todas" : `${columns.length} seleccionadas`;
+                      })()}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg h-7 text-xs"
+                      style={{ borderColor: "var(--platform-border)" }}
+                      onClick={() => setColumns((selectedTableInfo?.columns ?? []).map((x) => x.name))}
+                    >
+                      Seleccionar todo
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg h-7 text-xs"
+                      style={{ borderColor: "var(--platform-border)" }}
+                      onClick={() => setColumns([])}
+                    >
+                      Quitar todo
+                    </Button>
+                  </div>
+                  {columns.length === 0 && (
+                    <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná al menos una columna para continuar.</p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    {(selectedTableInfo?.columns ?? []).map((c) => {
+                      const active = columns.includes(c.name);
+                      return (
+                        <button
+                          key={c.name}
+                          type="button"
+                          onClick={() => {
+                            if (active) setColumns((prev) => prev.filter((x) => x !== c.name));
+                            else setColumns((prev) => [...prev, c.name]);
+                          }}
+                          className="rounded-full px-3 py-1.5 text-xs font-medium border transition-colors"
+                          style={{
+                            background: active ? "var(--platform-accent-dim)" : "var(--platform-surface-hover)",
+                            borderColor: "var(--platform-border)",
+                            color: active ? "var(--platform-accent)" : "var(--platform-fg-muted)",
+                          }}
+                        >
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Excluir filas por valores en columna */}
+                <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                    Elegí una columna; se cargarán automáticamente los valores. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado.
+                  </p>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>
+                    <div className="min-w-[180px]">
+                      <Select
+                        value={distinctColumn ?? ""}
+                        onChange={(v: string) => {
+                          const col = v || null;
+                          setDistinctColumn(col);
+                          setDistinctValuesList([]);
+                          setDistinctSearch("");
+                        }}
+                        options={(selectedTableInfo?.columns ?? []).map((col) => ({ value: col.name, label: col.name }))}
+                        placeholder="Elegir columna"
+                      />
+                    </div>
+                    {loadingDistinct && distinctColumn && (
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores…</span>
+                    )}
+                  </div>
+                  {distinctValuesList.length > 0 && distinctColumn && (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="Buscar valor…"
+                        value={distinctSearch}
+                        onChange={(e) => setDistinctSearch(e.target.value)}
+                        className="w-full rounded-lg border px-3 py-2 text-sm"
+                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                      />
+                      <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
+                        {distinctValuesList
+                          .filter((v) => !distinctSearch.trim() || String(v).toLowerCase().includes(distinctSearch.trim().toLowerCase()))
+                          .map((val) => {
+                            const current = excludedValues.find((e) => e.column === distinctColumn);
+                            const excluded = (current?.excluded ?? []).includes(String(val));
+                            return (
+                              <label
+                                key={String(val)}
+                                className="flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer hover:bg-[var(--platform-surface-hover)] text-sm"
+                                style={{ color: "var(--platform-fg)" }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={excluded}
+                                  onChange={() => {
+                                    setExcludedValues((prev) => {
+                                      const entry = prev.find((e) => e.column === distinctColumn);
+                                      const nextExcluded = entry ? [...entry.excluded] : [];
+                                      const s = String(val);
+                                      if (nextExcluded.includes(s)) {
+                                        const filtered = nextExcluded.filter((x) => x !== s);
+                                        if (filtered.length === 0) return prev.filter((e) => e.column !== distinctColumn);
+                                        return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: filtered } : e);
+                                      }
+                                      nextExcluded.push(s);
+                                      if (!entry) return [...prev, { column: distinctColumn, excluded: nextExcluded }];
+                                      return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: nextExcluded } : e);
+                                    });
+                                  }}
+                                />
+                                <span className="truncate">{String(val)}</span>
+                              </label>
+                            );
+                          })}
+                      </div>
+                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                        {excludedValues.find((e) => e.column === distinctColumn)?.excluded.length ?? 0} valor(es) marcados para excluir en esta columna.
+                      </p>
+                    </>
+                  )}
+                  {excludedValues.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {excludedValues.map(({ column, excluded }) => (
+                        <span key={column} className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
+                          {column}: {excluded.length} excluidos
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Clave única (KEY) — concatenar columnas como en Grain del Dataset de Métricas */}
+                <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Clave única (KEY) — opcional</Label>
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                    Seleccioná una o más columnas para formar una clave por concatenación (igual que el Grain en el Dataset de Métricas). Sirve para identificar de forma única cada fila.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {(selectedTableInfo?.columns ?? []).map((c) => {
+                      const active = keyColumns.includes(c.name);
+                      return (
+                        <label
+                          key={c.name}
+                          className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors"
+                          style={{ borderColor: active ? "var(--platform-accent)" : "var(--platform-border)", background: active ? "var(--platform-accent-dim)" : "var(--platform-surface)" }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={active}
+                            onChange={(e) => {
+                              if (e.target.checked) setKeyColumns((prev) => [...prev, c.name]);
+                              else setKeyColumns((prev) => prev.filter((x) => x !== c.name));
+                            }}
+                            className="rounded"
+                          />
+                          <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{c.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {keyColumns.length > 0 && (
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                      KEY = {keyColumns.join(" + ")}
+                    </p>
+                  )}
+                </div>
+
+                {/* UNION (opcional): múltiples tablas + columnas por tabla */}
+                <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="use-union-filtros"
+                      checked={useUnion}
+                      onChange={(e) => {
+                        const v = e.target.checked;
+                        setUseUnion(v);
+                        if (v) setUseJoin(false);
+                        if (!v) { setUnionRightConnectionId(null); setUnionRightTable(null); setUnionRightItems([]); }
+                      }}
+                    />
+                    <Label htmlFor="use-union-filtros" className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Combinar con otra tabla (UNION)</Label>
+                  </div>
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Apilar filas de otras tablas con las mismas columnas. Elegí una o más tablas y qué columnas traer de cada una.</p>
+                  {useUnion && (
+                    <div className="space-y-4 pt-2">
+                      <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                        <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Agregar tabla a apilar</Label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                          <div>
+                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
+                            <Select
+                              value={unionRightConnectionId != null ? String(unionRightConnectionId) : ""}
+                              onChange={(v: string) => setUnionRightConnectionId(v ? v : null)}
+                              options={connections.map((c) => ({
+                                value: String(c.id),
+                                label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
+                              }))}
+                              placeholder="Elegir conexión"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
+                            <Select
+                              value={unionRightTable ?? ""}
+                              onChange={(v: string) => setUnionRightTable(v || null)}
+                              options={unionRightTables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
+                              placeholder="Elegir tabla"
+                              searchable
+                              searchPlaceholder="Buscar tabla…"
+                              disabled={!unionRightConnectionId || loadingUnionMeta}
+                            />
+                          </div>
+                          <div className="sm:col-span-2 lg:col-span-1 flex items-end">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="rounded-xl w-full sm:w-auto"
+                              style={{ borderColor: "var(--platform-border)" }}
+                              disabled={!unionRightConnectionId || !unionRightTable || unionRightItems.some((it) => it.table === unionRightTable)}
+                              onClick={async () => {
+                                if (!unionRightConnectionId || !unionRightTable) return;
+                                try {
+                                  const res = await fetchMetadata(unionRightConnectionId, unionRightTable);
+                                  const data = await res.json();
+                                  const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
+                                  const mainCols = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
+                                  const defaultCols = mainCols.filter((c) => colNames.includes(c));
+                                  setUnionRightItems((prev) => [
+                                    ...prev,
+                                    { connectionId: unionRightConnectionId, table: unionRightTable, columns: defaultCols.length ? defaultCols : [], availableColumns: colNames.map((n: string) => ({ name: n })) },
+                                  ]);
+                                  setUnionRightTable(null);
+                                } catch {
+                                  toast.error("No se pudieron cargar las columnas de la tabla");
+                                }
+                              }}
+                            >
+                              Agregar tabla
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        <input type="checkbox" checked={unionAll} onChange={(e) => setUnionAll(e.target.checked)} />
+                        UNION ALL (incluir duplicados)
+                      </label>
+                      {unionRightItems.length > 0 && (
+                        <div className="space-y-2 border-t pt-3" style={{ borderColor: "var(--platform-border)" }}>
+                          <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tablas a apilar ({unionRightItems.length})</Label>
+                          {unionRightItems.map((item, idx) => (
+                            <div key={`${item.connectionId}-${item.table}-${idx}`} className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
+                                <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setUnionRightItems((prev) => prev.filter((_, i) => i !== idx))}>Quitar</button>
+                              </div>
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap gap-2 items-center">
+                                  <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas a traer:</span>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="rounded-lg h-7 text-xs"
+                                    style={{ borderColor: "var(--platform-border)" }}
+                                    onClick={() => setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: (it.availableColumns ?? []).map((c) => c.name) } : it))}
+                                  >
+                                    Seleccionar todas
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="rounded-lg h-7 text-xs"
+                                    style={{ borderColor: "var(--platform-border)" }}
+                                    onClick={() => setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: [] } : it))}
+                                  >
+                                    Deseleccionar todas
+                                  </Button>
+                                </div>
+                                <div className="flex flex-wrap gap-2 items-center">
+                                  {(item.availableColumns ?? []).map((col) => (
+                                    <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={item.columns.includes(col.name)}
+                                        onChange={(e) => {
+                                          setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: e.target.checked ? [...it.columns, col.name] : it.columns.filter((c) => c !== col.name) } : it));
+                                        }}
+                                      />
+                                      {col.name}
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* JOIN (opcional): múltiples tablas + columnas por tabla */}
+                <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="use-join-filtros"
+                      checked={useJoin}
+                      onChange={(e) => {
+                        const v = e.target.checked;
+                        setUseJoin(v);
+                        if (v) setUseUnion(false);
+                        if (!v) { setJoinSecondaryConnectionId(null); setJoinSecondaryTable(null); setJoinLeftColumn(""); setJoinRightColumn(""); setJoinItems([]); }
+                      }}
+                    />
+                    <Label htmlFor="use-join-filtros" className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Combinar con otra tabla (JOIN)</Label>
+                  </div>
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Unir por una columna en común. Elegí una o más tablas secundarias, columnas de enlace y qué columnas traer de cada una.</p>
+                  {useJoin && joinSecondaryConnectionId != null && connectionId != null && String(joinSecondaryConnectionId) !== String(connectionId) && (
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Al usar otra conexión (otra base de datos), el JOIN se ejecuta en memoria.</p>
+                  )}
+                  {useJoin && (
+                    <div className="space-y-4 pt-2">
+                      <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                        <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Tabla secundaria y tipo de JOIN</Label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                          <div>
+                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
+                            <Select
+                              value={joinSecondaryConnectionId != null ? String(joinSecondaryConnectionId) : ""}
+                              onChange={(v: string) => {
+                                setJoinSecondaryConnectionId(v ? v : null);
+                                setJoinSecondaryTable(null);
+                                setJoinLeftColumn("");
+                                setJoinRightColumn("");
+                              }}
+                              options={connections.map((c) => ({
+                                value: String(c.id),
+                                label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
+                              }))}
+                              placeholder="Elegir conexión"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
+                            <Select
+                              value={joinSecondaryTable ?? ""}
+                              onChange={(v: string) => { setJoinSecondaryTable(v || null); setJoinRightColumn(""); }}
+                              options={joinRightTables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
+                              placeholder="Elegir tabla"
+                              searchable
+                              searchPlaceholder="Buscar tabla…"
+                              disabled={!joinSecondaryConnectionId || loadingJoinMeta}
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tipo</Label>
+                            <Select
+                              value={joinType}
+                              onChange={(v: string) => setJoinType(v as "INNER" | "LEFT" | "RIGHT" | "FULL")}
+                              options={[
+                                { value: "INNER", label: "INNER" },
+                                { value: "LEFT", label: "LEFT" },
+                                { value: "RIGHT", label: "RIGHT" },
+                                { value: "FULL", label: "FULL" },
+                              ]}
+                              placeholder="Tipo"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                          <div>
+                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla principal</Label>
+                            <Select
+                              value={joinLeftColumn}
+                              onChange={(v: string) => setJoinLeftColumn(v)}
+                              options={(columns.length > 0 ? columns : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name)).map((c) => ({ value: c, label: c }))}
+                              placeholder="Elegir columna"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla secundaria</Label>
+                            <Select
+                              value={joinRightColumn}
+                              onChange={(v: string) => setJoinRightColumn(v)}
+                              options={joinRightColumns.map((c) => ({ value: c, label: c }))}
+                              placeholder="Elegir columna"
+                            />
+                          </div>
+                          <div className="lg:col-span-2 flex items-end">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="rounded-lg text-sm"
+                              style={{ borderColor: "var(--platform-border)" }}
+                              disabled={!joinSecondaryConnectionId || !joinSecondaryTable || !joinLeftColumn || !joinRightColumn}
+                              onClick={() => {
+                                if (!joinSecondaryConnectionId || !joinSecondaryTable || !joinLeftColumn || !joinRightColumn) return;
+                                setJoinItems((prev) => [
+                                  ...prev,
+                                  {
+                                    id: `join_${prev.length}_${Date.now()}`,
+                                    connectionId: joinSecondaryConnectionId,
+                                    table: joinSecondaryTable,
+                                    joinType,
+                                    leftColumn: joinLeftColumn,
+                                    rightColumn: joinRightColumn,
+                                    rightColumns: [joinRightColumn],
+                                    availableColumns: joinRightTableInfo?.columns ?? [],
+                                  },
+                                ]);
+                                setJoinSecondaryTable(null);
+                                setJoinLeftColumn("");
+                                setJoinRightColumn("");
+                                setJoinRightColumns([]);
+                              }}
+                            >
+                              Agregar tabla
+                            </Button>
+                          </div>
+                        </div>
+                        {joinItems.length > 0 && (
+                          <div className="space-y-2 border-t pt-3" style={{ borderColor: "var(--platform-border)" }}>
+                            <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tablas a combinar ({joinItems.length})</Label>
+                            {joinItems.map((item, idx) => (
+                              <div key={item.id} className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
+                                  <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{item.joinType} · {item.leftColumn} = {item.rightColumn}</span>
+                                  <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setJoinItems((prev) => prev.filter((_, i) => i !== idx))}>Quitar</button>
+                                </div>
+                                <div className="space-y-2">
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas a traer:</span>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="rounded-lg h-7 text-xs"
+                                      style={{ borderColor: "var(--platform-border)" }}
+                                      onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: (it.availableColumns ?? []).map((c) => c.name) } : it))}
+                                    >
+                                      Seleccionar todas
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="rounded-lg h-7 text-xs"
+                                      style={{ borderColor: "var(--platform-border)" }}
+                                      onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: [] } : it))}
+                                    >
+                                      Deseleccionar todas
+                                    </Button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    {(item.availableColumns ?? []).map((col) => (
+                                      <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                                        <input
+                                          type="checkbox"
+                                          checked={item.rightColumns.includes(col.name)}
+                                          onChange={(e) => {
+                                            setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: e.target.checked ? [...it.rightColumns, col.name] : it.rightColumns.filter((c) => c !== col.name) } : it));
+                                          }}
+                                        />
+                                        {col.name}
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+            ) : null}
+            <div className="flex gap-2">
+              {!isEditorMode && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-xl"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    onClick={() => goToStepAndSave("origen")}
+                  >
+                    Atrás
+                  </Button>
+                  <Button
+                    type="button"
+                    className="rounded-xl"
+                    style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                    onClick={() => goToStepAndSave("columnas_tipos")}
+                    disabled={!canGoNextFiltros}
+                  >
+                    Siguiente: Columnas y tipos <ChevronRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
         )}
         </section>
@@ -1289,13 +1918,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
-                  2b. Columnas y tipos
+                  3. Columnas y tipos
                 </h3>
                 <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                  Todas las columnas con su tipo inferido desde los datos (Fecha, Número, Texto). Definí nombre para mostrar y formato (como en Excel: fecha, número, moneda, porcentaje, texto) para que sea más legible.
+                  Estructura final del dataset: todas las columnas resultantes del paso anterior (incluidas las de JOIN). Definí tipo (Fecha, Número, Texto), nombre para mostrar y formato para que sea más legible.
                 </p>
               </div>
-              {(selectedTableInfo?.columns?.length ?? 0) > 0 && !loadingColumns && !inferringTypes && connectionId && selectedTable && (
+              {finalColumnsForTypes.length > 0 && finalColumnsForTypes.every((c) => !c.name.startsWith("join_")) && !loadingColumns && !inferringTypes && connectionId && selectedTable && (
                 <Button
                   type="button"
                   variant="outline"
@@ -1350,7 +1979,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               <div className="flex items-center gap-2 text-sm rounded-xl border px-4 py-3" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
                 <Loader2 className="h-4 w-4 animate-spin" /> Inferiendo tipos desde los datos…
               </div>
-            ) : (selectedTableInfo?.columns?.length ?? 0) > 0 ? (
+            ) : finalColumnsForTypes.length > 0 ? (
               <div className="rounded-xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -1363,7 +1992,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       </tr>
                     </thead>
                     <tbody>
-                      {(selectedTableInfo?.columns ?? []).map((c: { name: string; dataType?: string; inferredType?: "Fecha" | "Número" | "Texto" }) => {
+                      {finalColumnsForTypes.map((c: { name: string; dataType?: string; inferredType?: string }) => {
                         const disp = columnDisplay[c.name] ?? { label: "", format: "" };
                         const tipoInferido = dataTypeToLabel((c as { inferredType?: string }).inferredType ?? c.dataType);
                         const tipo = (disp.type as "Fecha" | "Número" | "Texto") ?? tipoInferido;
@@ -1387,7 +2016,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               <Input
                                 value={disp.label}
                                 onChange={(e) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), label: e.target.value } }))}
-                                placeholder={c.name}
+                                placeholder={c.name.replace(/^(primary|join_\d+)\./, "")}
                                 className="h-8 text-sm rounded-lg"
                                 style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
                               />
@@ -1413,26 +2042,26 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               <div className="rounded-xl border p-6 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                 <List className="h-10 w-10 mx-auto mb-3 opacity-50" style={{ color: "var(--platform-fg-muted)" }} />
                 <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Sin columnas</p>
-                <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>Elegí una tabla en el paso Origen para ver las columnas y sus tipos.</p>
-                <Button type="button" variant="outline" className="rounded-xl mt-4" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("origen")}>
-                  Ir a Origen
+                <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>Elegí columnas en el paso anterior (Columnas y filtros) para ver la estructura final y definir tipos.</p>
+                <Button type="button" variant="outline" className="rounded-xl mt-4" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("filtros")}>
+                  Ir a Columnas y filtros
                 </Button>
               </div>
             )}
             <div className="flex gap-2">
               {!isEditorMode && (
                 <>
-                  <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("origen")}>
+                  <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("filtros")}>
                     Atrás
                   </Button>
                   <Button
                     type="button"
                     className="rounded-xl"
                     style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                    onClick={() => goToStepAndSave("filtros")}
-                    disabled={!(selectedTableInfo?.columns?.length ?? 0)}
+                    onClick={() => goToStepAndSave("transformacion")}
+                    disabled={finalColumnsForTypes.length === 0}
                   >
-                    Siguiente: Columnas y filtros <ChevronRight className="ml-2 h-4 w-4" />
+                    Siguiente: Transformación <ChevronRight className="ml-2 h-4 w-4" />
                   </Button>
                 </>
               )}
@@ -1784,7 +2413,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   {/* Correcciones permanentes */}
                   <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Correcciones permanentes</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Reemplazar valor incorrecto → correcto (coincidencia exacta).</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Reemplazar valor incorrecto → correcto (coincidencia exacta). La comparación es exacta (el valor en la celda debe coincidir con &apos;Incorrecto&apos;). Si no aplica, comprobá espacios o mayúsculas.</p>
                     <div className="space-y-2 max-h-36 overflow-y-auto">
                       {dataFixes.map((fix, idx) => (
                         <div key={idx} className="flex gap-2 items-center flex-wrap">
@@ -1812,6 +2441,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Duplicados</Label>
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas clave para identificar duplicados. Se conserva una fila por clave.</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Se agrupa por la combinación de valores de las columnas elegidas; si varias filas tienen la misma combinación, se mantiene solo la primera o la última según la opción seleccionada.</p>
                     <div className="flex flex-wrap gap-4 items-end">
                       <div className="min-w-[180px]">
                         <Select
@@ -1847,319 +2477,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       </div>
                     ) : null}
                   </div>
-
-                  {/* UNION (opcional): múltiples tablas + columnas por tabla */}
-                  <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="use-union"
-                        checked={useUnion}
-                        onChange={(e) => {
-                          const v = e.target.checked;
-                          setUseUnion(v);
-                          if (v) setUseJoin(false);
-                          if (!v) { setUnionRightConnectionId(null); setUnionRightTable(null); setUnionRightItems([]); }
-                        }}
-                      />
-                      <Label htmlFor="use-union" className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Combinar con otra tabla (UNION)</Label>
-                    </div>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Apilar filas de otras tablas con las mismas columnas. Elegí una o más tablas y qué columnas traer de cada una.</p>
-                    {useUnion && (
-                      <div className="space-y-4 pt-2">
-                        <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                          <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Agregar tabla a apilar</Label>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                            <div>
-                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
-                              <Select
-                                value={unionRightConnectionId != null ? String(unionRightConnectionId) : ""}
-                                onChange={(v: string) => setUnionRightConnectionId(v ? v : null)}
-                                options={connections.map((c) => ({
-                                  value: String(c.id),
-                                  label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
-                                }))}
-                                placeholder="Elegir conexión"
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
-                              <Select
-                                value={unionRightTable ?? ""}
-                                onChange={(v: string) => setUnionRightTable(v || null)}
-                                options={unionRightTables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
-                                placeholder="Elegir tabla"
-                                searchable
-                                searchPlaceholder="Buscar tabla…"
-                                disabled={!unionRightConnectionId || loadingUnionMeta}
-                              />
-                            </div>
-                            <div className="sm:col-span-2 lg:col-span-1 flex items-end">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="rounded-xl w-full sm:w-auto"
-                                style={{ borderColor: "var(--platform-border)" }}
-                                disabled={!unionRightConnectionId || !unionRightTable || unionRightItems.some((it) => it.table === unionRightTable)}
-                                onClick={async () => {
-                                  if (!unionRightConnectionId || !unionRightTable) return;
-                                  try {
-                                    const res = await fetchMetadata(unionRightConnectionId, unionRightTable);
-                                    const data = await res.json();
-                                    const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
-                                    const mainCols = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
-                                    const defaultCols = mainCols.filter((c) => colNames.includes(c));
-                                    setUnionRightItems((prev) => [
-                                      ...prev,
-                                      { connectionId: unionRightConnectionId, table: unionRightTable, columns: defaultCols.length ? defaultCols : [], availableColumns: colNames.map((n: string) => ({ name: n })) },
-                                    ]);
-                                    setUnionRightTable(null);
-                                  } catch {
-                                    toast.error("No se pudieron cargar las columnas de la tabla");
-                                  }
-                                }}
-                              >
-                                Agregar tabla
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                        <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
-                          <input type="checkbox" checked={unionAll} onChange={(e) => setUnionAll(e.target.checked)} />
-                          UNION ALL (incluir duplicados)
-                        </label>
-                        {unionRightItems.length > 0 && (
-                          <div className="space-y-2 border-t pt-3" style={{ borderColor: "var(--platform-border)" }}>
-                            <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tablas a apilar ({unionRightItems.length})</Label>
-                            {unionRightItems.map((item, idx) => (
-                              <div key={`${item.connectionId}-${item.table}-${idx}`} className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
-                                  <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setUnionRightItems((prev) => prev.filter((_, i) => i !== idx))}>Quitar</button>
-                                </div>
-                                <div className="space-y-2">
-                                  <div className="flex flex-wrap gap-2 items-center">
-                                    <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas a traer:</span>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="rounded-lg h-7 text-xs"
-                                      style={{ borderColor: "var(--platform-border)" }}
-                                      onClick={() => setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: (it.availableColumns ?? []).map((c) => c.name) } : it))}
-                                    >
-                                      Seleccionar todas
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="rounded-lg h-7 text-xs"
-                                      style={{ borderColor: "var(--platform-border)" }}
-                                      onClick={() => setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: [] } : it))}
-                                    >
-                                      Deseleccionar todas
-                                    </Button>
-                                  </div>
-                                  <div className="flex flex-wrap gap-2 items-center">
-                                    {(item.availableColumns ?? []).map((col) => (
-                                      <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
-                                        <input
-                                          type="checkbox"
-                                          checked={item.columns.includes(col.name)}
-                                          onChange={(e) => {
-                                            setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: e.target.checked ? [...it.columns, col.name] : it.columns.filter((c) => c !== col.name) } : it));
-                                          }}
-                                        />
-                                        {col.name}
-                                      </label>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* JOIN (opcional): múltiples tablas + columnas por tabla */}
-                  <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="use-join"
-                        checked={useJoin}
-                        onChange={(e) => {
-                          const v = e.target.checked;
-                          setUseJoin(v);
-                          if (v) setUseUnion(false);
-                          if (!v) { setJoinSecondaryConnectionId(null); setJoinSecondaryTable(null); setJoinLeftColumn(""); setJoinRightColumn(""); setJoinItems([]); }
-                        }}
-                      />
-                      <Label htmlFor="use-join" className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Combinar con otra tabla (JOIN)</Label>
-                    </div>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Unir por una columna en común. Elegí una o más tablas secundarias, columnas de enlace y qué columnas traer de cada una.</p>
-                    {useJoin && (
-                      <div className="space-y-4 pt-2">
-                        <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                          <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Tabla secundaria y tipo de JOIN</Label>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                            <div>
-                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
-                              <Select
-                                value={joinSecondaryConnectionId != null ? String(joinSecondaryConnectionId) : ""}
-                                onChange={(v: string) => {
-                                  setJoinSecondaryConnectionId(v ? v : null);
-                                  setJoinSecondaryTable(null);
-                                  setJoinLeftColumn("");
-                                  setJoinRightColumn("");
-                                }}
-                                options={connections.map((c) => ({
-                                  value: String(c.id),
-                                  label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
-                                }))}
-                                placeholder="Elegir conexión"
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
-                              <Select
-                                value={joinSecondaryTable ?? ""}
-                                onChange={(v: string) => { setJoinSecondaryTable(v || null); setJoinRightColumn(""); }}
-                                options={joinRightTables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
-                                placeholder="Elegir tabla"
-                                searchable
-                                searchPlaceholder="Buscar tabla…"
-                                disabled={!joinSecondaryConnectionId || loadingJoinMeta}
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tipo</Label>
-                              <Select
-                                value={joinType}
-                                onChange={(v: string) => setJoinType(v as "INNER" | "LEFT" | "RIGHT" | "FULL")}
-                                options={[
-                                  { value: "INNER", label: "INNER" },
-                                  { value: "LEFT", label: "LEFT" },
-                                  { value: "RIGHT", label: "RIGHT" },
-                                  { value: "FULL", label: "FULL" },
-                                ]}
-                                placeholder="Tipo"
-                              />
-                            </div>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                          <div>
-                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla principal</Label>
-                            <Select
-                              value={joinLeftColumn}
-                              onChange={(v: string) => setJoinLeftColumn(v)}
-                              options={effectiveColumns.map((c) => ({ value: c, label: c }))}
-                              placeholder="Elegir columna"
-                            />
-                          </div>
-                          <div>
-                            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla secundaria</Label>
-                            <Select
-                              value={joinRightColumn}
-                              onChange={(v: string) => setJoinRightColumn(v)}
-                              options={joinRightColumns.map((c) => ({ value: c, label: c }))}
-                              placeholder="Elegir columna"
-                            />
-                          </div>
-                          <div className="lg:col-span-2 flex items-end">
-                            <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="rounded-lg text-sm"
-                            style={{ borderColor: "var(--platform-border)" }}
-                            disabled={!joinSecondaryConnectionId || !joinSecondaryTable || !joinLeftColumn || !joinRightColumn}
-                            onClick={() => {
-                              if (!joinSecondaryConnectionId || !joinSecondaryTable || !joinLeftColumn || !joinRightColumn) return;
-                              setJoinItems((prev) => [
-                                ...prev,
-                                {
-                                  id: `join_${prev.length}_${Date.now()}`,
-                                  connectionId: joinSecondaryConnectionId,
-                                  table: joinSecondaryTable,
-                                  joinType,
-                                  leftColumn: joinLeftColumn,
-                                  rightColumn: joinRightColumn,
-                                  rightColumns: [joinRightColumn],
-                                  availableColumns: joinRightTableInfo?.columns ?? [],
-                                },
-                              ]);
-                              setJoinSecondaryTable(null);
-                              setJoinLeftColumn("");
-                              setJoinRightColumn("");
-                              setJoinRightColumns([]);
-                            }}
-                          >
-                            Agregar tabla
-                            </Button>
-                          </div>
-                        </div>
-                        {joinItems.length > 0 && (
-                          <div className="space-y-2 border-t pt-3" style={{ borderColor: "var(--platform-border)" }}>
-                            <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tablas a combinar ({joinItems.length})</Label>
-                            {joinItems.map((item, idx) => (
-                              <div key={item.id} className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
-                                  <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{item.joinType} · {item.leftColumn} = {item.rightColumn}</span>
-                                  <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setJoinItems((prev) => prev.filter((_, i) => i !== idx))}>Quitar</button>
-                                </div>
-                                <div className="space-y-2">
-                                  <div className="flex flex-wrap gap-2 items-center">
-                                    <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas a traer:</span>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="rounded-lg h-7 text-xs"
-                                      style={{ borderColor: "var(--platform-border)" }}
-                                      onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: (it.availableColumns ?? []).map((c) => c.name) } : it))}
-                                    >
-                                      Seleccionar todas
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="rounded-lg h-7 text-xs"
-                                      style={{ borderColor: "var(--platform-border)" }}
-                                      onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: [] } : it))}
-                                    >
-                                      Deseleccionar todas
-                                    </Button>
-                                  </div>
-                                  <div className="flex flex-wrap gap-2 items-center">
-                                    {(item.availableColumns ?? []).map((col) => (
-                                      <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
-                                        <input
-                                          type="checkbox"
-                                          checked={item.rightColumns.includes(col.name)}
-                                          onChange={(e) => {
-                                            setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: e.target.checked ? [...it.rightColumns, col.name] : it.rightColumns.filter((c) => c !== col.name) } : it));
-                                          }}
-                                        />
-                                        {col.name}
-                                      </label>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
                 </div>
               );
             })()}
@@ -2171,199 +2488,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   </Button>
                   <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={() => goToStepAndSave("destino")}>
                     Siguiente: Destino <ChevronRight className="ml-2 h-4 w-4" />
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-        </section>
-        )}
-
-        {(step === "filtros" || isEditorMode) && (
-        <section id="seccion-filtros" className={isEditorMode ? "mb-10 pb-8 border-b" : ""} style={isEditorMode ? { borderColor: "var(--platform-border)" } : undefined}>
-        {(step === "filtros" || isEditorMode) && (
-          <div className="space-y-6 max-w-xl">
-            <div>
-              <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
-                3. Columnas y filtros (opcional)
-              </h3>
-              <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                Elegí qué columnas incluir y opcionalmente excluí filas con condiciones.
-              </p>
-            </div>
-            {loadingColumns === selectedTable ? (
-              <div className="flex items-center gap-2 text-sm rounded-xl border px-4 py-3" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
-                <Loader2 className="h-4 w-4 animate-spin" /> Cargando columnas…
-              </div>
-            ) : (selectedTableInfo?.columns?.length ?? 0) > 0 ? (
-              <div className="space-y-5">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2 mb-2">
-                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Columnas a incluir</Label>
-                    <span className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
-                      {(() => {
-                        const allNames = (selectedTableInfo?.columns ?? []).map((x) => x.name);
-                        return columns.length === 0 ? "Ninguna" : columns.length === allNames.length ? "Todas" : `${columns.length} seleccionadas`;
-                      })()}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="rounded-lg h-7 text-xs"
-                      style={{ borderColor: "var(--platform-border)" }}
-                      onClick={() => setColumns((selectedTableInfo?.columns ?? []).map((x) => x.name))}
-                    >
-                      Seleccionar todo
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="rounded-lg h-7 text-xs"
-                      style={{ borderColor: "var(--platform-border)" }}
-                      onClick={() => setColumns([])}
-                    >
-                      Quitar todo
-                    </Button>
-                  </div>
-                  {columns.length === 0 && (
-                    <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná al menos una columna para continuar.</p>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    {(selectedTableInfo?.columns ?? []).map((c) => {
-                      const active = columns.includes(c.name);
-                      return (
-                        <button
-                          key={c.name}
-                          type="button"
-                          onClick={() => {
-                            if (active) setColumns((prev) => prev.filter((x) => x !== c.name));
-                            else setColumns((prev) => [...prev, c.name]);
-                          }}
-                          className="rounded-full px-3 py-1.5 text-xs font-medium border transition-colors"
-                          style={{
-                            background: active ? "var(--platform-accent-dim)" : "var(--platform-surface-hover)",
-                            borderColor: "var(--platform-border)",
-                            color: active ? "var(--platform-accent)" : "var(--platform-fg-muted)",
-                          }}
-                        >
-                          {c.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Excluir filas por valores en columna */}
-                <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
-                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                    Elegí una columna; se cargarán automáticamente los valores. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado.
-                  </p>
-                  <div className="flex flex-wrap gap-2 items-center">
-                    <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>
-                    <div className="min-w-[180px]">
-                      <Select
-                        value={distinctColumn ?? ""}
-                        onChange={(v: string) => {
-                          const col = v || null;
-                          setDistinctColumn(col);
-                          setDistinctValuesList([]);
-                          setDistinctSearch("");
-                        }}
-                        options={(selectedTableInfo?.columns ?? []).map((col) => ({ value: col.name, label: col.name }))}
-                        placeholder="Elegir columna"
-                      />
-                    </div>
-                    {loadingDistinct && distinctColumn && (
-                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores…</span>
-                    )}
-                  </div>
-                  {distinctValuesList.length > 0 && distinctColumn && (
-                    <>
-                      <input
-                        type="text"
-                        placeholder="Buscar valor…"
-                        value={distinctSearch}
-                        onChange={(e) => setDistinctSearch(e.target.value)}
-                        className="w-full rounded-lg border px-3 py-2 text-sm"
-                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                      />
-                      <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
-                        {distinctValuesList
-                          .filter((v) => !distinctSearch.trim() || String(v).toLowerCase().includes(distinctSearch.trim().toLowerCase()))
-                          .map((val) => {
-                            const current = excludedValues.find((e) => e.column === distinctColumn);
-                            const excluded = (current?.excluded ?? []).includes(String(val));
-                            return (
-                              <label
-                                key={String(val)}
-                                className="flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer hover:bg-[var(--platform-surface-hover)] text-sm"
-                                style={{ color: "var(--platform-fg)" }}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={excluded}
-                                  onChange={() => {
-                                    setExcludedValues((prev) => {
-                                      const entry = prev.find((e) => e.column === distinctColumn);
-                                      const nextExcluded = entry ? [...entry.excluded] : [];
-                                      const s = String(val);
-                                      if (nextExcluded.includes(s)) {
-                                        const filtered = nextExcluded.filter((x) => x !== s);
-                                        if (filtered.length === 0) return prev.filter((e) => e.column !== distinctColumn);
-                                        return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: filtered } : e);
-                                      }
-                                      nextExcluded.push(s);
-                                      if (!entry) return [...prev, { column: distinctColumn, excluded: nextExcluded }];
-                                      return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: nextExcluded } : e);
-                                    });
-                                  }}
-                                />
-                                <span className="truncate">{String(val)}</span>
-                              </label>
-                            );
-                          })}
-                      </div>
-                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                        {excludedValues.find((e) => e.column === distinctColumn)?.excluded.length ?? 0} valor(es) marcados para excluir en esta columna.
-                      </p>
-                    </>
-                  )}
-                  {excludedValues.length > 0 && (
-                    <div className="flex flex-wrap gap-1 pt-1">
-                      {excludedValues.map(({ column, excluded }) => (
-                        <span key={column} className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
-                          {column}: {excluded.length} excluidos
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : null}
-            <div className="flex gap-2">
-              {!isEditorMode && (
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="rounded-xl"
-                    style={{ borderColor: "var(--platform-border)" }}
-                    onClick={() => goToStepAndSave("columnas_tipos")}
-                  >
-                    Atrás
-                  </Button>
-                  <Button
-                    type="button"
-                    className="rounded-xl"
-                    style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                    onClick={() => goToStepAndSave("transformacion")}
-                    disabled={!canGoNextFiltros}
-                  >
-                    Siguiente: Transformación <ChevronRight className="ml-2 h-4 w-4" />
                   </Button>
                 </>
               )}
@@ -2462,7 +2586,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         {!selectedTable
                           ? "Elegí la tabla de origen en la sección 2 (Origen de datos)."
                           : !hasColumnsToRun
-                            ? "Elegí al menos una columna en la sección 3 (Columnas y filtros) o esperá a que se carguen."
+                            ? "Elegí al menos una columna en la sección 2b (Columnas y filtros) o esperá a que se carguen."
                             : !outputTableName.trim()
                               ? "Indicá un nombre para la tabla de destino."
                               : "El nombre de la tabla solo puede tener letras, números y guión bajo."}
@@ -2515,6 +2639,28 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       </div>
                     </div>
                   )}
+                </div>
+                <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <h3 className="text-base font-medium" style={{ color: "var(--platform-fg)" }}>Frecuencia de actualización automática</h3>
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Programá con qué frecuencia el sistema traerá los nuevos registros de la base del cliente.</p>
+                  <div className="max-w-xs">
+                    <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Frecuencia</Label>
+                    <Select
+                      value={scheduleFrequency}
+                      onChange={(v: string) => setScheduleFrequency(v ?? "")}
+                      options={[
+                        { value: "", label: "Ninguna (solo manual)" },
+                        { value: "15m", label: "15 minutos" },
+                        { value: "1h", label: "1 hora" },
+                        { value: "6h", label: "6 horas" },
+                        { value: "12h", label: "12 horas" },
+                        { value: "24h", label: "24 horas" },
+                        { value: "1w", label: "1 semana" },
+                        { value: "1M", label: "1 mes" },
+                      ]}
+                      placeholder="Elegir frecuencia"
+                    />
+                  </div>
                 </div>
                 <div className="flex gap-3 pt-2">
                   <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("destino")}>

@@ -32,7 +32,7 @@ import { AddMetricConfigForm, type AddMetricFormConfig, type SavedMetricForm } f
 
 type SavedMetric = SavedMetricForm;
 
-// Tipos compatibles con el layout guardado en DB (mismo formato que AdminDashboardEditor)
+// Tipos compatibles con el layout guardado en DB (mismo formato que DashboardViewer/DashboardEditor)
 type AggregationMetric = {
   id: string;
   field: string;
@@ -66,6 +66,8 @@ type AggregationConfig = {
   chartYAxes?: string[];
   chartSeriesField?: string;
   chartNumberFormat?: string;
+  chartValueType?: string;
+  chartValueScale?: string;
   chartCurrencySymbol?: string;
   chartThousandSep?: boolean;
   chartDecimals?: number;
@@ -376,12 +378,24 @@ export function AdminDashboardStudio({
       ];
       const seriesColors = agg.chartSeriesColors;
       const colorKeys = seriesColors ? Object.keys(seriesColors) : [];
+      const aliasForYKey = (yKey: string): string => {
+        const match = yKey.match(/^metric_(\d+)$/);
+        if (match && agg.metrics[Number(match[1])]) {
+          return agg.metrics[Number(match[1])].alias || yKey;
+        }
+        return yKey;
+      };
+      const resolveColor = (key: string): string | undefined => {
+        if (!seriesColors) return undefined;
+        const k = (key ?? "").trim();
+        return seriesColors[key] ?? seriesColors[k] ?? (key.match(/^metric_\d+$/) ? seriesColors[aliasForYKey(key)] : undefined);
+      };
       const getColor = (label: string, idx: number) => {
-        const c = seriesColors?.[label] ?? seriesColors?.[label?.trim?.() ?? ""] ?? seriesColors?.[colorKeys[idx]!];
+        const c = resolveColor(label) ?? resolveColor(aliasForYKey(label)) ?? (colorKeys[idx] != null ? seriesColors?.[colorKeys[idx]!] : undefined);
         return c ?? defaultPalette[idx % defaultPalette.length]!;
       };
       const getColorByLabelStable = (label: string) => {
-        const c = seriesColors?.[label] ?? seriesColors?.[label?.trim?.() ?? ""];
+        const c = resolveColor(label) ?? resolveColor(aliasForYKey(label));
         if (c) return c;
         let hash = 0;
         const s = String(label ?? "");
@@ -463,6 +477,7 @@ export function AdminDashboardStudio({
       } else if (isPieOrDoughnut) {
         labels = rows.map((r) => String(r[xKey!] ?? ""));
         const firstYKey = yKeys[0] || metricAliases[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
+        const displayLabel = aliasForYKey(firstYKey!);
         const sliceColors = labels.map((l) => getColorByLabelStable(l));
         const hoverColors = sliceColors.map((c) => {
           const hex = String(c).replace(/^#/, "");
@@ -475,7 +490,7 @@ export function AdminDashboardStudio({
           return c;
         });
         datasets = [{
-          label: firstYKey!,
+          label: displayLabel,
           data: rows.map((r) => Number(r[firstYKey!] ?? 0)),
           backgroundColor: sliceColors,
           hoverBackgroundColor: hoverColors,
@@ -484,20 +499,22 @@ export function AdminDashboardStudio({
         }];
       } else if (effectiveChartType === "combo" && yKeys.length >= 2) {
         labels = rows.map((r) => String(r[xKey!] ?? ""));
+        const label0 = aliasForYKey(yKeys[0]!);
+        const label1 = aliasForYKey(yKeys[1]!);
         datasets = [
           {
-            label: yKeys[0]!,
+            label: label0,
             data: rows.map((r) => Number(r[yKeys[0]!] ?? 0)),
-            backgroundColor: getColor(yKeys[0]!, 0) + "80",
-            borderColor: getColor(yKeys[0]!, 0),
+            backgroundColor: getColor(label0, 0) + "80",
+            borderColor: getColor(label0, 0),
             borderWidth: 2,
             type: "bar" as const,
           },
           {
-            label: yKeys[1]!,
+            label: label1,
             data: rows.map((r) => Number(r[yKeys[1]!] ?? 0)),
-            backgroundColor: getColor(yKeys[1]!, 1) + "20",
-            borderColor: getColor(yKeys[1]!, 1),
+            backgroundColor: getColor(label1, 1) + "20",
+            borderColor: getColor(label1, 1),
             borderWidth: 2,
             type: "line" as const,
             fill: false,
@@ -508,21 +525,23 @@ export function AdminDashboardStudio({
         const isBarOrHorizontalBar = effectiveChartType === "bar" || effectiveChartType === "horizontalBar";
         const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
         if (oneMetricManyCategories) {
-          const alias = yKeys[0]!;
+          const yKey = yKeys[0]!;
+          const displayLabel = aliasForYKey(yKey);
           const barColors = labels.map((l) => getColorByLabelStable(l));
           datasets = [{
-            label: alias,
-            data: rows.map((r) => Number(r[alias] ?? 0)),
+            label: displayLabel,
+            data: rows.map((r) => Number(r[yKey] ?? 0)),
             backgroundColor: barColors.map((c) => c + "99"),
             borderColor: barColors,
             borderWidth: 1,
           }];
         } else {
-          datasets = yKeys.map((alias, idx) => {
-            const color = getColor(alias, idx);
+          datasets = yKeys.map((yKey, idx) => {
+            const displayLabel = aliasForYKey(yKey);
+            const color = getColor(displayLabel, idx);
             return {
-              label: alias,
-              data: rows.map((r) => Number(r[alias] ?? 0)),
+              label: displayLabel,
+              data: rows.map((r) => Number(r[yKey] ?? 0)),
               backgroundColor: effectiveChartType === "area" ? color + "40" : color + "99",
               borderColor: color,
               borderWidth: effectiveChartType === "line" || effectiveChartType === "area" ? 2 : 1,
@@ -848,6 +867,8 @@ export function AdminDashboardStudio({
       const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter(Boolean) as string[];
       const metricsArr = Array.isArray(cfg.metrics) ? cfg.metrics : [saved.metric];
       const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
+      const sources = etlData?.dataSources;
+      const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
       const newWidget: StudioWidget = {
         id: `w-${saved.id}-${Date.now()}`,
         type: chartType,
@@ -885,6 +906,8 @@ export function AdminDashboardStudio({
           chartYAxes: Array.isArray(cfg.chartYAxes) ? (cfg.chartYAxes as string[]) : undefined,
           chartSeriesField: (cfg.chartSeriesField as string) || undefined,
           chartNumberFormat: (cfg.chartNumberFormat as string) || undefined,
+          chartValueType: (cfg.chartValueType as string) || undefined,
+          chartValueScale: (cfg.chartValueScale as string) || undefined,
           chartCurrencySymbol: (cfg.chartCurrencySymbol as string) || undefined,
           chartThousandSep: cfg.chartThousandSep != null ? (cfg.chartThousandSep as boolean) : undefined,
           chartDecimals: cfg.chartDecimals != null ? (cfg.chartDecimals as number) : undefined,
@@ -898,7 +921,7 @@ export function AdminDashboardStudio({
           chartAxisOrder: (cfg.chartAxisOrder as string) || undefined,
         },
         excludeGlobalFilters: false,
-        dataSourceId: null,
+        dataSourceId: primaryId,
       };
       setWidgets((prev) => [...prev, newWidget]);
       setSelectedId(null);

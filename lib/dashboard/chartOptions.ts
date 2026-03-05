@@ -3,16 +3,19 @@
  * padding para evitar etiquetas cortadas, ejes, estilos y elementos.
  */
 
+/** Tipo de valor: número, moneda o porcentaje (sin escala). */
 export type ValueFormatType =
   | "none"
   | "currency"
-  | "percent"
-  | "K"
-  | "M"
-  | "Bi";
+  | "percent";
+
+/** Escala de visualización (K, M, Bi) aplicable junto con valueFormat. */
+export type ValueScaleType = "none" | "K" | "M" | "Bi";
 
 export type ChartStyleConfig = {
   valueFormat?: ValueFormatType;
+  /** Escala independiente del tipo: K, M, Bi. Se combina con valueFormat (ej. Moneda + M). */
+  valueScale?: ValueScaleType;
   currencySymbol?: string;
   /** Padding interno del gráfico (px) para que no se corten etiquetas */
   layoutPadding?: number;
@@ -47,18 +50,46 @@ export type ChartStyleConfig = {
 
 const DEFAULT_LAYOUT_PADDING = 16;
 
+/**
+ * Aplica escala (K/M/Bi) al valor: divide y añade sufijo.
+ * Devuelve { val, suffix } para combinar después con tipo (moneda/percent).
+ */
+function applyScale(
+  n: number,
+  scale: ValueScaleType
+): { val: number; suffix: string } {
+  if (scale === "K" && Math.abs(n) >= 1000)
+    return { val: n / 1000, suffix: "K" };
+  if (scale === "M" && Math.abs(n) >= 1e6)
+    return { val: n / 1e6, suffix: "M" };
+  if (scale === "M" && Math.abs(n) >= 1000)
+    return { val: n / 1000, suffix: "K" };
+  if (scale === "Bi" && Math.abs(n) >= 1e9)
+    return { val: n / 1e9, suffix: "Bi" };
+  if (scale === "Bi" && Math.abs(n) >= 1e6)
+    return { val: n / 1e6, suffix: "M" };
+  if (scale === "Bi" && Math.abs(n) >= 1000)
+    return { val: n / 1000, suffix: "K" };
+  return { val: n, suffix: "" };
+}
+
+/**
+ * Formatea un valor combinando tipo (number/currency/percent) y escala (none/K/M/Bi).
+ * Orden: primero escala (división + sufijo), luego tipo (prefijo $ o sufijo %).
+ */
 export function formatValue(
   value: number,
   format: ValueFormatType = "none",
-  currencySymbol: string = "$"
+  currencySymbol: string = "$",
+  scale: ValueScaleType = "none"
 ): string {
   const n = Number(value);
-  if (format === "percent") return `${n.toFixed(1)}%`;
-  if (format === "currency") return `${currencySymbol}${n.toLocaleString()}`;
-  if (format === "K") return n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
-  if (format === "M") return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
-  if (format === "Bi") return n >= 1e9 ? `${(n / 1e9).toFixed(1)}Bi` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
-  return n.toLocaleString();
+  const { val, suffix } = applyScale(n, scale);
+  const formatted = val.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 0 });
+  const withSuffix = `${formatted}${suffix}`;
+  if (format === "percent") return `${withSuffix}%`;
+  if (format === "currency") return `${currencySymbol}${withSuffix}`;
+  return withSuffix;
 }
 
 export function getLayoutPadding(style?: ChartStyleConfig | null): number {
@@ -69,15 +100,16 @@ export function getValueFormatter(
   style?: ChartStyleConfig | null,
   labelMode?: "percent" | "value"
 ) {
-  const format = style?.valueFormat ?? "none";
+  const format = (style?.valueFormat ?? "none") as ValueFormatType;
   const symbol = style?.currencySymbol ?? "$";
+  const scale = (style?.valueScale ?? "none") as ValueScaleType;
   return (value: number, ctx?: { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
     if (labelMode === "percent" && ctx?.chart?.data?.datasets?.[0]?.data) {
       const total = (ctx.chart.data.datasets[0].data as number[]).reduce((a, b) => Number(a) + Number(b), 0);
       const pct = total ? (Number(value) / total) * 100 : 0;
       return `${pct.toFixed(1)}%`;
     }
-    return formatValue(Number(value), format, symbol);
+    return formatValue(Number(value), format, symbol, scale);
   };
 }
 

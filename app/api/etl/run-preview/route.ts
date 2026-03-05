@@ -465,7 +465,8 @@ export async function POST(req: NextRequest) {
 
           const conn1Type = (conn1.type || "").toLowerCase();
           const conn2Type = (conn2.type || "").toLowerCase();
-          const useInMemoryJoin = conn1Type === "firebird" || conn2Type === "firebird";
+          const sameDb = String(primaryConnId) === String(secondaryConnId);
+          const useInMemoryJoin = conn1Type === "firebird" || conn2Type === "firebird" || !sameDb;
 
           if (useInMemoryJoin) {
             // Vista previa JOIN en memoria: traer filas de cada conexión (Firebird o Postgres) y unir en Node

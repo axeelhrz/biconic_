@@ -50,6 +50,8 @@ export type AggregationConfigEdit = {
   chartYAxes?: string[];
   chartSeriesField?: string;
   chartNumberFormat?: string;
+  chartValueType?: string;
+  chartValueScale?: string;
   chartCurrencySymbol?: string;
   chartThousandSep?: boolean;
   chartDecimals?: number;
@@ -99,6 +101,8 @@ export type SavedMetricAggregationConfig = {
   chartYAxes?: string[];
   chartSeriesField?: string;
   chartNumberFormat?: string;
+  chartValueType?: string;
+  chartValueScale?: string;
   chartCurrencySymbol?: string;
   chartThousandSep?: boolean;
   chartDecimals?: number;
@@ -236,6 +240,8 @@ export function AddMetricConfigForm({
         chartYAxes: cfg.chartYAxes,
         chartSeriesField: cfg.chartSeriesField,
         chartNumberFormat: cfg.chartNumberFormat,
+        chartValueType: cfg.chartValueType,
+        chartValueScale: cfg.chartValueScale,
         chartCurrencySymbol: cfg.chartCurrencySymbol,
         chartThousandSep: cfg.chartThousandSep,
         chartDecimals: cfg.chartDecimals,

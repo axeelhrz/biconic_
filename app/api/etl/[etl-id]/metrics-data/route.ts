@@ -261,6 +261,9 @@ async function fetchColumnTypesFromSchema(
   }
 }
 
+/** Límite máximo de filas para profiling "sin límite" (evitar saturar memoria/tiempo). */
+const MAX_PROFILE_ROWS = 50_000;
+
 /** Lee count y filas de etl_output vía Postgres directo (el esquema suele no estar expuesto en la API Supabase). */
 async function fetchFromEtlOutputViaPostgres(
   tableName: string,
@@ -276,8 +279,9 @@ async function fetchFromEtlOutputViaPostgres(
     );
     const rowCount = Array.isArray(countRes) && countRes[0]?.c != null ? Number(countRes[0].c) : 0;
     if (rowCount === 0) return { rowCount: 0, rows: [], tableExists: true };
+    const effectiveLimit = Math.min(MAX_PROFILE_ROWS, Math.max(1, limit));
     const rowsRes = await sql.unsafe(
-      `SELECT * FROM etl_output."${safeTable}" LIMIT ${Math.min(200, Math.max(1, limit))}`
+      `SELECT * FROM etl_output."${safeTable}" LIMIT ${effectiveLimit}`
     );
     const rows = Array.isArray(rowsRes) ? rowsRes : [];
     return { rowCount, rows, tableExists: true };
@@ -659,13 +663,15 @@ export async function GET(
     }
 
     const url = new URL(request.url);
-    const sampleRows = Math.min(500, Math.max(0, parseInt(url.searchParams.get("sampleRows") ?? "0", 10) || 0));
+    const unlimited = url.searchParams.get("unlimited") === "1" || url.searchParams.get("unlimited") === "true";
+    const sampleRowsParam = parseInt(url.searchParams.get("sampleRows") ?? "0", 10) || 0;
+    const sampleRows = unlimited ? MAX_PROFILE_ROWS : Math.min(MAX_PROFILE_ROWS, Math.max(0, sampleRowsParam));
     let rawRows: any[] = resolved.sampleData;
     let rowCount = resolved.rowCount;
 
     const schemaName = resolved.schema as "public" | "etl_output";
     const tableName = resolved.tableName;
-    const limitRows = sampleRows > 0 ? Math.min(200, sampleRows) : 200;
+    const limitRows = unlimited || sampleRows > 0 ? Math.min(MAX_PROFILE_ROWS, sampleRows || MAX_PROFILE_ROWS) : 200;
 
     try {
       if (schemaName === "etl_output") {

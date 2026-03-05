@@ -52,6 +52,8 @@ export type AggregationConfigEdit = {
   chartYAxes?: string[];
   chartSeriesField?: string;
   chartNumberFormat?: string;
+  chartValueType?: string;
+  chartValueScale?: string;
   chartCurrencySymbol?: string;
   chartThousandSep?: boolean;
   chartDecimals?: number;

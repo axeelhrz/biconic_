@@ -58,6 +58,8 @@ interface AggregationRequest {
   filters?: Filter[];
   orderBy?: OrderBy;
   limit?: number;
+  /** Si true, no se aplica LIMIT (hasta un tope de seguridad). Para vista previa con todas las filas. */
+  unlimited?: boolean;
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
   /** Comparación contra un valor fijo: agrega columnas alias_vs_fijo y alias_var_pct_fijo. */
@@ -138,12 +140,12 @@ function safeNumericCast(expr: string): string {
 }
 
 const SQL_KNOWN_FUNCTIONS = new Set([
-  "SUM", "AVG", "AVERAGE", "COUNT", "MIN", "MAX", "COUNTIF", "SUMIF", "AVERAGEIF", "COUNTIFS", "SUMIFS",
+  "SUM", "AVG", "AVERAGE", "COUNT", "MIN", "MAX", "COUNTA", "UNIQUE", "COUNTIF", "SUMIF", "AVERAGEIF", "COUNTIFS", "SUMIFS",
   "NULLIF", "COALESCE", "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN", "CEIL", "CEILING", "FLOOR", "TRUNC", "GREATEST", "LEAST",
   "MOD", "POWER", "SQRT", "SIGN", "EXP", "LN", "LOG", "LOG10", "PI",
   "SIN", "COS", "TAN", "FLOOR", "INT",
   "CASE", "WHEN", "THEN", "ELSE", "END",
-  "IF", "IFERROR", "IFNA", "AND", "OR", "NOT", "TRUE", "FALSE",
+  "IF", "IFS", "IFERROR", "IFNA", "AND", "OR", "NOT", "TRUE", "FALSE",
   "UPPER", "LOWER", "TRIM", "LENGTH", "LEN", "LEFT", "RIGHT", "SUBSTRING", "MID", "CONCAT", "CONCATENATE", "REPLACE", "SUBSTITUTE",
   "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "EOMONTH", "DATEDIF", "DATEVALUE", "TIMEVALUE",
   "VALUE", "TEXT", "REPT", "FIND", "SEARCH", "PROPER",
@@ -206,6 +208,60 @@ function expandIfToCaseWhen(expr: string): string {
   return trimmed.slice(0, ifStart) + caseExpr + trimmed.slice(i + 1);
 }
 
+/** Extrae el contenido entre paréntesis balanceados a partir de start (el índice del "("). Devuelve { inner, endIndex }. */
+function extractParenContent(s: string, start: number): { inner: string; endIndex: number } | null {
+  if (s[start] !== "(") return null;
+  let depth = 1;
+  let i = start + 1;
+  for (; i < s.length; i++) {
+    const c = s[i];
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0) return { inner: s.slice(start + 1, i).trim(), endIndex: i };
+    }
+  }
+  return null;
+}
+
+/** Convierte IFS(cond1, val1, cond2, val2, ..., [default]) en CASE WHEN ... END. */
+function expandIfsToCaseWhen(expr: string): string {
+  const trimmed = expr.trim();
+  const ifsStart = trimmed.search(/\bIFS\s*\(/i);
+  if (ifsStart === -1) return expr;
+  const start = trimmed.indexOf("(", ifsStart);
+  const extracted = extractParenContent(trimmed, start);
+  if (!extracted) return expr;
+  const args = extracted.inner.split(/[,;]/).map((a) => a.trim()).filter(Boolean);
+  if (args.length < 2) return expr;
+  const pairs: { cond: string; val: string }[] = [];
+  let i = 0;
+  while (i + 1 < args.length) {
+    pairs.push({ cond: args[i]!, val: args[i + 1]! });
+    i += 2;
+  }
+  const defaultVal = i < args.length ? args[i] : "NULL";
+  const whenParts = pairs.map((p) => `WHEN ${expandIfsToCaseWhen(p.cond)} THEN ${expandIfsToCaseWhen(p.val)}`).join(" ");
+  const caseExpr = `(CASE ${whenParts} ELSE ${expandIfsToCaseWhen(defaultVal)} END)`;
+  return trimmed.slice(0, ifsStart) + caseExpr + trimmed.slice(extracted.endIndex + 1);
+}
+
+/** Convierte AND(a, b, ...) en (a AND b AND ...). */
+function expandAndOr(expr: string, fn: "AND" | "OR"): string {
+  const regex = new RegExp(`\\b${fn}\\s*\\(`, "gi");
+  const match = expr.match(regex);
+  if (!match) return expr;
+  const first = expr.search(regex);
+  const start = expr.indexOf("(", first);
+  const extracted = extractParenContent(expr, start);
+  if (!extracted) return expr;
+  const args = extracted.inner.split(/[,;]/).map((a) => a.trim()).filter(Boolean);
+  const op = fn === "AND" ? " AND " : " OR ";
+  const joined = args.map((a) => (fn === "AND" ? expandAndOr(a, "AND") : expandAndOr(a, "OR"))).join(op);
+  const repl = `(${joined})`;
+  return expr.slice(0, first) + repl + expr.slice(extracted.endIndex + 1);
+}
+
 /** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO", IF(ESTADO='PAGADO',1,0)) en SQL seguro.
  *  - Literales numéricos y cadenas entre comillas se preservan.
  *  - ; se normaliza a , (estilo Excel).
@@ -235,20 +291,55 @@ function expressionToSql(expression: string, derivedLookup?: Record<string, Deri
     return `__STR${idx}__`;
   });
 
-  // 1b) Alias Excel -> SQL: AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(
+  // 1b) Alias Excel -> SQL: AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(, CONCATENATE( -> CONCAT(
   s = s.replace(/\bAVERAGE\s*\(/gi, "AVG(");
   s = s.replace(/\bLEN\s*\(/gi, "LENGTH(");
   s = s.replace(/\bMID\s*\(/gi, "SUBSTRING(");
+  s = s.replace(/\bCONCATENATE\s*\(/gi, "CONCAT(");
 
   // 1c) Potencia: token ^ token -> POWER(token, token)
   s = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*|\d+\.?\d*|__STR\d+__)\s+\^\s+([a-zA-Z_][a-zA-Z0-9_]*|\d+\.?\d*|__STR\d+__)\b/g, (_, a, b) => `POWER(${a},${b})`);
 
   // 2) Expandir IF(cond, then, else) a CASE WHEN
-  while (/IF\s*\(/i.test(s)) {
+  while (/IF\s*\(/i.test(s) && !/IFS\s*\(/i.test(s)) {
     const next = expandIfToCaseWhen(s);
     if (next === s) break;
     s = next;
   }
+  while (/\bIFS\s*\(/i.test(s)) {
+    const next = expandIfsToCaseWhen(s);
+    if (next === s) break;
+    s = next;
+  }
+  while (/\bAND\s*\(/i.test(s)) {
+    const next = expandAndOr(s, "AND");
+    if (next === s) break;
+    s = next;
+  }
+  while (/\bOR\s*\(/i.test(s)) {
+    const next = expandAndOr(s, "OR");
+    if (next === s) break;
+    s = next;
+  }
+
+  // 2b) COUNTA(UNIQUE(expr)) -> COUNT(DISTINCT expr) (caso Rumipal)
+  while (/COUNTA\s*\(\s*UNIQUE\s*\(/i.test(s)) {
+    const match = s.match(/COUNTA\s*\(\s*UNIQUE\s*\(/i);
+    if (!match) break;
+    const start = s.indexOf(match[0]!);
+    const openParen = s.indexOf("(", s.indexOf("UNIQUE", start));
+    const extracted = extractParenContent(s, openParen);
+    if (!extracted) break;
+    const inner = extracted.inner;
+    const countDistinctEnd = s.indexOf(")", extracted.endIndex + 1);
+    if (countDistinctEnd === -1) break;
+    const innerSql = expressionToSql(inner, derivedLookup, _depth + 1);
+    if (!innerSql) break;
+    const repl = `COUNT(DISTINCT ${innerSql})`;
+    s = s.slice(0, start) + repl + s.slice(countDistinctEnd + 1);
+  }
+  // 2c) COUNTA(expr) -> COUNT(expr) (contar no vacíos = COUNT en SQL)
+  s = s.replace(/\bCOUNTA\s*\(/gi, "COUNT(");
 
   // 3) Reemplazar identificadores (columnas/funciones). Primero prefijos join (primary.X, join_N.X) como un solo identificador para no interpretar "primary" como tabla.
   const out = s.replace(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*|[a-zA-Z_][a-zA-Z0-9_]*)\b/g, (id: string) => {
@@ -274,13 +365,114 @@ function expressionToSql(expression: string, derivedLookup?: Record<string, Deri
   return withStrings || null;
 }
 
-/** Si la expresión está envuelta en una función de agregación (ej. "SUM(X * Y)", "AVERAGE(X)"), devuelve { func, inner }. */
+/** Si la expresión está envuelta en una función de agregación (ej. "SUM(X * Y)", "AVERAGE(X)", "COUNTA(X)"), devuelve { func, inner }. */
 function unwrapAggExpression(expr: string): { func: string; inner: string } | null {
-  const m = expr.trim().match(/^(SUM|AVG|AVERAGE|COUNT|MIN|MAX)\s*\((.+)\)\s*$/i);
+  const m = expr.trim().match(/^(SUM|AVG|AVERAGE|COUNT|COUNTA|MIN|MAX)\s*\((.+)\)\s*$/i);
   if (!m) return null;
   let func = m[1]!.toUpperCase();
   if (func === "AVERAGE") func = "AVG";
+  if (func === "COUNTA") func = "COUNT";
   return { func, inner: m[2]!.trim() };
+}
+
+/** Divide el contenido de argumentos por comas respetando paréntesis y comillas. */
+function splitArgs(content: string): string[] {
+  const args: string[] = [];
+  let depth = 0;
+  let inQuote: string | null = null;
+  let start = 0;
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i];
+    if (inQuote) {
+      if (c === inQuote && content[i - 1] !== "\\") inQuote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      inQuote = c;
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if ((c === "," || c === ";") && depth === 0) {
+      args.push(content.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  if (start <= content.length) args.push(content.slice(start).trim());
+  return args.filter(Boolean);
+}
+
+/** Parsea criterio tipo ">10", "=Activo", "<>" y devuelve { op, valueStr }. */
+function parseCriterion(crit: string): { op: string; valueStr: string } {
+  const t = crit.trim();
+  const match = t.match(/^(\<\>|\>\=|\<\=|\>|\<|\=)?\s*(.*)$/s);
+  const op = (match?.[1] ?? "=").replace(/\s/g, "");
+  const valueStr = (match?.[2] ?? t).trim();
+  return { op: op || "=", valueStr };
+}
+
+/** Construye la expresión SQL de agregación para COUNTIF/SUMIF/COUNTIFS/SUMIFS. Devuelve null si no aplica. */
+function buildCountIfSumIfAggregate(
+  expression: string,
+  derivedLookup: Record<string, DerivedColumnRef> | undefined
+): string | null {
+  const trimmed = expression.replace(/\s+/g, " ").trim().replace(/;/g, ",");
+  const countIfMatch = trimmed.match(/^\s*COUNTIF\s*\((.+)\)\s*$/is);
+  if (countIfMatch) {
+    const args = splitArgs(countIfMatch[1]!);
+    if (args.length < 2) return null;
+    const rangeSql = expressionToSql(args[0]!, derivedLookup);
+    const crit = parseCriterion(args[1]!);
+    const valSql = expressionToSql(args[1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
+    if (!rangeSql) return null;
+    const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
+    return `COUNT(CASE WHEN ${whenClause} THEN 1 END)`;
+  }
+  const sumIfMatch = trimmed.match(/^\s*SUMIF\s*\((.+)\)\s*$/is);
+  if (sumIfMatch) {
+    const args = splitArgs(sumIfMatch[1]!);
+    if (args.length < 2) return null;
+    const rangeSql = expressionToSql(args[0]!, derivedLookup);
+    const crit = parseCriterion(args[1]!);
+    const valSql = expressionToSql(args[1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
+    const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
+    const sumRangeSql = args.length >= 3 ? expressionToSql(args[2]!, derivedLookup) : rangeSql;
+    if (!rangeSql || !sumRangeSql) return null;
+    return `SUM(CASE WHEN ${whenClause} THEN ${sumRangeSql} ELSE 0 END)`;
+  }
+  const countIfsMatch = trimmed.match(/^\s*COUNTIFS\s*\((.+)\)\s*$/is);
+  if (countIfsMatch) {
+    const args = splitArgs(countIfsMatch[1]!);
+    if (args.length < 2 || args.length % 2 !== 0) return null;
+    const conditions: string[] = [];
+    for (let i = 0; i < args.length; i += 2) {
+      const rangeSql = expressionToSql(args[i]!, derivedLookup);
+      const crit = parseCriterion(args[i + 1]!);
+      const valSql = expressionToSql(args[i + 1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
+      if (!rangeSql) return null;
+      const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
+      conditions.push(whenClause);
+    }
+    return `COUNT(CASE WHEN ${conditions.join(" AND ")} THEN 1 END)`;
+  }
+  const sumIfsMatch = trimmed.match(/^\s*SUMIFS\s*\((.+)\)\s*$/is);
+  if (sumIfsMatch) {
+    const args = splitArgs(sumIfsMatch[1]!);
+    if (args.length < 3 || (args.length - 1) % 2 !== 0) return null;
+    const sumRangeSql = expressionToSql(args[0]!, derivedLookup);
+    if (!sumRangeSql) return null;
+    const conditions: string[] = [];
+    for (let i = 1; i < args.length; i += 2) {
+      const rangeSql = expressionToSql(args[i]!, derivedLookup);
+      const crit = parseCriterion(args[i + 1]!);
+      const valSql = expressionToSql(args[i + 1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
+      if (!rangeSql) return null;
+      const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
+      conditions.push(whenClause);
+    }
+    return `SUM(CASE WHEN ${conditions.join(" AND ")} THEN ${sumRangeSql} ELSE 0 END)`;
+  }
+  return null;
 }
 
 export async function POST(req: NextRequest) {
@@ -309,18 +501,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validar que cada métrica base use una función de agregación permitida
+    // Validar que cada métrica base use una función de agregación permitida (o expresión con COUNTIF/SUMIF/etc.)
     const allowedAggSet = new Set(ALLOWED_AGG_FUNCTIONS.map((f) => f.toUpperCase()));
+    const allowedAggWhenExpression = new Set(["COUNTIF", "SUMIF", "COUNTIFS", "SUMIFS", "AVERAGEIF"]);
     for (let i = 0; i < body.metrics.length; i++) {
       const m = body.metrics[i];
       if (m.formula) continue;
       const func = (m.func || "").toString().toUpperCase().trim();
+      const expr = (m as Metric & { expression?: string }).expression?.trim() ?? "";
+      const exprIsCountIfSumIf = /^\s*(COUNTIF|SUMIF|COUNTIFS|SUMIFS)\s*\(/i.test(expr);
       const allowed =
         allowedAggSet.has(func) ||
-        func.startsWith("COUNT(DISTINCT");
+        func.startsWith("COUNT(DISTINCT") ||
+        func === "COUNTA" ||
+        allowedAggWhenExpression.has(func) ||
+        exprIsCountIfSumIf;
       if (!allowed) {
         return NextResponse.json(
-          { error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use: SUM, AVG, COUNT, MIN, MAX, COUNT(DISTINCT).` },
+          { error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use: SUM, AVG, COUNT, COUNTA, MIN, MAX, COUNT(DISTINCT), o expresiones con COUNTIF/SUMIF/COUNTIFS/SUMIFS.` },
           { status: 400 }
         );
       }
@@ -415,6 +613,7 @@ export async function POST(req: NextRequest) {
     let etlIdForLookup: string | null = body.etlId ?? null;
     if (!etlIdForLookup && table) {
       const tbl = table.toLowerCase();
+      const tableWithoutSchema = tbl.includes(".") ? tbl.split(".").slice(-1)[0] ?? tbl : tbl;
       try {
         const { data: etlByOutput } = await supabase
           .from("etl")
@@ -426,6 +625,17 @@ export async function POST(req: NextRequest) {
       } catch { /* ignore */ }
       if (!etlIdForLookup) {
         try {
+          const { data: etlByOutputShort } = await supabase
+            .from("etl")
+            .select("id")
+            .ilike("output_table", tableWithoutSchema)
+            .limit(1)
+            .maybeSingle();
+          if (etlByOutputShort?.id) etlIdForLookup = etlByOutputShort.id;
+        } catch { /* ignore */ }
+      }
+      if (!etlIdForLookup) {
+        try {
           const { data: runRow } = await supabase
             .from("etl_runs_log")
             .select("etl_id")
@@ -435,6 +645,19 @@ export async function POST(req: NextRequest) {
             .limit(1)
             .maybeSingle();
           if (runRow?.etl_id) etlIdForLookup = runRow.etl_id;
+        } catch { /* ignore */ }
+      }
+      if (!etlIdForLookup) {
+        try {
+          const { data: runRowShort } = await supabase
+            .from("etl_runs_log")
+            .select("etl_id")
+            .eq("status", "completed")
+            .ilike("destination_table_name", tableWithoutSchema)
+            .order("completed_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (runRowShort?.etl_id) etlIdForLookup = runRowShort.etl_id;
         } catch { /* ignore */ }
       }
     }
@@ -578,6 +801,22 @@ export async function POST(req: NextRequest) {
 
         const fieldExpr = (() => {
           if (resolvedExpr) {
+            const countIfSumIfAgg = buildCountIfSumIfAggregate(resolvedExpr, derivedByName);
+            if (countIfSumIfAgg) {
+              (m as any)._forceAggregate = countIfSumIfAgg;
+              return "1";
+            }
+            // UNIQUE(expr) como expresión completa -> COUNT(DISTINCT expr); se maneja en aggExpr más abajo
+            const uniqueMatch = resolvedExpr.trim().match(/^\s*UNIQUE\s*\((.+)\)\s*$/is);
+            if (uniqueMatch) {
+              const inner = uniqueMatch[1]!.trim();
+              const innerSql = expressionToSql(inner, derivedByName);
+              if (innerSql) {
+                const countDistinctExpr = `COUNT(DISTINCT (${innerSql}))`;
+                (m as any)._forceCountDistinct = countDistinctExpr;
+                return innerSql;
+              }
+            }
             const sqlExpr = expressionToSql(resolvedExpr, derivedByName);
             if (sqlExpr) return safeNumericCast(`(${sqlExpr})`);
             console.warn("[aggregate-data] expressionToSql returned null for:", resolvedExpr);
@@ -604,14 +843,22 @@ export async function POST(req: NextRequest) {
         (m as any).internalAlias = internalAlias;
 
         let aggExpr: string;
-        if (m.condition) {
+        const forceAggregate = (m as any)._forceAggregate as string | undefined;
+        const forceCountDistinct = (m as any)._forceCountDistinct as string | undefined;
+        if (forceAggregate) {
+          aggExpr = forceAggregate;
+        } else if (forceCountDistinct) {
+          aggExpr = forceCountDistinct;
+        } else if (m.condition) {
           const whenClause = buildWhenClause(m.condition);
           if (func === "COUNT" || func.startsWith("COUNT(DISTINCT"))
             aggExpr = `COUNT(CASE WHEN ${whenClause} THEN 1 END)`;
           else
             aggExpr = `${func}(${buildConditionExpr(m.condition, fieldExpr)})`;
         } else {
-          if (func.startsWith("COUNT(DISTINCT"))
+          if (func === "COUNTA") {
+            aggExpr = `COUNT(${fieldExpr})`;
+          } else if (func.startsWith("COUNT(DISTINCT"))
             aggExpr = `COUNT(DISTINCT ${fieldExpr})`;
           else
             aggExpr = `${func}(${fieldExpr})`;
@@ -813,16 +1060,31 @@ export async function POST(req: NextRequest) {
       query += ` ORDER BY ${dateGroupByExpr} ASC`;
     }
 
-    if (body.limit) {
-      const lim = Math.max(1, Math.min(5000, parseInt(String(body.limit), 10)));
+    const SAFETY_MAX_ROWS = 500_000;
+    if (body.unlimited === true) {
+      query += ` LIMIT ${SAFETY_MAX_ROWS}`;
+    } else if (body.limit != null && body.limit > 0) {
+      const lim = Math.max(1, Math.min(SAFETY_MAX_ROWS, parseInt(String(body.limit), 10) || 5000));
       query += ` LIMIT ${lim}`;
     }
 
-    // 5b. Fórmulas derivadas: subquery y columnas calculadas (solo caracteres seguros)
+    // 5b. Fórmulas derivadas: subquery y columnas calculadas (permite metric_N y alias de otras métricas; solo caracteres seguros)
+    const aliasToMetricRef: { alias: string; ref: string }[] = body.metrics
+      .map((m, idx) => ({ alias: (m.alias || "").trim(), ref: `metric_${idx}` }))
+      .filter((x) => x.alias.length > 0)
+      .sort((a, b) => b.alias.length - a.alias.length);
+    const resolveAliasesInFormula = (formula: string): string => {
+      let s = formula.replace(/\s+/g, " ").trim();
+      for (const { alias, ref } of aliasToMetricRef) {
+        if (alias && s.includes(alias)) s = s.split(alias).join(ref);
+      }
+      return s;
+    };
     const safeFormula = (expr: string) => {
       if (!expr || typeof expr !== "string") return null;
-      const s = expr.replace(/\s+/g, " ").trim();
-      if (!/^[metric_0-9\s\-+*/().,NULLIF]+$/i.test(s)) return null;
+      const withAliases = resolveAliasesInFormula(expr);
+      const s = withAliases.replace(/\s+/g, " ").trim();
+      if (!/^[metric_0-9\s\-+*/().,NULLIFROUNDCOALESCE]+$/i.test(s)) return null;
       return s;
     };
     if (metricsFormula.length > 0) {
@@ -874,7 +1136,7 @@ export async function POST(req: NextRequest) {
         } else {
           const availableDerived = Object.keys(derivedByName).join(", ") || "(ninguna)";
           const savedNames = Object.keys(savedMetricByName).length ? ` Métricas guardadas del ETL: ${Object.keys(savedMetricByName).join(", ")}.` : "";
-          userMsg = `La columna «${colName}» no existe en la tabla ni como columna calculada. Columnas calculadas disponibles: ${availableDerived}. Creala en Métricas → Fórmula → Crear columna. Si «${colName}» es una métrica guardada, definila en el ETL en Métricas (nombre, campo o expresión).${savedNames}`;
+          userMsg = `La columna «${colName}» no existe en la tabla ni como columna calculada. Columnas calculadas disponibles: ${availableDerived}. Creala en Métricas → Fórmula → Crear columna. Si «${colName}» es una métrica guardada, asegurate de que el widget use la fuente de datos del ETL donde está definida (mismo ETL).${savedNames}`;
         }
       }
       return NextResponse.json(

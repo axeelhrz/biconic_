@@ -356,6 +356,19 @@ function isNullLike(value: any, patterns: string[]): boolean {
   });
 }
 
+/** Resuelve el nombre de columna (payload) a la clave real en la fila (p. ej. primary_id, join_0_name o id en distinto casing). */
+function getKeyInRow(row: Record<string, any>, colName: string): string | undefined {
+  if (colName in row) return colName;
+  const keys = Object.keys(row);
+  const colLower = colName.toLowerCase();
+  const exact = keys.find((k) => k.toLowerCase() === colLower);
+  if (exact) return exact;
+  const withPrefix = keys.find(
+    (k) => k.toLowerCase().endsWith("_" + colLower) || k === colName.replace(/\./g, "_")
+  );
+  return withPrefix;
+}
+
 export function applyTransforms(
   row: Record<string, any>,
   config: { transforms: CleanTransform[] } | undefined
@@ -363,65 +376,64 @@ export function applyTransforms(
   if (!config?.transforms?.length) return row;
   const next: Record<string, any> = { ...row };
   for (const t of config.transforms) {
-    const v = next[t.column];
+    const keyInRow = getKeyInRow(next, t.column);
+    if (keyInRow === undefined) continue;
+    const v = next[keyInRow];
     switch (t.op) {
       case "trim":
-        next[t.column] = typeof v === "string" ? v.trim() : v;
+        next[keyInRow] = typeof v === "string" ? v.trim() : v;
         break;
       case "upper":
-        next[t.column] = typeof v === "string" ? v.toUpperCase() : v;
+        next[keyInRow] = typeof v === "string" ? v.toUpperCase() : v;
         break;
       case "lower":
-        next[t.column] = typeof v === "string" ? v.toLowerCase() : v;
+        next[keyInRow] = typeof v === "string" ? v.toLowerCase() : v;
         break;
       case "replace":
         if (typeof v === "string" && "find" in t) {
           try {
             const regex = new RegExp(t.find, "g");
-            next[t.column] = v.replace(regex, t.replaceWith);
+            next[keyInRow] = v.replace(regex, t.replaceWith);
           } catch {
-            next[t.column] = v;
+            next[keyInRow] = v;
           }
         }
         break;
       case "replace_value":
         if ("find" in t && "replaceWith" in t && String(v) === t.find) {
-          next[t.column] = t.replaceWith;
+          next[keyInRow] = t.replaceWith;
         }
         break;
       case "normalize_nulls": {
-        // Solo reemplazar si la columna existe en la fila y su valor coincide con los patrones de vacío.
-        // Si t.column no coincide con la clave (p. ej. "CODIGO" vs "codigo"), v sería undefined y no debemos reemplazar todo.
-        const keyInRow = t.column in next ? t.column : Object.keys(next).find((k) => k.toLowerCase() === t.column.toLowerCase());
-        if (keyInRow === undefined) break;
         const valueInRow = next[keyInRow];
-        if (!("patterns" in t) || !isNullLike(valueInRow, t.patterns)) break;
+        const patterns = "patterns" in t && Array.isArray(t.patterns) ? t.patterns : [];
+        if (!isNullLike(valueInRow, patterns)) break;
         next[keyInRow] = t.action === "replace" && t.replacement !== undefined ? t.replacement : null;
         break;
       }
       case "normalize_spaces":
         if (typeof v === "string") {
-          next[t.column] = v.replace(/\s+/g, " ").trim();
+          next[keyInRow] = v.replace(/\s+/g, " ").trim();
         }
         break;
       case "strip_invisible":
         if (typeof v === "string") {
-          next[t.column] = v.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+          next[keyInRow] = v.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
         }
         break;
       case "utf8_normalize":
         if (typeof v === "string") {
-          next[t.column] = v.normalize("NFC");
+          next[keyInRow] = v.normalize("NFC");
         }
         break;
       case "cast_number":
-        next[t.column] =
+        next[keyInRow] =
           v == null || v === "" || isNaN(Number(v)) ? null : Number(v);
         break;
       case "cast_date":
         {
           const d = v ? new Date(v) : null;
-          next[t.column] = d && !isNaN(d.getTime()) ? d.toISOString() : null;
+          next[keyInRow] = d && !isNaN(d.getTime()) ? d.toISOString() : null;
         }
         break;
     }
@@ -441,7 +453,8 @@ export function applyDedupe(
   for (const i of order) {
     const row = rows[i];
     const key = keyColumns.map((col) => {
-      const val = row[col];
+      const keyInRow = getKeyInRow(row, col);
+      const val = keyInRow !== undefined ? row[keyInRow] : undefined;
       return val == null ? "__NULL__" : String(val);
     }).join("\x00");
     if (!seen.has(key)) {

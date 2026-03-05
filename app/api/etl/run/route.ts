@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { v4 as uuidv4 } from "uuid";
 import { Client as PgClient } from "pg";
@@ -911,6 +912,145 @@ async function executeEtlPipeline(
         return;
       }
 
+      // JOIN entre dos conexiones distintas (cross-DB): ejecutar en memoria
+      const secondaryConnIdForCrossDb = isStarJoin ? (joinObj.joins?.[0] as any)?.secondaryConnectionId : joinObj.secondaryConnectionId;
+      if (isJoin && secondaryConnIdForCrossDb && String(primaryConnId) !== String(secondaryConnIdForCrossDb)) {
+        const { data: conn2 } = await supabaseAdmin.from("connections").select("*").eq("id", secondaryConnIdForCrossDb).single();
+        if (!conn2) throw new Error(`Conexión secundaria ${secondaryConnIdForCrossDb} no encontrada.`);
+        const isStar = isStarJoin && Array.isArray(joinObj.joins) && joinObj.joins.length > 0;
+        const leftTable = isStar ? (joinObj.primaryTable || (body!.filter?.table || "").trim()) : (joinObj.leftTable || "").trim();
+        const rightTable = isStar ? (joinObj.joins![0] as any).secondaryTable : (joinObj.rightTable || "").trim();
+        const jc = isStar ? (joinObj.joins![0] as any) : (joinObj.joinConditions?.[0] || {});
+        const leftCol = (jc.primaryColumn || jc.leftColumn || "").trim();
+        const rightCol = (jc.secondaryColumn || jc.rightColumn || "").trim();
+        const joinType = (jc.joinType || "INNER").toString().toUpperCase();
+        const selectedCols = (body!.filter?.columns || []) as string[];
+        const leftColumns = selectedCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, "").trim());
+        const rightColumns = selectedCols.filter((c: string) => /^join_0\./i.test(c)).map((c: string) => c.replace(/^join_0\./i, "").trim());
+        const leftConditions = (body!.filter?.conditions || [])
+          .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
+          .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^primary\./i, "").trim() }));
+        const rightConditions = (body!.filter?.conditions || [])
+          .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
+          .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
+        if (!leftTable || !rightTable || !leftCol || !rightCol)
+          throw new Error("JOIN entre conexiones distintas requiere tabla izquierda, derecha y columnas de enlace.");
+
+        const normalizeRowCrossDb = (row: Record<string, any>) => {
+          const out: Record<string, any> = {};
+          for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
+          return out;
+        };
+
+        const fetchFromConnectionCrossDb = async (
+          connection: any,
+          tableName: string,
+          columns: string[] | undefined,
+          conditions: FilterCondition[],
+          limit?: number,
+          offset?: number
+        ): Promise<Record<string, any>[]> => {
+          const connType = (connection.type || "").toLowerCase();
+          const pwd = connection.db_password_encrypted
+            ? decryptConnectionPassword(connection.db_password_encrypted)
+            : (connection.db_password ?? "");
+          if (connType === "postgres" || connType === "postgresql") {
+            const pgClient = new PgClient({
+              host: connection.db_host,
+              user: connection.db_user,
+              database: connection.db_name,
+              port: connection.db_port ?? 5432,
+              password: pwd || undefined,
+            });
+            await pgClient.connect();
+            try {
+              const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
+              const { clause, params } = buildWhereClausePg(conditions);
+              const limitVal = limit ?? 500000;
+              const offsetVal = offset ?? 0;
+              const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause} ORDER BY 1 ASC LIMIT ${limitVal} OFFSET ${offsetVal}`;
+              const res = await pgClient.query(q, params);
+              return (res.rows || []).map(normalizeRowCrossDb);
+            } finally {
+              await pgClient.end();
+            }
+          }
+          if (connType === "excel_file") {
+            const dbUrl = process.env.SUPABASE_DB_URL;
+            if (!dbUrl) throw new Error("SUPABASE_DB_URL no disponible para JOIN con Excel.");
+            const { data: meta } = await supabaseAdmin
+              .from("data_tables")
+              .select("physical_schema_name, physical_table_name")
+              .eq("connection_id", String(connection.id))
+              .single();
+            if (!meta?.physical_table_name) throw new Error("Metadatos Excel no encontrados para la conexión secundaria.");
+            const physicalTable = `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
+            const excelClient = new PgClient({ connectionString: dbUrl });
+            await excelClient.connect();
+            try {
+              const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
+              const { clause, params } = buildWhereClausePg(conditions);
+              const limitVal = limit ?? 500000;
+              const offsetVal = offset ?? 0;
+              const q = `SELECT ${sel} FROM ${quoteQualified(physicalTable)} ${clause} ORDER BY 1 ASC LIMIT ${limitVal} OFFSET ${offsetVal}`;
+              const res = await excelClient.query(q, params);
+              return (res.rows || []).map(normalizeRowCrossDb);
+            } finally {
+              await excelClient.end();
+            }
+          }
+          throw new Error(`JOIN entre conexiones: tipo "${connection.type}" no soportado para la conexión secundaria.`);
+        };
+
+        const rightRows = await fetchFromConnectionCrossDb(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions);
+        const rightColNorm = rightCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+        const rightMap = new Map<string, Record<string, any>[]>();
+        for (const r of rightRows) {
+          const key = String(r[rightColNorm] ?? (r as any)[rightCol] ?? "");
+          if (!rightMap.has(key)) rightMap.set(key, []);
+          rightMap.get(key)!.push(r);
+        }
+        const leftColNorm = leftCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+        const rightKeys = rightColumns.length ? rightColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : (rightRows[0] ? Object.keys(rightRows[0]) : []);
+
+        const prefixLeft = (row: Record<string, any>) => {
+          const out: Record<string, any> = {};
+          const leftKeys = leftColumns.length ? leftColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : Object.keys(row);
+          if (leftKeys.length) for (const k of leftKeys) out["primary_" + k] = row[k];
+          else for (const key in row) out["primary_" + key] = row[key];
+          return out;
+        };
+        const prefixRight = (row: Record<string, any>) => {
+          const out: Record<string, any> = {};
+          if (rightKeys.length) for (const k of rightKeys) out["join_0_" + k] = row[k];
+          else for (const key in row) out["join_0_" + key] = row[key];
+          return out;
+        };
+
+        let leftOffset = 0;
+        for (;;) {
+          const leftNorm = await fetchFromConnectionCrossDb(conn, leftTable, leftColumns.length ? leftColumns : undefined, leftConditions, pageSize, leftOffset);
+          if (leftNorm.length === 0) break;
+          const batch: Record<string, any>[] = [];
+          for (const lr of leftNorm) {
+            const key = String(lr[leftColNorm] ?? (lr as any)[leftCol] ?? "");
+            const matches = rightMap.get(key) ?? [];
+            if (matches.length > 0) {
+              for (const rr of matches) batch.push({ ...prefixLeft(lr), ...prefixRight(rr) });
+            } else if (joinType === "LEFT" || joinType === "FULL") {
+              const rightNulls: Record<string, any> = {};
+              for (const k of rightKeys) rightNulls["join_0_" + k] = null;
+              if (!rightKeys.length) for (const key in (rightRows[0] || {})) rightNulls["join_0_" + key] = null;
+              batch.push({ ...prefixLeft(lr), ...rightNulls });
+            }
+          }
+          if (batch.length > 0) yield batch;
+          if (leftNorm.length < pageSize) break;
+          leftOffset += pageSize;
+        }
+        return;
+      }
+
       let client: PgClient;
       if (conn.type === "excel_file") {
         const dbUrl = process.env.SUPABASE_DB_URL;
@@ -1252,7 +1392,19 @@ export async function POST(req: NextRequest) {
      if (!body) throw new Error("Cuerpo vacío");
 
      const supabaseAdmin = await createClient();
-     const { data: { user } } = await supabaseAdmin.auth.getUser();
+     let user: { id: string } | null = null;
+     const cronSecret = req.headers.get("x-cron-secret");
+     const validCronSecret =
+       process.env.ETL_SCHEDULER_SECRET || process.env.CRON_SECRET;
+     if (body.etlId && cronSecret && validCronSecret && cronSecret === validCronSecret) {
+       const serviceClient = createServiceRoleClient();
+       const { data: etlRow } = await serviceClient.from("etl").select("user_id").eq("id", body.etlId).single();
+       if (etlRow?.user_id) user = { id: (etlRow as { user_id: string }).user_id };
+     }
+     if (!user) {
+       const { data: { user: authUser } } = await supabaseAdmin.auth.getUser();
+       user = authUser;
+     }
      if (!user) throw new Error("No autorizado");
 
      // 1. Log Initial "started" state
@@ -1284,6 +1436,7 @@ export async function POST(req: NextRequest) {
            join: body.join,
            clean: body.clean,
            end: body.end,
+           ...((body as any).schedule != null && { schedule: (body as any).schedule }),
          };
          await supabaseAdmin
            .from("etl")
