@@ -405,7 +405,7 @@ function splitArgs(content: string): string[] {
 /** Parsea criterio tipo ">10", "=Activo", "<>" y devuelve { op, valueStr }. */
 function parseCriterion(crit: string): { op: string; valueStr: string } {
   const t = crit.trim();
-  const match = t.match(/^(\<\>|\>\=|\<\=|\>|\<|\=)?\s*(.*)$/s);
+  const match = t.match(/^(\<\>|\>\=|\<\=|\>|\<|\=)?\s*([\s\S]*)$/);
   const op = (match?.[1] ?? "=").replace(/\s/g, "");
   const valueStr = (match?.[2] ?? t).trim();
   return { op: op || "=", valueStr };
