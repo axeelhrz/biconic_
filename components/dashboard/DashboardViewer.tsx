@@ -113,8 +113,8 @@ function buildChartStyleFromAgg(agg: AggregationConfig | undefined): ChartStyleC
       ? "K"
       : valueScale === "M" || legacy === "M"
         ? "M"
-        : valueScale === "BI" || valueScale === "Bi" || legacy === "BI"
-          ? "Bi"
+        : valueScale === "BI" || valueScale === "Bi" || valueScale === "B" || legacy === "BI"
+          ? "B"
           : "none";
   const decimals = agg.chartDecimals ?? 2;
   const useGrouping = agg.chartThousandSep !== false;

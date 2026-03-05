@@ -333,7 +333,7 @@ export function MetricConfigPanel({
                   <option value="none">Ninguna</option>
                   <option value="K">Miles (K)</option>
                   <option value="M">Millones (M)</option>
-                  <option value="Bi">Miles de millones (Bi)</option>
+                  <option value="B">Miles de millones (B)</option>
                 </select>
               </div>
             </div>

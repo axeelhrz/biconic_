@@ -7,6 +7,23 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { DashboardTheme } from "@/types/dashboard";
 
+/** Fuentes disponibles en el desplegable (valor = font-family CSS completo). */
+const FONT_FAMILY_OPTIONS: { value: string; label: string }[] = [
+  { value: "'DM Sans', system-ui, -apple-system, sans-serif", label: "DM Sans" },
+  { value: "Inter, system-ui, -apple-system, sans-serif", label: "Inter" },
+  { value: "'Roboto', system-ui, sans-serif", label: "Roboto" },
+  { value: "'Open Sans', system-ui, sans-serif", label: "Open Sans" },
+  { value: "Lato, system-ui, sans-serif", label: "Lato" },
+  { value: "'Poppins', system-ui, sans-serif", label: "Poppins" },
+  { value: "'Source Sans 3', system-ui, sans-serif", label: "Source Sans 3" },
+  { value: "'Nunito', system-ui, sans-serif", label: "Nunito" },
+  { value: "'Work Sans', system-ui, sans-serif", label: "Work Sans" },
+  { value: "'Plus Jakarta Sans', system-ui, sans-serif", label: "Plus Jakarta Sans" },
+  { value: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", label: "Sistema" },
+];
+
+const DEFAULT_FONT = FONT_FAMILY_OPTIONS[0]!.value;
+
 type StudioAppearanceBarProps = {
   theme: DashboardTheme;
   onThemeChange: (patch: Partial<DashboardTheme>) => void;
@@ -125,12 +142,24 @@ export function StudioAppearanceBar({ theme, onThemeChange }: StudioAppearanceBa
           </div>
           <div className="sm:col-span-2 lg:col-span-3">
             <Label className="studio-appearance-label">Tipografía — familia</Label>
-            <Input
-              value={theme.fontFamily ?? ""}
-              onChange={(e) => onThemeChange({ fontFamily: e.target.value || undefined })}
-              className="studio-appearance-input mt-1"
-              placeholder="'DM Sans', system-ui, sans-serif"
-            />
+            <select
+              value={
+                FONT_FAMILY_OPTIONS.some((f) => f.value === (theme.fontFamily ?? ""))
+                  ? (theme.fontFamily ?? DEFAULT_FONT)
+                  : theme.fontFamily || DEFAULT_FONT
+              }
+              onChange={(e) => onThemeChange({ fontFamily: e.target.value || DEFAULT_FONT })}
+              className="studio-appearance-input mt-1 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+            >
+              {FONT_FAMILY_OPTIONS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
+              {theme.fontFamily && !FONT_FAMILY_OPTIONS.some((f) => f.value === theme.fontFamily) && (
+                <option value={theme.fontFamily}>Personalizado</option>
+              )}
+            </select>
           </div>
           <div>
             <Label className="studio-appearance-label">Título dashboard (rem)</Label>

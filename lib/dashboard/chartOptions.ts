@@ -9,8 +9,8 @@ export type ValueFormatType =
   | "currency"
   | "percent";
 
-/** Escala de visualización (K, M, Bi) aplicable junto con valueFormat. */
-export type ValueScaleType = "none" | "K" | "M" | "Bi";
+/** Escala de visualización (K, M, B) aplicable junto con valueFormat. */
+export type ValueScaleType = "none" | "K" | "M" | "Bi" | "B";
 
 export type ChartStyleConfig = {
   valueFormat?: ValueFormatType;
@@ -68,11 +68,11 @@ function applyScale(
     return { val: n / 1e6, suffix: "M" };
   if (scale === "M" && Math.abs(n) >= 1000)
     return { val: n / 1000, suffix: "K" };
-  if (scale === "Bi" && Math.abs(n) >= 1e9)
-    return { val: n / 1e9, suffix: "Bi" };
-  if (scale === "Bi" && Math.abs(n) >= 1e6)
+  if ((scale === "Bi" || scale === "B") && Math.abs(n) >= 1e9)
+    return { val: n / 1e9, suffix: "B" };
+  if ((scale === "Bi" || scale === "B") && Math.abs(n) >= 1e6)
     return { val: n / 1e6, suffix: "M" };
-  if (scale === "Bi" && Math.abs(n) >= 1000)
+  if ((scale === "Bi" || scale === "B") && Math.abs(n) >= 1000)
     return { val: n / 1000, suffix: "K" };
   return { val: n, suffix: "" };
 }
@@ -82,6 +82,9 @@ function applyScale(
  * Orden: primero escala (división + sufijo), luego tipo (prefijo $ o sufijo %).
  * decimals y useGrouping aplican al número antes del sufijo (K/M/Bi).
  */
+/** Locale para números: punto como separador de miles, coma para decimales (ej. 1.234.567,89). */
+const NUMBER_LOCALE = "es-ES";
+
 export function formatValue(
   value: number,
   format: ValueFormatType = "none",
@@ -92,7 +95,7 @@ export function formatValue(
 ): string {
   const n = Number(value);
   const { val, suffix } = applyScale(n, scale);
-  const formatted = val.toLocaleString(undefined, {
+  const formatted = val.toLocaleString(NUMBER_LOCALE, {
     maximumFractionDigits: decimals,
     minimumFractionDigits: 0,
     useGrouping,
