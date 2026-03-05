@@ -87,7 +87,9 @@ function buildWhereClausePg(conds: FilterCondition[]) {
 }
 
 function firebirdUnquotedIdent(name: string): string {
-  const s = (name || "").replace(/[^A-Za-z0-9_]/g, "_").toUpperCase();
+  let s = (name || "").trim();
+  s = s.replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
+  s = s.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase();
   return s || "COL";
 }
 

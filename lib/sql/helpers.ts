@@ -162,8 +162,11 @@ export function buildWhereClauseMy(conds: FilterCondition[] = []) {
 }
 
 // Firebird: identificador sin comillas para que el motor lo pase a mayúsculas y coincida con columnas creadas sin comillas (evita -206 Column unknown por diferencias de casing).
+// Quita prefijos primary. / join_N. para que solo se use el nombre real de la columna en la tabla.
 function firebirdUnquotedIdent(name: string): string {
-  const s = (name || "").replace(/[^A-Za-z0-9_]/g, "_").toUpperCase();
+  let s = (name || "").trim();
+  s = s.replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
+  s = s.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase();
   return s || "COL";
 }
 
