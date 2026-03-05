@@ -417,7 +417,7 @@ function buildCountIfSumIfAggregate(
   derivedLookup: Record<string, DerivedColumnRef> | undefined
 ): string | null {
   const trimmed = expression.replace(/\s+/g, " ").trim().replace(/;/g, ",");
-  const countIfMatch = trimmed.match(/^\s*COUNTIF\s*\((.+)\)\s*$/is);
+  const countIfMatch = trimmed.match(/^\s*COUNTIF\s*\(([\s\S]+)\)\s*$/i);
   if (countIfMatch) {
     const args = splitArgs(countIfMatch[1]!);
     if (args.length < 2) return null;
@@ -428,7 +428,7 @@ function buildCountIfSumIfAggregate(
     const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
     return `COUNT(CASE WHEN ${whenClause} THEN 1 END)`;
   }
-  const sumIfMatch = trimmed.match(/^\s*SUMIF\s*\((.+)\)\s*$/is);
+  const sumIfMatch = trimmed.match(/^\s*SUMIF\s*\(([\s\S]+)\)\s*$/i);
   if (sumIfMatch) {
     const args = splitArgs(sumIfMatch[1]!);
     if (args.length < 2) return null;
@@ -440,7 +440,7 @@ function buildCountIfSumIfAggregate(
     if (!rangeSql || !sumRangeSql) return null;
     return `SUM(CASE WHEN ${whenClause} THEN ${sumRangeSql} ELSE 0 END)`;
   }
-  const countIfsMatch = trimmed.match(/^\s*COUNTIFS\s*\((.+)\)\s*$/is);
+  const countIfsMatch = trimmed.match(/^\s*COUNTIFS\s*\(([\s\S]+)\)\s*$/i);
   if (countIfsMatch) {
     const args = splitArgs(countIfsMatch[1]!);
     if (args.length < 2 || args.length % 2 !== 0) return null;
@@ -455,7 +455,7 @@ function buildCountIfSumIfAggregate(
     }
     return `COUNT(CASE WHEN ${conditions.join(" AND ")} THEN 1 END)`;
   }
-  const sumIfsMatch = trimmed.match(/^\s*SUMIFS\s*\((.+)\)\s*$/is);
+  const sumIfsMatch = trimmed.match(/^\s*SUMIFS\s*\(([\s\S]+)\)\s*$/i);
   if (sumIfsMatch) {
     const args = splitArgs(sumIfsMatch[1]!);
     if (args.length < 3 || (args.length - 1) % 2 !== 0) return null;
@@ -807,7 +807,7 @@ export async function POST(req: NextRequest) {
               return "1";
             }
             // UNIQUE(expr) como expresión completa -> COUNT(DISTINCT expr); se maneja en aggExpr más abajo
-            const uniqueMatch = resolvedExpr.trim().match(/^\s*UNIQUE\s*\((.+)\)\s*$/is);
+            const uniqueMatch = resolvedExpr.trim().match(/^\s*UNIQUE\s*\(([\s\S]+)\)\s*$/i);
             if (uniqueMatch) {
               const inner = uniqueMatch[1]!.trim();
               const innerSql = expressionToSql(inner, derivedByName);
