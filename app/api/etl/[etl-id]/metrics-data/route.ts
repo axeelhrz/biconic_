@@ -265,7 +265,7 @@ async function fetchColumnTypesFromSchema(
 /** Límite máximo de filas para profiling "sin límite" (techo alto para bases muy grandes). */
 const MAX_PROFILE_ROWS = ETL_MAX_ROWS_CEILING;
 
-/** Lee count y filas de etl_output vía Postgres directo (el esquema suele no estar expuesto en la API Supabase). */
+/** Lee filas y count de etl_output vía Postgres directo. En bases grandes evita COUNT(*) (puede hacer timeout); obtiene primero filas con LIMIT y usa conteo aproximado (pg_class.reltuples). */
 async function fetchFromEtlOutputViaPostgres(
   tableName: string,
   limit: number
@@ -275,17 +275,30 @@ async function fetchFromEtlOutputViaPostgres(
   const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
   const sql = postgres(dbUrl);
   try {
-    const countRes = await sql.unsafe(
-      `SELECT count(*)::int AS c FROM etl_output."${safeTable}"`
-    );
-    const rowCount = Array.isArray(countRes) && countRes[0]?.c != null ? Number(countRes[0].c) : 0;
-    if (rowCount === 0) return { rowCount: 0, rows: [], tableExists: true };
     const effectiveLimit = Math.min(MAX_PROFILE_ROWS, Math.max(1, limit));
+    // Primero obtener filas con LIMIT (rápido; evita timeout en tablas grandes)
     const rowsRes = await sql.unsafe(
       `SELECT * FROM etl_output."${safeTable}" LIMIT ${effectiveLimit}`
     );
     const rows = Array.isArray(rowsRes) ? rowsRes : [];
-    return { rowCount, rows, tableExists: true };
+
+    if (rows.length > 0) {
+      // Hay datos: usar conteo aproximado (instantáneo) en lugar de COUNT(*) que en tablas enormes hace timeout
+      let rowCount: number;
+      try {
+        const approxRes = await sql.unsafe(
+          `SELECT c.reltuples::bigint AS c FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'etl_output' AND c.relname = '${safeTable}'`
+        );
+        const approx = Array.isArray(approxRes) && approxRes[0]?.c != null ? Number(approxRes[0].c) : 0;
+        rowCount = approx > 0 ? Math.max(rows.length, Math.round(approx)) : rows.length;
+      } catch {
+        rowCount = rows.length;
+      }
+      return { rowCount, rows, tableExists: true };
+    }
+
+    // Sin filas: tabla vacía (el SELECT * LIMIT ya confirmó que existe)
+    return { rowCount: 0, rows: [], tableExists: true };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     const tableMissing = /does not exist|relation.*does not exist|42P01/i.test(msg);
