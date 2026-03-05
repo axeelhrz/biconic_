@@ -208,50 +208,75 @@ export function MetricBlock({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 rounded-lg text-[var(--studio-muted)] opacity-0 group-hover:opacity-100 hover:bg-[var(--studio-surface-hover)] hover:text-[var(--studio-fg)]"
-                aria-label="Opciones"
+                className="metric-block-menu-trigger h-9 w-9 rounded-lg text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)] hover:text-[var(--studio-fg)] focus-visible:ring-2 focus-visible:ring-[var(--studio-accent)]"
+                aria-label="Opciones de gráfica"
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <MoreHorizontal className="h-5 w-5" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="rounded-xl border-[var(--studio-border)] bg-[var(--studio-surface)] shadow-xl" onClick={(e) => e.stopPropagation()}>
-              <DropdownMenuItem className="rounded-lg text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]" onClick={(e) => { e.stopPropagation(); onRun?.(); }}>
-                <Play className="mr-2 h-4 w-4" />
-                Actualizar datos
+            <DropdownMenuContent
+              align="end"
+              sideOffset={6}
+              className="metric-block-dropdown w-56 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-surface)] shadow-lg py-1.5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <DropdownMenuLabel className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--studio-fg-muted)]">
+                Modificar gráfica
+              </DropdownMenuLabel>
+              <DropdownMenuItem
+                className="metric-block-dropdown-item flex items-center gap-3 rounded-lg px-3 py-2.5 mx-1.5 my-0.5 text-sm text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
+                onClick={(e) => { e.stopPropagation(); onRun?.(); }}
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--studio-bg-elevated)]">
+                  <Play className="h-4 w-4" />
+                </span>
+                <span>Actualizar datos</span>
               </DropdownMenuItem>
               {onSizeChange && (
                 <>
-                  <DropdownMenuSeparator className="bg-[var(--studio-border)]" />
-                  <DropdownMenuLabel className="text-[var(--studio-fg-muted)]">Tamaño</DropdownMenuLabel>
-                  {SPAN_OPTIONS.map((opt) => (
-                    <DropdownMenuItem
-                      key={opt.value}
-                      className="rounded-lg text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
-                      onClick={(e) => { e.stopPropagation(); onSizeChange({ gridSpan: opt.value }); }}
-                    >
-                      {opt.label} {gridSpan === opt.value ? "✓" : ""}
-                    </DropdownMenuItem>
-                  ))}
-                  {HEIGHT_OPTIONS.map((opt) => (
-                    <DropdownMenuItem
-                      key={opt.value}
-                      className="rounded-lg text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
-                      onClick={(e) => { e.stopPropagation(); onSizeChange({ minHeight: opt.value }); }}
-                    >
-                      {opt.label} {minHeight === opt.value ? "✓" : ""}
-                    </DropdownMenuItem>
-                  ))}
+                  <DropdownMenuSeparator className="my-1.5 bg-[var(--studio-border)]" />
+                  <DropdownMenuLabel className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--studio-fg-muted)]">
+                    Tamaño
+                  </DropdownMenuLabel>
+                  <div className="px-2 py-1">
+                    <p className="mb-1.5 px-1.5 text-[11px] text-[var(--studio-fg-muted)]">Ancho (columnas)</p>
+                    {SPAN_OPTIONS.map((opt) => (
+                      <DropdownMenuItem
+                        key={opt.value}
+                        className="metric-block-dropdown-item flex items-center justify-between rounded-lg px-3 py-2 mx-0.5 text-sm text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
+                        onClick={(e) => { e.stopPropagation(); onSizeChange({ gridSpan: opt.value }); }}
+                      >
+                        {opt.label}
+                        {gridSpan === opt.value && <span className="text-[var(--studio-accent)] font-medium">✓</span>}
+                      </DropdownMenuItem>
+                    ))}
+                  </div>
+                  <div className="px-2 py-1">
+                    <p className="mb-1.5 px-1.5 text-[11px] text-[var(--studio-fg-muted)]">Alto (px)</p>
+                    {HEIGHT_OPTIONS.map((opt) => (
+                      <DropdownMenuItem
+                        key={opt.value}
+                        className="metric-block-dropdown-item flex items-center justify-between rounded-lg px-3 py-2 mx-0.5 text-sm text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
+                        onClick={(e) => { e.stopPropagation(); onSizeChange({ minHeight: opt.value }); }}
+                      >
+                        {opt.label}
+                        {minHeight === opt.value && <span className="text-[var(--studio-accent)] font-medium">✓</span>}
+                      </DropdownMenuItem>
+                    ))}
+                  </div>
                 </>
               )}
               {onDelete && (
                 <>
-                  <DropdownMenuSeparator className="bg-[var(--studio-border)]" />
+                  <DropdownMenuSeparator className="my-1.5 bg-[var(--studio-border)]" />
                   <DropdownMenuItem
-                    className="rounded-lg text-[var(--studio-danger)] focus:bg-red-500/10 focus:text-[var(--studio-danger)]"
+                    className="metric-block-dropdown-item flex items-center gap-3 rounded-lg px-3 py-2.5 mx-1.5 my-0.5 text-sm text-[var(--studio-danger)] focus:bg-red-500/10 focus:text-[var(--studio-danger)]"
                     onClick={(e) => { e.stopPropagation(); onDelete(); }}
                   >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Eliminar
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/10">
+                      <Trash2 className="h-4 w-4" />
+                    </span>
+                    <span>Eliminar</span>
                   </DropdownMenuItem>
                 </>
               )}

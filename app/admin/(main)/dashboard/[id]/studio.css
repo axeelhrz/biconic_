@@ -288,6 +288,7 @@
   gap: 1rem;
   animation: studio-blocks-in 0.45s cubic-bezier(0.16, 1, 0.3, 1);
   width: 100%;
+  min-width: 0;
 }
 @media (min-width: 640px) {
   .studio-blocks {
@@ -310,6 +311,46 @@
 .studio-block-cell {
   display: flex;
   min-width: 0;
+  position: relative;
+}
+/* Asas de redimensionado desde los bordes (solo cuando el widget está seleccionado) */
+.studio-resize-handle {
+  position: absolute;
+  z-index: 10;
+  background: transparent;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.studio-resize-handle:hover,
+.studio-resize-handle:active {
+  background: var(--studio-accent);
+  opacity: 0.25;
+}
+.studio-resize-handle-e {
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 100%;
+  cursor: ew-resize;
+}
+.studio-resize-handle-s {
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 12px;
+  cursor: ns-resize;
+}
+.studio-resize-handle-se {
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  border-radius: 0 0 var(--studio-radius, 12px) 0;
+}
+@media (pointer: fine) {
+  .studio-resize-handle-e { width: 6px; }
+  .studio-resize-handle-s { height: 6px; }
+  .studio-resize-handle-se { width: 12px; height: 12px; }
 }
 .studio-block-cell .metric-block {
   width: 100%;
@@ -354,6 +395,31 @@
   border-bottom: 1px solid var(--studio-border);
   background: rgba(0, 0, 0, 0.25);
   padding: 1rem 1.25rem;
+}
+/* Menú de tres puntos: siempre visible y fácil de tocar en móvil */
+.metric-block-menu-trigger {
+  opacity: 1;
+  flex-shrink: 0;
+}
+@media (min-width: 768px) {
+  .studio-block-cell:not([data-selected="true"]) .metric-block .metric-block-menu-trigger {
+    opacity: 0.7;
+  }
+  .studio-block-cell:hover .metric-block .metric-block-menu-trigger,
+  .studio-block-cell[data-selected="true"] .metric-block .metric-block-menu-trigger {
+    opacity: 1;
+  }
+}
+.metric-block-dropdown .metric-block-dropdown-item {
+  cursor: pointer;
+}
+@media (max-width: 479px) {
+  .metric-block-dropdown {
+    max-width: calc(100vw - 2rem);
+  }
+}
+.metric-block-header {
+  flex-wrap: wrap;
 }
 .metric-block-header .metric-block-title {
   font-size: var(--studio-text-card);
@@ -477,8 +543,15 @@
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;
-  padding: 1.5rem 1.5rem 2rem;
+  min-width: 0;
+  padding: 1rem;
   min-height: 420px;
+  box-sizing: border-box;
+}
+@media (min-width: 640px) {
+  .studio-canvas {
+    padding: 1.5rem 1.5rem 2rem;
+  }
 }
 
 @keyframes studio-blocks-in {

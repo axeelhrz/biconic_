@@ -163,6 +163,14 @@ export function AdminDashboardStudio({
   const loadedOnce = useRef(false);
   const etlMetricsMergedRef = useRef(false);
   const autoLoadWidgetsDoneRef = useRef(false);
+  const resizeStateRef = useRef<{
+    widgetId: string;
+    edge: string;
+    startSpan: number;
+    startMinHeight: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
 
   const { data: etlData, loading: etlLoading, error: etlError, refetch: refetchEtlData } = useAdminDashboardEtlData(dashboardId);
 
@@ -968,6 +976,45 @@ export function AdminDashboardStudio({
     setIsDirty(true);
   }, []);
 
+  const [resizingWidgetId, setResizingWidgetId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!resizingWidgetId || !resizeStateRef.current) return;
+    const state = resizeStateRef.current;
+    const cursor = state.edge === "se" ? "nwse-resize" : state.edge === "e" ? "ew-resize" : "ns-resize";
+    document.body.style.cursor = cursor;
+    document.body.style.userSelect = "none";
+    const onMove = (e: PointerEvent) => {
+      const dx = e.clientX - state.startX;
+      const dy = e.clientY - state.startY;
+      let gridSpan: number | undefined;
+      let minHeight: number | undefined;
+      if (state.edge === "e" || state.edge === "se") {
+        const spanDelta = Math.round(dx / 60);
+        gridSpan = Math.min(4, Math.max(1, state.startSpan + spanDelta));
+      }
+      if (state.edge === "s" || state.edge === "se") {
+        minHeight = Math.min(600, Math.max(200, state.startMinHeight + dy));
+      }
+      updateWidgetSize(state.widgetId, { ...(gridSpan != null && { gridSpan }), ...(minHeight != null && { minHeight }) });
+    };
+    const onUp = () => {
+      resizeStateRef.current = null;
+      setResizingWidgetId(null);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [resizingWidgetId, updateWidgetSize]);
+
   const addPage = useCallback(() => {
     const id = `page-${Date.now()}`;
     setPages((prev) => [...prev, { id, name: "Nueva página" }]);
@@ -1174,16 +1221,52 @@ export function AdminDashboardStudio({
                   kpiValue = w.config.datasets[0].data[0];
                 }
                 const span = Math.min(4, Math.max(1, w.gridSpan ?? 2));
+                const isSelected = selectedId === w.id;
+                const minH = w.minHeight ?? 280;
+                const onResizeStart = (edge: string) => (e: React.PointerEvent) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  resizeStateRef.current = {
+                    widgetId: w.id,
+                    edge,
+                    startSpan: span,
+                    startMinHeight: minH,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                  };
+                  setResizingWidgetId(w.id);
+                  (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+                };
                 return (
                   <div
                     key={w.id}
                     className="studio-block-cell"
+                    data-selected={isSelected ? "true" : undefined}
                     style={{
                       gridColumn: `span ${span}`,
-                      minHeight: w.minHeight ?? 280,
+                      minHeight: minH,
                       ...cardStyle,
                     }}
                   >
+                    {isSelected && (
+                      <>
+                        <div
+                          role="presentation"
+                          className="studio-resize-handle studio-resize-handle-e"
+                          onPointerDown={onResizeStart("e")}
+                        />
+                        <div
+                          role="presentation"
+                          className="studio-resize-handle studio-resize-handle-s"
+                          onPointerDown={onResizeStart("s")}
+                        />
+                        <div
+                          role="presentation"
+                          className="studio-resize-handle studio-resize-handle-se"
+                          onPointerDown={onResizeStart("se")}
+                        />
+                      </>
+                    )}
                     <MetricBlock
                       id={w.id}
                       title={w.title}
@@ -1193,14 +1276,14 @@ export function AdminDashboardStudio({
                       chartConfig={w.config ?? undefined}
                       chartType={chartType}
                       isLoading={w.isLoading}
-                      isSelected={selectedId === w.id}
+                      isSelected={isSelected}
                       onSelect={() => setSelectedId(w.id)}
                       onRun={() => loadMetricData(w.id)}
                       onDelete={() => deleteMetric(w.id)}
                       kpiValue={kpiValue}
                       tableRows={w.rows as Record<string, unknown>[] | undefined}
                       gridSpan={span}
-                      minHeight={w.minHeight ?? 280}
+                      minHeight={minH}
                       onSizeChange={(patch) => updateWidgetSize(w.id, patch)}
                     />
                   </div>
