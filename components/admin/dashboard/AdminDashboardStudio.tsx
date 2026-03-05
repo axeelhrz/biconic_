@@ -278,10 +278,11 @@ export function AdminDashboardStudio({
     };
   }, [layoutLoaded, etlData, etlLoading]);
 
-  const saveDashboard = useCallback(async () => {
+  const saveDashboard = useCallback(async (overrides?: { widgets?: StudioWidget[] }) => {
     setIsSaving(true);
     try {
-      const cleanWidgets = widgets.map(({ rows, config, columns, facetValues, ...rest }) => rest);
+      const widgetsToSave = overrides?.widgets ?? widgets;
+      const cleanWidgets = widgetsToSave.map(({ rows, config, columns, facetValues, ...rest }) => rest);
       let datasetConfig: { derivedColumns: { name: string; expression: string; defaultAggregation: string }[] } | undefined;
       const etlId = etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId;
       if (etlId) {
@@ -865,10 +866,13 @@ export function AdminDashboardStudio({
   }, []);
 
   const deleteMetric = useCallback((widgetId: string) => {
-    setWidgets((prev) => prev.filter((w) => w.id !== widgetId).map((w, i) => ({ ...w, gridOrder: i })));
+    const newWidgets = widgets.filter((w) => w.id !== widgetId).map((w, i) => ({ ...w, gridOrder: i }));
+    setWidgets(newWidgets);
     if (selectedId === widgetId) setSelectedId(null);
     setIsDirty(true);
-  }, [selectedId]);
+    // Persistir en el servidor para que al refrescar la métrica siga eliminada
+    saveDashboard({ widgets: newWidgets });
+  }, [selectedId, widgets, saveDashboard]);
 
   const handleSave = useCallback(() => {
     saveDashboard();
