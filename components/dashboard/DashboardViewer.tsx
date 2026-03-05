@@ -678,7 +678,7 @@ export function DashboardViewer({
                     ...widget,
                     chartStyle: widget.chartStyle ?? buildChartStyleFromAgg(widget.aggregationConfig),
                   } as DashboardWidgetRendererWidget}
-                  isLoading={widget.isLoading}
+                  isLoading={widget.isLoading === true}
                   filterValue={filterValues[widget.id]}
                   onFilterChange={handleFilterChange}
                   minHeight={widget.minHeight ?? 240}
