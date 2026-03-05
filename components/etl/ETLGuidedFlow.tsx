@@ -260,6 +260,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewSortKey, setPreviewSortKey] = useState<string | null>(null);
   const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
   const previewAbortRef = useRef<AbortController | null>(null);
+  const previewLoadedOnceRef = useRef<boolean>(false);
 
   const previewRowsFilteredByExcluded = useMemo(() => {
     if (!previewRows || previewRows.length === 0) return previewRows ?? [];
@@ -977,6 +978,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     }
     previewAbortRef.current?.abort();
     previewAbortRef.current = new AbortController();
+    previewLoadedOnceRef.current = false;
     setPreviewLoading(true);
     setPreviewError(null);
     const previewBody = { ...body } as Record<string, unknown>;
@@ -991,20 +993,45 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       body: JSON.stringify(previewBody),
       signal: previewAbortRef.current.signal,
     })
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) {
+          return res.text().then((text) => {
+            let errMsg = `Error del servidor (${res.status})`;
+            try {
+              const j = JSON.parse(text) as { error?: string };
+              if (j?.error && typeof j.error === "string") errMsg = j.error;
+            } catch {
+              if (text?.trim()) errMsg = text.trim().slice(0, 200);
+            }
+            setPreviewRows(null);
+            setPreviewError(errMsg);
+            throw new Error(errMsg);
+          });
+        }
+        return res.json();
+      })
       .then((data) => {
         if (data.ok && Array.isArray(data.previewRows)) {
+          previewLoadedOnceRef.current = true;
           setPreviewRows(data.previewRows);
           setPreviewError(null);
+        } else if (data.ok && !Array.isArray(data.previewRows)) {
+          setPreviewRows(null);
+          setPreviewError("La respuesta del servidor no incluyó datos de vista previa.");
         } else {
           setPreviewRows(null);
-          setPreviewError(data?.error || "Error al cargar vista previa");
+          setPreviewError((data as { error?: string })?.error || "Error al cargar vista previa");
         }
       })
       .catch((e: unknown) => {
         if ((e as { name?: string }).name === "AbortError") return;
         setPreviewRows(null);
-        setPreviewError(e instanceof Error ? e.message : "Error al cargar vista previa");
+        const msg = e instanceof Error ? e.message : "Error al cargar vista previa";
+        setPreviewError(
+          typeof msg === "string" && (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed"))
+            ? "No se pudo conectar. Revisá la red y probá de nuevo."
+            : msg
+        );
       })
       .finally(() => {
         setPreviewLoading(false);
@@ -2754,6 +2781,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               {previewError && (
                 <p className="text-sm py-4 px-3 rounded-lg" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }}>
                   {previewError}
+                  <span className="block mt-2">Tocá <strong>Actualizar</strong> para reintentar.</span>
                 </p>
               )}
               {!previewError && previewRows && previewRows.length > 0 && (() => {
@@ -2823,12 +2851,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   </div>
                 );
               })()}
-              {!previewError && !previewLoading && (!previewRows || previewRows.length === 0) && connectionId && selectedTable && (
+              {!previewError && !previewLoading && (!previewRows || previewRows.length === 0) && connectionId && selectedTable && previewLoadedOnceRef.current && (
+                <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
+                  La consulta se ejecutó pero no devolvió filas. Revisá los filtros o probá otra tabla. Podés tocar <strong>Actualizar</strong> para volver a cargar.
+                </p>
+              )}
+              {!previewError && !previewLoading && (!previewRows || previewRows.length === 0) && connectionId && selectedTable && !previewLoadedOnceRef.current && (
                 <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
                   Sin datos aún o la vista previa no se cargó. Tocá <strong>Actualizar</strong> arriba a la derecha para cargar la vista previa ahora.
                 </p>
               )}
-              {!connectionId && !previewLoading && (
+              {(!connectionId || !selectedTable) && !previewLoading && (
                 <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
                   Elegí una conexión y tabla para ver aquí una vista previa de los datos.
                 </p>
