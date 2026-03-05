@@ -336,8 +336,9 @@ async function executeEtlPipeline(
     const PREVIEW_LIMIT = 5000;
 
     let rowsProcessed = 0;
-    const pageSize = 5000;
-    const INSERT_CHUNK_SIZE_DEFAULT = 1000;
+    /** Lotes más grandes = menos iteraciones y menos updates a etl_runs_log; permite llegar a ~1M filas en 300s (Hobby). */
+    const pageSize = 20000;
+    const INSERT_CHUNK_SIZE_DEFAULT = 2000;
     /** Postgres limita ~65535 parámetros por query. chunkSize * numColumnas debe quedar por debajo. */
     const MAX_PARAMS_PER_QUERY = 60000;
     let tableCreated = false;
@@ -1259,10 +1260,13 @@ async function executeEtlPipeline(
     }
 
     // --- MAIN EXECUTION LOOP ---
+    /** Actualizar monitoreo cada N filas para no saturar Supabase y ganar tiempo (objetivo ~1M en 300s). */
+    const LOG_UPDATE_EVERY_ROWS = 50000;
+    let lastLoggedRows = 0;
+
     for await (const rawBatch of dataSourceGenerator()) {
       if (rawBatch.length === 0) continue;
       rowsProcessed += rawBatch.length;
-      console.log(`[Background Run ${runId}] Processing batch of ${rawBatch.length} rows`);
 
       let transformedBatch = rawBatch;
       if (body.pipeline?.length) {
@@ -1302,14 +1306,17 @@ async function executeEtlPipeline(
       
       await insertBatch(transformedBatch);
 
-      // --- REALTIME UPDATE UPDATE ---
-      try {
-         await supabaseAdmin
-           .from("etl_runs_log")
-           .update({ rows_processed: rowsProcessed })
-           .eq("id", runId);
-      } catch (logErr) {
-         console.warn("[Background] Log update failed (non-fatal):", logErr);
+      // --- REALTIME UPDATE (throttled: cada LOG_UPDATE_EVERY_ROWS para permitir ~1M en 300s) ---
+      if (rowsProcessed - lastLoggedRows >= LOG_UPDATE_EVERY_ROWS) {
+         try {
+            await supabaseAdmin
+              .from("etl_runs_log")
+              .update({ rows_processed: rowsProcessed })
+              .eq("id", runId);
+            lastLoggedRows = rowsProcessed;
+         } catch (logErr) {
+            console.warn("[Background] Log update failed (non-fatal):", logErr);
+         }
       }
     }
 
