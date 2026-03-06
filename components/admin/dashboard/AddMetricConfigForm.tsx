@@ -274,7 +274,7 @@ export function AddMetricConfigForm({
         chartLabelOverrides: cfg.chartLabelOverrides,
         chartMetricFormats: cfg.chartMetricFormats,
         chartComboSyncAxes: (cfg as { chartComboSyncAxes?: boolean }).chartComboSyncAxes,
-        dateGroupByGranularity: (cfg as { dateGroupByGranularity?: string }).dateGroupByGranularity,
+        dateGroupByGranularity: (cfg as { dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year" }).dateGroupByGranularity,
       });
     } else {
       updateAgg({
