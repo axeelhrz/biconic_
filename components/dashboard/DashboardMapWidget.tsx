@@ -142,13 +142,13 @@ export function DashboardMapWidget({
             <CircleMarker
               key={i}
               center={[lat, lon]}
+              radius={6}
               pathOptions={{
                 fillColor: accentColor,
                 color: accentColor,
                 weight: 1.5,
                 opacity: 0.9,
                 fillOpacity: 0.6,
-                radius: 6,
               }}
             >
               <Popup>{popupContent}</Popup>
