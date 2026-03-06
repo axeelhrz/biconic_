@@ -1537,9 +1537,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna de fecha</Label>
                     <div className="min-w-[180px]">
                       <Select
-                        value={dateFilterColumn ?? ""}
+                        value={
+                          (dateFilterColumn && joinItems.length > 0 && !/^(primary|join_\d+)\./i.test(dateFilterColumn))
+                            ? `primary.${dateFilterColumn}`
+                            : (dateFilterColumn ?? "")
+                        }
                         onChange={(v: string) => setDateFilterColumn(v || null)}
-                        options={(selectedTableInfo?.columns ?? []).map((col) => ({ value: col.name, label: col.name }))}
+                        options={leftColumnOptionsForNextJoin}
                         placeholder="Elegir columna"
                       />
                     </div>

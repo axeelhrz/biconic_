@@ -128,13 +128,36 @@ export function buildDateFilterWhereFragmentPg(
   dateFilter: DateFilterSpec | undefined | null,
   paramStartIndex: number,
   /** Optional table/alias prefix, e.g. "p." for star schema primary table */
-  tablePrefix: string = ""
+  tablePrefix: string = "",
+  /** When set, resolve primary.<name> and join_N.<name> to p. / jN. alias (star join) */
+  joinsCount?: number
 ): { clause: string; params: any[] } {
   const params: any[] = [];
   const parts: string[] = [];
-  if (!dateFilter?.column) return { clause: "", params };
+  const rawColumn = (dateFilter?.column ?? "").trim();
+  if (!rawColumn) return { clause: "", params };
 
-  const col = tablePrefix + quoteIdent(dateFilter.column, "postgres");
+  let col: string;
+  if (joinsCount != null && joinsCount >= 0) {
+    if (/^primary\./i.test(rawColumn)) {
+      const name = rawColumn.replace(/^primary\./i, "").trim();
+      col = `p.${quoteIdent(name, "postgres")}`;
+    } else {
+      const m = rawColumn.match(/^join_(\d+)\.(.+)$/i);
+      if (m) {
+        const i = Number(m[1]);
+        const name = m[2].trim();
+        if (!Number.isNaN(i) && i >= 0 && i < joinsCount)
+          col = `j${i}.${quoteIdent(name, "postgres")}`;
+        else
+          col = tablePrefix + quoteIdent(rawColumn, "postgres");
+      } else {
+        col = tablePrefix + quoteIdent(rawColumn, "postgres");
+      }
+    }
+  } else {
+    col = tablePrefix + quoteIdent(rawColumn, "postgres");
+  }
   const dateExpr = `(
     CASE
       WHEN ${col}::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(${col}::text, 'DD/MM/YYYY')
@@ -143,19 +166,23 @@ export function buildDateFilterWhereFragmentPg(
     END
   )`;
 
+  const years = Array.isArray(dateFilter.years) ? dateFilter.years.map((y) => Number(y)).filter((n) => !Number.isNaN(n)) : [];
+  const months = Array.isArray(dateFilter.months) ? dateFilter.months.map((m) => Number(m)).filter((n) => !Number.isNaN(n)) : [];
+  const exactDates = Array.isArray(dateFilter.exactDates) ? dateFilter.exactDates.filter((d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) : [];
+
   let idx = paramStartIndex;
-  if (dateFilter.years?.length) {
-    const placeholders = dateFilter.years.map(() => `$${idx++}`);
-    dateFilter.years.forEach((y) => params.push(y));
+  if (years.length) {
+    const placeholders = years.map(() => `$${idx++}`);
+    years.forEach((y) => params.push(y));
     parts.push(`EXTRACT(YEAR FROM ${dateExpr}) IN (${placeholders.join(", ")})`);
   }
-  if (dateFilter.months?.length) {
-    const placeholders = dateFilter.months.map(() => `$${idx++}`);
-    dateFilter.months.forEach((m) => params.push(m));
+  if (months.length) {
+    const placeholders = months.map(() => `$${idx++}`);
+    months.forEach((m) => params.push(m));
     parts.push(`EXTRACT(MONTH FROM ${dateExpr}) IN (${placeholders.join(", ")})`);
   }
-  if (dateFilter.exactDates?.length) {
-    const valid = dateFilter.exactDates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+  if (exactDates.length) {
+    const valid = exactDates;
     if (valid.length) {
       valid.forEach((d) => params.push(d));
       const placeholders = valid.map(() => `$${idx++}`);

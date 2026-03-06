@@ -4,6 +4,7 @@ import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
 import { randomUUID } from "crypto";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
+import { buildDateFilterWhereFragmentPg, type DateFilterSpec } from "@/lib/sql/helpers";
 
 // --- TIPOS DE DATOS ---
 type FilterCondition = {
@@ -76,6 +77,7 @@ type StarJoin = {
     secondaryColumns?: string[];
   }>;
   conditions?: FilterCondition[];
+  dateFilter?: DateFilterSpec;
   limit?: number;
   offset?: number;
   count?: boolean;
@@ -585,29 +587,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             conditions || [],
             joins.length
           );
+          const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(
+            body.dateFilter,
+            params.length + 1,
+            "p.",
+            joins.length
+          );
+          const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
+          const mergedParams = [...params, ...dfParams];
           const sql = `SELECT ${selectParts.join(
             ", "
-          )} ${fromJoin} ${clause} LIMIT $${params.length + 1} OFFSET $${
-            params.length + 2
+          )} ${fromJoin} ${mergedClause} LIMIT $${mergedParams.length + 1} OFFSET $${
+            mergedParams.length + 2
           }`;
           log("Ejecutando consulta JOIN de Excel:", {
             sql,
-            params: [...params, limit, offset],
+            params: [...mergedParams, limit, offset],
           });
 
-          const resDb = await client.query(sql, [...params, limit, offset]);
+          const resDb = await client.query(sql, [...mergedParams, limit, offset]);
           log(
             `Consulta de Excel ejecutada, ${resDb.rowCount} filas obtenidas.`
           );
 
           let totalOut: number | undefined = undefined;
           if (count) {
-            const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${clause}`;
+            const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${mergedClause}`;
             log("Ejecutando consulta de conteo de Excel:", {
               sql: countSql,
-              params,
+              params: mergedParams,
             });
-            const cntRes = await client.query(countSql, params);
+            const cntRes = await client.query(countSql, mergedParams);
             totalOut = cntRes.rows?.[0]?.c ?? 0;
             log(`Conteo de Excel ejecutado, total: ${totalOut}.`);
           }
@@ -727,29 +737,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             conditions || [],
             joins.length
           );
+          const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(
+            body.dateFilter,
+            params.length + 1,
+            "p.",
+            joins.length
+          );
+          const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
+          const mergedParams = [...params, ...dfParams];
           const sql = `SELECT ${selectParts.join(
             ", "
-          )} ${fromJoin} ${clause} LIMIT $${params.length + 1} OFFSET $${
-            params.length + 2
+          )} ${fromJoin} ${mergedClause} LIMIT $${mergedParams.length + 1} OFFSET $${
+            mergedParams.length + 2
           }`;
           log("Ejecutando consulta de datos en PostgreSQL:", {
             sql,
-            params: [...params, limit, offset],
+            params: [...mergedParams, limit, offset],
           });
 
-          const resDb = await client.query(sql, [...params, limit, offset]);
+          const resDb = await client.query(sql, [...mergedParams, limit, offset]);
           log(
             `Consulta de datos ejecutada, ${resDb.rowCount} filas obtenidas.`
           );
 
           let totalOut: number | undefined = undefined;
           if (count) {
-            const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${clause}`;
+            const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${mergedClause}`;
             log("Ejecutando consulta de conteo en PostgreSQL:", {
               sql: countSql,
-              params,
+              params: mergedParams,
             });
-            const cntRes = await client.query(countSql, params);
+            const cntRes = await client.query(countSql, mergedParams);
             totalOut = cntRes.rows?.[0]?.c ?? 0;
             log(`Consulta de conteo ejecutada, total: ${totalOut}.`);
           }

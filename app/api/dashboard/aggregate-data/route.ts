@@ -115,6 +115,16 @@ function toSqlLiteral(v: any): string {
   return `'${s}'`;
 }
 
+/** True si el valor es un año (4 dígitos, 1900–2100). Para arrays, true solo si todos los elementos son año. */
+function isYearLike(value: any): boolean {
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.length > 0 && value.every((v) => isYearLike(v));
+  const s = String(value).trim();
+  if (!/^\d{4}$/.test(s)) return false;
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 1900 && n <= 2100;
+}
+
 const normalizeStr = (str: string) =>
   str ? str.replace(/\s+/g, "").toUpperCase() : "";
 
@@ -369,14 +379,45 @@ function expressionToSql(expression: string, derivedLookup?: Record<string, Deri
   return withStrings || null;
 }
 
-/** Si la expresión está envuelta en una función de agregación (ej. "SUM(X * Y)", "AVERAGE(X)", "COUNTA(X)"), devuelve { func, inner }. */
+/** Devuelve el índice de la ")" que cierra la "(" en openParenIndex, respetando paréntesis anidados y comillas. */
+function findMatchingCloseParen(expr: string, openParenIndex: number): number {
+  let depth = 1;
+  let inQuote: string | null = null;
+  for (let i = openParenIndex + 1; i < expr.length; i++) {
+    const c = expr[i];
+    if (inQuote) {
+      if (c === inQuote && expr[i - 1] !== "\\") inQuote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      inQuote = c;
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** Si la expresión está envuelta en una función de agregación (ej. "SUM(X * Y)", "AVERAGE(X)"), devuelve { func, inner }.
+ *  Solo desempaqueta cuando toda la expresión es exactamente una llamada (paréntesis balanceados); p. ej. "SUM(a)/SUM(b)" no se desempaqueta. */
 function unwrapAggExpression(expr: string): { func: string; inner: string } | null {
-  const m = expr.trim().match(/^(SUM|AVG|AVERAGE|COUNT|COUNTA|MIN|MAX)\s*\((.+)\)\s*$/i);
-  if (!m) return null;
-  let func = m[1]!.toUpperCase();
+  const s = expr.trim();
+  const headMatch = s.match(/^(SUM|AVG|AVERAGE|COUNT|COUNTA|MIN|MAX)\s*\(/i);
+  if (!headMatch) return null;
+  const openParenIndex = headMatch.index! + headMatch[0].length - 1;
+  const closeParenIndex = findMatchingCloseParen(s, openParenIndex);
+  if (closeParenIndex === -1) return null;
+  const afterClose = s.slice(closeParenIndex + 1).trim();
+  if (afterClose.length > 0) return null;
+  const inner = s.slice(openParenIndex + 1, closeParenIndex).trim();
+  let func = headMatch[1]!.toUpperCase();
   if (func === "AVERAGE") func = "AVG";
   if (func === "COUNTA") func = "COUNT";
-  return { func, inner: m[2]!.trim() };
+  return { func, inner };
 }
 
 /** Divide el contenido de argumentos por comas respetando paréntesis y comillas. */
@@ -798,10 +839,12 @@ export async function POST(req: NextRequest) {
           resolvedExpr = savedMetric.expression;
         }
 
-        // Si está envuelta en agregación, extraer
+        // Si está envuelta en agregación, extraer. Detectar expresión compuesta (ej. SUM(a)/SUM(b)) para no envolver en func() después.
         let func = (m.func || derived?.defaultAggregation || savedMetric?.func || "SUM").toString().toUpperCase();
+        let isCompoundAggregate = false;
         if (resolvedExpr) {
           const unwrapped = unwrapAggExpression(resolvedExpr);
+          isCompoundAggregate = !unwrapped && /\b(SUM|AVG|COUNT|MIN|MAX)\s*\(/i.test(resolvedExpr);
           if (unwrapped) {
             resolvedExpr = unwrapped.inner;
             if (!m.func || m.func === "SUM") func = unwrapped.func;
@@ -815,11 +858,13 @@ export async function POST(req: NextRequest) {
           resolvedExpr = derivedForField.expression;
           if (!func || func === "SUM") func = (derivedForField.defaultAggregation || "SUM").toUpperCase();
           const unwrapped = unwrapAggExpression(resolvedExpr);
+          isCompoundAggregate = !unwrapped && /\b(SUM|AVG|COUNT|MIN|MAX)\s*\(/i.test(resolvedExpr);
           if (unwrapped) {
             resolvedExpr = unwrapped.inner;
             func = unwrapped.func;
           }
         }
+        (m as any)._compoundAggregate = isCompoundAggregate;
 
         const fieldExpr = (() => {
           if (resolvedExpr) {
@@ -867,10 +912,13 @@ export async function POST(req: NextRequest) {
         let aggExpr: string;
         const forceAggregate = (m as any)._forceAggregate as string | undefined;
         const forceCountDistinct = (m as any)._forceCountDistinct as string | undefined;
+        const compoundAggregate = (m as any)._compoundAggregate as boolean | undefined;
         if (forceAggregate) {
           aggExpr = forceAggregate;
         } else if (forceCountDistinct) {
           aggExpr = forceCountDistinct;
+        } else if (compoundAggregate) {
+          aggExpr = fieldExpr;
         } else if (m.condition) {
           const whenClause = buildWhenClause(m.condition);
           if (func === "COUNT" || func.startsWith("COUNT(DISTINCT"))
@@ -981,8 +1029,18 @@ export async function POST(req: NextRequest) {
           const col = quotedColumn(f.field);
           const op = (f.operator || "=").toUpperCase().trim();
 
+          const useDateExprForYearLike =
+            (op === "=" && isYearLike(f.value)) ||
+            (op === "IN" && Array.isArray(f.value) && f.value.length > 0 && isYearLike(f.value));
           let fieldExpression;
-          if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "QUARTER" || op === "SEMESTER") {
+          if (
+            op === "MONTH" ||
+            op === "DAY" ||
+            op === "YEAR" ||
+            op === "QUARTER" ||
+            op === "SEMESTER" ||
+            useDateExprForYearLike
+          ) {
             fieldExpression = `(
               CASE
                 WHEN ${col}::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(${col}::text, 'DD/MM/YYYY')
@@ -1050,6 +1108,16 @@ export async function POST(req: NextRequest) {
             const s = Number(f.value);
             if (isNaN(s) || (s !== 1 && s !== 2)) return "TRUE";
             return `${semExpr} = ${s}`;
+          }
+          if (op === "=" && isYearLike(f.value)) {
+            return `EXTRACT(YEAR FROM ${fieldExpression}) = ${Number(f.value)}`;
+          }
+          if (op === "IN" && Array.isArray(f.value) && f.value.length > 0 && isYearLike(f.value)) {
+            const yearList = f.value
+              .map((v) => Number(v))
+              .filter((n) => !isNaN(n) && n >= 1900 && n <= 2100)
+              .join(", ");
+            if (yearList) return `EXTRACT(YEAR FROM ${fieldExpression}) IN (${yearList})`;
           }
           if (op === "IN") {
             const list = (Array.isArray(f.value) ? f.value : [])

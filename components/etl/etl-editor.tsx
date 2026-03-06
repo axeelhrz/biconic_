@@ -5571,10 +5571,25 @@ export function ETLEditor({
                       return (t?.columns || []).map((c: any) => c.name);
                     };
 
-                    const primaryCols = getColumnsFor(
-                      selected.join?.primaryConnectionId,
-                      selected.join?.primaryTable
-                    );
+                    /** Opciones de "Columna Principal" por join: principal + join_0 … join_{idx-1} para encadenar correctamente. */
+                    const getPrimaryColOptionsForJoinIndex = (joinIndex: number): { value: string; label: string }[] => {
+                      const options: { value: string; label: string }[] = [];
+                      const primaryCols = getColumnsFor(
+                        selected.join?.primaryConnectionId,
+                        selected.join?.primaryTable
+                      );
+                      primaryCols.forEach((col) => {
+                        options.push({ value: `primary.${col}`, label: `Principal · ${col}` });
+                      });
+                      const joins = selected.join?.joins || [];
+                      for (let i = 0; i < joinIndex; i++) {
+                        const prevCols = getColumnsFor(joins[i].secondaryConnectionId, joins[i].secondaryTable);
+                        prevCols.forEach((col) => {
+                          options.push({ value: `join_${i}.${col}`, label: `Join ${i + 1} · ${col}` });
+                        });
+                      }
+                      return options;
+                    };
 
                     return (
                       <div className="space-y-4">
@@ -5843,7 +5858,11 @@ export function ETLEditor({
                                         <Label>Columna Principal</Label>
                                         <select
                                           className="w-full rounded-xl border px-3 py-2 text-sm bg-white"
-                                          value={jn.primaryColumn || ""}
+                                          value={
+                                            (jn.primaryColumn && /^(primary|join_\d+)\./i.test(jn.primaryColumn))
+                                              ? jn.primaryColumn
+                                              : (jn.primaryColumn ? `primary.${jn.primaryColumn}` : "")
+                                          }
                                           onChange={(e) => {
                                             const next = (
                                               selected.join?.joins || []
@@ -5868,9 +5887,9 @@ export function ETLEditor({
                                           }
                                         >
                                           <option value="">Columna…</option>
-                                          {primaryCols.map((c) => (
-                                            <option key={c} value={c}>
-                                              {c}
+                                          {getPrimaryColOptionsForJoinIndex(idx).map((opt) => (
+                                            <option key={opt.value} value={opt.value}>
+                                              {opt.label}
                                             </option>
                                           ))}
                                         </select>

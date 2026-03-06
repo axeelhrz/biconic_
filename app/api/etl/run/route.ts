@@ -1229,7 +1229,7 @@ async function executeEtlPipeline(
                      });
                      
                      const { clause: starClause, params: starParams } = buildWhereClausePgStar(sqlConditions, (star.joins||[]).length);
-                     const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, starParams.length + 1, "p.");
+                     const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, starParams.length + 1, "p.", (star.joins||[]).length);
                      const mergedClause = dfClause ? (starClause ? `${starClause} AND ${dfClause}` : `WHERE ${dfClause}`) : starClause;
                      const mergedParams = [...starParams, ...dfParams];
                      baseQuery = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause} ORDER BY 1 ASC`;
@@ -1274,7 +1274,7 @@ async function executeEtlPipeline(
                   });
                    
                   const { clause: starClause, params: starParams } = buildWhereClausePgStar(sqlConditions, (star.joins||[]).length);
-                  const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, starParams.length + 1, "p.");
+                  const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, starParams.length + 1, "p.", (star.joins||[]).length);
                   const mergedClause = dfClause ? (starClause ? `${starClause} AND ${dfClause}` : `WHERE ${dfClause}`) : starClause;
                   const mergedParams = [...starParams, ...dfParams];
                   baseQuery = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause}`;

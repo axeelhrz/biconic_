@@ -485,6 +485,7 @@ export async function POST(req: NextRequest) {
             primaryTable: starJoin.primaryTable,
             joins: joinsWithCols,
             conditions: body.filter?.conditions || [],
+            dateFilter: body.filter?.dateFilter ?? undefined,
             primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
             limit: PREVIEW_MAX_ROWS,
           };
