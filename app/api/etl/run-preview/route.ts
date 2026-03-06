@@ -10,6 +10,8 @@ import {
   buildWhereClausePgStar,
   buildJoinClauseBinary,
   buildWhereClauseFirebird,
+  buildDateFilterWhereFragmentPg,
+  type DateFilterSpec,
 } from "@/lib/sql/helpers";
 import {
   applyCleanBatch,
@@ -18,6 +20,7 @@ import {
   applyConditionRules,
   applyCountAggregation,
   inferColumnTypes,
+  getValue,
   CastTargetType
 } from "@/lib/etl/transformations";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
@@ -57,6 +60,7 @@ type RunBody = {
     table?: string;
     columns?: string[];
     conditions?: FilterCondition[];
+    dateFilter?: DateFilterSpec;
   };
   join?: {
     connectionId: string;
@@ -179,9 +183,9 @@ export async function POST(req: NextRequest) {
     } = await supabaseAdmin.auth.getUser();
     if (!user) throw new Error("No autorizado");
 
-    // Normalize guided JOIN format (primaryConnectionId + joins[]) to legacy shape (connectionId, secondaryConnectionId, leftTable, rightTable, joinConditions, leftColumns, rightColumns)
-    const guidedJoin = body?.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[] }> } | undefined;
-    if (guidedJoin?.primaryConnectionId && Array.isArray(guidedJoin.joins) && guidedJoin.joins.length > 0) {
+    // Normalize guided JOIN format to legacy shape only when a single join (so existing binary join path is used)
+    const guidedJoin = body?.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[] }> } | undefined;
+    if (guidedJoin?.primaryConnectionId && Array.isArray(guidedJoin.joins) && guidedJoin.joins.length === 1) {
       const first = guidedJoin.joins[0];
       const filterCols = (body!.filter?.columns as string[] | undefined) || [];
       const leftCols = filterCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, ""));
@@ -204,6 +208,16 @@ export async function POST(req: NextRequest) {
         ],
       };
     }
+
+    const allConditions = body?.filter?.conditions ?? [];
+    const sqlConditions = allConditions.filter((c: FilterCondition) => c.operator !== "not in");
+    const excludeRowsRules: { column: string; excluded: string[] }[] = allConditions
+      .filter((c: FilterCondition) => c.operator === "not in")
+      .map((c) => ({
+        column: (c.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim(),
+        excluded: (c.value ?? "").split(",").map((v) => v.trim()).filter(Boolean),
+      }));
+    const dateFilter = body?.filter?.dateFilter ?? undefined;
 
     // Generator can return up to PREVIEW_MAX_ROWS (practical no-limit for large DBs)
     async function* dataSourceGenerator() {
@@ -257,8 +271,17 @@ export async function POST(req: NextRequest) {
         }
         // Si izquierda es firebird, dbUrlUnion queda null (solo se usan clientes Firebird para esa rama)
 
-        const runOne = async (client: PgClient, src: typeof left, tableQ: string) => {
-          const { clause, params } = buildWhereClausePg(src.filter?.conditions || []);
+        const runOne = async (
+          client: PgClient,
+          src: typeof left,
+          tableQ: string,
+          options?: { conditionsOverride?: FilterCondition[]; dateFilter?: DateFilterSpec }
+        ) => {
+          const conds = options?.conditionsOverride ?? src.filter?.conditions ?? [];
+          const { clause: condClause, params: condParams } = buildWhereClausePg(conds);
+          const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(options?.dateFilter, condParams.length + 1);
+          const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
+          const params = [...condParams, ...dfParams];
           const sel = src.filter?.columns?.length ? src.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
           const q = `SELECT ${sel} FROM ${quoteQualified(tableQ)} ${clause} ORDER BY 1 ASC LIMIT ${PREVIEW_MAX_ROWS}`;
           const res = await client.query(q, params);
@@ -270,17 +293,19 @@ export async function POST(req: NextRequest) {
         };
 
         const runUnionOnePg = async (client: PgClient, leftSrc: typeof left, rightSrc: typeof right, leftTableQ: string, rightTableQ: string) => {
-          const { clause: leftClause, params: leftParams } = buildWhereClausePg(leftSrc.filter?.conditions || []);
+          const { clause: leftCondClause, params: leftParams } = buildWhereClausePg(sqlConditions);
+          const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, leftParams.length + 1);
+          const leftClause = dfClause ? (leftCondClause ? `${leftCondClause} AND ${dfClause}` : `WHERE ${dfClause}`) : leftCondClause;
           const { clause: rightClause, params: rightParams } = buildWhereClausePg(rightSrc.filter?.conditions || []);
           const rightClauseOffset = rightParams.length
-            ? rightClause.replace(/\$(\d+)/g, (_: string, n: string) => `$${Number(n) + leftParams.length}`)
+            ? rightClause.replace(/\$(\d+)/g, (_: string, n: string) => `$${Number(n) + leftParams.length + dfParams.length}`)
             : rightClause;
           const leftSel = leftSrc.filter?.columns?.length ? leftSrc.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
           const rightSel = rightSrc.filter?.columns?.length ? rightSrc.filter.columns.map((c: string) => quoteIdent(c)).join(", ") : "*";
           const leftQ = `SELECT ${leftSel} FROM ${quoteQualified(leftTableQ)} ${leftClause}`;
           const rightQ = `SELECT ${rightSel} FROM ${quoteQualified(rightTableQ)} ${rightClauseOffset}`;
           const unionSql = `(${leftQ}) UNION ALL (${rightQ}) ORDER BY 1 ASC LIMIT ${PREVIEW_MAX_ROWS}`;
-          const res = await client.query(unionSql, [...leftParams, ...rightParams]);
+          const res = await client.query(unionSql, [...leftParams, ...dfParams, ...rightParams]);
           return (res.rows || []).map((r: Record<string, any>) => {
             const out: Record<string, any> = {};
             for (const k in r) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = r[k];
@@ -408,7 +433,7 @@ export async function POST(req: NextRequest) {
           const clientLeft = new PgClient({ connectionString: dbUrlUnion });
           await clientLeft.connect();
           try {
-            leftRows = await runOne(clientLeft, left, leftTable);
+            leftRows = await runOne(clientLeft, left, leftTable, { conditionsOverride: sqlConditions, dateFilter });
           } finally {
             await clientLeft.end();
           }
@@ -446,6 +471,41 @@ export async function POST(req: NextRequest) {
         return;
       }
 
+        // Star join (multiple JOINs): call join-query API to get preview rows
+        const starJoin = body.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[] }> } | undefined;
+        if (starJoin?.primaryConnectionId && Array.isArray(starJoin.joins) && starJoin.joins.length > 0) {
+          const filterCols = (body.filter?.columns as string[] | undefined) || [];
+          const primaryColumns = filterCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, ""));
+          const joinsWithCols = (starJoin.joins || []).map((jn: any, idx: number) => ({
+            ...jn,
+            secondaryColumns: filterCols.filter((c: string) => new RegExp(`^join_${idx}\\.`, "i").test(c)).map((c: string) => c.replace(new RegExp(`^join_${idx}\\.`, "i"), "")),
+          }));
+          const joinQueryBody = {
+            primaryConnectionId: starJoin.primaryConnectionId,
+            primaryTable: starJoin.primaryTable,
+            joins: joinsWithCols,
+            conditions: body.filter?.conditions || [],
+            primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
+            limit: PREVIEW_MAX_ROWS,
+          };
+          try {
+            const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");
+            const cookieHeader = req.headers.get("cookie");
+            const res = await fetch(`${origin}/api/connection/join-query`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
+              body: JSON.stringify(joinQueryBody),
+            });
+            const data = await res.json();
+            if (data?.ok && Array.isArray(data.rows)) {
+              yield { rows: data.rows.slice(0, PREVIEW_MAX_ROWS), query: "Star JOIN (múltiples tablas)" };
+            }
+          } catch (e) {
+            console.error("[Preview] Star join fetch error:", e);
+          }
+          return;
+        }
+
         if (joinConf?.connectionId) {
           const primaryConnId = joinConf.connectionId;
           const secondaryConnId = joinConf.secondaryConnectionId;
@@ -476,10 +536,10 @@ export async function POST(req: NextRequest) {
             const leftCol = jc?.leftColumn ?? "";
             const rightCol = jc?.rightColumn ?? "";
             const joinType = (jc?.joinType || "INNER").toUpperCase();
-            const leftConditions = (body.filter?.conditions || [])
+            const leftConditions = (sqlConditions as FilterCondition[])
               .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
               .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^primary\./i, "").trim() }));
-            const rightConditions = (body.filter?.conditions || [])
+            const rightConditions = (sqlConditions as FilterCondition[])
               .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
               .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
 
@@ -650,7 +710,7 @@ export async function POST(req: NextRequest) {
             );
 
             // Map filter conditions (primary. -> left., join_0. -> right.)
-            const mappedConds = (body.filter?.conditions || []).map((c) => {
+            const mappedConds = (sqlConditions as FilterCondition[]).map((c) => {
                const col = c.column || "";
                let mapped = col.replace(/^primary\./i, "left."); // or l.
                mapped = mapped.replace(/^join_0\./i, "right.");   // or r.
@@ -658,7 +718,10 @@ export async function POST(req: NextRequest) {
                return { ...c, column: mapped } as any;
             });
 
-            const { clause: whereClause, params } = buildWhereClausePg(mappedConds);
+            const { clause: mcClause, params: mcParams } = buildWhereClausePg(mappedConds);
+            const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, mcParams.length + 1, "l.");
+            const whereClause = dfClause ? (mcClause ? `${mcClause} AND ${dfClause}` : `WHERE ${dfClause}`) : mcClause;
+            const params = [...mcParams, ...dfParams];
 
             const baseQuery = `SELECT ${selectParts.join(", ")} FROM ${lQ} AS l ${joinClause} ${whereClause}`;
 
@@ -743,7 +806,7 @@ export async function POST(req: NextRequest) {
               : safePart(tableToQuery);
             // Firebird con solo nombre de tabla: usar SELECT * para evitar -206 (Column unknown)
             const colsFirebird = "*";
-            const rawConditions = (filter?.conditions || []).filter(
+            const rawConditions = (sqlConditions as FilterCondition[]).filter(
               (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
             );
             const { clause, params } = buildWhereClauseFirebird(rawConditions);
@@ -822,14 +885,16 @@ export async function POST(req: NextRequest) {
           if (tableToQuery) {
             const tableQ = quoteQualified(tableToQuery);
             const columns = filter?.columns;
-            const conditions = filter?.conditions || [];
 
             const selectList =
               columns && columns.length
                 ? columns.map((c) => quoteIdent(c)).join(", ")
                 : "*";
 
-            const { clause: whereClause, params } = buildWhereClausePg(conditions);
+            const { clause: condClause, params: condParams } = buildWhereClausePg(sqlConditions);
+            const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, condParams.length + 1);
+            const whereClause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
+            const params = [...condParams, ...dfParams];
             
             baseQuery = `SELECT ${selectList} FROM ${tableQ} ${whereClause} ORDER BY 1 ASC`;
             queryParams = params;
@@ -880,9 +945,17 @@ export async function POST(req: NextRequest) {
 
       try {
         let transformedBatch = rawBatch;
+        if (excludeRowsRules.length > 0) {
+          transformedBatch = rawBatch.filter(
+            (row: Record<string, any>) =>
+              !excludeRowsRules.some(({ column, excluded }) =>
+                excluded.includes(String(getValue(row, column) ?? ""))
+              )
+          );
+        }
 
         if (body.inferTypes) {
-          allPreviewRows.push(...rawBatch);
+          allPreviewRows.push(...transformedBatch);
           isFirstBatch = false;
           continue;
         }

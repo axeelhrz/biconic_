@@ -64,6 +64,12 @@ type AggregationConfig = {
   chartCurrencySymbol?: string;
   chartThousandSep?: boolean;
   chartDecimals?: number;
+  /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
+  chartLabelOverrides?: Record<string, string>;
+  /** Formato por métrica (clave = chartYAxes key). */
+  chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
+  /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
+  chartComboSyncAxes?: boolean;
 };
 
 export type Widget = DashboardWidgetRendererWidget & {
@@ -95,6 +101,8 @@ function computeGridPlacements(
   }
   return placements;
 }
+
+type MetricFormatEntry = { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean };
 
 /** Construye chartStyle desde aggregationConfig para que el renderer aplique formato (tipo + escala + decimales). */
 function buildChartStyleFromAgg(agg: AggregationConfig | undefined): ChartStyleConfig | undefined {
@@ -128,6 +136,45 @@ function buildChartStyleFromAgg(agg: AggregationConfig | undefined): ChartStyleC
   };
 }
 
+/** Construye ChartStyleConfig desde un formato por métrica; si m es undefined usa el formato global de agg. */
+function buildChartStyleFromMetricFormat(m: MetricFormatEntry | undefined, agg: AggregationConfig | undefined): ChartStyleConfig | undefined {
+  const valueType = m?.valueType ?? (agg?.chartValueType as string | undefined);
+  const valueScale = m?.valueScale ?? (agg?.chartValueScale as string | undefined);
+  const legacy = agg?.chartNumberFormat as string | undefined;
+  const valueFormat: ValueFormatType =
+    valueType === "currency" || legacy === "currency"
+      ? "currency"
+      : valueType === "percent" || legacy === "percent"
+        ? "percent"
+        : "none";
+  const scale: ValueScaleType =
+    valueScale === "K" || legacy === "K"
+      ? "K"
+      : valueScale === "M" || legacy === "M"
+        ? "M"
+        : valueScale === "BI" || valueScale === "Bi" || valueScale === "B" || legacy === "BI"
+          ? "B"
+          : "none";
+  const decimals = m?.decimals ?? agg?.chartDecimals ?? 2;
+  const useGrouping = m?.thousandSep !== false && (m?.thousandSep ?? agg?.chartThousandSep !== false);
+  if (valueFormat === "none" && scale === "none" && decimals === 2 && useGrouping && !m) return undefined;
+  return {
+    valueFormat,
+    valueScale: scale,
+    currencySymbol: m?.currencySymbol ?? agg?.chartCurrencySymbol ?? "$",
+    decimals,
+    useGrouping,
+  };
+}
+
+/** Construye array de estilos por dataset cuando hay varias métricas (chartYAxes). El renderer usa chartMetricStyles[i] ?? chartStyle. */
+function buildChartMetricStyles(agg: AggregationConfig | undefined): (ChartStyleConfig | undefined)[] {
+  if (!agg) return [];
+  const yKeys = Array.isArray(agg.chartYAxes) ? agg.chartYAxes : [];
+  if (yKeys.length <= 1) return [];
+  return yKeys.map((key) => buildChartStyleFromMetricFormat(agg.chartMetricFormats?.[key], agg));
+}
+
 function buildChartConfigFromRows(
   dataArray: Record<string, unknown>[],
   widget: Widget,
@@ -156,6 +203,9 @@ function buildChartConfigFromRows(
     yKeys = numKeys.length > 0 ? numKeys : resultKeys.filter((k) => k !== xKey).slice(0, 1);
   }
   if (!xKey || yKeys.length === 0) return undefined;
+
+  const overrides = agg?.chartLabelOverrides;
+  const labelOverride = (v: string) => (overrides && v in overrides ? overrides[v] : v);
 
   const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
   const basePalette = widget.color ? [widget.color, ...defaultPalette] : accentColor ? [accentColor, ...defaultPalette] : defaultPalette;
@@ -210,9 +260,9 @@ function buildChartConfigFromRows(
     const uniqueX = [...new Set(rows.map((r: any) => String(r[xKey] ?? "")))];
     const seriesValues = [...new Set(rows.map((r: any) => String(r[seriesField] ?? "")))];
     return {
-      labels: uniqueX,
+      labels: uniqueX.map(labelOverride),
       datasets: seriesValues.map((sv, idx) => ({
-        label: sv,
+        label: labelOverride(sv),
         data: uniqueX.map((xv) => {
           const match = rows.find((r: any) => String(r[xKey] ?? "") === xv && String(r[seriesField] ?? "") === sv);
           return match ? Number((match as any)[yKeys[0]] ?? 0) : 0;
@@ -225,7 +275,7 @@ function buildChartConfigFromRows(
   }
 
   if (isPieOrDoughnut) {
-    const labels = rows.map((r: any) => String(r[xKey] ?? ""));
+    const labels = rows.map((r: any) => labelOverride(String(r[xKey] ?? "")));
     const firstYKey = yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
     return {
       labels,
@@ -240,7 +290,7 @@ function buildChartConfigFromRows(
   }
 
   if (resolvedType === "combo" && yKeys.length >= 2) {
-    const labels = rows.map((r: any) => String(r[xKey] ?? ""));
+    const labels = rows.map((r: any) => labelOverride(String(r[xKey] ?? "")));
     const label0 = aliasForYKey(yKeys[0]);
     const label1 = aliasForYKey(yKeys[1]);
     return {
@@ -253,6 +303,7 @@ function buildChartConfigFromRows(
           borderColor: getColor(label0, 0) as string,
           borderWidth: 2,
           type: "bar",
+          yAxisID: "y",
         },
         {
           label: label1,
@@ -262,12 +313,13 @@ function buildChartConfigFromRows(
           borderWidth: 2,
           type: "line",
           fill: false,
+          yAxisID: "y1",
         },
       ],
     };
   }
 
-  const labels = rows.map((r: any) => String(r[xKey] ?? ""));
+  const labels = rows.map((r: any) => labelOverride(String(r[xKey] ?? "")));
   const isBarOrHorizontalBar = resolvedType === "bar" || resolvedType === "horizontalBar";
   const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
   if (oneMetricManyCategories) {
@@ -336,6 +388,7 @@ export function DashboardViewer({
   const [globalFilters, setGlobalFilters] = useState<AggregationFilter[]>([]);
   const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>(() => ({ ...DEFAULT_DASHBOARD_THEME }));
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
+  const [globalFilterDistinctValues, setGlobalFilterDistinctValues] = useState<Record<string, unknown[]>>({});
   const stateRef = useRef({ widgets, setWidgets });
 
   const { data: etlData } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
@@ -360,6 +413,55 @@ export function DashboardViewer({
     setDashboardTheme((prev) => ({ ...DEFAULT_DASHBOARD_THEME, ...prev, ...loadedTheme }));
     setGlobalFilters(Array.isArray(dashboard.global_filters_config) ? (dashboard.global_filters_config as AggregationFilter[]) : []);
   }, [etlData, initialWidgets, initialTitle, initialGlobalFilters]);
+
+  // Cargar distinct values para cada filtro global (select / single|multi por dimensión)
+  useEffect(() => {
+    const dataSources = (etlData as any)?.dataSources as { schema?: string; tableName?: string }[] | undefined;
+    let primaryTableName: string | undefined;
+    if (dataSources?.[0]?.tableName) {
+      primaryTableName = `${dataSources[0].schema ?? "etl_output"}.${dataSources[0].tableName}`;
+    } else {
+      const name = (etlData as any)?.etlData?.name;
+      primaryTableName = name && String(name).includes(".") ? name : name ? `etl_output.${name}` : undefined;
+    }
+    if (!primaryTableName || !globalFilters.length) return;
+    const distinctUrl = apiEndpoints?.distinctValues ?? "/api/dashboard/distinct-values";
+    const selectFilters = globalFilters.filter(
+      (gf) => gf.field && ((gf as any).inputType === "select" || (gf as any).filterType === "single" || (gf as any).filterType === "multi")
+    );
+    let cancelled = false;
+    const dateFields = (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
+    (async () => {
+      for (const gf of selectFilters) {
+        if (cancelled) break;
+        try {
+          const isDateField = gf.field && dateFields.some((d: string) => (d || "").toLowerCase() === (gf.field || "").toLowerCase());
+          const body: { tableName: string; field: string; limit: number; transform?: string } = {
+            tableName: primaryTableName,
+            field: gf.field!,
+            limit: 200,
+          };
+          if (isDateField) body.transform = "YEAR";
+          const res = await fetch(distinctUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!res.ok) continue;
+          const values = await res.json();
+          if (cancelled) break;
+          if (Array.isArray(values)) {
+            setGlobalFilterDistinctValues((prev) => ({ ...prev, [gf.id]: values }));
+          }
+        } catch {
+          // ignore per-field errors
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [etlData, globalFilters, apiEndpoints?.distinctValues]);
 
   const getTableNameForWidget = useCallback(
     (widget: Widget): string | null => {
@@ -423,18 +525,36 @@ export function DashboardViewer({
           value: filterValues[w.id],
           convertToNumber: (w as any).filterConfig!.inputType === "number",
         }));
-      const rawFilters = [
-        ...(!(widget as any).excludeGlobalFilters
-          ? globalFilters.filter(
-              (f) =>
-                f.value !== "" && f.value !== null && f.value !== undefined &&
-                !(Array.isArray(f.value) && f.value.length === 0) &&
-                !fieldsWithWidgets.has(f.field)
-            )
-          : []),
-        ...widgetFilters,
-        ...(aggConfig?.filters || []),
-      ];
+      // Filtros globales efectivos: usar filterValues[gf.id] (no f.value, que viene vacío para filtros dinámicos)
+      const effectiveGlobalFilters: AggregationFilter[] = (widget as any).excludeGlobalFilters
+        ? []
+        : globalFilters
+            .filter((f) => !fieldsWithWidgets.has(f.field))
+            .map((f) => {
+              const userValue = filterValues[f.id];
+              const isEmpty =
+                userValue === "" ||
+                userValue === null ||
+                userValue === undefined ||
+                (Array.isArray(userValue) && userValue.length === 0);
+              if (isEmpty) return null;
+              const op = f.operator || "=";
+              const value =
+                op === "IN"
+                  ? Array.isArray(userValue)
+                    ? userValue
+                    : [userValue]
+                  : userValue;
+              return {
+                id: f.id,
+                field: f.field,
+                operator: op,
+                value,
+                convertToNumber: f.convertToNumber,
+              };
+            })
+            .filter((f): f is AggregationFilter => f != null);
+      const rawFilters = [...effectiveGlobalFilters, ...widgetFilters, ...(aggConfig?.filters || [])];
       const preparedFilters = rawFilters.map((f) => ({
         field: f.field,
         operator: f.operator || "=",
@@ -450,6 +570,37 @@ export function DashboardViewer({
           const dimensionsArray = (aggConfig as any).dimensions?.length
             ? (aggConfig as any).dimensions
             : [aggConfig.dimension, (aggConfig as any).dimension2].filter(Boolean);
+          // Métricas guardadas del ETL del widget para que el backend resuelva por nombre
+          const dataSources = (etlData as any)?.dataSources as { id: string; etlId: string; savedMetrics?: unknown[] }[] | undefined;
+          const widgetSource = widget.dataSourceId && dataSources?.length
+            ? dataSources.find((s) => s.id === widget.dataSourceId)
+            : dataSources?.[0];
+          const savedMetricsList = widgetSource?.savedMetrics ?? (etlData as any)?.savedMetrics ?? [];
+          const metricFieldNames = new Set(
+            aggConfig.metrics
+              .filter((m) => (m as any).func !== "FORMULA" && m.field != null && String(m.field).trim() !== "")
+              .map((m) => String(m.field).trim().toLowerCase())
+          );
+          const savedMetricsForBody = Array.isArray(savedMetricsList)
+            ? savedMetricsList
+                .filter((s: any) => (s?.name ?? "").trim() && metricFieldNames.has(String(s.name).trim().toLowerCase()))
+                .map((s: any) => {
+                  const first = s?.aggregationConfig?.metrics?.[0] ?? s?.metric;
+                  const name = String(s?.name ?? "").trim();
+                  if (!first) return { name, field: name, func: "SUM", alias: name };
+                  const field = String(first?.field ?? "").trim() || name;
+                  const func = String(first?.func ?? "SUM");
+                  const alias = String(first?.alias ?? name);
+                  const expression = first?.expression;
+                  return {
+                    name,
+                    field,
+                    func,
+                    alias,
+                    ...(expression && String(expression).trim() ? { expression: String(expression).trim() } : {}),
+                  };
+                })
+            : [];
           const bodyPayload: Record<string, unknown> = {
             tableName: fullTableName,
             dimension: aggConfig.dimension,
@@ -470,6 +621,12 @@ export function DashboardViewer({
           if ((aggConfig as any).cumulative) bodyPayload.cumulative = (aggConfig as any).cumulative;
           if ((aggConfig as any).comparePeriod) bodyPayload.comparePeriod = (aggConfig as any).comparePeriod;
           if ((aggConfig as any).dateDimension) bodyPayload.dateDimension = (aggConfig as any).dateDimension;
+          if (savedMetricsForBody.length > 0) bodyPayload.savedMetrics = savedMetricsForBody;
+          const primaryDim = dimensionsArray[0] ?? aggConfig.dimension;
+          const dateFields = (widgetSource as { fields?: { date?: string[] } })?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
+          const isDateDim = primaryDim && dateFields.some((d: string) => (d || "").toLowerCase() === (primaryDim || "").toLowerCase());
+          const dateGroupByGranularity = (aggConfig as { dateGroupByGranularity?: string }).dateGroupByGranularity;
+          if (isDateDim && dateGroupByGranularity && primaryDim) bodyPayload.dateGroupBy = { field: primaryDim, granularity: dateGroupByGranularity };
 
           const url = apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data";
           const res = await fetch(url, {
@@ -660,35 +817,91 @@ export function DashboardViewer({
       <div className={useClientTheme ? "client-view-body flex flex-1 flex-col min-h-0" : "flex flex-1 flex-col min-h-0"}>
       {globalFilters.length > 0 && (
         <div
-          className="flex flex-shrink-0 flex-wrap items-center gap-2 px-4 py-2"
+          className="flex flex-shrink-0 flex-wrap items-center gap-4 px-4 py-2"
           style={{ background: "var(--platform-bg, var(--client-bg, #f8fafc))", borderBottom: "1px solid var(--platform-border)" }}
         >
-          {globalFilters.map((gf) => (
-            <div key={gf.id} className="flex items-center gap-1.5 text-sm">
-              <span style={{ color: "var(--platform-fg-muted)" }}>{gf.field}</span>
-              {(gf as any).inputType === "select" && Array.isArray((gf as any).distinctValues) ? (
-                <select
-                  className="rounded-md border px-2 py-1 text-sm"
-                  style={{ borderColor: "var(--platform-border)" }}
-                  value={String(filterValues[gf.id] ?? "")}
-                  onChange={(e) => setFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value }))}
-                >
-                  <option value="">Todos</option>
-                  {((gf as any).distinctValues as unknown[]).map((v) => (
-                    <option key={String(v)} value={String(v)}>{String(v)}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type={(gf as any).inputType === "number" ? "number" : (gf as any).inputType === "date" ? "date" : "text"}
-                  className="rounded-md border px-2 py-1 text-sm w-32"
-                  style={{ borderColor: "var(--platform-border)" }}
-                  value={String(filterValues[gf.id] ?? "")}
-                  onChange={(e) => setFilterValues((prev) => ({ ...prev, [gf.id]: (gf as any).inputType === "number" ? e.target.valueAsNumber : e.target.value }))}
-                />
-              )}
-            </div>
-          ))}
+          {globalFilters.map((gf) => {
+            const label = (gf as any).label || gf.field;
+            const options = (globalFilterDistinctValues[gf.id] ?? (gf as any).distinctValues) as unknown[] | undefined;
+            const isMulti = (gf.operator || "=") === "IN";
+            const selectedArray = isMulti
+              ? (Array.isArray(filterValues[gf.id]) ? filterValues[gf.id] : filterValues[gf.id] != null && filterValues[gf.id] !== "" ? [filterValues[gf.id]] : []) as string[]
+              : [];
+            const hasOptions = Array.isArray(options) && options.length > 0;
+
+            return (
+              <div key={gf.id} className="flex flex-col gap-1.5 text-sm">
+                <span style={{ color: "var(--platform-fg-muted)" }}>{label}</span>
+                {isMulti && hasOptions ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs rounded-md"
+                      style={{ borderColor: "var(--platform-border)" }}
+                      onClick={() => setFilterValues((prev) => ({ ...prev, [gf.id]: [...options].map(String) }))}
+                    >
+                      Seleccionar todo
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs rounded-md"
+                      style={{ borderColor: "var(--platform-border)" }}
+                      onClick={() => setFilterValues((prev) => ({ ...prev, [gf.id]: [] }))}
+                    >
+                      Deseleccionar todo
+                    </Button>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 max-h-24 overflow-y-auto">
+                      {options.map((v) => {
+                        const s = String(v);
+                        const checked = selectedArray.includes(s);
+                        return (
+                          <label key={s} className="flex items-center gap-1.5 cursor-pointer whitespace-nowrap" style={{ color: "var(--platform-fg)" }}>
+                            <input
+                              type="checkbox"
+                              className="rounded border"
+                              style={{ borderColor: "var(--platform-border)" }}
+                              checked={checked}
+                              onChange={(e) => {
+                                const next = e.target.checked
+                                  ? [...selectedArray, s]
+                                  : selectedArray.filter((x) => x !== s);
+                                setFilterValues((prev) => ({ ...prev, [gf.id]: next }));
+                              }}
+                            />
+                            <span className="text-xs">{s}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (gf as any).inputType === "select" && hasOptions ? (
+                  <select
+                    className="rounded-md border px-2 py-1 text-sm min-w-[8rem]"
+                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
+                    value={String(filterValues[gf.id] ?? "")}
+                    onChange={(e) => setFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value }))}
+                  >
+                    <option value="">Todos</option>
+                    {(options as unknown[]).map((v) => (
+                      <option key={String(v)} value={String(v)}>{String(v)}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type={(gf as any).inputType === "number" ? "number" : (gf as any).inputType === "date" ? "date" : "text"}
+                    className="rounded-md border px-2 py-1 text-sm w-32"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    value={String(filterValues[gf.id] ?? "")}
+                    onChange={(e) => setFilterValues((prev) => ({ ...prev, [gf.id]: (gf as any).inputType === "number" ? e.target.valueAsNumber : e.target.value }))}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -724,6 +937,7 @@ export function DashboardViewer({
                   widget={{
                     ...widget,
                     chartStyle: widget.chartStyle ?? buildChartStyleFromAgg(widget.aggregationConfig),
+                    chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
                   } as DashboardWidgetRendererWidget}
                   isLoading={widget.isLoading === true}
                   filterValue={filterValues[widget.id]}

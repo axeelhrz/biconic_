@@ -12,6 +12,8 @@ import {
   buildWhereClausePgStar,
   buildWhereClauseFirebird,
   buildJoinClauseBinary,
+  buildDateFilterWhereFragmentPg,
+  type DateFilterSpec,
 } from "@/lib/sql/helpers";
 import {
   applyCleanBatch,
@@ -60,6 +62,7 @@ type RunBody = {
     table?: string;
     columns?: string[];
     conditions?: FilterCondition[];
+    dateFilter?: DateFilterSpec;
   };
   join?: {
     connectionId: string;
@@ -349,6 +352,17 @@ async function executeEtlPipeline(
     const globalCountMap = new Map<string, number>();
     const globalCountOriginalValues = new Map<string, any>();
 
+    // Excluir filas: aplicar en memoria después de UNION/JOIN (no en WHERE)
+    const allConditions = body?.filter?.conditions ?? [];
+    const sqlConditions = allConditions.filter((c: FilterCondition) => c.operator !== "not in");
+    const excludeRowsRules: { column: string; excluded: string[] }[] = allConditions
+      .filter((c: FilterCondition) => c.operator === "not in")
+      .map((c) => ({
+        column: (c.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim(),
+        excluded: (c.value ?? "").split(",").map((v) => v.trim()).filter(Boolean),
+      }));
+    const dateFilter = body?.filter?.dateFilter ?? undefined;
+
     /** Quita el byte nulo (0x00) de strings; convierte undefined a null (postgres no admite undefined). */
     const sanitizeForPostgres = (val: unknown): unknown => {
       if (val === undefined || val === null) return null;
@@ -574,11 +588,19 @@ async function executeEtlPipeline(
         const clientUnion = new PgClient({ connectionString: dbUrlUnion });
         await withRetry(() => clientUnion.connect(), { label: "union-connect" });
         try {
-          const runSource = async (source: { connectionId: string; filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] } }, tableQualified: string) => {
+          const runSource = async (
+            source: { connectionId: string; filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] } },
+            tableQualified: string,
+            options?: { conditionsOverride?: FilterCondition[]; dateFilter?: DateFilterSpec }
+          ) => {
             const filter = source.filter || {};
             const tableQ = quoteQualified(tableQualified);
             const selectList = filter.columns?.length ? filter.columns.map((c: string) => quoteIdent(c, "postgres")).join(", ") : "*";
-            const { clause, params } = buildWhereClausePg(filter.conditions || []);
+            const conds = options?.conditionsOverride ?? filter.conditions ?? [];
+            const { clause: condClause, params: condParams } = buildWhereClausePg(conds);
+            const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(options?.dateFilter, condParams.length + 1);
+            const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
+            const params = [...condParams, ...dfParams];
             const base = `SELECT ${selectList} FROM ${tableQ} ${clause} ORDER BY 1 ASC`;
             const batches: any[][] = [];
             let offset = 0;
@@ -602,7 +624,7 @@ async function executeEtlPipeline(
 
           const leftTable = leftInfo.table;
           let leftCols: string[] | null = null;
-          for (const batch of await runSource(left, leftTable)) {
+          for (const batch of await runSource(left, leftTable, { conditionsOverride: sqlConditions, dateFilter })) {
             if (batch.length && leftCols === null) leftCols = Object.keys(batch[0]).sort();
             yield batch;
           }
@@ -672,10 +694,10 @@ async function executeEtlPipeline(
           const selectedCols = (body!.filter?.columns || []) as string[];
           const leftColumns = selectedCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, "").trim());
           const rightColumns = selectedCols.filter((c: string) => /^join_0\./i.test(c)).map((c: string) => c.replace(/^join_0\./i, "").trim());
-          const leftConditions = (body!.filter?.conditions || [])
+          const leftConditions = (sqlConditions as FilterCondition[])
             .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
             .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^primary\./i, "").trim() }));
-          const rightConditions = (body!.filter?.conditions || [])
+          const rightConditions = (sqlConditions as FilterCondition[])
             .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
             .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
 
@@ -859,7 +881,7 @@ async function executeEtlPipeline(
           ? (tableToQuery.split(".").pop() || tableToQuery).trim().toUpperCase()
           : safePart(tableToQuery);
         const cols = "*";
-        const firebirdConditions = (body!.filter?.conditions || [])
+        const firebirdConditions = (sqlConditions as FilterCondition[])
           .map((c) => ({
             ...c,
             column: (c.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim(),
@@ -930,10 +952,10 @@ async function executeEtlPipeline(
         const selectedCols = (body!.filter?.columns || []) as string[];
         const leftColumns = selectedCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, "").trim());
         const rightColumns = selectedCols.filter((c: string) => /^join_0\./i.test(c)).map((c: string) => c.replace(/^join_0\./i, "").trim());
-        const leftConditions = (body!.filter?.conditions || [])
+        const leftConditions = (sqlConditions as FilterCondition[])
           .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
           .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^primary\./i, "").trim() }));
-        const rightConditions = (body!.filter?.conditions || [])
+        const rightConditions = (sqlConditions as FilterCondition[])
           .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
           .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
         if (!leftTable || !rightTable || !leftCol || !rightCol)
@@ -1095,7 +1117,7 @@ async function executeEtlPipeline(
            if (!isStarJoin) {
               // Binary
               const { leftTable, rightTable, joinConditions, leftColumns, rightColumns } = joinObj;
-              const mappedConds = (body!.filter?.conditions || []).map((c) => {
+              const mappedConds = (sqlConditions as FilterCondition[]).map((c) => {
                   const col = c.column || "";
                   let mapped = col.replace(/^primary\./i, "left.");
                   mapped = mapped.replace(/^join_0\./i, "right.");
@@ -1123,7 +1145,10 @@ async function executeEtlPipeline(
                  else selectParts.push("r.*");
                  
                  const joinClause = buildJoinClauseBinary(joinConditions, "postgres", rQ);
-                 const { clause, params } = buildWhereClausePg(mappedConds);
+                 const { clause: mcClause, params: mcParams } = buildWhereClausePg(mappedConds);
+                 const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, mcParams.length + 1, "l.");
+                 const clause = dfClause ? (mcClause ? `${mcClause} AND ${dfClause}` : `WHERE ${dfClause}`) : mcClause;
+                 const params = [...mcParams, ...dfParams];
                  baseQuery = `SELECT ${selectParts.join(", ")} FROM ${lQ} AS l ${joinClause} ${clause}`;
                  queryParams = params;
                } else {
@@ -1137,9 +1162,12 @@ async function executeEtlPipeline(
                  else selectParts.push("r.*");
 
                  const joinClause = buildJoinClauseBinary(joinConditions, "postgres", rQ);
-                 const { clause, params } = buildWhereClausePg(mappedConds);
-                 baseQuery = `SELECT ${selectParts.join(", ")} FROM ${lQ} AS l ${joinClause} ${clause}`;
-                 queryParams = params;
+                 const { clause: mcClause2, params: mcParams2 } = buildWhereClausePg(mappedConds);
+                 const { clause: dfClause2, params: dfParams2 } = buildDateFilterWhereFragmentPg(dateFilter, mcParams2.length + 1, "l.");
+                 const clause2 = dfClause2 ? (mcClause2 ? `${mcClause2} AND ${dfClause2}` : `WHERE ${dfClause2}`) : mcClause2;
+                 const params2 = [...mcParams2, ...dfParams2];
+                 baseQuery = `SELECT ${selectParts.join(", ")} FROM ${lQ} AS l ${joinClause} ${clause2}`;
+                 queryParams = params2;
                }
            } else {
               // Star Join
@@ -1180,13 +1208,32 @@ async function executeEtlPipeline(
                      let fromJoin = `FROM ${pQ} AS p`;
                      (star.joins||[]).forEach((jn: any, idx: number) => {
                         const jt = (jn.joinType || "INNER").toUpperCase();
-                        const on = `p.${quoteIdent(jn.primaryColumn||"")} = j${idx}.${quoteIdent(jn.secondaryColumn||"")}`;
+                        const pc = (jn.primaryColumn || "").trim();
+                        let leftAlias = "p", leftCol = pc;
+                        if (pc.includes(".")) {
+                          if (/^primary\./i.test(pc)) {
+                            leftCol = pc.replace(/^primary\./i, "").trim();
+                          } else {
+                            const m = pc.match(/^join_(\d+)\.(.+)$/i);
+                            if (m) {
+                              const i = parseInt(m[1], 10);
+                              if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                                leftAlias = `j${i}`;
+                                leftCol = m[2].trim();
+                              }
+                            }
+                          }
+                        }
+                        const on = `${leftAlias}.${quoteIdent(leftCol)} = j${idx}.${quoteIdent(jn.secondaryColumn||"")}`;
                         fromJoin += ` ${jt} JOIN ${jQs[idx]} AS j${idx} ON ${on}`;
                      });
                      
-                     const { clause, params } = buildWhereClausePgStar(body!.filter?.conditions || [], (star.joins||[]).length);
-                     baseQuery = `SELECT ${selectParts.join(", ")} ${fromJoin} ${clause} ORDER BY 1 ASC`;
-                     queryParams = params;
+                     const { clause: starClause, params: starParams } = buildWhereClausePgStar(sqlConditions, (star.joins||[]).length);
+                     const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, starParams.length + 1, "p.");
+                     const mergedClause = dfClause ? (starClause ? `${starClause} AND ${dfClause}` : `WHERE ${dfClause}`) : starClause;
+                     const mergedParams = [...starParams, ...dfParams];
+                     baseQuery = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause} ORDER BY 1 ASC`;
+                     queryParams = mergedParams;
                   } finally {
                      await internalClient.end();
                   }
@@ -1206,13 +1253,32 @@ async function executeEtlPipeline(
                   let fromJoin = `FROM ${pQ} AS p`;
                   (star.joins||[]).forEach((jn: any, idx: number) => {
                       const jt = (jn.joinType || "INNER").toUpperCase();
-                      const on = `p.${quoteIdent(jn.primaryColumn||"")} = j${idx}.${quoteIdent(jn.secondaryColumn||"")}`;
+                      const pc = (jn.primaryColumn || "").trim();
+                      let leftAlias = "p", leftCol = pc;
+                      if (pc.includes(".")) {
+                        if (/^primary\./i.test(pc)) {
+                          leftCol = pc.replace(/^primary\./i, "").trim();
+                        } else {
+                          const m = pc.match(/^join_(\d+)\.(.+)$/i);
+                          if (m) {
+                            const i = parseInt(m[1], 10);
+                            if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                              leftAlias = `j${i}`;
+                              leftCol = m[2].trim();
+                            }
+                          }
+                        }
+                      }
+                      const on = `${leftAlias}.${quoteIdent(leftCol)} = j${idx}.${quoteIdent(jn.secondaryColumn||"")}`;
                       fromJoin += ` ${jt} JOIN ${jQs[idx]} AS j${idx} ON ${on}`;
                   });
                    
-                  const { clause, params } = buildWhereClausePgStar(body!.filter?.conditions || [], (star.joins||[]).length);
-                  baseQuery = `SELECT ${selectParts.join(", ")} ${fromJoin} ${clause}`;
-                  queryParams = params;
+                  const { clause: starClause, params: starParams } = buildWhereClausePgStar(sqlConditions, (star.joins||[]).length);
+                  const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, starParams.length + 1, "p.");
+                  const mergedClause = dfClause ? (starClause ? `${starClause} AND ${dfClause}` : `WHERE ${dfClause}`) : starClause;
+                  const mergedParams = [...starParams, ...dfParams];
+                  baseQuery = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause}`;
+                  queryParams = mergedParams;
                }
            }
         } else {
@@ -1225,7 +1291,7 @@ async function executeEtlPipeline(
            }
            if (!tableToQuery) throw new Error("Tabla de origen requerida.");
            
-           const { columns, conditions } = body!.filter!;
+           const { columns } = body!.filter!;
            const tableQ = quoteQualified(tableToQuery);
            const selectList = columns && columns.length ? columns.map(c => {
               const cv = castMap.get(c);
@@ -1237,7 +1303,10 @@ async function executeEtlPipeline(
               return ident;
            }).join(", ") : "*";
            
-           const { clause, params } = buildWhereClausePg(conditions);
+           const { clause: condClause, params: condParams } = buildWhereClausePg(sqlConditions);
+           const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, condParams.length + 1);
+           const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
+           const params = [...condParams, ...dfParams];
            baseQuery = `SELECT ${selectList} FROM ${tableQ} ${clause} ORDER BY 1 ASC`;
            queryParams = params;
         }
@@ -1269,6 +1338,14 @@ async function executeEtlPipeline(
       rowsProcessed += rawBatch.length;
 
       let transformedBatch = rawBatch;
+      if (excludeRowsRules.length > 0) {
+        transformedBatch = rawBatch.filter(
+          (row) =>
+            !excludeRowsRules.some(({ column, excluded }) =>
+              excluded.includes(String(getValue(row, column) ?? ""))
+            )
+        );
+      }
       if (body.pipeline?.length) {
          for (const step of body.pipeline) {
             try {

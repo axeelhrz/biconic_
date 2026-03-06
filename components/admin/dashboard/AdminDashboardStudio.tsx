@@ -82,6 +82,14 @@ type AggregationConfig = {
   chartScaleMode?: string;
   chartScaleMin?: string | number;
   chartScaleMax?: string | number;
+  /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico. */
+  chartLabelOverrides?: Record<string, string>;
+  /** Formato por métrica (clave = chartYAxes key). */
+  chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
+  /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
+  chartComboSyncAxes?: boolean;
+  /** Si la dimensión es fecha, agrupar por este nivel. */
+  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
 };
 type StudioWidget = {
   id: string;
@@ -401,6 +409,9 @@ export function AdminDashboardStudio({
         return defaultPalette[Math.abs(hash) % defaultPalette.length]!;
       };
 
+      const overrides = agg.chartLabelOverrides;
+      const labelOverride = (v: string) => (overrides && v in overrides ? overrides[v]! : v);
+
       const effectiveChartType = agg.chartType || widgetType || "bar";
       const isPieOrDoughnut = effectiveChartType === "pie" || effectiveChartType === "doughnut";
       const resultKeys = Object.keys(dataArray[0] || {});
@@ -457,12 +468,12 @@ export function AdminDashboardStudio({
 
       if (seriesField && resultKeys.includes(seriesField) && !isPieOrDoughnut) {
         const uniqueX = [...new Set(rows.map((r) => String(r[xKey!] ?? "")))];
-        labels = uniqueX;
+        labels = uniqueX.map(labelOverride);
         const seriesValues = [...new Set(rows.map((r) => String(r[seriesField] ?? "")))];
         datasets = seriesValues.map((sv, idx) => {
           const color = getColor(sv, idx);
           return {
-            label: sv,
+            label: labelOverride(sv),
             data: uniqueX.map((xv) => {
               const match = rows.find((r) => String(r[xKey!] ?? "") === xv && String(r[seriesField] ?? "") === sv);
               return match ? Number(match[yKeys[0]!] ?? 0) : 0;
@@ -473,7 +484,7 @@ export function AdminDashboardStudio({
           };
         });
       } else if (isPieOrDoughnut) {
-        labels = rows.map((r) => String(r[xKey!] ?? ""));
+        labels = rows.map((r) => labelOverride(String(r[xKey!] ?? "")));
         const firstYKey = yKeys[0] || metricAliases[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
         const displayLabel = aliasForYKey(firstYKey!);
         const sliceColors = labels.map((l) => getColorByLabelStable(l));
@@ -496,7 +507,7 @@ export function AdminDashboardStudio({
           borderWidth: 2,
         }];
       } else if (effectiveChartType === "combo" && yKeys.length >= 2) {
-        labels = rows.map((r) => String(r[xKey!] ?? ""));
+        labels = rows.map((r) => labelOverride(String(r[xKey!] ?? "")));
         const label0 = aliasForYKey(yKeys[0]!);
         const label1 = aliasForYKey(yKeys[1]!);
         datasets = [
@@ -507,6 +518,7 @@ export function AdminDashboardStudio({
             borderColor: getColor(label0, 0),
             borderWidth: 2,
             type: "bar" as const,
+            yAxisID: "y",
           },
           {
             label: label1,
@@ -516,10 +528,11 @@ export function AdminDashboardStudio({
             borderWidth: 2,
             type: "line" as const,
             fill: false,
+            yAxisID: "y1",
           },
         ];
       } else {
-        labels = rows.map((r) => String(r[xKey!] ?? ""));
+        labels = rows.map((r) => labelOverride(String(r[xKey!] ?? "")));
         const isBarOrHorizontalBar = effectiveChartType === "bar" || effectiveChartType === "horizontalBar";
         const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
         if (oneMetricManyCategories) {
@@ -618,6 +631,10 @@ export function AdminDashboardStudio({
           }
           const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
           const widgetEtlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
+          const widgetDateFields = sourceId ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.date ?? etlData?.fields?.date ?? []) : (etlData?.fields?.date ?? []);
+          const primaryDimension = dimensions[0] ?? agg.dimension;
+          const isDateDimension = primaryDimension && widgetDateFields.some((d: string) => (d || "").toLowerCase() === (primaryDimension || "").toLowerCase());
+          const dateGroupByGranularity = (agg as { dateGroupByGranularity?: string }).dateGroupByGranularity;
           const metricAliasesForApi = metricsPayload.map((m: Record<string, unknown>) => m.alias as string).filter(Boolean);
           const rankingLimit = agg.chartRankingEnabled && agg.chartRankingTop && agg.chartRankingTop > 0
             ? agg.chartRankingTop
@@ -625,6 +642,31 @@ export function AdminDashboardStudio({
           const rankingOrderBy = rankingLimit && (agg.chartRankingMetric || metricAliasesForApi[0])
             ? { field: agg.chartRankingMetric || metricAliasesForApi[0], direction: "DESC" as const }
             : undefined;
+          // Enviar definiciones de métricas guardadas referenciadas por nombre para que el backend las resuelva (multi-ETL o cuando el lookup falla)
+          const metricFieldNames = new Set(
+            agg.metrics
+              .filter((m) => m.func !== "FORMULA" && m.field != null && String(m.field).trim() !== "")
+              .map((m) => String(m.field).trim().toLowerCase())
+          );
+          const savedMetricsForBody = savedMetrics
+            .filter((s) => (s.name || "").trim() && metricFieldNames.has((s.name || "").trim().toLowerCase()))
+            .map((s) => {
+              const first = (s as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
+                ?? (s as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric;
+              const name = String(s.name ?? "").trim();
+              if (!first) return { name, field: name, func: "SUM", alias: name };
+              const field = String((first as { field?: string }).field ?? "").trim() || name;
+              const func = String((first as { func?: string }).func ?? "SUM");
+              const alias = String((first as { alias?: string }).alias ?? name);
+              const expression = (first as { expression?: string }).expression;
+              return {
+                name,
+                field,
+                func,
+                alias,
+                ...(expression && String(expression).trim() ? { expression: String(expression).trim() } : {}),
+              };
+            });
           const res = await fetch("/api/dashboard/aggregate-data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -640,7 +682,9 @@ export function AdminDashboardStudio({
               cumulative: agg.cumulative || "none",
               comparePeriod: agg.comparePeriod || undefined,
               dateDimension: agg.dateDimension || undefined,
+              ...(isDateDimension && dateGroupByGranularity && primaryDimension && { dateGroupBy: { field: primaryDimension, granularity: dateGroupByGranularity } }),
               ...(derivedColumnsFromLayout.length > 0 && { derivedColumns: derivedColumnsFromLayout }),
+              ...(savedMetricsForBody.length > 0 && { savedMetrics: savedMetricsForBody }),
             }),
           });
           const dataArray = await res.json();
@@ -839,6 +883,8 @@ export function AdminDashboardStudio({
           chartColorScheme: (cfg.chartColorScheme as string) || undefined,
           showDataLabels: (cfg.showDataLabels as boolean) || undefined,
           chartAxisOrder: (cfg.chartAxisOrder as string) || undefined,
+          chartLabelOverrides: cfg.chartLabelOverrides && typeof cfg.chartLabelOverrides === "object" ? (cfg.chartLabelOverrides as Record<string, string>) : undefined,
+          chartMetricFormats: cfg.chartMetricFormats && typeof cfg.chartMetricFormats === "object" ? (cfg.chartMetricFormats as Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>) : undefined,
         },
         excludeGlobalFilters: false,
         dataSourceId: primaryId,

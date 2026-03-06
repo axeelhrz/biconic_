@@ -17,6 +17,8 @@ export interface DashboardDataSource {
     string: string[];
     date: string[];
   };
+  /** Métricas guardadas del ETL (layout.saved_metrics) para resolver por nombre en aggregate-data */
+  savedMetrics?: unknown[];
 }
 
 export interface ETLDataResponse {

@@ -116,6 +116,56 @@ export function buildWhereClausePg(conds: FilterCondition[] = []) {
   return { clause: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
 }
 
+/** Date filter for ETL: AÑO → MES → DÍA (Excel-style). Returns extra WHERE fragment and params for Postgres. */
+export type DateFilterSpec = {
+  column: string;
+  years?: number[];
+  months?: number[];
+  exactDates?: string[];
+};
+
+export function buildDateFilterWhereFragmentPg(
+  dateFilter: DateFilterSpec | undefined | null,
+  paramStartIndex: number,
+  /** Optional table/alias prefix, e.g. "p." for star schema primary table */
+  tablePrefix: string = ""
+): { clause: string; params: any[] } {
+  const params: any[] = [];
+  const parts: string[] = [];
+  if (!dateFilter?.column) return { clause: "", params };
+
+  const col = tablePrefix + quoteIdent(dateFilter.column, "postgres");
+  const dateExpr = `(
+    CASE
+      WHEN ${col}::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(${col}::text, 'DD/MM/YYYY')
+      WHEN ${col}::text LIKE '%, % de % de %' THEN to_date(${col}::text, 'Day, DD "de" Month "de" YYYY')
+      ELSE ${col}::date
+    END
+  )`;
+
+  let idx = paramStartIndex;
+  if (dateFilter.years?.length) {
+    const placeholders = dateFilter.years.map(() => `$${idx++}`);
+    dateFilter.years.forEach((y) => params.push(y));
+    parts.push(`EXTRACT(YEAR FROM ${dateExpr}) IN (${placeholders.join(", ")})`);
+  }
+  if (dateFilter.months?.length) {
+    const placeholders = dateFilter.months.map(() => `$${idx++}`);
+    dateFilter.months.forEach((m) => params.push(m));
+    parts.push(`EXTRACT(MONTH FROM ${dateExpr}) IN (${placeholders.join(", ")})`);
+  }
+  if (dateFilter.exactDates?.length) {
+    const valid = dateFilter.exactDates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    if (valid.length) {
+      valid.forEach((d) => params.push(d));
+      const placeholders = valid.map(() => `$${idx++}`);
+      parts.push(`${dateExpr} IN (${placeholders.map((p) => `${p}::date`).join(", ")})`);
+    }
+  }
+  if (parts.length === 0) return { clause: "", params };
+  return { clause: parts.join(" AND "), params };
+}
+
 export function buildWhereClauseMy(conds: FilterCondition[] = []) {
   const params: any[] = [];
   const parts = conds.map((c) => {

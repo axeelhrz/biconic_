@@ -557,8 +557,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           let fromJoin = `FROM ${pQualified} AS p`;
           joins.forEach((jn, idx) => {
             const jt = (jn.joinType || "INNER").toUpperCase();
-            const on = `p.${quoteIdent(
-              jn.primaryColumn || "",
+            const pc = (jn.primaryColumn || "").trim();
+            let leftAlias = "p";
+            let leftCol = pc;
+            if (pc.includes(".")) {
+              if (/^primary\./i.test(pc)) {
+                leftCol = pc.replace(/^primary\./i, "").trim();
+              } else {
+                const m = pc.match(/^join_(\d+)\.(.+)$/i);
+                if (m) {
+                  const i = Number(m[1]);
+                  if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                    leftAlias = `j${i}`;
+                    leftCol = m[2].trim();
+                  }
+                }
+              }
+            }
+            const on = `${leftAlias}.${quoteIdent(
+              leftCol,
               "postgres"
             )} = j${idx}.${quoteIdent(jn.secondaryColumn || "", "postgres")}`;
             fromJoin += ` ${jt} JOIN ${jQualified[idx]} AS j${idx} ON ${on}`;
@@ -682,8 +699,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           let fromJoin = `FROM ${pQualified} AS p`;
           joins.forEach((jn, idx) => {
             const jt = (jn.joinType || "INNER").toUpperCase();
-            const on = `p.${quoteIdent(
-              jn.primaryColumn || "",
+            const pc = (jn.primaryColumn || "").trim();
+            let leftAlias = "p";
+            let leftCol = pc;
+            if (pc.includes(".")) {
+              if (/^primary\./i.test(pc)) {
+                leftCol = pc.replace(/^primary\./i, "").trim();
+              } else {
+                const m = pc.match(/^join_(\d+)\.(.+)$/i);
+                if (m) {
+                  const i = Number(m[1]);
+                  if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                    leftAlias = `j${i}`;
+                    leftCol = m[2].trim();
+                  }
+                }
+              }
+            }
+            const on = `${leftAlias}.${quoteIdent(
+              leftCol,
               "postgres"
             )} = j${idx}.${quoteIdent(jn.secondaryColumn || "", "postgres")}`;
             fromJoin += ` ${jt} JOIN ${jQualified[idx]} AS j${idx} ON ${on}`;

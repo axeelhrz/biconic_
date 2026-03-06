@@ -180,6 +180,7 @@ export async function GET(
       tableName: string;
       rowCount: number;
       fields: FieldsInfo;
+      savedMetrics: unknown[];
     }[] = [];
     let firstEtl: { id: string; title: string; name: string } | null = null;
     let firstEtlData: { name: string; rowCount: number; created_at: string | null } | null = null;
@@ -191,12 +192,18 @@ export async function GET(
 
       const { data: etlRow } = await supabase
         .from("etl")
-        .select("id, title, name")
+        .select("id, title, name, layout")
         .eq("id", row.etl_id)
         .maybeSingle();
 
       const etlName = (etlRow as any)?.title || (etlRow as any)?.name || row.alias;
       const fields = deriveFieldsFromSample(resolved.sampleData);
+      const layout = (etlRow as any)?.layout;
+      const savedMetrics = Array.isArray(layout?.saved_metrics)
+        ? layout.saved_metrics
+        : Array.isArray(layout?.savedMetrics)
+          ? layout.savedMetrics
+          : [];
 
       dataSources.push({
         id: row.id,
@@ -207,6 +214,7 @@ export async function GET(
         tableName: resolved.tableName,
         rowCount: resolved.rowCount,
         fields,
+        savedMetrics,
       });
 
       if (!firstEtl) {

@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
           const op = (f.operator || "=").toUpperCase().trim();
 
           let fieldExpression;
-          if (op === "MONTH" || op === "DAY" || op === "YEAR") {
+          if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "QUARTER" || op === "SEMESTER") {
             fieldExpression = `(
               CASE
                 WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, 'DD/MM/YYYY')
@@ -131,6 +131,17 @@ export async function POST(req: NextRequest) {
             const dayStr = String(f.value || "").trim();
             if (!/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) return "TRUE";
             return `${fieldExpression} = DATE '${dayStr}'`;
+          }
+          if (op === "QUARTER") {
+            const q = Number(f.value);
+            if (isNaN(q) || q < 1 || q > 4) return "TRUE";
+            return `EXTRACT(QUARTER FROM ${fieldExpression}) = ${q}`;
+          }
+          if (op === "SEMESTER") {
+            const semExpr = `(CASE WHEN EXTRACT(MONTH FROM ${fieldExpression}) <= 6 THEN 1 ELSE 2 END)`;
+            const s = Number(f.value);
+            if (isNaN(s) || (s !== 1 && s !== 2)) return "TRUE";
+            return `${semExpr} = ${s}`;
           }
           if (op === "IN") {
             const list = (Array.isArray(f.value) ? f.value : [])

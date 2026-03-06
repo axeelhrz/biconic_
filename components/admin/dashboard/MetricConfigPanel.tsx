@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { X, Trash2, Play, BookmarkPlus } from "lucide-react";
+import { useState, useMemo } from "react";
+import { X, Trash2, Play, BookmarkPlus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,6 +64,14 @@ export type AggregationConfigEdit = {
   chartRankingMetric?: string;
   chartColorScheme?: string;
   showDataLabels?: boolean;
+  /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
+  chartLabelOverrides?: Record<string, string>;
+  /** Formato por métrica (clave = chartYAxes key). */
+  chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
+  /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
+  chartComboSyncAxes?: boolean;
+  /** Si la dimensión es una columna fecha, agrupar por este nivel. */
+  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
 };
 
 export type MetricConfigWidget = {
@@ -110,7 +118,7 @@ const AGG_FUNCS: { value: string; label: string }[] = [
 const OPERATORS = [
   "=", "!=", ">", ">=", "<", "<=",
   "LIKE", "ILIKE", "IN", "BETWEEN",
-  "MONTH", "YEAR", "DAY", "IS", "IS NOT",
+  "MONTH", "YEAR", "DAY", "QUARTER", "SEMESTER", "IS", "IS NOT",
 ];
 
 type MetricConfigPanelProps = {
@@ -125,6 +133,8 @@ type MetricConfigPanelProps = {
   onSaveMetricAsTemplate?: (name: string, metric: AggregationMetricEdit) => void;
 };
 
+const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
+
 export function MetricConfigPanel({
   widget,
   etlData,
@@ -138,6 +148,12 @@ export function MetricConfigPanel({
   const [saveTemplateForIndex, setSaveTemplateForIndex] = useState<number | null>(null);
   const [saveTemplateName, setSaveTemplateName] = useState("");
   const agg = widget.aggregationConfig || { enabled: false, metrics: [] };
+  const chartType = (agg.chartType as string) || widget.type;
+  const showLabelOverrides = CHART_TYPES_FOR_LABELS.includes(chartType);
+  const labelOverridesEntries = useMemo(
+    () => Object.entries(agg.chartLabelOverrides ?? {}),
+    [agg.chartLabelOverrides]
+  );
   const filters = agg.filters || [];
   const metrics = agg.metrics || [];
   const sources = etlData?.dataSources;
@@ -191,6 +207,21 @@ export function MetricConfigPanel({
 
   const removeFilter = (index: number) => {
     updateAgg({ filters: filters.filter((_, i) => i !== index) });
+  };
+
+  const setLabelOverride = (oldRaw: string, newRaw: string, display: string) => {
+    const next = { ...(agg.chartLabelOverrides ?? {}) };
+    if (oldRaw !== "") delete next[oldRaw];
+    if (newRaw !== "") next[newRaw] = display;
+    updateAgg({ chartLabelOverrides: Object.keys(next).length ? next : undefined });
+  };
+  const removeLabelOverride = (raw: string) => {
+    const next = { ...(agg.chartLabelOverrides ?? {}) };
+    delete next[raw];
+    updateAgg({ chartLabelOverrides: Object.keys(next).length ? next : undefined });
+  };
+  const addLabelOverride = () => {
+    updateAgg({ chartLabelOverrides: { ...(agg.chartLabelOverrides ?? {}), "": "" } });
   };
 
   const addSavedMetric = (saved: SavedMetricPanel) => {
@@ -289,6 +320,39 @@ export function MetricConfigPanel({
           </div>
         )}
 
+        {showLabelOverrides && (
+          <div className="border-t border-[var(--studio-border)] pt-4">
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Nombres de etiquetas en el gráfico</Label>
+            <p className="text-[11px] text-[var(--studio-fg-muted)] mt-0.5 mb-2">Reemplazar el valor que viene de los datos por el texto a mostrar (eje X, porciones, leyenda).</p>
+            <div className="space-y-2">
+              {labelOverridesEntries.map(([raw, display], idx) => (
+                <div key={`override-${idx}-${raw}`} className="flex gap-2 items-center">
+                  <Input
+                    value={raw}
+                    onChange={(e) => setLabelOverride(raw, e.target.value, display)}
+                    placeholder="Valor original (ej. Q1)"
+                    className="h-8 text-xs flex-1"
+                  />
+                  <span className="text-[var(--studio-fg-muted)] text-xs">→</span>
+                  <Input
+                    value={display}
+                    onChange={(e) => setLabelOverride(raw, raw, e.target.value)}
+                    placeholder="Nombre a mostrar"
+                    className="h-8 text-xs flex-1"
+                  />
+                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500" onClick={() => removeLabelOverride(raw)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <Button type="button" variant="outline" size="sm" className="mt-2 h-8 text-xs" onClick={addLabelOverride}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Añadir etiqueta
+            </Button>
+          </div>
+        )}
+
         {((widget.aggregationConfig as any)?.chartType || widget.type) === "kpi" && (
           <div className="space-y-3">
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">KPI — línea secundaria</Label>
@@ -307,7 +371,7 @@ export function MetricConfigPanel({
           </div>
         )}
 
-        {!["filter", "image", "text"].includes(widget.type) && (
+        {!["filter", "image", "text"].includes(widget.type) && (Array.isArray(agg.chartYAxes) ? agg.chartYAxes.length : 0) <= 1 && (
           <div className="border-t border-[var(--studio-border)] pt-4 space-y-3">
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Formato de números</Label>
             <div className="grid grid-cols-2 gap-2">
@@ -372,6 +436,88 @@ export function MetricConfigPanel({
             </div>
           </div>
         )}
+        {!["filter", "image", "text"].includes(widget.type) && Array.isArray(agg.chartYAxes) && agg.chartYAxes.length > 1 && (
+          <div className="border-t border-[var(--studio-border)] pt-4 space-y-3">
+            {widget.type === "combo" && (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!agg.chartComboSyncAxes}
+                  onChange={(e) => onUpdate({ aggregationConfig: { ...agg, chartComboSyncAxes: e.target.checked } })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Sincronizar ejes</span>
+                <span className="text-[10px] text-[var(--studio-fg-muted)]">Alinear el eje derecho con el izquierdo para comparar dos métricas con escalas distintas.</span>
+              </label>
+            )}
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Formato por métrica</Label>
+            <p className="text-[11px] text-[var(--studio-fg-muted)]">Asigná tipo y escala a cada métrica del gráfico.</p>
+            <div className="space-y-3">
+              {agg.chartYAxes.map((key, idx) => {
+                const label = (agg.metrics?.[idx] as { alias?: string; field?: string } | undefined)?.alias ?? (agg.metrics?.[idx] as { field?: string } | undefined)?.field ?? key;
+                const m = (agg.chartMetricFormats ?? {})[key] ?? {};
+                const valueType = (m.valueType ?? agg.chartValueType ?? "number") as string;
+                const valueScale = (m.valueScale ?? agg.chartValueScale ?? "none") as string;
+                const updateM = (upd: Partial<{ valueType: string; valueScale: string; currencySymbol: string; decimals: number; thousandSep: boolean }>) =>
+                  onUpdate({ aggregationConfig: { ...agg, chartMetricFormats: { ...(agg.chartMetricFormats ?? {}), [key]: { ...m, ...upd } } } });
+                return (
+                  <div key={key} className="rounded border p-2" style={{ borderColor: "var(--studio-border)", background: "var(--studio-surface)" }}>
+                    <p className="text-[11px] font-medium mb-1.5" style={{ color: "var(--studio-fg)" }}>{label}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-[10px] text-[var(--studio-fg-muted)]">Tipo</Label>
+                        <select
+                          value={valueType || "number"}
+                          onChange={(e) => updateM({ valueType: e.target.value || undefined })}
+                          className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                        >
+                          <option value="number">Número</option>
+                          <option value="currency">Moneda</option>
+                          <option value="percent">Porcentaje</option>
+                        </select>
+                      </div>
+                      <div>
+                        <Label className="text-[10px] text-[var(--studio-fg-muted)]">Escala</Label>
+                        <select
+                          value={valueScale || "none"}
+                          onChange={(e) => updateM({ valueScale: e.target.value || undefined })}
+                          className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                        >
+                          <option value="none">Ninguna</option>
+                          <option value="K">K</option>
+                          <option value="M">M</option>
+                          <option value="B">B</option>
+                        </select>
+                      </div>
+                    </div>
+                    {valueType === "currency" && (
+                      <div className="mt-2">
+                        <Label className="text-[10px] text-[var(--studio-fg-muted)]">Símbolo</Label>
+                        <Input
+                          value={(m.currencySymbol as string) ?? (agg.chartCurrencySymbol as string) ?? "$"}
+                          onChange={(e) => updateM({ currencySymbol: e.target.value || "$" })}
+                          className="mt-0.5 h-7 w-14 text-[11px]"
+                          placeholder="$"
+                        />
+                      </div>
+                    )}
+                    <div className="mt-2 flex items-center gap-2">
+                      <Label className="text-[10px] text-[var(--studio-fg-muted)]">Decimales</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={6}
+                        value={m.decimals ?? agg.chartDecimals ?? 2}
+                        onChange={(e) => updateM({ decimals: Math.min(6, Math.max(0, parseInt(e.target.value, 10) || 0)) })}
+                        className="h-7 w-12 text-[11px]"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {!["filter", "image", "text"].includes(widget.type) && (
           <>
@@ -396,6 +542,23 @@ export function MetricConfigPanel({
                         fieldType="all"
                         placeholder="Campo..."
                       />
+                      {agg.dimension && (etlData?.dataSources?.find((s) => s.id === (widget.dataSourceId ?? etlData?.primarySourceId))?.fields?.date ?? etlData?.fields?.date ?? []).some((d: string) => (d || "").toLowerCase() === (agg.dimension || "").toLowerCase()) && (
+                        <div>
+                          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Nivel de fecha (agrupar por)</Label>
+                          <select
+                            value={agg.dateGroupByGranularity ?? "month"}
+                            onChange={(e) => updateAgg({ dateGroupByGranularity: e.target.value as "day" | "month" | "quarter" | "semester" | "year" })}
+                            className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
+                          >
+                            <option value="day">Día</option>
+                            <option value="week">Semana</option>
+                            <option value="month">Mes</option>
+                            <option value="quarter">Trimestre</option>
+                            <option value="semester">Semestre</option>
+                            <option value="year">Año</option>
+                          </select>
+                        </div>
+                      )}
                       <AdminFieldSelector
                         label="Segunda dimensión (opcional)"
                         value={agg.dimension2 || ""}
@@ -545,7 +708,34 @@ export function MetricConfigPanel({
                                 </>
                               ) : (
                                 <div className="space-y-1.5">
-                                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Operaciones: metric_0, metric_1… con + - * /</Label>
+                                  {(() => {
+                                    const baseRefs = metrics
+                                      .map((mm, idx) => (mm.func !== "FORMULA" ? { ref: `metric_${idx}`, label: mm.alias || mm.field || `Métrica ${idx + 1}` } : null))
+                                      .filter((x): x is { ref: string; label: string } => x != null);
+                                    return (
+                                      <>
+                                        <Label className="text-[11px] text-[var(--studio-fg-muted)]">Operaciones: metric_0, metric_1… con + - * /. En este widget: {baseRefs.length ? baseRefs.map((r) => `${r.ref}=«${r.label}»`).join(", ") : "añadí al menos una métrica base antes de la fórmula."}</Label>
+                                        {baseRefs.length > 0 && (
+                                          <select
+                                            value=""
+                                            onChange={(e) => {
+                                              const ref = e.target.value;
+                                              if (!ref) return;
+                                              const cur = m.formula ?? "";
+                                              updateMetric(i, { formula: cur + (cur && !cur.endsWith(" ") ? " " : "") + ref, field: "" });
+                                              e.target.value = "";
+                                            }}
+                                            className="h-7 text-[11px] rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2"
+                                          >
+                                            <option value="">Insertar métrica en fórmula…</option>
+                                            {baseRefs.map((r) => (
+                                              <option key={r.ref} value={r.ref}>{r.ref} ({r.label})</option>
+                                            ))}
+                                          </select>
+                                        )}
+                                      </>
+                                    );
+                                  })()}
                                   <div className="flex flex-wrap gap-1">
                                     {[
                                       { label: "A ÷ B", expr: "metric_0 / NULLIF(metric_1, 0)" },

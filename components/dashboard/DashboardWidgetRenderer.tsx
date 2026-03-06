@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useMemo } from "react";
 import { Loader2 } from "lucide-react";
 import { Bar, Line, Pie, Doughnut, Scatter } from "react-chartjs-2";
@@ -17,8 +18,13 @@ import {
 } from "chart.js";
 import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Card } from "@/components/ui/card";
-import { buildChartOptions, formatValue, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import { buildChartOptions, formatValue, getValueFormatter, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { DashboardTextWidget } from "./DashboardTextWidget";
+
+const DashboardMapWidget = dynamic(
+  () => import("./DashboardMapWidget").then((m) => m.DashboardMapWidget),
+  { ssr: false }
+);
 
 ChartJS.register(
   CategoryScale,
@@ -46,7 +52,8 @@ export type WidgetChartType =
   | "filter"
   | "image"
   | "text"
-  | "scatter";
+  | "scatter"
+  | "map";
 
 export type ChartConfig = {
   labels: string[];
@@ -58,6 +65,7 @@ export type ChartConfig = {
     borderWidth?: number;
     type?: "bar" | "line";
     fill?: boolean;
+    yAxisID?: string;
   }>;
 };
 
@@ -79,6 +87,8 @@ export interface DashboardWidgetRendererWidget {
   facetValues?: Record<string, unknown[]>;
   labelDisplayMode?: "percent" | "value";
   chartStyle?: ChartStyleConfig;
+  /** Un estilo por dataset cuando el gráfico tiene varias métricas (formato por métrica). */
+  chartMetricStyles?: (ChartStyleConfig | undefined)[];
   gridSpan?: number;
   minHeight?: number;
   kpiSecondaryLabel?: string;
@@ -213,6 +223,7 @@ export function DashboardWidgetRenderer({
     if (chartType === "text") return true;
     if (chartType === "image") return true;
     if (chartType === "filter") return true;
+    if (chartType === "map") return Array.isArray(tableRows) && tableRows.length > 0;
     return !!(chartConfig?.labels?.length && (chartConfig.datasets?.length ?? 0) > 0);
   }, [chartType, chartConfig, tableRows]);
 
@@ -226,10 +237,36 @@ export function DashboardWidgetRenderer({
     return formatKpiValue(sum, widget.chartStyle as ChartStyleConfig | undefined);
   }, [chartType, widget.rows, widget.chartStyle]);
 
+  const isCombo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2;
+  const aggConfig = widget.aggregationConfig as { chartComboSyncAxes?: boolean } | undefined;
+  const comboSyncAxes = isCombo && aggConfig?.chartComboSyncAxes === true;
+
+  const effectiveChartData = useMemo((): ChartConfig | null | undefined => {
+    if (!isCombo || !chartConfig?.datasets?.[0]?.data || !chartConfig?.datasets?.[1]?.data) return chartConfig ?? null;
+    if (!comboSyncAxes) return chartConfig;
+    const d0 = chartConfig.datasets[0].data as number[];
+    const d1 = chartConfig.datasets[1].data as number[];
+    const min0 = Math.min(...d0);
+    const max0 = Math.max(...d0);
+    const min1 = Math.min(...d1);
+    const max1 = Math.max(...d1);
+    const range0 = max0 - min0 || 1;
+    const range1 = max1 - min1 || 1;
+    return {
+      labels: chartConfig.labels,
+      datasets: [
+        { ...chartConfig.datasets[0], data: d0.map((v) => (v - min0) / range0) },
+        { ...chartConfig.datasets[1], data: d1.map((v) => (v - min1) / range1) },
+      ],
+    };
+  }, [isCombo, comboSyncAxes, chartConfig]);
+
   const chartOptions = useMemo(() => {
     const style = (widget.chartStyle as ChartStyleConfig | undefined) ?? undefined;
     const labelMode = widget.labelDisplayMode ?? "percent";
-    const type = chartType === "horizontalBar" ? "horizontalBar" : chartType === "area" ? "line" : (chartType as "bar" | "line" | "pie" | "doughnut");
+    const type = chartType === "horizontalBar" ? "horizontalBar" : chartType === "area" ? "line" : chartType === "combo" ? "bar" : (chartType as "bar" | "line" | "pie" | "doughnut");
+    const metricStyles = widget.chartMetricStyles as (ChartStyleConfig | undefined)[] | undefined;
+    const usePerMetricFormat = Array.isArray(metricStyles) && metricStyles.length > 0;
     const optionsBase = getChartOptionsBase(darkChartTheme);
     if (type === "pie" || type === "doughnut") {
       const base = buildChartOptions(type, style, labelMode) as Record<string, unknown>;
@@ -249,21 +286,104 @@ export function DashboardWidgetRenderer({
         plugins,
       };
     }
-    if (type === "bar" || type === "horizontalBar" || type === "line") {
+    if (type === "bar" || type === "horizontalBar" || type === "line" || chartType === "combo") {
       const built = buildChartOptions(type, style, "value") as Record<string, unknown>;
       const builtPlugins = built.plugins as Record<string, unknown> | undefined;
       const builtDatalabels = builtPlugins?.datalabels as Record<string, unknown> | undefined ?? {};
+      const datalabelFormatter =
+        usePerMetricFormat
+          ? (value: number, ctx?: { datasetIndex?: number }) => {
+              const s = ctx?.datasetIndex != null && metricStyles[ctx.datasetIndex] != null ? metricStyles[ctx.datasetIndex]! : style;
+              return getValueFormatter(s ?? undefined, "value")(value, ctx as { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } });
+            }
+          : (builtDatalabels as { formatter?: (v: number, c?: unknown) => string }).formatter;
+
+      const isComboTwo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2;
+      const syncAxes = isComboTwo && (widget.aggregationConfig as { chartComboSyncAxes?: boolean } | undefined)?.chartComboSyncAxes === true;
+      let comboScales: Record<string, unknown> | undefined;
+      if (isComboTwo && chartConfig?.datasets?.[0]?.data && chartConfig?.datasets?.[1]?.data) {
+        const d0 = chartConfig.datasets[0].data as number[];
+        const d1 = chartConfig.datasets[1].data as number[];
+        const min0 = Math.min(...d0);
+        const max0 = Math.max(...d0);
+        const min1 = Math.min(...d1);
+        const max1 = Math.max(...d1);
+        const range0 = max0 - min0 || 1;
+        const range1 = max1 - min1 || 1;
+        const style0 = (usePerMetricFormat && metricStyles[0]) ? metricStyles[0]! : style;
+        const style1 = (usePerMetricFormat && metricStyles[1]) ? metricStyles[1]! : style;
+        const fmt0 = getValueFormatter(style0 ?? undefined, "value");
+        const fmt1 = getValueFormatter(style1 ?? undefined, "value");
+        comboScales = {
+          ...(built.scales as Record<string, unknown>),
+          y: {
+            ...(built.scales as Record<string, unknown>)?.y as object,
+            ...(syncAxes && {
+              min: 0,
+              max: 1,
+              ticks: {
+                ...((built.scales as Record<string, unknown>)?.y as Record<string, unknown>)?.ticks,
+                callback: (value: number) => fmt0(value * range0 + min0),
+              },
+            }),
+          },
+          y1: {
+            position: "right" as const,
+            grid: { drawOnChartArea: false },
+            ...(syncAxes && {
+              min: 0,
+              max: 1,
+              ticks: {
+                callback: (value: number) => fmt1(value * range1 + min1),
+              },
+            }),
+          },
+        };
+      }
+
+      const tooltipCallbacks =
+        usePerMetricFormat || syncAxes
+          ? {
+              label: (context: { dataset: { label?: string }; parsed: { y?: number }; datasetIndex?: number }) => {
+                let rawY = context.parsed?.y ?? 0;
+                if (syncAxes && chartConfig?.datasets?.[0]?.data && chartConfig?.datasets?.[1]?.data && context.datasetIndex != null) {
+                  const d0 = chartConfig.datasets[0].data as number[];
+                  const d1 = chartConfig.datasets[1].data as number[];
+                  const min0 = Math.min(...d0);
+                  const max0 = Math.max(...d0);
+                  const min1 = Math.min(...d1);
+                  const max1 = Math.max(...d1);
+                  const range0 = max0 - min0 || 1;
+                  const range1 = max1 - min1 || 1;
+                  rawY = context.datasetIndex === 0 ? rawY * range0 + min0 : rawY * range1 + min1;
+                }
+                const s = context?.datasetIndex != null && metricStyles?.[context.datasetIndex] != null ? metricStyles[context.datasetIndex]! : style;
+                const formatted = s != null ? getValueFormatter(s, "value")(rawY, context as unknown) : String(rawY);
+                return `${context.dataset?.label ?? ""}: ${formatted}`;
+              },
+            }
+          : undefined;
       const plugins = {
         ...optionsBase.plugins,
         ...builtPlugins,
-        ...(darkChartTheme && {
-          datalabels: { ...builtDatalabels, color: DATALABEL_COLOR_DARK },
+        datalabels: {
+          ...builtDatalabels,
+          ...(datalabelFormatter != null && { formatter: datalabelFormatter }),
+          ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
+        },
+        ...(tooltipCallbacks && {
+          tooltip: {
+            ...(optionsBase.plugins as { tooltip?: Record<string, unknown> }).tooltip,
+            callbacks: tooltipCallbacks,
+          },
         }),
       };
-      return { ...optionsBase, ...built, plugins };
+      const baseReturn = { ...optionsBase, ...built, plugins };
+      if (comboScales) return { ...baseReturn, scales: comboScales };
+      return baseReturn;
     }
     return optionsBase;
-  }, [chartType, chartConfig, widget.chartStyle, widget.labelDisplayMode, darkChartTheme]);
+  }, [chartType, chartConfig, widget.chartStyle, widget.chartMetricStyles, widget.labelDisplayMode, widget.aggregationConfig, darkChartTheme]);
 
   return (
     <Card
@@ -380,9 +500,24 @@ export function DashboardWidgetRenderer({
                 )}
               </div>
             )}
-            {chartType !== "kpi" && chartType !== "table" && chartType !== "text" && chartType !== "image" && chartType !== "filter" && chartConfig && (
+            {chartType === "map" && (
+              <div className="flex flex-1 flex-col min-h-0">
+                {!Array.isArray(tableRows) || tableRows.length === 0 ? (
+                  <div className="flex flex-1 flex-col items-center justify-center py-8 text-center text-sm" style={{ color: "var(--platform-fg-muted, #64748b)" }}>
+                    No hay datos geográficos
+                  </div>
+                ) : (
+                  <DashboardMapWidget
+                    rows={tableRows as Record<string, unknown>[]}
+                    aggregationConfig={widget.aggregationConfig as { chartXAxis?: string; chartYAxes?: string[]; dimension?: string; dimensions?: string[] } | undefined}
+                    height={Math.max(220, (effectiveMinHeight ?? 240) - 52)}
+                  />
+                )}
+              </div>
+            )}
+            {chartType !== "kpi" && chartType !== "table" && chartType !== "text" && chartType !== "image" && chartType !== "filter" && chartType !== "map" && chartConfig && (
               <div className="h-[220px] w-full">
-                {(chartType === "bar" || chartType === "combo") && <Bar data={chartConfig as never} options={chartOptions as never} />}
+                {(chartType === "bar" || chartType === "combo") && <Bar data={(chartType === "combo" && effectiveChartData ? effectiveChartData : chartConfig) as never} options={chartOptions as never} />}
                 {chartType === "horizontalBar" && (
                   <Bar
                     data={chartConfig as never}

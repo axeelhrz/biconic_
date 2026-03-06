@@ -217,6 +217,28 @@ export async function GET(
       return nonNull > 0 && dateCount / nonNull >= 0.6;
     });
 
+    // Métricas guardadas del ETL para resolver por nombre en aggregate-data
+    let savedMetrics: unknown[] = [];
+    try {
+      const { data: etlRow } = await supabase
+        .from("etl")
+        .select("layout")
+        .eq("id", dashboard.etl_id)
+        .maybeSingle();
+      const layout = (etlRow as any)?.layout;
+      savedMetrics = Array.isArray(layout?.saved_metrics)
+        ? layout.saved_metrics
+        : Array.isArray(layout?.savedMetrics)
+          ? layout.savedMetrics
+          : [];
+    } catch {
+      // ignore
+    }
+
+    const fullTableName =
+      resolvedSchema && resolvedTableName
+        ? `${resolvedSchema}.${resolvedTableName}`
+        : resolvedTableName || "etl_output";
     const elapsedTime = (Date.now() - startTime) / 1000;
     return NextResponse.json({
       ok: true,
@@ -225,7 +247,7 @@ export async function GET(
         etl: dashboard.etl,
         etlData: {
           id: 0,
-          name: resolvedTableName || "etl_output",
+          name: fullTableName,
           created_at: resolvedCreatedAt || new Date().toISOString(),
           dataArray: [],
           rowCount: rowCount,
@@ -236,6 +258,7 @@ export async function GET(
           string: stringFields,
           date: dateFields,
         },
+        savedMetrics,
       },
     });
   } catch (error: any) {

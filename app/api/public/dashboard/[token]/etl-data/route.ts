@@ -179,6 +179,10 @@ export async function GET(
       return nonNull > 0 && dateCount / nonNull >= 0.6;
     });
 
+    const fullTableName =
+      resolvedSchema && resolvedTableName
+        ? `${resolvedSchema}.${resolvedTableName}`
+        : resolvedTableName || "etl_output";
     return NextResponse.json({
       ok: true,
       data: {
@@ -186,7 +190,7 @@ export async function GET(
         etl: dashboard.etl,
         etlData: {
           id: 0,
-          name: resolvedTableName || "etl_output",
+          name: fullTableName,
           created_at: resolvedCreatedAt || new Date().toISOString(),
           dataArray: [],
           rowCount: rowCount,

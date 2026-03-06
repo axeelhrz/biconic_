@@ -13,7 +13,7 @@ interface DistinctRequest {
   filters?: Filter[]; // opcional, para acotar el universo
   limit?: number; // 1..1000
   order?: "ASC" | "DESC";
-  transform?: "YEAR" | "MONTH" | "DAY";
+  transform?: "DAY" | "MONTH" | "QUARTER" | "SEMESTER" | "YEAR";
 }
 
 const ALLOWED_OPERATORS = new Set([
@@ -128,15 +128,24 @@ export async function POST(
     const transformOp = (body.transform || "").toUpperCase();
     console.log("[public distinct-values API] Transform op:", transformOp);
 
+    const dateExpr = `(
+      CASE
+        WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, 'DD/MM/YYYY')
+        WHEN "${safeField}"::text LIKE '%, % de % de %' THEN to_date("${safeField}"::text, 'Day, DD "de" Month "de" YYYY')
+        ELSE "${safeField}"::date
+      END
+    )`;
     if (transformOp === "YEAR") {
       console.log("[public distinct-values API] Applying YEAR transformation");
-      selectExpression = `EXTRACT(YEAR FROM (
-        CASE
-          WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, 'DD/MM/YYYY')
-          WHEN "${safeField}"::text LIKE '%, % de % de %' THEN to_date("${safeField}"::text, 'Day, DD "de" Month "de" YYYY')
-          ELSE "${safeField}"::date
-        END
-      ))`;
+      selectExpression = `EXTRACT(YEAR FROM ${dateExpr})::text`;
+    } else if (transformOp === "MONTH") {
+      selectExpression = `TO_CHAR(${dateExpr}::timestamp, 'YYYY-MM')`;
+    } else if (transformOp === "QUARTER") {
+      selectExpression = `(EXTRACT(YEAR FROM ${dateExpr})::text || '-Q' || EXTRACT(QUARTER FROM ${dateExpr})::text)`;
+    } else if (transformOp === "SEMESTER") {
+      selectExpression = `(EXTRACT(YEAR FROM ${dateExpr})::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${dateExpr}) <= 6 THEN '1' ELSE '2' END)`;
+    } else if (transformOp === "DAY") {
+      selectExpression = `(${dateExpr}::timestamp)::date::text`;
     }
 
     let query = `SELECT DISTINCT ${selectExpression} AS value FROM "${schema}"."${safeTable}"`;

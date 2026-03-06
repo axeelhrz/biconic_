@@ -65,10 +65,12 @@ interface AggregationRequest {
   /** Comparación contra un valor fijo: agrega columnas alias_vs_fijo y alias_var_pct_fijo. */
   compareFixedValue?: number;
   dateDimension?: string;
-  /** Agrupación temporal: aplica DATE_TRUNC(granularity, campo) como primera dimensión. */
-  dateGroupBy?: { field: string; granularity: "day" | "week" | "month" | "year" };
+  /** Agrupación temporal: aplica DATE_TRUNC(granularity, campo) como primera dimensión (semester vía expresión). */
+  dateGroupBy?: { field: string; granularity: "day" | "week" | "month" | "quarter" | "semester" | "year" };
   /** Filtro de rango temporal: último N (last/unit) o rango personalizado (from/to). */
   dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string };
+  /** Definiciones de métricas guardadas enviadas por el cliente para resolver por nombre (evita depender solo del ETL lookup). */
+  savedMetrics?: Array<{ name: string; field?: string; func?: string; alias?: string; expression?: string }>;
 }
 
 // --- Constantes ---
@@ -97,6 +99,8 @@ const ALLOWED_OPERATORS = new Set([
   "MONTH",
   "YEAR",
   "DAY",
+  "QUARTER",
+  "SEMESTER",
   "EXACT",
   "CONTAINS",
   "STARTS_WITH",
@@ -232,7 +236,7 @@ function expandIfsToCaseWhen(expr: string): string {
   const start = trimmed.indexOf("(", ifsStart);
   const extracted = extractParenContent(trimmed, start);
   if (!extracted) return expr;
-  const args = extracted.inner.split(/[,;]/).map((a) => a.trim()).filter(Boolean);
+  const args = splitArgs(extracted.inner);
   if (args.length < 2) return expr;
   const pairs: { cond: string; val: string }[] = [];
   let i = 0;
@@ -255,7 +259,7 @@ function expandAndOr(expr: string, fn: "AND" | "OR"): string {
   const start = expr.indexOf("(", first);
   const extracted = extractParenContent(expr, start);
   if (!extracted) return expr;
-  const args = extracted.inner.split(/[,;]/).map((a) => a.trim()).filter(Boolean);
+  const args = splitArgs(extracted.inner);
   const op = fn === "AND" ? " AND " : " OR ";
   const joined = args.map((a) => (fn === "AND" ? expandAndOr(a, "AND") : expandAndOr(a, "OR"))).join(op);
   const repl = `(${joined})`;
@@ -275,8 +279,8 @@ function expressionToSql(expression: string, derivedLookup?: Record<string, Deri
   if (!expression || typeof expression !== "string") return null;
   let s = expression.replace(/\s+/g, " ").trim();
   if (!s) return null;
-  // Permitir literales: números, cadenas con ' o ", ^ para potencia
-  const allowed = /^[a-zA-Z0-9_*+\-/().,\s'"%;^]+$/;
+  // Permitir literales: números, cadenas con ' o ", ^ para potencia, = <> ! para comparaciones (IF, COUNTIF, etc.)
+  const allowed = /^[a-zA-Z0-9_*+\-/().,\s'"%;^=<>!]+$/;
   if (!allowed.test(s)) return null;
 
   // 0) Normalizar ; a , (Excel usa ; como separador de argumentos)
@@ -712,6 +716,24 @@ export async function POST(req: NextRequest) {
         }
       } catch { /* ignore */ }
     }
+    // Fusionar métricas guardadas enviadas en el body (prioridad al cliente para multi-ETL o cuando el lookup falla)
+    if (Array.isArray(body.savedMetrics) && body.savedMetrics.length > 0) {
+      for (const sm of body.savedMetrics) {
+        const name = typeof sm?.name === "string" ? String(sm.name).trim() : "";
+        if (!name) continue;
+        const key = name.toLowerCase();
+        const field = typeof sm.field === "string" ? String(sm.field).trim() : "";
+        const func = typeof sm.func === "string" ? String(sm.func).toUpperCase() : "SUM";
+        const alias = typeof sm.alias === "string" ? String(sm.alias).trim() : name;
+        const expression = typeof sm.expression === "string" ? String(sm.expression).trim() : undefined;
+        savedMetricByName[key] = {
+          field: field || name,
+          func,
+          alias: alias || name,
+          ...(expression ? { expression } : {}),
+        };
+      }
+    }
     console.log("[aggregate-data] derivedByName keys:", Object.keys(derivedByName), "etlIdForLookup:", etlIdForLookup);
 
     const getDerived = (field: string | undefined): DerivedColumnRef | undefined => {
@@ -880,8 +902,13 @@ export async function POST(req: NextRequest) {
     if (body.dateGroupBy?.field && body.dateGroupBy?.granularity) {
       const dgCol = quotedColumn(body.dateGroupBy.field);
       const gran = body.dateGroupBy.granularity.toLowerCase().replace(/[^a-z]/g, "");
-      const validGran = ["day", "week", "month", "year"].includes(gran) ? gran : "month";
-      dateGroupByExpr = `DATE_TRUNC('${validGran}', ${dgCol}::timestamp)`;
+      const validGranList = ["day", "week", "month", "quarter", "semester", "year"];
+      const validGran = validGranList.includes(gran) ? gran : "month";
+      if (validGran === "semester") {
+        dateGroupByExpr = `(EXTRACT(YEAR FROM ${dgCol}::timestamp)::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${dgCol}::timestamp) <= 6 THEN '1' ELSE '2' END)`;
+      } else {
+        dateGroupByExpr = `DATE_TRUNC('${validGran}', ${dgCol}::timestamp)`;
+      }
       // No agregar columna "periodo": la dimensión temporal usa el nombre del campo (ej. FECHA_COMPRA) con valores agrupados por granularidad.
       const timeField = (body.dateGroupBy.field || "").trim().replace(/"/g, '""');
       const dateParts =
@@ -955,7 +982,7 @@ export async function POST(req: NextRequest) {
           const op = (f.operator || "=").toUpperCase().trim();
 
           let fieldExpression;
-          if (op === "MONTH" || op === "DAY" || op === "YEAR") {
+          if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "QUARTER" || op === "SEMESTER") {
             fieldExpression = `(
               CASE
                 WHEN ${col}::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(${col}::text, 'DD/MM/YYYY')
@@ -996,6 +1023,33 @@ export async function POST(req: NextRequest) {
             const dayStr = String(f.value || "").trim();
             if (!/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) return "TRUE";
             return `${fieldExpression} = DATE '${dayStr}'`;
+          }
+          if (op === "QUARTER") {
+            if (Array.isArray(f.value)) {
+              const list = f.value
+                .map((v) => Number(v))
+                .filter((n) => !isNaN(n) && n >= 1 && n <= 4)
+                .join(", ");
+              if (!list) return "TRUE";
+              return `EXTRACT(QUARTER FROM ${fieldExpression}) IN (${list})`;
+            }
+            const q = Number(f.value);
+            if (isNaN(q) || q < 1 || q > 4) return "TRUE";
+            return `EXTRACT(QUARTER FROM ${fieldExpression}) = ${q}`;
+          }
+          if (op === "SEMESTER") {
+            const semExpr = `(CASE WHEN EXTRACT(MONTH FROM ${fieldExpression}) <= 6 THEN 1 ELSE 2 END)`;
+            if (Array.isArray(f.value)) {
+              const list = f.value
+                .map((v) => Number(v))
+                .filter((n) => !isNaN(n) && (n === 1 || n === 2))
+                .join(", ");
+              if (!list) return "TRUE";
+              return `${semExpr} IN (${list})`;
+            }
+            const s = Number(f.value);
+            if (isNaN(s) || (s !== 1 && s !== 2)) return "TRUE";
+            return `${semExpr} = ${s}`;
           }
           if (op === "IN") {
             const list = (Array.isArray(f.value) ? f.value : [])
@@ -1136,7 +1190,7 @@ export async function POST(req: NextRequest) {
         } else {
           const availableDerived = Object.keys(derivedByName).join(", ") || "(ninguna)";
           const savedNames = Object.keys(savedMetricByName).length ? ` Métricas guardadas del ETL: ${Object.keys(savedMetricByName).join(", ")}.` : "";
-          userMsg = `La columna «${colName}» no existe en la tabla ni como columna calculada. Columnas calculadas disponibles: ${availableDerived}. Creala en Métricas → Fórmula → Crear columna. Si «${colName}» es una métrica guardada, asegurate de que el widget use la fuente de datos del ETL donde está definida (mismo ETL).${savedNames}`;
+          userMsg = `La columna «${colName}» no existe en la tabla ni como columna calculada. Columnas calculadas disponibles: ${availableDerived}. Creala en Métricas → Fórmula → Crear columna. Si «${colName}» es una métrica guardada, asegurate de que el widget use la fuente de datos del ETL donde está definida (mismo ETL) o enviá en el body del request el array «savedMetrics» con la definición de esa métrica (name, field, expression, etc.).${savedNames}`;
         }
       }
       return NextResponse.json(

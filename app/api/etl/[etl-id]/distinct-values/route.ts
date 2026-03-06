@@ -77,23 +77,80 @@ async function resolveEtlTable(
 
 const MAX_ROWS = 5000;
 
+type DateLevel = "day" | "month" | "quarter" | "semester" | "year";
+
+/** Expresión SQL para valores distintos por nivel de fecha (columna ya sanitizada, schema.table calificado). */
+function dateLevelSelectExpression(
+  qualifiedColumn: string,
+  dateLevel: DateLevel
+): string {
+  const col = qualifiedColumn;
+  switch (dateLevel) {
+    case "year":
+      return `EXTRACT(YEAR FROM ${col}::timestamp)::text`;
+    case "month":
+      return `TO_CHAR(${col}::timestamp, 'YYYY-MM')`;
+    case "quarter":
+      return `(EXTRACT(YEAR FROM ${col}::timestamp)::text || '-Q' || EXTRACT(QUARTER FROM ${col}::timestamp)::text)`;
+    case "semester":
+      return `(EXTRACT(YEAR FROM ${col}::timestamp)::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${col}::timestamp) <= 6 THEN '1' ELSE '2' END)`;
+    case "day":
+    default:
+      return `(${col}::timestamp)::date::text`;
+  }
+}
+
 /**
  * Lee valores distintos de una columna en etl_output vía Postgres directo.
- * El esquema etl_output suele no tener permisos vía API Supabase; la previsualización del dataset usa esta misma vía.
+ * Si dateLevel está presente, agrega por ese nivel (day|month|quarter|semester|year).
  */
 async function fetchDistinctFromEtlOutputViaPostgres(
   tableName: string,
-  column: string
+  column: string,
+  dateLevel?: DateLevel
 ): Promise<{ values: string[]; error?: string }> {
   const dbUrl = process.env.SUPABASE_DB_URL;
   if (!dbUrl) return { values: [], error: "SUPABASE_DB_URL no configurado" };
   const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
   const safeColumn = column.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "id";
+  const colRef = `"${safeColumn}"`;
+  const selectExpr = dateLevel
+    ? dateLevelSelectExpression(colRef, dateLevel)
+    : colRef;
   const sql = postgres(dbUrl);
   try {
-    // Identificadores ya sanitizados (solo a-z0-9_); mismo patrón que metrics-data para etl_output
     const rows = await sql.unsafe(
-      `SELECT DISTINCT "${safeColumn}" AS val FROM etl_output."${safeTable}" WHERE "${safeColumn}" IS NOT NULL AND trim("${safeColumn}"::text) != '' LIMIT ${MAX_ROWS}`
+      `SELECT DISTINCT ${selectExpr} AS val FROM etl_output."${safeTable}" WHERE "${safeColumn}" IS NOT NULL AND trim("${safeColumn}"::text) != '' LIMIT ${MAX_ROWS}`
+    );
+    await sql.end();
+    const raw = Array.isArray(rows) ? rows : [];
+    const values = [...new Set(raw.map((r: any) => String(r?.val ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return { values };
+  } catch (err: unknown) {
+    try { await sql.end(); } catch { /* ignore */ }
+    const msg = err instanceof Error ? err.message : String(err);
+    return { values: [], error: msg };
+  }
+}
+
+/** Valores distintos por nivel de fecha en cualquier schema.table vía Postgres. */
+async function fetchDistinctViaPostgres(
+  schema: string,
+  tableName: string,
+  column: string,
+  dateLevel: DateLevel
+): Promise<{ values: string[]; error?: string }> {
+  const dbUrl = process.env.SUPABASE_DB_URL;
+  if (!dbUrl) return { values: [], error: "SUPABASE_DB_URL no configurado" };
+  const safeSchema = schema.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "public";
+  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
+  const safeColumn = column.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "id";
+  const colRef = `"${safeColumn}"`;
+  const selectExpr = dateLevelSelectExpression(colRef, dateLevel);
+  const sql = postgres(dbUrl);
+  try {
+    const rows = await sql.unsafe(
+      `SELECT DISTINCT ${selectExpr} AS val FROM "${safeSchema}"."${safeTable}" WHERE "${safeColumn}" IS NOT NULL AND trim("${safeColumn}"::text) != '' LIMIT ${MAX_ROWS}`
     );
     await sql.end();
     const raw = Array.isArray(rows) ? rows : [];
@@ -139,6 +196,10 @@ export async function GET(
 
     const url = new URL(request.url);
     const columnParam = (url.searchParams.get("column") ?? "").trim();
+    const dateLevelParam = (url.searchParams.get("dateLevel") ?? "").toLowerCase().trim();
+    const dateLevel: DateLevel | undefined = ["day", "month", "quarter", "semester", "year"].includes(dateLevelParam)
+      ? (dateLevelParam as DateLevel)
+      : undefined;
     // Quitar prefijo tipo "schema." o "tablename." si vino calificado
     const columnRaw = columnParam.replace(/^[a-zA-Z0-9_]+\./, "").replace(/[^a-zA-Z0-9_]/g, "");
     if (!columnRaw) {
@@ -157,7 +218,14 @@ export async function GET(
     // El esquema etl_output suele no tener permisos vía API Supabase (permission denied).
     // Usamos la misma vía que la previsualización del dataset: Postgres directo con SUPABASE_DB_URL.
     if (resolved.schema === "etl_output" && process.env.SUPABASE_DB_URL) {
-      const result = await fetchDistinctFromEtlOutputViaPostgres(resolved.tableName, column);
+      const result = await fetchDistinctFromEtlOutputViaPostgres(resolved.tableName, column, dateLevel);
+      if (result.error) {
+        return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
+      }
+      values = result.values;
+    } else if (dateLevel && process.env.SUPABASE_DB_URL) {
+      // Con dateLevel usamos Postgres para poder aplicar la expresión de agregación
+      const result = await fetchDistinctViaPostgres(resolved.schema, resolved.tableName, column, dateLevel);
       if (result.error) {
         return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
       }

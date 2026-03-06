@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronLeft, Trash2, BookmarkPlus } from "lucide-react";
+import { useState, useMemo } from "react";
+import { ChevronLeft, Trash2, BookmarkPlus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -69,6 +69,14 @@ export type AggregationConfigEdit = {
   chartColorScheme?: string;
   chartSeriesColors?: Record<string, string>;
   showDataLabels?: boolean;
+  /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
+  chartLabelOverrides?: Record<string, string>;
+  /** Formato por métrica (clave = chartYAxes key). Si existe, se usa en lugar del formato global para esa serie. */
+  chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
+  /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
+  chartComboSyncAxes?: boolean;
+  /** Si la dimensión es una columna fecha, agrupar por este nivel. */
+  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
 };
 
 export type AddMetricFormConfig = {
@@ -120,6 +128,10 @@ export type SavedMetricAggregationConfig = {
   chartColorScheme?: string;
   chartSeriesColors?: Record<string, string>;
   showDataLabels?: boolean;
+  chartLabelOverrides?: Record<string, string>;
+  chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
+  chartComboSyncAxes?: boolean;
+  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
   interCrossFilter?: boolean;
   interCrossFilterFields?: string[];
   interDrilldown?: boolean;
@@ -164,7 +176,7 @@ const AGG_FUNCS = [
   { value: "FORMULA", label: "Fórmula / ratio" },
 ];
 
-const OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE", "IN", "BETWEEN", "MONTH", "YEAR", "DAY", "IS", "IS NOT"];
+const OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE", "IN", "BETWEEN", "MONTH", "YEAR", "DAY", "QUARTER", "SEMESTER", "IS", "IS NOT"];
 
 type AddMetricConfigFormProps = {
   initialValues: AddMetricFormConfig;
@@ -259,6 +271,10 @@ export function AddMetricConfigForm({
         chartColorScheme: cfg.chartColorScheme,
         chartSeriesColors: cfg.chartSeriesColors,
         showDataLabels: cfg.showDataLabels,
+        chartLabelOverrides: cfg.chartLabelOverrides,
+        chartMetricFormats: cfg.chartMetricFormats,
+        chartComboSyncAxes: (cfg as { chartComboSyncAxes?: boolean }).chartComboSyncAxes,
+        dateGroupByGranularity: (cfg as { dateGroupByGranularity?: string }).dateGroupByGranularity,
       });
     } else {
       updateAgg({
@@ -300,6 +316,24 @@ export function AddMetricConfigForm({
 
   const removeFilter = (index: number) => {
     updateAgg({ filters: filters.filter((_, i) => i !== index) });
+  };
+
+  const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
+  const showLabelOverrides = CHART_TYPES_FOR_LABELS.includes(form.type);
+  const labelOverridesEntries = useMemo(() => Object.entries(agg.chartLabelOverrides ?? {}), [agg.chartLabelOverrides]);
+  const setLabelOverride = (oldRaw: string, newRaw: string, display: string) => {
+    const next = { ...(agg.chartLabelOverrides ?? {}) };
+    if (oldRaw !== "") delete next[oldRaw];
+    if (newRaw !== "") next[newRaw] = display;
+    updateAgg({ chartLabelOverrides: Object.keys(next).length ? next : undefined });
+  };
+  const removeLabelOverride = (raw: string) => {
+    const next = { ...(agg.chartLabelOverrides ?? {}) };
+    delete next[raw];
+    updateAgg({ chartLabelOverrides: Object.keys(next).length ? next : undefined });
+  };
+  const addLabelOverride = () => {
+    updateAgg({ chartLabelOverrides: { ...(agg.chartLabelOverrides ?? {}), "": "" } });
   };
 
   const orderFields = agg.enabled
@@ -401,6 +435,50 @@ export function AddMetricConfigForm({
             </div>
           </div>
         )}
+        {form.type === "combo" && (agg.chartYAxes?.length ?? 0) >= 2 && (
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!agg.chartComboSyncAxes}
+              onChange={(e) => updateAgg({ chartComboSyncAxes: e.target.checked })}
+              className="rounded"
+            />
+            <span className="text-xs text-[var(--studio-fg-muted)]">Sincronizar ejes</span>
+            <span className="text-[10px] text-[var(--studio-fg-muted)]">Alinear el eje derecho con el izquierdo para comparar dos métricas con escalas distintas.</span>
+          </label>
+        )}
+        {showLabelOverrides && (
+          <div>
+            <Label className="add-metric-label">Nombres de etiquetas en el gráfico</Label>
+            <p className="text-[11px] text-[var(--studio-fg-muted)] mt-0.5 mb-2">Reemplazar el valor de los datos por el texto a mostrar (eje X, porciones, leyenda).</p>
+            <div className="space-y-2">
+              {labelOverridesEntries.map(([raw, display], idx) => (
+                <div key={`override-${idx}-${raw}`} className="flex gap-2 items-center">
+                  <Input
+                    value={raw}
+                    onChange={(e) => setLabelOverride(raw, e.target.value, display)}
+                    placeholder="Valor original (ej. Q1)"
+                    className="h-8 text-xs flex-1"
+                  />
+                  <span className="text-[var(--studio-fg-muted)] text-xs">→</span>
+                  <Input
+                    value={display}
+                    onChange={(e) => setLabelOverride(raw, raw, e.target.value)}
+                    placeholder="Nombre a mostrar"
+                    className="h-8 text-xs flex-1"
+                  />
+                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500" onClick={() => removeLabelOverride(raw)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <Button type="button" variant="outline" size="sm" className="mt-2 h-8 text-xs" onClick={addLabelOverride}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Añadir etiqueta
+            </Button>
+          </div>
+        )}
         {form.type === "kpi" && (
           <div className="space-y-2">
             <Label className="add-metric-label">KPI secundario (etiqueta)</Label>
@@ -432,6 +510,19 @@ export function AddMetricConfigForm({
                   fieldType="all"
                   placeholder="Campo..."
                 />
+                {(agg.dimension && (selectedSource?.fields?.date ?? etlData?.fields?.date ?? []).some((d: string) => (d || "").toLowerCase() === (agg.dimension || "").toLowerCase())) && (
+                  <div>
+                    <Label className="add-metric-label text-[11px]">Nivel de fecha (agrupar por)</Label>
+                    <select value={agg.dateGroupByGranularity ?? "month"} onChange={(e) => updateAgg({ dateGroupByGranularity: e.target.value as "day" | "month" | "quarter" | "semester" | "year" })} className="add-metric-select mt-0.5 h-8 text-xs w-full">
+                      <option value="day">Día</option>
+                      <option value="week">Semana</option>
+                      <option value="month">Mes</option>
+                      <option value="quarter">Trimestre</option>
+                      <option value="semester">Semestre</option>
+                      <option value="year">Año</option>
+                    </select>
+                  </div>
+                )}
                 <AdminFieldSelector
                   label="Segunda dimensión (opcional)"
                   value={agg.dimension2 || ""}
@@ -539,7 +630,34 @@ export function AddMetricConfigForm({
                           </>
                         ) : (
                           <div className="space-y-1.5">
-                            <Label className="add-metric-label text-[11px]">Operaciones: metric_0, metric_1… (+ - * /)</Label>
+                            {(() => {
+                              const baseRefs = metrics
+                                .map((mm, idx) => (mm.func !== "FORMULA" ? { ref: `metric_${idx}`, label: mm.alias || mm.field || `Métrica ${idx + 1}` } : null))
+                                .filter((x): x is { ref: string; label: string } => x != null);
+                              return (
+                                <>
+                                  <Label className="add-metric-label text-[11px]">Operaciones: metric_0, metric_1… (+ - * /). En este widget: {baseRefs.length ? baseRefs.map((r) => `${r.ref}=«${r.label}»`).join(", ") : "añadí al menos una métrica base antes de la fórmula."}</Label>
+                                  {baseRefs.length > 0 && (
+                                    <select
+                                      value=""
+                                      onChange={(e) => {
+                                        const ref = e.target.value;
+                                        if (!ref) return;
+                                        const cur = m.formula ?? "";
+                                        updateMetric(i, { formula: cur + (cur && !cur.endsWith(" ") ? " " : "") + ref, field: "" });
+                                        e.target.value = "";
+                                      }}
+                                      className="h-7 text-[11px] rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-[var(--studio-fg)]"
+                                    >
+                                      <option value="">Insertar métrica en fórmula…</option>
+                                      {baseRefs.map((r) => (
+                                        <option key={r.ref} value={r.ref}>{r.ref} ({r.label})</option>
+                                      ))}
+                                    </select>
+                                  )}
+                                </>
+                              );
+                            })()}
                             <div className="flex flex-wrap gap-1">
                               {[
                                 { label: "A ÷ B", expr: "metric_0 / NULLIF(metric_1, 0)" },

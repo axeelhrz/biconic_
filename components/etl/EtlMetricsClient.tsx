@@ -79,6 +79,19 @@ const FILTER_OPERATOR_OPTIONS = [
   { value: "LIKE", label: "LIKE" },
   { value: "ILIKE", label: "ILIKE" },
   { value: "IN", label: "IN" },
+  { value: "DAY", label: "Día (fecha)" },
+  { value: "MONTH", label: "Mes" },
+  { value: "QUARTER", label: "Trimestre" },
+  { value: "SEMESTER", label: "Semestre" },
+  { value: "YEAR", label: "Año" },
+];
+
+const DATE_LEVEL_OPTIONS = [
+  { value: "day", label: "Día", operator: "DAY" as const },
+  { value: "month", label: "Mes", operator: "MONTH" as const },
+  { value: "quarter", label: "Trimestre", operator: "QUARTER" as const },
+  { value: "semester", label: "Semestre", operator: "SEMESTER" as const },
+  { value: "year", label: "Año", operator: "YEAR" as const },
 ];
 
 const CHART_TYPES: { value: string; label: string; icon: ComponentType<{ className?: string }>; description: string }[] = [
@@ -460,6 +473,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [chartRankingMetric, setChartRankingMetric] = useState("");
   const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
   const [chartSeriesColors, setChartSeriesColors] = useState<Record<string, string>>({});
+  const [chartLabelOverrides, setChartLabelOverrides] = useState<Record<string, string>>({});
+  const [chartMetricFormats, setChartMetricFormats] = useState<Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>>({});
+  const [chartComboSyncAxes, setChartComboSyncAxes] = useState(false);
   const [interCrossFilter, setInterCrossFilter] = useState(true);
   const [interCrossFilterFields, setInterCrossFilterFields] = useState<string[]>([]);
   const [interDrilldown, setInterDrilldown] = useState(false);
@@ -468,6 +484,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [interDrillThroughTarget, setInterDrillThroughTarget] = useState("");
   const [interTooltipFields, setInterTooltipFields] = useState<string[]>(["value", "delta_pct"]);
   const [interHighlight, setInterHighlight] = useState(true);
+
+  const setLabelOverride = (oldRaw: string, newRaw: string, display: string) => {
+    setChartLabelOverrides((prev) => {
+      const next = { ...prev };
+      if (oldRaw !== "") delete next[oldRaw];
+      if (newRaw !== "") next[newRaw] = display;
+      return Object.keys(next).length ? next : {};
+    });
+  };
+  const removeLabelOverride = (raw: string) => {
+    setChartLabelOverrides((prev) => {
+      const next = { ...prev };
+      delete next[raw];
+      return next;
+    });
+  };
+  const addLabelOverride = () => {
+    setChartLabelOverrides((prev) => ({ ...prev, "": "" }));
+  };
 
   // Dashboard vinculado al ETL
   const [linkedDashboardId, setLinkedDashboardId] = useState<string | null>(null);
@@ -499,6 +534,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [filterFieldLoading, setFilterFieldLoading] = useState<string | null>(null);
   const [filterListOpenId, setFilterListOpenId] = useState<string | null>(null);
   const [filterListSearch, setFilterListSearch] = useState("");
+  /** Nivel de jerarquía de fecha por filtro (id del filtro → day|month|quarter|semester|year). */
+  const [filterDateLevel, setFilterDateLevel] = useState<Record<string, string>>({});
   const [datasetRelations, setDatasetRelations] = useState<DatasetRelation[]>([]);
   const [relationFormConnectionId, setRelationFormConnectionId] = useState("");
   const [relationFormTableKey, setRelationFormTableKey] = useState("");
@@ -864,8 +901,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       else if (c === ")") { depth--; if (depth < 0) return "Paréntesis de cierre ) sin apertura."; }
     }
     if (depth !== 0) return "Faltan paréntesis de cierre.";
-    const allowedChars = /^[a-zA-Z0-9_*+\-/().,\s'"%;^]+$/;
-    if (!allowedChars.test(expr)) return "La fórmula contiene caracteres no permitidos. Usá columnas, números, operadores ( * - + / ^ ) y comillas para texto.";
+    const allowedChars = /^[a-zA-Z0-9_*+\-/().,\s'"%;^=<>!]+$/;
+    if (!allowedChars.test(expr)) return "La fórmula contiene caracteres no permitidos. Usá columnas, números, operadores ( * - + / ^ ) y comparaciones (=, <, >, <>, !=).";
     const columnsSet = new Set([...fields, ...derivedColumns.map((d) => d.name)].map((x) => x.toLowerCase()));
     const savedMetricNamesSet = new Set((data?.savedMetrics ?? []).map((s: { name?: string }) => (s.name ?? "").toLowerCase()));
     const protectedStr = expr.replace(/'([^']*)'|"([^"]*)"/g, " __STR__ ");
@@ -1090,6 +1127,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       setChartPinnedDimensions(Array.isArray(cfg.chartPinnedDimensions) ? cfg.chartPinnedDimensions : []);
       setChartColorScheme(cfg.chartColorScheme ?? "auto");
       setChartSeriesColors(cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? cfg.chartSeriesColors : {});
+      setChartLabelOverrides(cfg.chartLabelOverrides && typeof cfg.chartLabelOverrides === "object" ? cfg.chartLabelOverrides : {});
+      setChartMetricFormats(cfg.chartMetricFormats && typeof cfg.chartMetricFormats === "object" ? cfg.chartMetricFormats : {});
+      setChartComboSyncAxes(!!cfg.chartComboSyncAxes);
       setShowDataLabels(!!cfg.showDataLabels);
       setInterCrossFilter(cfg.interCrossFilter !== false);
       setInterCrossFilterFields(Array.isArray(cfg.interCrossFilterFields) ? cfg.interCrossFilterFields : []);
@@ -1122,6 +1162,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       setChartPinnedDimensions([]);
       setChartColorScheme("auto");
       setChartSeriesColors({});
+      setChartLabelOverrides({});
+      setChartMetricFormats({});
       setShowDataLabels(false);
       setInterCrossFilter(true);
       setInterCrossFilterFields([]);
@@ -1489,6 +1531,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       };
     });
 
+    if (formChartType === "combo" && yKeys.length >= 2) {
+      return {
+        labels,
+        datasets: [
+          { ...datasets[0], type: "bar" as const, yAxisID: "y" },
+          { ...datasets[1], type: "line" as const, fill: false, yAxisID: "y1" },
+        ],
+      };
+    }
+
     if (formChartType === "pie" || formChartType === "doughnut") {
       const yKey = yKeys[0]!;
       const sliceColors = labels.map((label) => getColorByLabelStable(label));
@@ -1715,6 +1767,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
             chartNumberFormat: cfg.chartNumberFormat || undefined,
             chartCurrencySymbol: cfg.chartCurrencySymbol || undefined,
             chartSeriesColors: cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" && Object.keys(cfg.chartSeriesColors).length > 0 ? cfg.chartSeriesColors : undefined,
+            chartLabelOverrides: cfg.chartLabelOverrides && typeof cfg.chartLabelOverrides === "object" && Object.keys(cfg.chartLabelOverrides).length > 0 ? cfg.chartLabelOverrides : undefined,
+            chartMetricFormats: cfg.chartMetricFormats && typeof cfg.chartMetricFormats === "object" && Object.keys(cfg.chartMetricFormats).length > 0 ? cfg.chartMetricFormats : undefined,
+            chartComboSyncAxes: (cfg as { chartComboSyncAxes?: boolean }).chartComboSyncAxes ?? undefined,
             chartRankingEnabled: (cfg.chartRankingEnabled as boolean) || undefined,
             chartRankingTop: (cfg.chartRankingTop as number) ?? undefined,
             chartRankingMetric: (cfg.chartRankingMetric as string) || undefined,
@@ -1829,6 +1884,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
+      chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
+      chartMetricFormats:
+        chartYAxes.length > 1
+          ? Object.fromEntries(
+              chartYAxes.map((key) => [
+                key,
+                chartMetricFormats[key] ?? {
+                  valueType: chartValueType,
+                  valueScale: chartValueScale,
+                  currencySymbol: chartCurrencySymbol,
+                  decimals: chartDecimals,
+                  thousandSep: chartThousandSep,
+                },
+              ])
+            )
+          : Object.keys(chartMetricFormats).length > 0
+            ? chartMetricFormats
+            : undefined,
+      chartComboSyncAxes: formChartType === "combo" && chartYAxes.length >= 2 ? chartComboSyncAxes : undefined,
       showDataLabels: showDataLabels || undefined,
       interCrossFilter: interCrossFilter === false ? false : undefined,
       interCrossFilterFields: interCrossFilterFields.length > 0 ? interCrossFilterFields : undefined,
@@ -2006,6 +2080,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
+      chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
+      chartMetricFormats:
+        chartYAxes.length > 1
+          ? Object.fromEntries(
+              chartYAxes.map((key) => [
+                key,
+                chartMetricFormats[key] ?? {
+                  valueType: chartValueType,
+                  valueScale: chartValueScale,
+                  currencySymbol: chartCurrencySymbol,
+                  decimals: chartDecimals,
+                  thousandSep: chartThousandSep,
+                },
+              ])
+            )
+          : Object.keys(chartMetricFormats).length > 0
+            ? chartMetricFormats
+            : undefined,
+      chartComboSyncAxes: formChartType === "combo" && chartYAxes.length >= 2 ? chartComboSyncAxes : undefined,
       showDataLabels: showDataLabels || undefined,
       interCrossFilter: interCrossFilter === false ? false : undefined,
       interCrossFilterFields: interCrossFilterFields.length > 0 ? interCrossFilterFields : undefined,
@@ -3018,6 +3111,32 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                               disablePortal
                             />
                           </div>
+                          {formMetrics.length > 1 && (
+                            <div className="flex flex-col gap-1">
+                              <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Combinar métricas de este análisis (metric_0, metric_1…)</Label>
+                              <Select
+                                value=""
+                                onChange={(val: string) => {
+                                  if (!val) return;
+                                  const el = formulaInputRef.current;
+                                  if (el && "value" in el) {
+                                    const input = el as HTMLInputElement;
+                                    const cur = exprValue;
+                                    const start = input.selectionStart ?? cur.length;
+                                    const end = input.selectionEnd ?? cur.length;
+                                    setFormMetrics((prev) => prev.map((m, i) => i === 0 ? { ...m, expression: cur.slice(0, start) + val + cur.slice(end) } : m));
+                                    setTimeout(() => { input.focus(); input.setSelectionRange(start + val.length, start + val.length); }, 0);
+                                  }
+                                }}
+                                options={[{ value: "", label: "Insertar…" }, ...formMetrics.map((mm, idx) => ({ value: `metric_${idx}`, label: `metric_${idx} (${mm.alias || mm.field || `Métrica ${idx + 1}`})` }))]}
+                                placeholder="metric_0, metric_1…"
+                                className="min-w-[180px]"
+                                buttonClassName="h-9 text-sm"
+                                disablePortal
+                              />
+                              <p className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>Orden: {formMetrics.map((mm, idx) => `metric_${idx}=«${mm.alias || mm.field || ""}»`).join(", ")}</p>
+                            </div>
+                          )}
                         </div>
                         {formulaSyntaxError && (
                           <p className="text-sm mt-2 rounded-lg py-2 px-3 border" role="alert" style={{ color: "var(--platform-fg)", borderColor: "var(--platform-error, #dc2626)", background: "var(--platform-error-muted, rgba(220,38,38,0.08))" }}>
@@ -3187,7 +3306,24 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           <Input value={isListMode ? "" : (f.value != null ? String(f.value) : "")} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder={isListMode ? `${selectedArr.length} de lista` : "Valor (manual)"} className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                           {f.field && (
                             <>
-                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
+                              {dateFields.includes(f.field) && (
+                                <Select
+                                  value={filterDateLevel[f.id] || "year"}
+                                  onChange={(val: string) => {
+                                    const level = val || "year";
+                                    setFilterDateLevel((prev) => ({ ...prev, [f.id]: level }));
+                                    const opt = DATE_LEVEL_OPTIONS.find((o) => o.value === level);
+                                    if (opt) setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: opt!.operator } : ff));
+                                    setFilterFieldValues((prev) => ({ ...prev, [f.field]: [] }));
+                                  }}
+                                  options={DATE_LEVEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                                  placeholder="Nivel"
+                                  className="min-w-[100px]"
+                                  buttonClassName="h-8 text-xs"
+                                  disablePortal
+                                />
+                              )}
+                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const dateLevel = dateFields.includes(f.field) ? (filterDateLevel[f.id] || "year") : undefined; const url = dateLevel ? `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}&dateLevel=${encodeURIComponent(dateLevel)}` : `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`; const res = await fetch(url); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
                                 {filterFieldLoading === f.field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Cargar lista"}
                               </Button>
                               {listValues.length ? (
@@ -3494,6 +3630,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                     { value: "day", label: "Día" },
                                     { value: "week", label: "Semana" },
                                     { value: "month", label: "Mes" },
+                                    { value: "quarter", label: "Trimestre" },
+                                    { value: "semester", label: "Semestre" },
                                     { value: "year", label: "Año" },
                                   ]}
                                   placeholder="Granularidad…"
@@ -3573,7 +3711,24 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           <Input value={isListModeC ? "" : (f.value != null ? String(f.value) : "")} onChange={(e) => setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, value: e.target.value || null } : ff))} placeholder={isListModeC ? `${selectedArrC.length} de lista` : "Valor (manual)"} className="h-8 text-xs rounded-lg flex-1 min-w-[80px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                           {f.field && (
                             <>
-                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
+                              {dateFields.includes(f.field) && (
+                                <Select
+                                  value={filterDateLevel[f.id] || "year"}
+                                  onChange={(val: string) => {
+                                    const level = val || "year";
+                                    setFilterDateLevel((prev) => ({ ...prev, [f.id]: level }));
+                                    const opt = DATE_LEVEL_OPTIONS.find((o) => o.value === level);
+                                    if (opt) setFormFilters((prev) => prev.map((ff, ii) => ii === i ? { ...ff, operator: opt!.operator } : ff));
+                                    setFilterFieldValues((prev) => ({ ...prev, [f.field]: [] }));
+                                  }}
+                                  options={DATE_LEVEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                                  placeholder="Nivel"
+                                  className="min-w-[100px]"
+                                  buttonClassName="h-8 text-xs"
+                                  disablePortal
+                                />
+                              )}
+                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const dateLevel = dateFields.includes(f.field) ? (filterDateLevel[f.id] || "year") : undefined; const url = dateLevel ? `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}&dateLevel=${encodeURIComponent(dateLevel)}` : `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`; const res = await fetch(url); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
                                 {filterFieldLoading === f.field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Cargar lista"}
                               </Button>
                               {listValuesC.length ? (
@@ -3726,7 +3881,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Vista previa de datos</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
                     Tabla final resultante con la configuración actual.
-                    {timeColumn && analysisGranularity ? ` Agrupando por ${analysisGranularity === "month" ? "mes" : analysisGranularity === "week" ? "semana" : analysisGranularity === "day" ? "día" : "año"} (${getSampleDisplayLabel(timeColumn)}).` : ""}
+                    {timeColumn && analysisGranularity ? ` Agrupando por ${analysisGranularity === "month" ? "mes" : analysisGranularity === "week" ? "semana" : analysisGranularity === "day" ? "día" : analysisGranularity === "quarter" ? "trimestre" : analysisGranularity === "semester" ? "semestre" : "año"} (${getSampleDisplayLabel(timeColumn)}).` : ""}
                     {analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo ? ` Rango: ${analysisDateFrom} a ${analysisDateTo}.` : analysisTimeRange && analysisTimeRange !== "0" && Number(analysisTimeRange) > 0 ? ` Últimos ${analysisTimeRange} ${analysisTimeRange === "7" || analysisTimeRange === "30" ? "días" : "meses"} (respecto a los datos).` : timeColumn ? " Sin filtro de fecha: se muestran todos los datos." : ""}
                   </p>
                   {transformLabel && (
@@ -3916,43 +4071,95 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Solo afecta la presentación visual. No cambia filas ni valores del análisis.</p>
 
                   <div className="space-y-5">
-                    {/* 6.3.1 Formato numérico: Tipo (Número / Moneda / %) y Escala (K, M, B) */}
-                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Formato numérico</Label>
-                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Tipo</p>
-                      <div className="flex flex-wrap gap-1.5 mb-3">
-                        {([["number", "Número"], ["currency", "Moneda"], ["percent", "Porcentaje"]] as [string, string][]).map(([val, lbl]) => (
-                          <button key={val} type="button" onClick={() => setChartValueType(val as "number" | "currency" | "percent")} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartValueType === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartValueType === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartValueType === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
-                        ))}
-                      </div>
-                      <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Escala</p>
-                      <div className="flex flex-wrap gap-1.5 mb-3">
-                        {([["none", "Ninguna"], ["K", "K"], ["M", "M"], ["BI", "B"]] as [string, string][]).map(([val, lbl]) => (
-                          <button key={val} type="button" onClick={() => setChartValueScale(val as "none" | "K" | "M" | "BI")} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartValueScale === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartValueScale === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartValueScale === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
-                        ))}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-4">
-                        {chartValueType === "currency" && (
-                          <div className="flex items-center gap-2">
-                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Símbolo</Label>
-                            <Input value={chartCurrencySymbol} onChange={(e) => setChartCurrencySymbol(e.target.value)} className="h-8 w-16 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                          </div>
-                        )}
-                        <div className="flex items-center gap-2">
-                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Decimales</Label>
-                          <Input type="number" min={0} max={6} value={chartDecimals} onChange={(e) => setChartDecimals(Math.max(0, Math.min(6, parseInt(e.target.value) || 0)))} className="h-8 w-16 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                    {/* 6.3.1 Formato numérico (una sola métrica) o Formato por métrica (varias) */}
+                    {chartYAxes.length <= 1 ? (
+                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Formato numérico</Label>
+                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Tipo</p>
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          {([["number", "Número"], ["currency", "Moneda"], ["percent", "Porcentaje"]] as [string, string][]).map(([val, lbl]) => (
+                            <button key={val} type="button" onClick={() => setChartValueType(val as "number" | "currency" | "percent")} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartValueType === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartValueType === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartValueType === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                          ))}
                         </div>
-                        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
-                          <input type="checkbox" checked={chartThousandSep} onChange={(e) => setChartThousandSep(e.target.checked)} className="rounded" />
-                          Separador de miles
-                        </label>
-                        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                        <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Escala</p>
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          {([["none", "Ninguna"], ["K", "K"], ["M", "M"], ["BI", "B"]] as [string, string][]).map(([val, lbl]) => (
+                            <button key={val} type="button" onClick={() => setChartValueScale(val as "none" | "K" | "M" | "BI")} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartValueScale === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartValueScale === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartValueScale === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                          ))}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-4">
+                          {chartValueType === "currency" && (
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Símbolo</Label>
+                              <Input value={chartCurrencySymbol} onChange={(e) => setChartCurrencySymbol(e.target.value)} className="h-8 w-16 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Decimales</Label>
+                            <Input type="number" min={0} max={6} value={chartDecimals} onChange={(e) => setChartDecimals(Math.max(0, Math.min(6, parseInt(e.target.value) || 0)))} className="h-8 w-16 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                          </div>
+                          <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                            <input type="checkbox" checked={chartThousandSep} onChange={(e) => setChartThousandSep(e.target.checked)} className="rounded" />
+                            Separador de miles
+                          </label>
+                          <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                            <input type="checkbox" checked={showDataLabels} onChange={(e) => setShowDataLabels(e.target.checked)} className="rounded" />
+                            Mostrar etiquetas en gráfico
+                          </label>
+                        </div>
+                        <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Vista previa: {formatNumber(1234567.89)}</p>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Formato por métrica</Label>
+                        <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Asigná tipo y escala a cada métrica del gráfico (ej. Moneda a una y Número a la otra).</p>
+                        <div className="space-y-4">
+                          {chartYAxes.map((key) => {
+                            const label = chartAvailableColumns.find((c) => c.key === key)?.label ?? key;
+                            const m = chartMetricFormats[key] ?? {};
+                            const valueType = (m.valueType ?? chartValueType) as "number" | "currency" | "percent";
+                            const valueScale = (m.valueScale ?? chartValueScale) as "none" | "K" | "M" | "BI";
+                            const currencySymbol = m.currencySymbol ?? chartCurrencySymbol;
+                            const decimals = m.decimals ?? chartDecimals;
+                            const updateM = (upd: Partial<{ valueType: string; valueScale: string; currencySymbol: string; decimals: number; thousandSep: boolean }>) =>
+                              setChartMetricFormats((prev) => ({ ...prev, [key]: { ...(prev[key] ?? {}), ...upd } }));
+                            return (
+                              <div key={key} className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                                <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg)" }}>{label}</p>
+                                <div className="flex flex-wrap gap-2 mb-2">
+                                  {([["number", "Número"], ["currency", "Moneda"], ["percent", "Porcentaje"]] as [string, string][]).map(([val, lbl]) => (
+                                    <button key={val} type="button" onClick={() => updateM({ valueType: val })} className="rounded-lg px-2.5 py-1 text-xs font-medium transition-all border" style={{ background: valueType === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: valueType === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: valueType === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                                  ))}
+                                </div>
+                                <div className="flex flex-wrap gap-2 mb-2">
+                                  {([["none", "Ninguna"], ["K", "K"], ["M", "M"], ["BI", "B"]] as [string, string][]).map(([val, lbl]) => (
+                                    <button key={val} type="button" onClick={() => updateM({ valueScale: val })} className="rounded-lg px-2.5 py-1 text-xs font-medium transition-all border" style={{ background: valueScale === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: valueScale === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: valueScale === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                                  ))}
+                                </div>
+                                {(valueType === "currency" || valueType === "percent") && (
+                                  <div className="flex flex-wrap items-center gap-3 mt-2">
+                                    {valueType === "currency" && (
+                                      <div className="flex items-center gap-2">
+                                        <Label className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>Símbolo</Label>
+                                        <Input value={currencySymbol} onChange={(e) => updateM({ currencySymbol: e.target.value })} className="h-7 w-14 rounded text-xs !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                                      </div>
+                                    )}
+                                    <div className="flex items-center gap-2">
+                                      <Label className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>Decimales</Label>
+                                      <Input type="number" min={0} max={6} value={decimals} onChange={(e) => updateM({ decimals: Math.max(0, Math.min(6, parseInt(e.target.value) || 0)) })} className="h-7 w-12 rounded text-xs !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <label className="flex items-center gap-2 text-xs cursor-pointer mt-3" style={{ color: "var(--platform-fg)" }}>
                           <input type="checkbox" checked={showDataLabels} onChange={(e) => setShowDataLabels(e.target.checked)} className="rounded" />
                           Mostrar etiquetas en gráfico
                         </label>
                       </div>
-                      <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Vista previa: {formatNumber(1234567.89)}</p>
-                    </div>
+                    )}
 
                     {/* 6.3.2 Orden */}
                     <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
@@ -3998,6 +4205,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Máx</Label>
                             <Input type="number" value={chartScaleMax} onChange={(e) => setChartScaleMax(e.target.value)} placeholder="Ej. 100" className="h-8 w-20 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                           </div>
+                        </div>
+                      )}
+                      {formChartType === "combo" && chartYAxes.length >= 2 && (
+                        <div className="flex items-center gap-3 mt-3">
+                          <input type="checkbox" id="chartComboSyncAxes" checked={chartComboSyncAxes} onChange={(e) => setChartComboSyncAxes(e.target.checked)} className="rounded" />
+                          <Label htmlFor="chartComboSyncAxes" className="text-sm cursor-pointer" style={{ color: "var(--platform-fg)" }}>Sincronizar ejes</Label>
+                          <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Alinear el eje derecho con el izquierdo para comparar visualmente dos métricas con escalas distintas.</p>
                         </div>
                       )}
                       <Label className="text-sm font-medium mb-2 block mt-3" style={{ color: "var(--platform-fg)" }}>Graduación (paso del eje)</Label>
@@ -4116,6 +4330,42 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       })()}
                     </div>
 
+                    {/* Nombres de etiquetas en el gráfico */}
+                    {(["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"] as string[]).includes(formChartType) && (
+                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Nombres de etiquetas en el gráfico</Label>
+                        <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Reemplazar el valor de los datos por el texto a mostrar (eje X, porciones, leyenda).</p>
+                        <div className="space-y-2">
+                          {Object.entries(chartLabelOverrides).map(([raw, display], idx) => (
+                            <div key={`override-${idx}-${raw}`} className="flex gap-2 items-center">
+                              <Input
+                                value={raw}
+                                onChange={(e) => setLabelOverride(raw, e.target.value, display)}
+                                placeholder="Valor original (ej. Q1)"
+                                className="h-8 text-xs flex-1 rounded-lg"
+                                style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                              />
+                              <span className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>→</span>
+                              <Input
+                                value={display}
+                                onChange={(e) => setLabelOverride(raw, raw, e.target.value)}
+                                placeholder="Nombre a mostrar"
+                                className="h-8 text-xs flex-1 rounded-lg"
+                                style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                              />
+                              <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500" onClick={() => removeLabelOverride(raw)}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        <Button type="button" variant="outline" size="sm" className="mt-2 h-8 text-xs rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={addLabelOverride}>
+                          <Plus className="mr-1.5 h-3.5 w-3.5 inline" />
+                          Añadir etiqueta
+                        </Button>
+                      </div>
+                    )}
+
                     {/* 6.3.4 Siempre visible */}
                     {formDimensions.filter(Boolean).length > 0 && (
                       <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
@@ -4218,6 +4468,64 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                               title: { display: false },
                             },
                           };
+                          const isComboTwo = formChartType === "combo" && previewChartConfig.datasets?.length >= 2;
+                          let comboScales: Record<string, unknown> = axisScales;
+                          let comboPreviewData: typeof previewChartConfig = previewChartConfig;
+                          if (isComboTwo && previewChartConfig.datasets?.[0]?.data && previewChartConfig.datasets?.[1]?.data) {
+                            const d0 = previewChartConfig.datasets[0].data as number[];
+                            const d1 = previewChartConfig.datasets[1].data as number[];
+                            const min0 = Math.min(...d0);
+                            const max0 = Math.max(...d0);
+                            const min1 = Math.min(...d1);
+                            const max1 = Math.max(...d1);
+                            const range0 = max0 - min0 || 1;
+                            const range1 = max1 - min1 || 1;
+                            const cfg0 = chartYAxes[0] ? (chartMetricFormats[chartYAxes[0]] ?? { valueType: chartValueType, valueScale: chartValueScale, currencySymbol: chartCurrencySymbol, decimals: chartDecimals, thousandSep: chartThousandSep }) : {};
+                            const cfg1 = chartYAxes[1] ? (chartMetricFormats[chartYAxes[1]] ?? { valueType: chartValueType, valueScale: chartValueScale, currencySymbol: chartCurrencySymbol, decimals: chartDecimals, thousandSep: chartThousandSep }) : {};
+                            if (chartComboSyncAxes) {
+                              comboPreviewData = {
+                                ...previewChartConfig,
+                                datasets: [
+                                  { ...previewChartConfig.datasets[0], data: d0.map((v) => (v - min0) / range0) },
+                                  { ...previewChartConfig.datasets[1], data: d1.map((v) => (v - min1) / range1) },
+                                ],
+                              };
+                              comboScales = {
+                                ...axisScales,
+                                y: {
+                                  ...axisScales.y,
+                                  min: 0,
+                                  max: 1,
+                                  ticks: {
+                                    ...axisScales.y.ticks,
+                                    callback: (value: number) => formatWithConfig(value * range0 + min0, cfg0),
+                                  },
+                                },
+                                y1: {
+                                  display: true,
+                                  position: "right",
+                                  grid: { drawOnChartArea: false, color: gridColor },
+                                  min: 0,
+                                  max: 1,
+                                  ticks: { color: axisColor, font: { size: 11 }, callback: (value: number) => formatWithConfig(value * range1 + min1, cfg1) },
+                                  title: { display: false },
+                                },
+                              };
+                            } else {
+                              comboScales = {
+                                ...axisScales,
+                                y1: {
+                                  display: true,
+                                  position: "right",
+                                  grid: { drawOnChartArea: false, color: gridColor },
+                                  ticks: { color: axisColor, font: { size: 11 }, ...(stepSize != null ? { stepSize } : {}) },
+                                  ...(yMin != null ? { min: yMin } : {}),
+                                  ...(yMax != null ? { max: yMax } : {}),
+                                  title: { display: false },
+                                },
+                              };
+                            }
+                          }
                           let legendTextColor = "#334155";
                           if (typeof document !== "undefined") {
                             const v = getComputedStyle(document.documentElement).getPropertyValue("--platform-fg")?.trim() || "";
@@ -4235,12 +4543,31 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                               pointStyle: "circle",
                             },
                           };
+                          const formatWithConfig = (n: number, cfg: { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }) => {
+                            const valueType = cfg.valueType ?? chartValueType;
+                            const valueScale = (cfg.valueScale ?? chartValueScale) as "none" | "K" | "M" | "BI";
+                            const decimals = cfg.decimals ?? chartDecimals;
+                            const useGrouping = cfg.thousandSep !== false && (cfg.thousandSep ?? chartThousandSep);
+                            const symbol = cfg.currencySymbol ?? chartCurrencySymbol;
+                            let val = n;
+                            let suffix = "";
+                            if (valueScale === "K" && Math.abs(n) >= 1000) { val = n / 1_000; suffix = "K"; }
+                            else if (valueScale === "M" && Math.abs(n) >= 1_000_000) { val = n / 1_000_000; suffix = "M"; }
+                            else if (valueScale === "M" && Math.abs(n) >= 1000) { val = n / 1_000; suffix = "K"; }
+                            else if (valueScale === "BI" && Math.abs(n) >= 1_000_000_000) { val = n / 1_000_000_000; suffix = "BI"; }
+                            else if (valueScale === "BI" && Math.abs(n) >= 1_000_000) { val = n / 1_000_000; suffix = "M"; }
+                            else if (valueScale === "BI" && Math.abs(n) >= 1000) { val = n / 1_000; suffix = "K"; }
+                            const formatted = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: decimals, useGrouping }).format(val);
+                            if (valueType === "percent") return `${formatted}${suffix}%`;
+                            if (valueType === "currency") return `${symbol}${formatted}${suffix}`;
+                            return `${formatted}${suffix}`;
+                          };
                           const dataLabelsPluginOpts = showDataLabels
                             ? {
                                 display: true,
                                 color: legendTextColor || "#334155",
                                 font: { size: 11, weight: "bold" as const },
-                                formatter: (value: unknown, ctx: { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
+                                formatter: (value: unknown, ctx: { datasetIndex?: number; chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
                                   const n = Number(value);
                                   if (formChartType === "pie" || formChartType === "doughnut") {
                                     const data = ctx?.chart?.data?.datasets?.[0]?.data;
@@ -4249,6 +4576,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                       const pct = total ? (n / total) * 100 : 0;
                                       return `${pct.toFixed(1)}%`;
                                     }
+                                  }
+                                  if (chartYAxes.length > 1 && ctx?.datasetIndex != null && chartYAxes[ctx.datasetIndex]) {
+                                    const key = chartYAxes[ctx.datasetIndex];
+                                    const cfg = chartMetricFormats[key] ?? { valueType: chartValueType, valueScale: chartValueScale, currencySymbol: chartCurrencySymbol, decimals: chartDecimals, thousandSep: chartThousandSep };
+                                    return formatWithConfig(n, cfg);
                                   }
                                   return formatNumber(n);
                                 },
@@ -4298,15 +4630,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           } : { display: true, position: "right", labels: { color: legendTextColor, font: { size: 12, color: legendTextColor } } };
                           return (
                             <div className="h-[320px] w-full" style={{ color: "var(--platform-fg)" }}>
-                              {formChartType === "bar" && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "horizontalBar" && <Bar data={previewChartConfig} options={{ ...baseOpts, indexAxis: "y" as const, scales: { x: axisScales.x, y: { ...axisScales.y, ticks: { ...axisScales.y.ticks, maxTicksLimit: 12 } } } }} />}
-                              {formChartType === "line" && <Line data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "area" && <Line data={areaData} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "pie" && <Pie data={previewChartConfig} options={{ ...baseOpts, plugins: { ...baseOpts.plugins, legend: pieDoughnutLegendOpts } } as Record<string, unknown>} />}
-                              {formChartType === "doughnut" && <Doughnut data={previewChartConfig} options={{ ...baseOpts, plugins: { ...baseOpts.plugins, legend: pieDoughnutLegendOpts } } as Record<string, unknown>} />}
+                              {formChartType === "bar" && <Bar data={previewChartConfig as never} options={{ ...baseOpts, scales: axisScales }} />}
+                              {formChartType === "horizontalBar" && <Bar data={previewChartConfig as never} options={{ ...baseOpts, indexAxis: "y" as const, scales: { x: axisScales.x, y: { ...axisScales.y, ticks: { ...axisScales.y.ticks, maxTicksLimit: 12 } } } }} />}
+                              {formChartType === "line" && <Line data={previewChartConfig as never} options={{ ...baseOpts, scales: axisScales }} />}
+                              {formChartType === "area" && <Line data={areaData as never} options={{ ...baseOpts, scales: axisScales }} />}
+                              {formChartType === "pie" && <Pie data={previewChartConfig as never} options={{ ...baseOpts, plugins: { ...baseOpts.plugins, legend: pieDoughnutLegendOpts } } as Record<string, unknown>} />}
+                              {formChartType === "doughnut" && <Doughnut data={previewChartConfig as never} options={{ ...baseOpts, plugins: { ...baseOpts.plugins, legend: pieDoughnutLegendOpts } } as Record<string, unknown>} />}
                               {formChartType === "scatter" && <Scatter data={scatterData as { datasets: { label: string; data: { x: number; y: number }[]; backgroundColor: string; borderColor: string }[] }} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "combo" && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
-                              {!["bar", "horizontalBar", "line", "area", "pie", "doughnut", "scatter", "combo", "kpi", "table", "map"].includes(formChartType) && <Bar data={previewChartConfig} options={{ ...baseOpts, scales: axisScales }} />}
+                              {formChartType === "combo" && <Bar data={comboPreviewData as never} options={{ ...baseOpts, scales: comboScales as typeof axisScales }} />}
+                              {!["bar", "horizontalBar", "line", "area", "pie", "doughnut", "scatter", "combo", "kpi", "table", "map"].includes(formChartType) && <Bar data={previewChartConfig as never} options={{ ...baseOpts, scales: axisScales }} />}
                             </div>
                           );
                         })()}

@@ -129,6 +129,8 @@ export type GuidedConfig = {
     columnDisplay?: Record<string, { label?: string; format?: string; type?: "Fecha" | "Número" | "Texto" }>;
     /** Columnas para formar la clave única (KEY) por concatenación, como el Grain del Dataset de Métricas */
     keyColumns?: string[];
+    /** Filtro por fecha: jerarquía AÑO → MES → DÍA (tipo Excel) */
+    dateFilter?: { column: string; years?: number[]; months?: number[]; exactDates?: string[] };
   };
   union?: {
     left?: { connectionId?: string | number; filter?: { table?: string; columns?: string[]; conditions?: unknown[] } };
@@ -184,6 +186,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [distinctSearch, setDistinctSearch] = useState("");
   /** Columnas para formar la KEY (clave única) por concatenación, como el Grain en Dataset de Métricas */
   const [keyColumns, setKeyColumns] = useState<string[]>([]);
+  /** Filtro por fecha: columna + años/meses/días específicos (jerarquía tipo Excel) */
+  const [dateFilterColumn, setDateFilterColumn] = useState<string | null>(null);
+  const [dateFilterYears, setDateFilterYears] = useState<number[]>([]);
+  const [dateFilterMonths, setDateFilterMonths] = useState<number[]>([]);
+  /** Texto libre para días específicos (se parsea a YYYY-MM-DD al guardar) */
+  const [dateFilterExactDatesText, setDateFilterExactDatesText] = useState("");
   const [outputTableName, setOutputTableName] = useState("");
   const [outputMode, setOutputMode] = useState<"overwrite" | "append">("overwrite");
   const [scheduleFrequency, setScheduleFrequency] = useState<string>("");
@@ -348,6 +356,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setColumnDisplay(next);
     }
     if (filter && Array.isArray(filter.keyColumns)) setKeyColumns(filter.keyColumns);
+    const dateFilter = (filter as { dateFilter?: { column?: string; years?: number[]; months?: number[]; exactDates?: string[] } })?.dateFilter;
+    if (dateFilter?.column) {
+      setDateFilterColumn(dateFilter.column);
+      setDateFilterYears(Array.isArray(dateFilter.years) ? dateFilter.years : []);
+      setDateFilterMonths(Array.isArray(dateFilter.months) ? dateFilter.months : []);
+      setDateFilterExactDatesText(Array.isArray(dateFilter.exactDates) ? dateFilter.exactDates.join(", ") : "");
+    }
     const end = cfg.end;
     if (end?.target?.table) setOutputTableName(end.target.table);
     if (end?.mode) setOutputMode(end.mode);
@@ -729,6 +744,26 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   // Columnas de la tabla secundaria del JOIN
   const joinRightTableInfo = joinRightTables.find((t) => `${t.schema}.${t.name}` === joinSecondaryTable);
 
+  /** Opciones para "Columna tabla principal" del próximo JOIN: solo tabla principal si no hay JOINs; si hay JOINs, incluye primary.* y join_0.*, join_1.*, … para encadenar. */
+  const leftColumnOptionsForNextJoin = useMemo(() => {
+    const primaryCols = columns.length > 0 ? columns : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
+    if (joinItems.length === 0) {
+      return primaryCols.map((c: string) => ({ value: c, label: c }));
+    }
+    const options: { value: string; label: string }[] = [];
+    primaryCols.forEach((colName: string) => {
+      options.push({ value: `primary.${colName}`, label: `Principal · ${colName}` });
+    });
+    joinItems.forEach((item: { table: string; rightColumns: string[]; availableColumns?: { name: string }[] }, i: number) => {
+      const tableLabel = item.table?.split(".").pop() || `Join ${i}`;
+      const cols = item.rightColumns?.length ? item.rightColumns : (item.availableColumns ?? []).map((ac: { name: string }) => ac.name);
+      cols.forEach((colName: string) => {
+        options.push({ value: `join_${i}.${colName}`, label: `${tableLabel} · ${colName}` });
+      });
+    });
+    return options;
+  }, [columns, selectedTableInfo?.columns, joinItems]);
+
   /** Columnas finales del dataset (tras selección, UNION y JOIN). Refleja exactamente la estructura que se guardará. */
   const finalColumnsForTypes = useMemo(() => {
     const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
@@ -889,6 +924,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (keyColumns.length > 0) {
       (filterPayload as Record<string, unknown>).keyColumns = keyColumns;
     }
+    const parsedExactDates = dateFilterExactDatesText.trim().split(/[,\s]+/).map((s) => s.trim()).filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s));
+    if (dateFilterColumn && (dateFilterYears.length > 0 || dateFilterMonths.length > 0 || parsedExactDates.length > 0)) {
+      (filterPayload as Record<string, unknown>).dateFilter = {
+        column: dateFilterColumn,
+        ...(dateFilterYears.length > 0 ? { years: dateFilterYears } : {}),
+        ...(dateFilterMonths.length > 0 ? { months: dateFilterMonths } : {}),
+        ...(parsedExactDates.length > 0 ? { exactDates: parsedExactDates } : {}),
+      };
+    }
     const body: Record<string, unknown> = {
       connectionId,
       filter: filterPayload,
@@ -969,6 +1013,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     joinRightColumns,
     joinType,
     buildCleanConfig,
+    dateFilterColumn,
+    dateFilterYears,
+    dateFilterMonths,
+    dateFilterExactDatesText,
   ]);
 
   const fetchPreview = useCallback(() => {
@@ -1412,7 +1460,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 2b. Columnas y filtros (opcional)
               </h3>
               <p className="text-sm mt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                Elegí qué columnas incluir y opcionalmente excluí filas con condiciones.
+                Orden: columnas → clave única → UNION/JOIN → excluir filas (opcional) al final.
               </p>
             </div>
             {loadingColumns === selectedTable ? (
@@ -1479,90 +1527,84 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   </div>
                 </div>
 
-                {/* Excluir filas por valores en columna */}
+                {/* Filtro por fecha (opcional): AÑO → MES → DÍA, tipo Excel */}
                 <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
+                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Filtro por fecha (opcional)</Label>
                   <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                    Elegí una columna; se cargarán automáticamente los valores. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado.
+                    Reducí el volumen filtrando por año(s), mes(es) o días concretos. Jerarquía tipo Excel: año → mes → día.
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
-                    <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>
+                    <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna de fecha</Label>
                     <div className="min-w-[180px]">
                       <Select
-                        value={distinctColumn ?? ""}
-                        onChange={(v: string) => {
-                          const col = v || null;
-                          setDistinctColumn(col);
-                          setDistinctValuesList([]);
-                          setDistinctSearch("");
-                        }}
+                        value={dateFilterColumn ?? ""}
+                        onChange={(v: string) => setDateFilterColumn(v || null)}
                         options={(selectedTableInfo?.columns ?? []).map((col) => ({ value: col.name, label: col.name }))}
                         placeholder="Elegir columna"
                       />
                     </div>
-                    {loadingDistinct && distinctColumn && (
-                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores…</span>
-                    )}
                   </div>
-                  {distinctValuesList.length > 0 && distinctColumn && (
+                  {dateFilterColumn && (
                     <>
-                      <input
-                        type="text"
-                        placeholder="Buscar valor…"
-                        value={distinctSearch}
-                        onChange={(e) => setDistinctSearch(e.target.value)}
-                        className="w-full rounded-lg border px-3 py-2 text-sm"
-                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
-                      />
-                      <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
-                        {distinctValuesList
-                          .filter((v) => !distinctSearch.trim() || String(v).toLowerCase().includes(distinctSearch.trim().toLowerCase()))
-                          .map((val) => {
-                            const current = excludedValues.find((e) => e.column === distinctColumn);
-                            const excluded = (current?.excluded ?? []).includes(String(val));
+                      <div>
+                        <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Años</Label>
+                        <div className="flex flex-wrap gap-1">
+                          {Array.from({ length: 19 }, (_, i) => 2012 + i).map((y) => {
+                            const active = dateFilterYears.includes(y);
                             return (
-                              <label
-                                key={String(val)}
-                                className="flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer hover:bg-[var(--platform-surface-hover)] text-sm"
-                                style={{ color: "var(--platform-fg)" }}
+                              <button
+                                key={y}
+                                type="button"
+                                onClick={() => setDateFilterYears((prev) => active ? prev.filter((x) => x !== y) : [...prev, y].sort((a, b) => a - b))}
+                                className="rounded-full px-2.5 py-1 text-xs font-medium border transition-colors"
+                                style={{
+                                  background: active ? "var(--platform-accent-dim)" : "var(--platform-surface-hover)",
+                                  borderColor: "var(--platform-border)",
+                                  color: active ? "var(--platform-accent)" : "var(--platform-fg-muted)",
+                                }}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={excluded}
-                                  onChange={() => {
-                                    setExcludedValues((prev) => {
-                                      const entry = prev.find((e) => e.column === distinctColumn);
-                                      const nextExcluded = entry ? [...entry.excluded] : [];
-                                      const s = String(val);
-                                      if (nextExcluded.includes(s)) {
-                                        const filtered = nextExcluded.filter((x) => x !== s);
-                                        if (filtered.length === 0) return prev.filter((e) => e.column !== distinctColumn);
-                                        return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: filtered } : e);
-                                      }
-                                      nextExcluded.push(s);
-                                      if (!entry) return [...prev, { column: distinctColumn, excluded: nextExcluded }];
-                                      return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: nextExcluded } : e);
-                                    });
-                                  }}
-                                />
-                                <span className="truncate">{String(val)}</span>
-                              </label>
+                                {y}
+                              </button>
                             );
                           })}
+                        </div>
                       </div>
-                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                        {excludedValues.find((e) => e.column === distinctColumn)?.excluded.length ?? 0} valor(es) marcados para excluir en esta columna.
-                      </p>
+                      <div>
+                        <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Meses (opcional)</Label>
+                        <div className="flex flex-wrap gap-1">
+                          {["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"].map((label, i) => {
+                            const month = i + 1;
+                            const active = dateFilterMonths.includes(month);
+                            return (
+                              <button
+                                key={month}
+                                type="button"
+                                onClick={() => setDateFilterMonths((prev) => active ? prev.filter((x) => x !== month) : [...prev, month].sort((a, b) => a - b))}
+                                className="rounded-full px-2.5 py-1 text-xs font-medium border transition-colors"
+                                style={{
+                                  background: active ? "var(--platform-accent-dim)" : "var(--platform-surface-hover)",
+                                  borderColor: "var(--platform-border)",
+                                  color: active ? "var(--platform-accent)" : "var(--platform-fg-muted)",
+                                }}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Días específicos (opcional, YYYY-MM-DD)</Label>
+                        <input
+                          type="text"
+                          placeholder="ej. 2024-01-15, 2024-02-20"
+                          value={dateFilterExactDatesText}
+                          onChange={(e) => setDateFilterExactDatesText(e.target.value)}
+                          className="w-full rounded-lg border px-3 py-2 text-sm"
+                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                        />
+                      </div>
                     </>
-                  )}
-                  {excludedValues.length > 0 && (
-                    <div className="flex flex-wrap gap-1 pt-1">
-                      {excludedValues.map(({ column, excluded }) => (
-                        <span key={column} className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
-                          {column}: {excluded.length} excluidos
-                        </span>
-                      ))}
-                    </div>
                   )}
                 </div>
 
@@ -1814,7 +1856,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             <Select
                               value={joinLeftColumn}
                               onChange={(v: string) => setJoinLeftColumn(v)}
-                              options={(columns.length > 0 ? columns : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name)).map((c) => ({ value: c, label: c }))}
+                              options={leftColumnOptionsForNextJoin}
                               placeholder="Elegir columna"
                             />
                           </div>
@@ -1917,7 +1959,94 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       </div>
                     )}
                   </div>
+
+                {/* Excluir filas (último paso opcional): después de columnas, clave, UNION y JOIN */}
+                <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                    Elegí una columna; se cargarán automáticamente los valores. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado. Se aplica al final, después de UNION y JOIN.
+                  </p>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>
+                    <div className="min-w-[180px]">
+                      <Select
+                        value={distinctColumn ?? ""}
+                        onChange={(v: string) => {
+                          const col = v || null;
+                          setDistinctColumn(col);
+                          setDistinctValuesList([]);
+                          setDistinctSearch("");
+                        }}
+                        options={(selectedTableInfo?.columns ?? []).map((col) => ({ value: col.name, label: col.name }))}
+                        placeholder="Elegir columna"
+                      />
+                    </div>
+                    {loadingDistinct && distinctColumn && (
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores…</span>
+                    )}
+                  </div>
+                  {distinctValuesList.length > 0 && distinctColumn && (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="Buscar valor…"
+                        value={distinctSearch}
+                        onChange={(e) => setDistinctSearch(e.target.value)}
+                        className="w-full rounded-lg border px-3 py-2 text-sm"
+                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                      />
+                      <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
+                        {distinctValuesList
+                          .filter((v) => !distinctSearch.trim() || String(v).toLowerCase().includes(distinctSearch.trim().toLowerCase()))
+                          .map((val) => {
+                            const current = excludedValues.find((e) => e.column === distinctColumn);
+                            const excluded = (current?.excluded ?? []).includes(String(val));
+                            return (
+                              <label
+                                key={String(val)}
+                                className="flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer hover:bg-[var(--platform-surface-hover)] text-sm"
+                                style={{ color: "var(--platform-fg)" }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={excluded}
+                                  onChange={() => {
+                                    setExcludedValues((prev) => {
+                                      const entry = prev.find((e) => e.column === distinctColumn);
+                                      const nextExcluded = entry ? [...entry.excluded] : [];
+                                      const s = String(val);
+                                      if (nextExcluded.includes(s)) {
+                                        const filtered = nextExcluded.filter((x) => x !== s);
+                                        if (filtered.length === 0) return prev.filter((e) => e.column !== distinctColumn);
+                                        return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: filtered } : e);
+                                      }
+                                      nextExcluded.push(s);
+                                      if (!entry) return [...prev, { column: distinctColumn, excluded: nextExcluded }];
+                                      return prev.map((e) => e.column === distinctColumn ? { column: distinctColumn, excluded: nextExcluded } : e);
+                                    });
+                                  }}
+                                />
+                                <span className="truncate">{String(val)}</span>
+                              </label>
+                            );
+                          })}
+                      </div>
+                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                        {excludedValues.find((e) => e.column === distinctColumn)?.excluded.length ?? 0} valor(es) marcados para excluir en esta columna.
+                      </p>
+                    </>
+                  )}
+                  {excludedValues.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {excludedValues.map(({ column, excluded }) => (
+                        <span key={column} className="text-xs rounded-full px-2 py-0.5" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg-muted)" }}>
+                          {column}: {excluded.length} excluidos
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
+              </div>
             ) : null}
             <div className="flex gap-2">
               {!isEditorMode && (
