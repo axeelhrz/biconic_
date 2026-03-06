@@ -134,7 +134,8 @@ export function buildDateFilterWhereFragmentPg(
 ): { clause: string; params: any[] } {
   const params: any[] = [];
   const parts: string[] = [];
-  const rawColumn = (dateFilter?.column ?? "").trim();
+  if (!dateFilter) return { clause: "", params };
+  const rawColumn = (dateFilter.column ?? "").trim();
   if (!rawColumn) return { clause: "", params };
 
   let col: string;
