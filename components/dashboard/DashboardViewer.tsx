@@ -528,9 +528,9 @@ export function DashboardViewer({
       // Filtros globales efectivos: usar filterValues[gf.id] (no f.value, que viene vacío para filtros dinámicos)
       const effectiveGlobalFilters: AggregationFilter[] = (widget as any).excludeGlobalFilters
         ? []
-        : globalFilters
+        : (globalFilters
             .filter((f) => !fieldsWithWidgets.has(f.field))
-            .map((f) => {
+            .map((f): AggregationFilter | null => {
               const userValue = filterValues[f.id];
               const isEmpty =
                 userValue === "" ||
@@ -539,7 +539,7 @@ export function DashboardViewer({
                 (Array.isArray(userValue) && userValue.length === 0);
               if (isEmpty) return null;
               const op = f.operator || "=";
-              const value =
+              const value: unknown =
                 op === "IN"
                   ? Array.isArray(userValue)
                     ? userValue
@@ -553,7 +553,7 @@ export function DashboardViewer({
                 convertToNumber: f.convertToNumber,
               };
             })
-            .filter((f): f is AggregationFilter => f != null);
+            .filter((f): f is AggregationFilter => f != null));
       const rawFilters = [...effectiveGlobalFilters, ...widgetFilters, ...(aggConfig?.filters || [])];
       const preparedFilters = rawFilters.map((f) => ({
         field: f.field,
