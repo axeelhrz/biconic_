@@ -50,6 +50,8 @@ export type ChartConfig = {
     borderWidth?: number;
     fill?: boolean;
     type?: "bar" | "line";
+    /** Eje Y a usar en gráficos combo (ej. "y", "y1"). */
+    yAxisID?: string;
   }>;
 };
 
