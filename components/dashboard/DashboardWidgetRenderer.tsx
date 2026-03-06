@@ -322,7 +322,7 @@ export function DashboardWidgetRenderer({
               min: 0,
               max: 1,
               ticks: {
-                ...((built.scales as Record<string, unknown>)?.y as Record<string, unknown>)?.ticks,
+                ...(((built.scales as Record<string, unknown>)?.y as Record<string, unknown> | undefined)?.ticks ?? {}),
                 callback: (value: number) => fmt0(value * range0 + min0),
               },
             }),
@@ -358,7 +358,7 @@ export function DashboardWidgetRenderer({
                   rawY = context.datasetIndex === 0 ? rawY * range0 + min0 : rawY * range1 + min1;
                 }
                 const s = context?.datasetIndex != null && metricStyles?.[context.datasetIndex] != null ? metricStyles[context.datasetIndex]! : style;
-                const formatted = s != null ? getValueFormatter(s, "value")(rawY, context as unknown) : String(rawY);
+                const formatted = s != null ? getValueFormatter(s, "value")(rawY, context as { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) : String(rawY);
                 return `${context.dataset?.label ?? ""}: ${formatted}`;
               },
             }
