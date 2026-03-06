@@ -265,10 +265,25 @@ async function fetchColumnTypesFromSchema(
 /** Límite máximo de filas para profiling "sin límite" (techo alto para bases muy grandes). */
 const MAX_PROFILE_ROWS = ETL_MAX_ROWS_CEILING;
 
+/** Parámetros opcionales para filtrar por fecha al leer datos de profiling. */
+export type ProfileDateFilter = {
+  dateColumn: string; // nombre físico de la columna en la tabla (ej. primary_fecha)
+  years?: number[];
+  dateFrom?: string; // YYYY-MM-DD
+  dateTo?: string;   // YYYY-MM-DD
+};
+
+/** Escapa nombre de columna para uso seguro en SQL (identificador). */
+function safeColumnIdent(name: string): string {
+  const safe = (name || "").replace(/"/g, '""').toLowerCase().replace(/[^a-zA-Z0-9_]/g, "_");
+  return safe ? `"${safe}"` : '"column"';
+}
+
 /** Lee filas y count de etl_output vía Postgres directo. En bases grandes evita COUNT(*) (puede hacer timeout); obtiene primero filas con LIMIT y usa conteo aproximado (pg_class.reltuples). */
 async function fetchFromEtlOutputViaPostgres(
   tableName: string,
-  limit: number
+  limit: number,
+  dateFilter?: ProfileDateFilter | null
 ): Promise<{ rowCount: number; rows: any[]; tableExists?: boolean }> {
   const dbUrl = process.env.SUPABASE_DB_URL;
   if (!dbUrl) return { rowCount: 0, rows: [], tableExists: false };
@@ -276,28 +291,60 @@ async function fetchFromEtlOutputViaPostgres(
   const sql = postgres(dbUrl);
   try {
     const effectiveLimit = Math.min(MAX_PROFILE_ROWS, Math.max(1, limit));
-    // Primero obtener filas con LIMIT (rápido; evita timeout en tablas grandes)
-    const rowsRes = await sql.unsafe(
-      `SELECT * FROM etl_output."${safeTable}" LIMIT ${effectiveLimit}`
-    );
+    const colRef = dateFilter?.dateColumn ? safeColumnIdent(dateFilter.dateColumn) : null;
+    const dateExpr = colRef
+      ? `(CASE WHEN ${colRef}::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(${colRef}::text, 'DD/MM/YYYY') WHEN ${colRef}::text LIKE '%, % de % de %' THEN to_date(${colRef}::text, 'Day, DD \"de\" Month \"de\" YYYY') ELSE ${colRef}::date END)`
+      : "";
+    let whereClause = "";
+    const params: (string | number)[] = [];
+    if (dateFilter?.dateColumn && dateExpr) {
+      const parts: string[] = [];
+      if (Array.isArray(dateFilter.years) && dateFilter.years.length > 0) {
+        const placeholders = dateFilter.years.map((_, i) => `$${i + 1}`).join(", ");
+        parts.push(`EXTRACT(YEAR FROM ${dateExpr}) IN (${placeholders})`);
+        params.push(...dateFilter.years);
+      }
+      if (dateFilter.dateFrom && dateFilter.dateTo && /^\d{4}-\d{2}-\d{2}$/.test(dateFilter.dateFrom) && /^\d{4}-\d{2}-\d{2}$/.test(dateFilter.dateTo)) {
+        const idx = params.length + 1;
+        parts.push(`${dateExpr} BETWEEN $${idx}::date AND $${idx + 1}::date`);
+        params.push(dateFilter.dateFrom, dateFilter.dateTo);
+      }
+      if (parts.length > 0) whereClause = " WHERE " + parts.join(" AND ");
+    }
+    const selectSql = params.length > 0
+      ? `SELECT * FROM etl_output."${safeTable}"${whereClause} LIMIT $${params.length + 1}`
+      : `SELECT * FROM etl_output."${safeTable}" LIMIT ${effectiveLimit}`;
+    const queryParams = params.length > 0 ? [...params, effectiveLimit] : [];
+
+    const rowsRes = queryParams.length > 0
+      ? await sql.unsafe(selectSql, queryParams as any)
+      : await sql.unsafe(selectSql);
     const rows = Array.isArray(rowsRes) ? rowsRes : [];
 
     if (rows.length > 0) {
-      // Hay datos: usar conteo aproximado (instantáneo) en lugar de COUNT(*) que en tablas enormes hace timeout
       let rowCount: number;
-      try {
-        const approxRes = await sql.unsafe(
-          `SELECT c.reltuples::bigint AS c FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'etl_output' AND c.relname = '${safeTable}'`
-        );
-        const approx = Array.isArray(approxRes) && approxRes[0]?.c != null ? Number(approxRes[0].c) : 0;
-        rowCount = approx > 0 ? Math.max(rows.length, Math.round(approx)) : rows.length;
-      } catch {
-        rowCount = rows.length;
+      if (whereClause) {
+        try {
+          const countSql = `SELECT COUNT(*)::bigint AS c FROM etl_output."${safeTable}"${whereClause}`;
+          const countRes = params.length > 0 ? await sql.unsafe(countSql, params as any) : await sql.unsafe(countSql);
+          rowCount = Number(Array.isArray(countRes) && countRes[0]?.c != null ? countRes[0].c : rows.length);
+        } catch {
+          rowCount = rows.length;
+        }
+      } else {
+        try {
+          const approxRes = await sql.unsafe(
+            `SELECT c.reltuples::bigint AS c FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'etl_output' AND c.relname = '${safeTable}'`
+          );
+          const approx = Array.isArray(approxRes) && approxRes[0]?.c != null ? Number(approxRes[0].c) : 0;
+          rowCount = approx > 0 ? Math.max(rows.length, Math.round(approx)) : rows.length;
+        } catch {
+          rowCount = rows.length;
+        }
       }
       return { rowCount, rows, tableExists: true };
     }
 
-    // Sin filas: tabla vacía (el SELECT * LIMIT ya confirmó que existe)
     return { rowCount: 0, rows: [], tableExists: true };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -680,6 +727,24 @@ export async function GET(
     const unlimited = url.searchParams.get("unlimited") === "1" || url.searchParams.get("unlimited") === "true";
     const sampleRowsParam = parseInt(url.searchParams.get("sampleRows") ?? "0", 10) || 0;
     const sampleRows = unlimited ? MAX_PROFILE_ROWS : Math.min(MAX_PROFILE_ROWS, Math.max(0, sampleRowsParam));
+    const dateColumnParam = url.searchParams.get("dateColumn") ?? url.searchParams.get("date_column") ?? "";
+    const yearsParam = url.searchParams.get("years") ?? url.searchParams.get("year") ?? "";
+    const dateFromParam = url.searchParams.get("dateFrom") ?? url.searchParams.get("date_from") ?? "";
+    const dateToParam = url.searchParams.get("dateTo") ?? url.searchParams.get("date_to") ?? "";
+    const parsedYears = yearsParam ? yearsParam.split(",").map((y) => parseInt(y.trim(), 10)).filter((n) => !isNaN(n) && n >= 1900 && n <= 2100) : [];
+    const fromOk = dateFromParam && /^\d{4}-\d{2}-\d{2}$/.test(dateFromParam.trim());
+    const toOk = dateToParam && /^\d{4}-\d{2}-\d{2}$/.test(dateToParam.trim());
+    const hasValidDateFilter =
+      !!dateColumnParam.trim() && (parsedYears.length > 0 || (fromOk && toOk));
+    const profileDateFilter: ProfileDateFilter | undefined = hasValidDateFilter
+      ? {
+          dateColumn: dateColumnParam.trim().replace(/"/g, ""),
+          ...(parsedYears.length > 0 ? { years: parsedYears } : {}),
+          ...(fromOk ? { dateFrom: dateFromParam!.trim() } : {}),
+          ...(toOk ? { dateTo: dateToParam!.trim() } : {}),
+        }
+      : undefined;
+
     let rawRows: any[] = resolved.sampleData;
     let rowCount = resolved.rowCount;
 
@@ -689,7 +754,7 @@ export async function GET(
 
     try {
       if (schemaName === "etl_output") {
-        const pgResult = await fetchFromEtlOutputViaPostgres(tableName, limitRows);
+        const pgResult = await fetchFromEtlOutputViaPostgres(tableName, limitRows, profileDateFilter ?? undefined);
         rowCount = pgResult.rowCount;
         if (pgResult.rows.length > 0) {
           rawRows = pgResult.rows;
@@ -721,7 +786,7 @@ export async function GET(
       }
     } catch {
       if (schemaName === "etl_output") {
-        const pgResult = await fetchFromEtlOutputViaPostgres(tableName, limitRows);
+        const pgResult = await fetchFromEtlOutputViaPostgres(tableName, limitRows, profileDateFilter ?? undefined);
         if (pgResult.rows.length > 0) {
           rawRows = pgResult.rows;
           rowCount = pgResult.rowCount;

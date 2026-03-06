@@ -751,6 +751,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
   }, [wizard, wizardStep, showForm, fetchData]);
 
+  // Auto-seleccionar "No aditiva (ratio)" cuando la fórmula del paso Cálculo contiene división
+  useEffect(() => {
+    if (wizard !== "B" || wizardStep !== 1) return;
+    const expr = (formMetrics[0] as { expression?: string })?.expression ?? "";
+    if (expr.includes("/")) setMetricAdditivity("non");
+  }, [wizard, wizardStep, formMetrics]);
+
   // Refrescar al volver a la pestaña (p. ej. después de ejecutar el ETL en otra pestaña)
   useEffect(() => {
     const onVisibility = () => {
@@ -1185,7 +1192,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const effectiveFormMetrics = useMemo((): AggregationMetricEdit[] => {
     if ((wizard === "C" || wizard === "D") && analysisSelectedMetricIds.length > 0) {
       return analysisSelectedMetricIds
-        .map((id) => savedMetrics.find((s) => s.id === id))
+        .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
         .filter((s): s is SavedMetricForm => s != null)
         .flatMap((s) => {
           const cfg = s.aggregationConfig;
@@ -1496,20 +1503,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       const xValuesRaw = [...new Set(rows.map((r) => (r as Record<string, unknown>)[xKey]))];
       const xValues = xValuesRaw.map((xv) => String(xv ?? ""));
       const labels = xValues.map((xv) => formatLabel(xv, xKey));
-      const yField = yKeys[0]!;
-      const datasets = seriesValues.map((sv, idx) => {
-        const color = getColor(sv, idx);
-        return {
-          label: sv,
-          data: xValues.map((xv) => {
-            const row = rows.find((r) => String((r as Record<string, unknown>)[xKey] ?? "") === xv && String((r as Record<string, unknown>)[chartSeriesField] ?? "") === sv);
-            return row ? Number((row as Record<string, unknown>)[yField] ?? 0) : 0;
-          }),
-          backgroundColor: color + "99",
-          borderColor: color,
-          borderWidth: 1,
-        };
-      });
+      const datasets = seriesValues.flatMap((sv, svIdx) =>
+        yKeys.map((yKey, yIdx) => {
+          const label = `${sv} (${colLabel(yKey)})`;
+          const color = getColor(label, svIdx * yKeys.length + yIdx);
+          return {
+            label,
+            data: xValues.map((xv) => {
+              const row = rows.find((r) => String((r as Record<string, unknown>)[xKey] ?? "") === xv && String((r as Record<string, unknown>)[chartSeriesField] ?? "") === sv);
+              return row ? Number((row as Record<string, unknown>)[yKey] ?? 0) : 0;
+            }),
+            backgroundColor: color + "99",
+            borderColor: color,
+            borderWidth: 1,
+          };
+        })
+      );
       return { labels, datasets };
     }
 
@@ -3248,6 +3257,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     })()}
                   </div>
 
+                  {((formMetrics[0] as { expression?: string })?.expression ?? "").includes("/") && (
+                    <div className="rounded-lg border p-3 flex items-start gap-2 mt-4" style={{ borderColor: "var(--platform-accent)", background: "var(--platform-accent-dim, rgba(59,130,246,0.06))" }}>
+                      <span className="text-sm" style={{ color: "var(--platform-fg)" }}>Detectamos un ratio (división). En el siguiente paso podés confirmar cómo se debe agregar.</span>
+                    </div>
+                  )}
+
                   <div className="flex justify-between pt-2">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext} disabled={!!formulaSyntaxError}>
@@ -3258,10 +3273,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
               )}
 
               {/* Wizard B1: Propiedades matemáticas */}
-              {wizard === "B" && wizardStep === 1 && (
+              {wizard === "B" && wizardStep === 1 && (() => {
+                const formulaHasDivision = ((formMetrics[0] as { expression?: string })?.expression ?? "").includes("/");
+                return (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Propiedades matemáticas</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Declara el comportamiento de la métrica. Previene agregaciones incorrectas en tablas y totales.</p>
+                  {formulaHasDivision && metricAdditivity === "additive" && (
+                    <div className="rounded-lg border p-3 mb-4" style={{ borderColor: "var(--platform-error, #dc2626)", background: "rgba(220,38,38,0.06)" }}>
+                      <p className="text-xs font-medium" style={{ color: "var(--platform-error, #dc2626)" }}>La fórmula contiene una división. Si la definís como Aditiva, al agrupar por otra dimensión el resultado puede ser incorrecto (se sumarían ratios en lugar de calcular SUM(numerador)/SUM(denominador)). Recomendamos dejar «No aditiva (ratio)».</p>
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-3 mb-4">
                     {(["additive", "semi", "non"] as const).map((t) => (
                       <button key={t} type="button" onClick={() => setMetricAdditivity(t)} className="p-4 rounded-xl border text-left transition-colors" style={{ borderColor: metricAdditivity === t ? "var(--platform-accent)" : "var(--platform-border)", background: metricAdditivity === t ? "var(--platform-accent-dim)" : "var(--platform-bg)" }}>
@@ -3281,7 +3303,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Filtros base</Button>
                   </div>
                 </section>
-              )}
+              ); })()}
 
               {/* Wizard B2: Filtros base */}
               {wizard === "B" && wizardStep === 2 && (

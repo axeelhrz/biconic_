@@ -117,6 +117,13 @@ export type Widget = {
         | "is not null";
       value?: string;
     }>;
+    /** Filtro por fecha (año, mes, fechas exactas) para reducir registros al ejecutar el ETL */
+    dateFilter?: {
+      column: string;
+      years?: number[];
+      months?: number[];
+      exactDates?: string[];
+    };
   };
   // For cast nodes: convert column data types (replacing originals)
   cast?: {
@@ -3456,6 +3463,114 @@ export function ETLEditor({
                               </div>
                             )}
                           </div>
+                        </div>
+                      );
+                    })()}
+                    {/* Filtro por fecha: reduce registros al ejecutar el ETL */}
+                    {(() => {
+                      const srcEdge = edges.find((e) => e.to === selected.id);
+                      const srcNode = srcEdge && widgets.find((w) => w.id === srcEdge.from);
+                      const dateColumnOptions: { value: string; label: string }[] = [];
+                      if (srcNode?.type === "join") {
+                        const j = (srcNode as any).join || {};
+                        const resolveCols = (connId?: string | number, qualified?: string, picked?: string[]): string[] => {
+                          if (!qualified) return [];
+                          if (picked?.length) return picked;
+                          const [schema, name] = qualified.includes(".") ? qualified.split(".", 2) : ["public", qualified];
+                          const connWidget = widgets.find((w) => w.type === "connection" && w.connectionId === connId);
+                          const tables = (connWidget && metaByNode[connWidget.id] ? metaByNode[connWidget.id].tables : connId && metaByNode[`conn:${connId}`] ? metaByNode[`conn:${connId}`].tables : []) || [];
+                          const tbl = tables.find((t: any) => t.schema === schema && t.name === name);
+                          return (tbl?.columns || []).map((c: any) => c.name);
+                        };
+                        const primaryCols = resolveCols(j.primaryConnectionId, j.primaryTable, j.primaryColumns);
+                        dateColumnOptions.push(...primaryCols.map((n) => ({ value: `primary.${n}`, label: `Principal · ${n}` })));
+                        (j.joins || []).forEach((jn: any, i: number) => {
+                          const secCols = resolveCols(jn.secondaryConnectionId, jn.secondaryTable, jn.secondaryColumns);
+                          secCols.forEach((n: string) => dateColumnOptions.push({ value: `join_${i}.${n}`, label: `Join ${i + 1} · ${n}` }));
+                        });
+                      } else if (srcNode?.type === "connection" && selected.filter?.table) {
+                        const tables = metaByNode[srcNode.id]?.tables || [];
+                        const tbl = tables.find((t: any) => `${t.schema}.${t.name}` === selected.filter?.table);
+                        (tbl?.columns || []).forEach((c: any) => dateColumnOptions.push({ value: c.name, label: c.name }));
+                      }
+                      const df = selected.filter?.dateFilter;
+                      const years = Array.from({ length: 19 }, (_, i) => 2012 + i);
+                      const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+                      return (
+                        <div className="space-y-2 border-t pt-3 mt-3">
+                          <Label className="text-sm font-medium text-gray-700">Filtro por fecha (al ejecutar ETL)</Label>
+                          <div>
+                            <Label className="text-xs text-gray-500">Columna de fecha</Label>
+                            <select
+                              className="w-full rounded-xl border px-2 py-2 text-sm bg-white mt-1"
+                              value={df?.column ?? ""}
+                              onChange={(e) => updateSelected({ filter: { ...selected.filter, dateFilter: df ? { ...df, column: e.target.value } : { column: e.target.value } } })}
+                            >
+                              <option value="">Sin filtro</option>
+                              {dateColumnOptions.map((o) => (
+                                <option key={o.value} value={o.value}>{o.label}</option>
+                              ))}
+                            </select>
+                          </div>
+                          {df?.column && (
+                            <>
+                              <div>
+                                <Label className="text-xs text-gray-500 block mb-1">Años</Label>
+                                <div className="flex flex-wrap gap-1">
+                                  {years.map((y) => {
+                                    const active = (df.years || []).includes(y);
+                                    return (
+                                      <button
+                                        key={y}
+                                        type="button"
+                                        className={`rounded-full px-2 py-1 text-xs border ${active ? "bg-emerald-50 border-emerald-400 text-emerald-700" : "bg-white border-gray-300 text-gray-700"}`}
+                                        onClick={() => {
+                                          const next = active ? (df.years || []).filter((x) => x !== y) : [...(df.years || []), y].sort((a, b) => a - b);
+                                          updateSelected({ filter: { ...selected.filter, dateFilter: { ...df, years: next.length ? next : undefined } } });
+                                        }}
+                                      >
+                                        {y}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              <div>
+                                <Label className="text-xs text-gray-500 block mb-1">Meses (opcional)</Label>
+                                <div className="flex flex-wrap gap-1">
+                                  {months.map((label, i) => {
+                                    const month = i + 1;
+                                    const active = (df.months || []).includes(month);
+                                    return (
+                                      <button
+                                        key={month}
+                                        type="button"
+                                        className={`rounded-full px-2 py-1 text-xs border ${active ? "bg-emerald-50 border-emerald-400 text-emerald-700" : "bg-white border-gray-300 text-gray-700"}`}
+                                        onClick={() => {
+                                          const next = active ? (df.months || []).filter((x) => x !== month) : [...(df.months || []), month].sort((a, b) => a - b);
+                                          updateSelected({ filter: { ...selected.filter, dateFilter: { ...df, months: next.length ? next : undefined } } });
+                                        }}
+                                      >
+                                        {label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              <div>
+                                <Label className="text-xs text-gray-500 block mb-1">Fechas exactas (YYYY-MM-DD, opcional)</Label>
+                                <Input
+                                  placeholder="ej. 2024-01-15, 2024-02-20"
+                                  value={(df.exactDates || []).join(", ")}
+                                  onChange={(e) => {
+                                    const parsed = e.target.value.trim().split(/[,\s]+/).map((s) => s.trim()).filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s));
+                                    updateSelected({ filter: { ...selected.filter, dateFilter: { ...df, exactDates: parsed.length ? parsed : undefined } } });
+                                  }}
+                                  className="rounded-xl mt-1"
+                                />
+                              </div>
+                            </>
+                          )}
                         </div>
                       );
                     })()}
@@ -8418,6 +8533,14 @@ function EndRunButton({
                 table: flow.leftBranch.filterNode!.filter!.table,
                 columns: flow.leftBranch.filterNode!.filter!.columns || [],
                 conditions: flow.leftBranch.filterNode!.filter!.conditions || [],
+                ...(flow.leftBranch.filterNode!.filter!.dateFilter?.column && {
+                  dateFilter: {
+                    column: flow.leftBranch.filterNode!.filter!.dateFilter!.column,
+                    ...(flow.leftBranch.filterNode!.filter!.dateFilter!.years?.length ? { years: flow.leftBranch.filterNode!.filter!.dateFilter!.years } : {}),
+                    ...(flow.leftBranch.filterNode!.filter!.dateFilter!.months?.length ? { months: flow.leftBranch.filterNode!.filter!.dateFilter!.months } : {}),
+                    ...(flow.leftBranch.filterNode!.filter!.dateFilter!.exactDates?.length ? { exactDates: flow.leftBranch.filterNode!.filter!.dateFilter!.exactDates } : {}),
+                  },
+                }),
               },
             },
             right: {
@@ -8426,6 +8549,14 @@ function EndRunButton({
                 table: flow.rightBranch.filterNode!.filter!.table,
                 columns: flow.rightBranch.filterNode!.filter!.columns || [],
                 conditions: flow.rightBranch.filterNode!.filter!.conditions || [],
+                ...(flow.rightBranch.filterNode!.filter!.dateFilter?.column && {
+                  dateFilter: {
+                    column: flow.rightBranch.filterNode!.filter!.dateFilter!.column,
+                    ...(flow.rightBranch.filterNode!.filter!.dateFilter!.years?.length ? { years: flow.rightBranch.filterNode!.filter!.dateFilter!.years } : {}),
+                    ...(flow.rightBranch.filterNode!.filter!.dateFilter!.months?.length ? { months: flow.rightBranch.filterNode!.filter!.dateFilter!.months } : {}),
+                    ...(flow.rightBranch.filterNode!.filter!.dateFilter!.exactDates?.length ? { exactDates: flow.rightBranch.filterNode!.filter!.dateFilter!.exactDates } : {}),
+                  },
+                }),
               },
             },
             unionAll: (upstreamNode as any).union?.unionAll !== false,
@@ -8440,6 +8571,14 @@ function EndRunButton({
             table: filterNode!.filter!.table!,
             columns: filterNode!.filter!.columns || [],
             conditions: filterNode!.filter!.conditions || [],
+            ...(filterNode!.filter!.dateFilter?.column && {
+              dateFilter: {
+                column: filterNode!.filter!.dateFilter.column,
+                ...(filterNode!.filter!.dateFilter.years?.length ? { years: filterNode!.filter!.dateFilter.years } : {}),
+                ...(filterNode!.filter!.dateFilter.months?.length ? { months: filterNode!.filter!.dateFilter.months } : {}),
+                ...(filterNode!.filter!.dateFilter.exactDates?.length ? { exactDates: filterNode!.filter!.dateFilter.exactDates } : {}),
+              },
+            }),
           },
           end: commonEnd,
         };
@@ -8486,6 +8625,14 @@ function EndRunButton({
             filter: {
               columns: allSelected,
               conditions: filterNode!.filter?.conditions || [],
+              ...(filterNode!.filter?.dateFilter?.column && {
+                dateFilter: {
+                  column: filterNode!.filter.dateFilter.column,
+                  ...(filterNode!.filter.dateFilter.years?.length ? { years: filterNode!.filter.dateFilter.years } : {}),
+                  ...(filterNode!.filter.dateFilter.months?.length ? { months: filterNode!.filter.dateFilter.months } : {}),
+                  ...(filterNode!.filter.dateFilter.exactDates?.length ? { exactDates: filterNode!.filter.dateFilter.exactDates } : {}),
+                },
+              }),
             },
             end: commonEnd,
           };
@@ -8514,6 +8661,14 @@ function EndRunButton({
             filter: {
               columns: allSelected,
               conditions: filterNode!.filter?.conditions || [],
+              ...(filterNode!.filter?.dateFilter?.column && {
+                dateFilter: {
+                  column: filterNode!.filter.dateFilter.column,
+                  ...(filterNode!.filter.dateFilter.years?.length ? { years: filterNode!.filter.dateFilter.years } : {}),
+                  ...(filterNode!.filter.dateFilter.months?.length ? { months: filterNode!.filter.dateFilter.months } : {}),
+                  ...(filterNode!.filter.dateFilter.exactDates?.length ? { exactDates: filterNode!.filter.dateFilter.exactDates } : {}),
+                },
+              }),
             },
             end: commonEnd,
           };

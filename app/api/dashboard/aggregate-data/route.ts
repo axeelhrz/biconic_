@@ -402,6 +402,38 @@ function findMatchingCloseParen(expr: string, openParenIndex: number): number {
   return -1;
 }
 
+/** Encuentra el índice del operador "/" de división a nivel top (depth 0), respetando paréntesis y comillas. Devuelve -1 si no hay ninguno. */
+function findTopLevelDivision(expr: string): number {
+  let depth = 0;
+  let inQuote: string | null = null;
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i];
+    if (inQuote) {
+      if (c === inQuote && expr[i - 1] !== "\\") inQuote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      inQuote = c;
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if (c === "/" && depth === 0) return i;
+  }
+  return -1;
+}
+
+/** Si la expresión es un ratio (num/den a nivel top), devuelve { numerator, denominator }. Usado para generar SUM(num)/NULLIF(SUM(den),0) en lugar de SUM(num/den). */
+function parseRatioExpression(expr: string): { numerator: string; denominator: string } | null {
+  const s = expr.replace(/\s+/g, " ").trim();
+  const idx = findTopLevelDivision(s);
+  if (idx <= 0 || idx >= s.length - 1) return null;
+  const numerator = s.slice(0, idx).trim();
+  const denominator = s.slice(idx + 1).trim();
+  if (!numerator || !denominator) return null;
+  return { numerator, denominator };
+}
+
 /** Si la expresión está envuelta en una función de agregación (ej. "SUM(X * Y)", "AVERAGE(X)"), devuelve { func, inner }.
  *  Solo desempaqueta cuando toda la expresión es exactamente una llamada (paréntesis balanceados); p. ej. "SUM(a)/SUM(b)" no se desempaqueta. */
 function unwrapAggExpression(expr: string): { func: string; inner: string } | null {
@@ -873,6 +905,19 @@ export async function POST(req: NextRequest) {
               (m as any)._forceAggregate = countIfSumIfAgg;
               return "1";
             }
+            // Ratio: num/den -> agregar como SUM(num)/NULLIF(SUM(den),0) para que al cambiar dimensión sea correcto
+            const ratioParsed = parseRatioExpression(resolvedExpr);
+            if (ratioParsed) {
+              const numSql = expressionToSql(ratioParsed.numerator, derivedByName);
+              const denSql = expressionToSql(ratioParsed.denominator, derivedByName);
+              if (numSql && denSql) {
+                (m as any)._ratioAggregate = {
+                  numSql: safeNumericCast(`(${numSql})`),
+                  denSql: safeNumericCast(`(${denSql})`),
+                };
+                return "1";
+              }
+            }
             // UNIQUE(expr) como expresión completa -> COUNT(DISTINCT expr); se maneja en aggExpr más abajo
             const uniqueMatch = resolvedExpr.trim().match(/^\s*UNIQUE\s*\(([\s\S]+)\)\s*$/i);
             if (uniqueMatch) {
@@ -913,7 +958,10 @@ export async function POST(req: NextRequest) {
         const forceAggregate = (m as any)._forceAggregate as string | undefined;
         const forceCountDistinct = (m as any)._forceCountDistinct as string | undefined;
         const compoundAggregate = (m as any)._compoundAggregate as boolean | undefined;
-        if (forceAggregate) {
+        const ratioAggregate = (m as any)._ratioAggregate as { numSql: string; denSql: string } | undefined;
+        if (ratioAggregate) {
+          aggExpr = `SUM(${ratioAggregate.numSql}) / NULLIF(SUM(${ratioAggregate.denSql}), 0)`;
+        } else if (forceAggregate) {
           aggExpr = forceAggregate;
         } else if (forceCountDistinct) {
           aggExpr = forceCountDistinct;

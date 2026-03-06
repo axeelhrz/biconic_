@@ -1179,7 +1179,10 @@ async function executeEtlPipeline(
                (star.joins || []).forEach((jn: any, idx: number) => {
                  const prefix = `join_${idx}.`;
                  const arr = selectedCols.filter(c => c.startsWith(prefix)).map(c => c.slice(prefix.length));
-                 if (arr.length) joinsSelected[jn.id] = arr;
+                 if (arr.length) {
+                   joinsSelected[jn.id] = arr;
+                   joinsSelected[`join_${idx}`] = arr; // fallback por índice por si jn.id no coincide (ej. UUID en editor)
+                 }
                });
 
                if (dbType === "excel_file") {
@@ -1199,11 +1202,25 @@ async function executeEtlPipeline(
                      const selectParts: string[] = [];
                      if (primarySelected.length) primarySelected.forEach(col => selectParts.push(`p.${quoteIdent(col)} AS "primary_${col.replace(/"/g, '""')}"`));
                      else selectParts.push("p.*");
-                     (star.joins||[]).forEach((jn: any, idx: number) => {
-                        const secCols = joinsSelected[jn.id] || jn.secondaryColumns || [];
-                        if (secCols.length) secCols.forEach((col: string) => selectParts.push(`j${idx}.${quoteIdent(col)} AS "join_${idx}_${col.replace(/"/g, '""')}"`));
-                        else selectParts.push(`j${idx}.*`);
-                     });
+                     for (let idx = 0; idx < (star.joins || []).length; idx++) {
+                       const jn = (star.joins as any[])[idx];
+                       let secCols: string[] = joinsSelected[jn.id] || joinsSelected[`join_${idx}`] || jn.secondaryColumns || [];
+                       if (secCols.length === 0 && jPhyss[idx]) {
+                         try {
+                           const qual = jPhyss[idx] as string;
+                           const [schema, table] = qual.includes(".") ? qual.split(".", 2) : ["data_warehouse", qual];
+                           const colsRes = await internalClient.query(
+                             "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position",
+                             [schema, table]
+                           );
+                           secCols = (colsRes.rows || []).map((r: any) => String(r.column_name ?? ""));
+                         } catch {
+                           // fallback
+                         }
+                       }
+                       if (secCols.length) secCols.forEach((col: string) => selectParts.push(`j${idx}.${quoteIdent(col)} AS "join_${idx}_${col.replace(/"/g, '""')}"`));
+                       else selectParts.push(`j${idx}.*`);
+                     }
 
                      let fromJoin = `FROM ${pQ} AS p`;
                      (star.joins||[]).forEach((jn: any, idx: number) => {
@@ -1244,11 +1261,26 @@ async function executeEtlPipeline(
                   const selectParts: string[] = [];
                   if (primarySelected.length) primarySelected.forEach(col => selectParts.push(`p.${quoteIdent(col)} AS "primary_${col.replace(/"/g, '""')}"`));
                   else selectParts.push("p.*");
-                  (star.joins||[]).forEach((jn: any, idx: number) => {
-                      const secCols = joinsSelected[jn.id] || jn.secondaryColumns || [];
-                      if (secCols.length) secCols.forEach((col: string) => selectParts.push(`j${idx}.${quoteIdent(col)} AS "join_${idx}_${col.replace(/"/g, '""')}"`));
-                      else selectParts.push(`j${idx}.*`);
-                  });
+                  for (let idx = 0; idx < (star.joins || []).length; idx++) {
+                    const jn = (star.joins as any[])[idx];
+                    let secCols: string[] = joinsSelected[jn.id] || joinsSelected[`join_${idx}`] || jn.secondaryColumns || [];
+                    if (secCols.length === 0 && jn.secondaryTable) {
+                      try {
+                        const [schema, table] = (jn.secondaryTable as string).includes(".")
+                          ? (jn.secondaryTable as string).split(".", 2)
+                          : ["public", (jn.secondaryTable as string)];
+                        const colsRes = await client.query(
+                          "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position",
+                          [schema, table]
+                        );
+                        secCols = (colsRes.rows || []).map((r: any) => String(r.column_name ?? ""));
+                      } catch {
+                        // fallback: sin alias, puede dar nombres duplicados
+                      }
+                    }
+                    if (secCols.length) secCols.forEach((col: string) => selectParts.push(`j${idx}.${quoteIdent(col)} AS "join_${idx}_${col.replace(/"/g, '""')}"`));
+                    else selectParts.push(`j${idx}.*`);
+                  }
 
                   let fromJoin = `FROM ${pQ} AS p`;
                   (star.joins||[]).forEach((jn: any, idx: number) => {
