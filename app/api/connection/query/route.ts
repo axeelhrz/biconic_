@@ -90,7 +90,6 @@ function firebirdQuotedIdent(name: string): string {
   let s = (name || "").trim();
   s = s.replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
   if (!s) return '"COL"';
-  if (/^[a-z0-9_]+$/.test(s)) s = s.toUpperCase();
   return `"${s.replace(/"/g, '""')}"`;
 }
 

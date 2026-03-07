@@ -756,9 +756,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   // Columnas de la tabla secundaria del JOIN
   const joinRightTableInfo = joinRightTables.find((t) => `${t.schema}.${t.name}` === joinSecondaryTable);
 
-  /** Opciones para "Columna tabla principal" del próximo JOIN: solo tabla principal si no hay JOINs; si hay JOINs, incluye primary.* y join_0.*, join_1.*, … para encadenar. */
+  /** Opciones para "Columna tabla principal" del próximo JOIN y para filtro por fecha. Preferir nombres de metadata (selectedTableInfo?.columns) para que el casing coincida con Firebird y evite -206. */
   const leftColumnOptionsForNextJoin = useMemo(() => {
-    const primaryCols = columns.length > 0 ? columns : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
+    const metaCols = (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
+    const primaryCols = metaCols.length > 0 ? metaCols : (columns.length > 0 ? columns : []);
     if (joinItems.length === 0) {
       return primaryCols.map((c: string) => ({ value: c, label: c }));
     }

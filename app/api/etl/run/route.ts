@@ -793,8 +793,10 @@ async function executeEtlPipeline(
             .map((c) => ({ ...c, column: resolveColCase(c.column || "") }))
             .filter((c) => c.column.length > 0);
           const { clause: leftClause, params: leftParams } = buildWhereClauseFirebird(leftFbConditions);
+          const rawDateCol = (dateFilter?.column || "").replace(/^primary\./i, "").trim();
+          const resolvedDateCol = rawDateCol ? resolveColCase(rawDateCol) : rawDateCol;
           const leftDateFilterFb = dateFilter?.column
-            ? { ...dateFilter, column: (dateFilter.column || "").replace(/^primary\./i, "").trim() }
+            ? { ...dateFilter, column: resolvedDateCol }
             : dateFilter;
           const { clause: leftDfClause, params: leftDfParams } = buildDateFilterWhereFragmentFirebird(leftDateFilterFb);
           const mergedLeftClause = leftDfClause ? (leftClause ? `${leftClause} AND ${leftDfClause}` : `WHERE ${leftDfClause}`) : leftClause;
