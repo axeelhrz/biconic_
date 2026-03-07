@@ -6,3 +6,6 @@
  * Riesgos: memoria y tiempo en tablas enormes; monitorear en producción.
  */
 export const ETL_MAX_ROWS_CEILING = 2_147_483_647;
+
+/** Límite por defecto para vista previa de datos en UI (run-preview). Evita timeouts en tablas grandes. */
+export const ETL_PREVIEW_DEFAULT_LIMIT = 1000;

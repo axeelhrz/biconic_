@@ -86,17 +86,17 @@ function buildWhereClausePg(conds: FilterCondition[]) {
   return { clause, params };
 }
 
-function firebirdUnquotedIdent(name: string): string {
+function firebirdQuotedIdent(name: string): string {
   let s = (name || "").trim();
   s = s.replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
-  s = s.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase();
-  return s || "COL";
+  if (!s) return '"COL"';
+  return `"${s.replace(/"/g, '""')}"`;
 }
 
 function buildWhereClauseFirebird(conds: FilterCondition[]) {
   const params: any[] = [];
   const parts = conds.map((c) => {
-    const col = firebirdUnquotedIdent(c.column || "");
+    const col = firebirdQuotedIdent(c.column || "");
     switch (c.operator) {
       case "is null":
         return `${col} IS NULL`;

@@ -1046,6 +1046,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     setPreviewError(null);
     const previewBody = { ...body } as Record<string, unknown>;
     delete previewBody.end;
+    previewBody.limit = 1000;
     if (previewBody.union && typeof previewBody.union === "object" && Array.isArray((previewBody.union as { rights?: unknown[] }).rights)) {
       const u = previewBody.union as { left: unknown; rights: unknown[]; unionAll?: boolean };
       if (u.rights.length > 0) (previewBody.union as Record<string, unknown>).right = u.rights[0];
@@ -3017,6 +3018,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <dd className="space-y-0.5">
                       <div className="font-medium" style={{ color: "var(--platform-fg)" }}>Filas mostradas: {previewLoading ? "…" : (previewRows != null ? String(previewDisplayRows.length) : "—")}</div>
                       <div className="font-medium" style={{ color: "var(--platform-fg)" }}>Total obtenido: {previewLoading ? "…" : previewError ? "Error al cargar" : (previewRows != null ? (previewRowsProcessed ?? previewRows.length) : "—")}</div>
+                      {!previewLoading && previewRows != null && previewRows.length > 0 && (
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Mostrando hasta 1.000 filas (vista previa).</p>
+                      )}
                     </dd>
                   </div>
                 </dl>

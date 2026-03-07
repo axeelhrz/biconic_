@@ -203,7 +203,7 @@ export function buildDateFilterWhereFragmentFirebird(
   if (!dateFilter) return { clause: "", params };
   const rawColumn = (dateFilter.column ?? "").trim().replace(/^primary\./i, "").trim();
   if (!rawColumn) return { clause: "", params };
-  const col = firebirdUnquotedIdent(rawColumn);
+  const col = firebirdQuotedIdent(rawColumn);
   const years = Array.isArray(dateFilter.years) ? dateFilter.years.map((y) => Number(y)).filter((n) => !Number.isNaN(n)) : [];
   const months = Array.isArray(dateFilter.months) ? dateFilter.months.map((m) => Number(m)).filter((n) => !Number.isNaN(n)) : [];
   const exactDates = Array.isArray(dateFilter.exactDates) ? dateFilter.exactDates.filter((d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) : [];
@@ -268,8 +268,7 @@ export function buildWhereClauseMy(conds: FilterCondition[] = []) {
   return { clause: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
 }
 
-// Firebird: identificador sin comillas para que el motor lo pase a mayúsculas y coincida con columnas creadas sin comillas (evita -206 Column unknown por diferencias de casing).
-// Quita prefijos primary. / join_N. para que solo se use el nombre real de la columna en la tabla.
+// Firebird: identificador sin comillas (legado). Columnas creadas con comillas en Firebird tienen casing exacto; usar firebirdQuotedIdent.
 function firebirdUnquotedIdent(name: string): string {
   let s = (name || "").trim();
   s = s.replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
@@ -277,11 +276,19 @@ function firebirdUnquotedIdent(name: string): string {
   return s || "COL";
 }
 
-// WHERE clause for Firebird (positional ? params)
+/** Firebird: identificador entre comillas dobles para preservar mayúsculas/minúsculas (evita -206 Column unknown en columnas creadas con comillas). */
+function firebirdQuotedIdent(name: string): string {
+  let s = (name || "").trim();
+  s = s.replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
+  if (!s) return '"COL"';
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+// WHERE clause for Firebird (positional ? params). Usa identificadores entre comillas para coincidir con el casing de la base (evita -206).
 export function buildWhereClauseFirebird(conds: FilterCondition[] = []) {
   const params: any[] = [];
   const parts = conds.map((c) => {
-    const col = firebirdUnquotedIdent(c.column || "");
+    const col = firebirdQuotedIdent(c.column || "");
     switch (c.operator) {
       case "is null":
         return `${col} IS NULL`;
