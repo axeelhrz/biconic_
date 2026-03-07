@@ -365,15 +365,16 @@ async function executeEtlPipeline(
     const dateFilter = body?.filter?.dateFilter ?? undefined;
 
     /** Quita el byte nulo (0x00) de strings; convierte undefined a null (postgres no admite undefined).
-     * Si el valor es un string con formato Date.toString() (ej. "Thu Feb 19 2026 00:00:00 GMT+0000 ..."),
-     * lo normaliza a ISO para que Postgres pueda convertirlo a DATE/TIMESTAMP sin error. */
+     * Strings que parecen fecha (Date.toString(), ISO, o parseables por Date) se normalizan a ISO
+     * para que Postgres acepte DATE/TIMESTAMP sin "Conversion error from string". */
     const sanitizeForPostgres = (val: unknown): unknown => {
       if (val === undefined || val === null) return null;
       if (typeof val === "string") {
         const s = val.replace(/\u0000/g, "");
         const d = new Date(s);
-        if (!isNaN(d.getTime()) && /GMT|UTC|Coordinated|Greenwich/.test(s)) {
-          return d.toISOString();
+        if (!isNaN(d.getTime())) {
+          const looksLikeJsDate = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s/.test(s) || /GMT|UTC|Coordinated|Greenwich/.test(s);
+          if (looksLikeJsDate) return d.toISOString();
         }
         return s;
       }
