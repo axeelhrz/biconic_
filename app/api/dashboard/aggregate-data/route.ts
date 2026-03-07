@@ -130,7 +130,9 @@ const normalizeStr = (str: string) =>
 
 /** Convierte nombre de columna del front (primary.COL, join_N.COL) al nombre físico en la tabla ETL (primary_col, join_n_col). */
 function displayColumnToPhysical(name: string): string {
-  const n = (name || "").trim();
+  let n = (name || "").trim();
+  if (n.length >= 2 && n.startsWith('"') && n.endsWith('"'))
+    n = n.slice(1, -1).replace(/""/g, '"');
   if (/^primary\.[a-zA-Z_][a-zA-Z0-9_]*$/i.test(n))
     return "primary_" + n.slice(8).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
   const joinMatch = n.match(/^join_(\d+)\.[a-zA-Z_][a-zA-Z0-9_]*$/i);

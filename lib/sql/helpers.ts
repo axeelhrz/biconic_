@@ -194,6 +194,35 @@ export function buildDateFilterWhereFragmentPg(
   return { clause: parts.join(" AND "), params };
 }
 
+/** Date filter for ETL on Firebird: returns WHERE fragment with ? placeholders and params (EXTRACT(YEAR/MONTH) or exact dates). */
+export function buildDateFilterWhereFragmentFirebird(
+  dateFilter: DateFilterSpec | undefined | null
+): { clause: string; params: any[] } {
+  const params: any[] = [];
+  const parts: string[] = [];
+  if (!dateFilter) return { clause: "", params };
+  const rawColumn = (dateFilter.column ?? "").trim().replace(/^primary\./i, "").trim();
+  if (!rawColumn) return { clause: "", params };
+  const col = firebirdUnquotedIdent(rawColumn);
+  const years = Array.isArray(dateFilter.years) ? dateFilter.years.map((y) => Number(y)).filter((n) => !Number.isNaN(n)) : [];
+  const months = Array.isArray(dateFilter.months) ? dateFilter.months.map((m) => Number(m)).filter((n) => !Number.isNaN(n)) : [];
+  const exactDates = Array.isArray(dateFilter.exactDates) ? dateFilter.exactDates.filter((d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) : [];
+  if (years.length) {
+    parts.push(`EXTRACT(YEAR FROM ${col}) IN (${years.map(() => "?").join(", ")})`);
+    years.forEach((y) => params.push(y));
+  }
+  if (months.length) {
+    parts.push(`EXTRACT(MONTH FROM ${col}) IN (${months.map(() => "?").join(", ")})`);
+    months.forEach((m) => params.push(m));
+  }
+  if (exactDates.length) {
+    parts.push(`CAST(${col} AS DATE) IN (${exactDates.map(() => "?").join(", ")})`);
+    exactDates.forEach((d) => params.push(d));
+  }
+  if (parts.length === 0) return { clause: "", params };
+  return { clause: parts.join(" AND "), params };
+}
+
 export function buildWhereClauseMy(conds: FilterCondition[] = []) {
   const params: any[] = [];
   const parts = conds.map((c) => {

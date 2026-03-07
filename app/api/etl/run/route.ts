@@ -13,6 +13,7 @@ import {
   buildWhereClauseFirebird,
   buildJoinClauseBinary,
   buildDateFilterWhereFragmentPg,
+  buildDateFilterWhereFragmentFirebird,
   type DateFilterSpec,
 } from "@/lib/sql/helpers";
 import {
@@ -631,7 +632,7 @@ async function executeEtlPipeline(
           for (let r = 0; r < rightSources.length; r++) {
             const right = rightSources[r];
             const rightInfo = rightInfos[r];
-            const rightBatches = await runSource(right, rightInfo.table);
+            const rightBatches = await runSource(right, rightInfo.table, { dateFilter });
             for (const batch of rightBatches) {
               if (batch.length) {
                 const rightCols = Object.keys(batch[0]).sort();
@@ -792,6 +793,12 @@ async function executeEtlPipeline(
             .map((c) => ({ ...c, column: resolveColCase(c.column || "") }))
             .filter((c) => c.column.length > 0);
           const { clause: leftClause, params: leftParams } = buildWhereClauseFirebird(leftFbConditions);
+          const leftDateFilterFb = dateFilter?.column
+            ? { ...dateFilter, column: (dateFilter.column || "").replace(/^primary\./i, "").trim() }
+            : dateFilter;
+          const { clause: leftDfClause, params: leftDfParams } = buildDateFilterWhereFragmentFirebird(leftDateFilterFb);
+          const mergedLeftClause = leftDfClause ? (leftClause ? `${leftClause} AND ${leftDfClause}` : `WHERE ${leftDfClause}`) : leftClause;
+          const mergedLeftParams = [...leftParams, ...leftDfParams];
           const Firebird = require("node-firebird");
           const opts = {
             host: conn.db_host || "localhost",
@@ -820,12 +827,12 @@ async function executeEtlPipeline(
               const cols = "*";
               const sql =
                 offset === 0
-                  ? `SELECT FIRST ${pageSize} ${cols} FROM ${leftTablePart} ${leftClause}`
-                  : `SELECT FIRST ${pageSize} SKIP ${offset} ${cols} FROM ${leftTablePart} ${leftClause}`;
+                  ? `SELECT FIRST ${pageSize} ${cols} FROM ${leftTablePart} ${mergedLeftClause}`
+                  : `SELECT FIRST ${pageSize} SKIP ${offset} ${cols} FROM ${leftTablePart} ${mergedLeftClause}`;
               const leftRows = await withRetry(
                 () =>
                   new Promise<any[]>((resolve, reject) => {
-                    db.query(sql, leftParams, (err: Error | null, r: any[]) => {
+                    db.query(sql, mergedLeftParams, (err: Error | null, r: any[]) => {
                       if (err) reject(err);
                       else resolve(r || []);
                     });
@@ -973,12 +980,20 @@ async function executeEtlPipeline(
           columns: string[] | undefined,
           conditions: FilterCondition[],
           limit?: number,
-          offset?: number
+          offset?: number,
+          dateFilter?: DateFilterSpec
         ): Promise<Record<string, any>[]> => {
           const connType = (connection.type || "").toLowerCase();
           const pwd = connection.db_password_encrypted
             ? decryptConnectionPassword(connection.db_password_encrypted)
             : (connection.db_password ?? "");
+          const buildWhereWithDateFilter = () => {
+            const { clause: condClause, params: condParams } = buildWhereClausePg(conditions);
+            const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, condParams.length + 1);
+            const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
+            const params = [...condParams, ...dfParams];
+            return { clause, params };
+          };
           if (connType === "postgres" || connType === "postgresql") {
             const pgClient = new PgClient({
               host: connection.db_host,
@@ -990,7 +1005,7 @@ async function executeEtlPipeline(
             await pgClient.connect();
             try {
               const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
-              const { clause, params } = buildWhereClausePg(conditions);
+              const { clause, params } = buildWhereWithDateFilter();
               const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
               const offsetVal = offset ?? 0;
               const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause} ORDER BY 1 ASC LIMIT ${limitVal} OFFSET ${offsetVal}`;
@@ -1014,7 +1029,7 @@ async function executeEtlPipeline(
             await excelClient.connect();
             try {
               const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
-              const { clause, params } = buildWhereClausePg(conditions);
+              const { clause, params } = buildWhereWithDateFilter();
               const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
               const offsetVal = offset ?? 0;
               const q = `SELECT ${sel} FROM ${quoteQualified(physicalTable)} ${clause} ORDER BY 1 ASC LIMIT ${limitVal} OFFSET ${offsetVal}`;
@@ -1027,7 +1042,7 @@ async function executeEtlPipeline(
           throw new Error(`JOIN entre conexiones: tipo "${connection.type}" no soportado para la conexión secundaria.`);
         };
 
-        const rightRows = await fetchFromConnectionCrossDb(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions);
+        const rightRows = await fetchFromConnectionCrossDb(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions, undefined, undefined);
         const rightColNorm = rightCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
         const rightMap = new Map<string, Record<string, any>[]>();
         for (const r of rightRows) {
@@ -1052,9 +1067,12 @@ async function executeEtlPipeline(
           return out;
         };
 
+        const leftDateFilter = dateFilter?.column
+          ? { ...dateFilter, column: (dateFilter.column || "").replace(/^primary\./i, "").trim() }
+          : dateFilter;
         let leftOffset = 0;
         for (;;) {
-          const leftNorm = await fetchFromConnectionCrossDb(conn, leftTable, leftColumns.length ? leftColumns : undefined, leftConditions, pageSize, leftOffset);
+          const leftNorm = await fetchFromConnectionCrossDb(conn, leftTable, leftColumns.length ? leftColumns : undefined, leftConditions, pageSize, leftOffset, leftDateFilter);
           if (leftNorm.length === 0) break;
           const batch: Record<string, any>[] = [];
           for (const lr of leftNorm) {

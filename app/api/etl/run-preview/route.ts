@@ -11,6 +11,7 @@ import {
   buildJoinClauseBinary,
   buildWhereClauseFirebird,
   buildDateFilterWhereFragmentPg,
+  buildDateFilterWhereFragmentFirebird,
   type DateFilterSpec,
 } from "@/lib/sql/helpers";
 import {
@@ -548,7 +549,8 @@ export async function POST(req: NextRequest) {
               conn: any,
               tableName: string,
               columns: string[] | undefined,
-              conditions: FilterCondition[]
+              conditions: FilterCondition[],
+              dateFilterOpt?: DateFilterSpec
             ): Promise<Record<string, any>[]> => {
               const connType = (conn.type || "").toLowerCase();
               const limit = Math.min(PREVIEW_MAX_ROWS, body?.limit ?? PREVIEW_MAX_ROWS);
@@ -564,14 +566,17 @@ export async function POST(req: NextRequest) {
                 if (!fbUser) return Promise.reject(new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión."));
                 const tablePart = tableName.includes(".") ? (tableName.split(".").pop() || tableName.trim()).trim().toUpperCase() : tableName.trim().toUpperCase();
                 const { clause, params } = buildWhereClauseFirebird(conditions.filter((c) => (c.column ?? "").trim() !== ""));
+                const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterOpt?.column ? { ...dateFilterOpt, column: (dateFilterOpt.column || "").replace(/^primary\./i, "").trim() } : dateFilterOpt);
+                const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
+                const mergedParams = [...params, ...dfParams];
                 const escapeFbLiteral = (v: any): string => {
                   if (v == null) return "NULL";
                   if (typeof v === "boolean") return v ? "1" : "0";
                   if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${String(v)}' AS DOUBLE PRECISION)`;
                   return `'${String(v).replace(/'/g, "''")}'`;
                 };
-                let clauseInlined = clause;
-                for (const p of params) {
+                let clauseInlined = mergedClause;
+                for (const p of mergedParams) {
                   const pos = clauseInlined.indexOf("?");
                   if (pos === -1) break;
                   clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
@@ -597,7 +602,10 @@ export async function POST(req: NextRequest) {
               await client.connect();
               try {
                 const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
-                const { clause, params } = buildWhereClausePg(conditions);
+                const { clause: condClause, params: condParams } = buildWhereClausePg(conditions);
+                const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterOpt, condParams.length + 1);
+                const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
+                const params = [...condParams, ...dfParams];
                 const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause} ORDER BY 1 ASC LIMIT ${limit}`;
                 const res = await client.query(q, params);
                 return (res.rows || []).map(normalize);
@@ -606,7 +614,7 @@ export async function POST(req: NextRequest) {
               }
             };
 
-            const leftRows = await fetchFromConn(conn1, leftTable, joinConf.leftColumns, leftConditions);
+            const leftRows = await fetchFromConn(conn1, leftTable, joinConf.leftColumns, leftConditions, dateFilter);
             const rightRows = await fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions);
 
             const findKey = (row: Record<string, any>, col: string) => {
