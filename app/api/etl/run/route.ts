@@ -895,6 +895,12 @@ async function executeEtlPipeline(
           }))
           .filter((c) => (c.column ?? "").length > 0);
         const { clause, params } = buildWhereClauseFirebird(firebirdConditions);
+        const dateFilterFb = dateFilter?.column
+          ? { ...dateFilter, column: (dateFilter.column || "").replace(/^primary\./i, "").trim() }
+          : dateFilter;
+        const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterFb);
+        const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
+        const mergedParams = [...params, ...dfParams];
         const Firebird = require("node-firebird");
         const opts = {
           host: conn.db_host || "localhost",
@@ -920,12 +926,12 @@ async function executeEtlPipeline(
           for (;;) {
             const sql =
               offset === 0
-                ? `SELECT FIRST ${pageSize} ${cols} FROM ${tablePart} ${clause}`
-                : `SELECT FIRST ${pageSize} SKIP ${offset} ${cols} FROM ${tablePart} ${clause}`;
+                ? `SELECT FIRST ${pageSize} ${cols} FROM ${tablePart} ${mergedClause}`
+                : `SELECT FIRST ${pageSize} SKIP ${offset} ${cols} FROM ${tablePart} ${mergedClause}`;
             const rows = await withRetry(
               () =>
                 new Promise<any[]>((resolve, reject) => {
-                  db.query(sql, params, (err: Error | null, r: any[]) => {
+                  db.query(sql, mergedParams, (err: Error | null, r: any[]) => {
                     if (err) reject(err);
                     else resolve(r || []);
                   });
