@@ -70,6 +70,7 @@ type AggregationMetric = {
   alias: string;
   condition?: { field: string; operator: string; value: unknown };
   formula?: string;
+  expression?: string;
 };
 type AggregationFilter = {
   id: string;
