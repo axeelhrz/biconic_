@@ -554,7 +554,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             try {
               primaryCols = await getTableColumnsPg(client, pPhysical, "data_warehouse");
             } catch (e) {
-              log("No se pudieron obtener columnas de la tabla principal, usando p.*", e);
+              log("No se pudieron obtener columnas de la tabla principal, usando p.*", e instanceof Error ? { message: e.message } : { error: String(e) });
             }
           }
           if (primaryCols.length > 0)
@@ -574,7 +574,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               try {
                 secCols = await getTableColumnsPg(client, jPhysicals[idx] as string, "data_warehouse");
               } catch (e) {
-                log(`No se pudieron obtener columnas del join ${idx}, usando j${idx}.*`, e);
+                log(`No se pudieron obtener columnas del join ${idx}, usando j${idx}.*`, e instanceof Error ? { message: e.message } : { error: String(e) });
               }
             }
             if (secCols.length > 0)
@@ -673,7 +673,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           log("Cerrando conexión a BD interna de Supabase.");
           await client
             .end()
-            .catch((err) => log("Error al cerrar cliente PG para Excel.", err));
+            .catch((err) => log("Error al cerrar cliente PG para Excel.", err instanceof Error ? { message: err.message } : { error: String(err) }));
         }
       } else if (dbType === "postgres" || dbType === "postgresql") {
         log("Detectado tipo 'postgres'. Iniciando flujo de JOIN externo.");
@@ -721,7 +721,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             try {
               primaryCols = await getTableColumnsPg(client, primaryTable, "public");
             } catch (e) {
-              log("No se pudieron obtener columnas de la tabla principal, usando p.*", e);
+              log("No se pudieron obtener columnas de la tabla principal, usando p.*", e instanceof Error ? { message: e.message } : { error: String(e) });
             }
           }
           if (primaryCols.length > 0)
@@ -741,7 +741,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               try {
                 secCols = await getTableColumnsPg(client, jn.secondaryTable, "public");
               } catch (e) {
-                log(`No se pudieron obtener columnas del join ${idx}, usando j${idx}.*`, e);
+                log(`No se pudieron obtener columnas del join ${idx}, usando j${idx}.*`, e instanceof Error ? { message: e.message } : { error: String(e) });
               }
             }
             if (secCols.length > 0)
@@ -843,7 +843,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           log("Cerrando conexión a PostgreSQL externo.");
           await client
             .end()
-            .catch((err) => log("Error al cerrar cliente PG.", err));
+            .catch((err) => log("Error al cerrar cliente PG.", err instanceof Error ? { message: err.message } : { error: String(err) }));
         }
       } else if (dbType === "mysql") {
         log("Detectado tipo 'mysql'. Iniciando flujo de JOIN externo.");
