@@ -569,6 +569,17 @@ export async function POST(req: NextRequest) {
                   }
                 : undefined;
 
+            const findKey = (row: Record<string, any>, col: string) => {
+              const c = col.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+              if (row[c] !== undefined) return c;
+              for (const k of Object.keys(row)) if (k.toLowerCase() === c) return k;
+              return undefined;
+            };
+            const getVal = (row: Record<string, any>, col: string) => {
+              const k = findKey(row, col);
+              return k === undefined ? undefined : row[k];
+            };
+
             const fetchFromConn = async (
               conn: any,
               tableName: string,
@@ -639,19 +650,29 @@ export async function POST(req: NextRequest) {
               }
             };
 
-            const leftRows = await fetchFromConn(conn1, leftTable, joinConf.leftColumns, leftConditions, dateFilterForLeft);
-            const rightRows = await fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions, dateFilterForRight);
-
-            const findKey = (row: Record<string, any>, col: string) => {
-              const c = col.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-              if (row[c] !== undefined) return c;
-              for (const k of Object.keys(row)) if (k.toLowerCase() === c) return k;
-              return undefined;
-            };
-            const getVal = (row: Record<string, any>, col: string) => {
-              const k = findKey(row, col);
-              return k === undefined ? undefined : row[k];
-            };
+            let leftRows: Record<string, any>[];
+            let rightRows: Record<string, any>[];
+            if (dateFilterForRight) {
+              rightRows = await fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions, dateFilterForRight);
+              const rightKeys = new Set(rightRows.map((r) => String(getVal(r, rightCol) ?? "")));
+              const leftConditionsWithIn =
+                rightKeys.size > 0
+                  ? [
+                      ...leftConditions,
+                      {
+                        column: resolveLeftColCase(leftCol),
+                        operator: "in" as const,
+                        value: Array.from(rightKeys).slice(0, effectiveLimit).join(","),
+                      },
+                    ]
+                  : leftConditions;
+              leftRows = await fetchFromConn(conn1, leftTable, joinConf.leftColumns, leftConditionsWithIn, dateFilterForLeft);
+            } else {
+              [leftRows, rightRows] = await Promise.all([
+                fetchFromConn(conn1, leftTable, joinConf.leftColumns, leftConditions, dateFilterForLeft),
+                fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions, dateFilterForRight),
+              ]);
+            }
 
             const rightMap = new Map<string, Record<string, any>[]>();
             for (const r of rightRows) {
