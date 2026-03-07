@@ -550,11 +550,24 @@ export async function POST(req: NextRequest) {
               .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
 
             const leftColumnNames = joinConf.leftColumns ?? [];
+            const rightColumnNames = joinConf.rightColumns ?? [];
             const resolveLeftColCase = (col: string) =>
               leftColumnNames.find((lc: string) => lc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
-            const dateFilterForLeft = dateFilter?.column
-              ? { ...dateFilter, column: resolveLeftColCase((dateFilter.column || "").replace(/^primary\./i, "").trim()) }
-              : dateFilter;
+            const resolveRightColCase = (col: string) =>
+              rightColumnNames.find((rc: string) => rc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
+            const dateFilterCol = dateFilter?.column ?? "";
+            const isDateFilterOnRight = /^join_\d+\./i.test(dateFilterCol);
+            const dateFilterForLeft =
+              dateFilter && !isDateFilterOnRight && dateFilterCol.trim()
+                ? { ...dateFilter, column: resolveLeftColCase((dateFilter.column || "").replace(/^primary\./i, "").trim()) }
+                : undefined;
+            const dateFilterForRight =
+              dateFilter?.column && /^join_0\./i.test(dateFilter.column)
+                ? {
+                    ...dateFilter,
+                    column: resolveRightColCase((dateFilter.column || "").replace(/^join_0\./i, "").trim()),
+                  }
+                : undefined;
 
             const fetchFromConn = async (
               conn: any,
@@ -577,7 +590,8 @@ export async function POST(req: NextRequest) {
                 if (!fbUser) return Promise.reject(new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión."));
                 const tablePart = tableName.includes(".") ? (tableName.split(".").pop() || tableName.trim()).trim().toUpperCase() : tableName.trim().toUpperCase();
                 const { clause, params } = buildWhereClauseFirebird(conditions.filter((c) => (c.column ?? "").trim() !== ""));
-                const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterOpt?.column ? { ...dateFilterOpt, column: (dateFilterOpt.column || "").replace(/^primary\./i, "").trim() } : dateFilterOpt);
+                const colForFb = (dateFilterOpt?.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
+                const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterOpt?.column ? { ...dateFilterOpt, column: colForFb } : dateFilterOpt);
                 const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
                 const mergedParams = [...params, ...dfParams];
                 const escapeFbLiteral = (v: any): string => {
@@ -626,7 +640,7 @@ export async function POST(req: NextRequest) {
             };
 
             const leftRows = await fetchFromConn(conn1, leftTable, joinConf.leftColumns, leftConditions, dateFilterForLeft);
-            const rightRows = await fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions);
+            const rightRows = await fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions, dateFilterForRight);
 
             const findKey = (row: Record<string, any>, col: string) => {
               const c = col.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();

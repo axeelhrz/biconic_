@@ -756,26 +756,37 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   // Columnas de la tabla secundaria del JOIN
   const joinRightTableInfo = joinRightTables.find((t) => `${t.schema}.${t.name}` === joinSecondaryTable);
 
+  /** Join efectivo: lista de JOINs o un único ítem sintético cuando hay join simple configurado sin "Agregar tabla". */
+  const effectiveJoinItemsForOptions = useMemo(
+    () =>
+      joinItems.length > 0
+        ? joinItems
+        : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
+          ? [{ id: "join_0", table: joinSecondaryTable, rightColumns: joinRightColumns, availableColumns: joinRightTableInfo?.columns ?? [] }]
+          : [],
+    [joinItems, joinSecondaryConnectionId, joinSecondaryTable, joinLeftColumn, joinRightColumn, joinRightColumns, joinRightTableInfo?.columns]
+  );
+
   /** Opciones para "Columna tabla principal" del próximo JOIN y para filtro por fecha. Preferir nombres de metadata (selectedTableInfo?.columns) para que el casing coincida con Firebird y evite -206. */
   const leftColumnOptionsForNextJoin = useMemo(() => {
     const metaCols = (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
     const primaryCols = metaCols.length > 0 ? metaCols : (columns.length > 0 ? columns : []);
-    if (joinItems.length === 0) {
+    if (effectiveJoinItemsForOptions.length === 0) {
       return primaryCols.map((c: string) => ({ value: c, label: c }));
     }
     const options: { value: string; label: string }[] = [];
     primaryCols.forEach((colName: string) => {
       options.push({ value: `primary.${colName}`, label: `Principal · ${colName}` });
     });
-    joinItems.forEach((item: { table: string; rightColumns: string[]; availableColumns?: { name: string }[] }, i: number) => {
+    effectiveJoinItemsForOptions.forEach((item: { table: string; rightColumns?: string[]; availableColumns?: { name: string }[] }, i: number) => {
       const tableLabel = item.table?.split(".").pop() || `Join ${i}`;
-      const cols = item.rightColumns?.length ? item.rightColumns : (item.availableColumns ?? []).map((ac: { name: string }) => ac.name);
+      const cols = (item.rightColumns?.length ? item.rightColumns : (item.availableColumns ?? []).map((ac: { name: string }) => ac.name)) ?? [];
       cols.forEach((colName: string) => {
         options.push({ value: `join_${i}.${colName}`, label: `${tableLabel} · ${colName}` });
       });
     });
     return options;
-  }, [columns, selectedTableInfo?.columns, joinItems]);
+  }, [columns, selectedTableInfo?.columns, effectiveJoinItemsForOptions]);
 
   /** Columnas finales del dataset (tras selección, UNION y JOIN). Refleja exactamente la estructura que se guardará. */
   const finalColumnsForTypes = useMemo(() => {
@@ -1557,7 +1568,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <div className="min-w-[180px]">
                       <Select
                         value={
-                          (dateFilterColumn && joinItems.length > 0 && !/^(primary|join_\d+)\./i.test(dateFilterColumn))
+                          (dateFilterColumn && effectiveJoinItemsForOptions.length > 0 && !/^(primary|join_\d+)\./i.test(dateFilterColumn))
                             ? `primary.${dateFilterColumn}`
                             : (dateFilterColumn ?? "")
                         }

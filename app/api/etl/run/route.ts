@@ -706,7 +706,8 @@ async function executeEtlPipeline(
             connection: any,
             tableName: string,
             columns: string[] | undefined,
-            conditions: FilterCondition[]
+            conditions: FilterCondition[],
+            dateFilterOpt?: DateFilterSpec
           ): Promise<Record<string, any>[]> => {
             const connType = (connection.type || "").toLowerCase();
             const pwd = connection.db_password_encrypted
@@ -719,6 +720,12 @@ async function executeEtlPipeline(
               conditions.map((c) => ({ ...c, column: (c.column || "").trim() })).filter((c) => (c.column ?? "").length > 0)
             );
             if (connType === "firebird") {
+              const colForFb = (dateFilterOpt?.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
+              const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(
+                dateFilterOpt?.column ? { ...dateFilterOpt, column: colForFb } : dateFilterOpt
+              );
+              const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
+              const mergedParams = [...params, ...dfParams];
               const Firebird = require("node-firebird");
               const opts = {
                 host: connection.db_host || "localhost",
@@ -732,7 +739,6 @@ async function executeEtlPipeline(
               return new Promise((resolve, reject) => {
                 Firebird.attach(opts, (err: Error | null, db: any) => {
                   if (err) return reject(err);
-                  // Firebird: SELECT * para evitar -206 (Column unknown) por nombre/casing.
                   const cols = "*";
                   const escapeFb = (v: any): string => {
                     if (v == null) return "NULL";
@@ -740,8 +746,8 @@ async function executeEtlPipeline(
                     if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${v}' AS DOUBLE PRECISION)`;
                     return `'${String(v).replace(/'/g, "''")}'`;
                   };
-                  let clauseInlined = clause;
-                  for (const p of params) {
+                  let clauseInlined = mergedClause;
+                  for (const p of mergedParams) {
                     const pos = clauseInlined.indexOf("?");
                     if (pos === -1) break;
                     clauseInlined = clauseInlined.slice(0, pos) + escapeFb(p) + clauseInlined.slice(pos + 1);
@@ -766,8 +772,11 @@ async function executeEtlPipeline(
               try {
                 const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
                 const { clause: pgClause, params: pgParams } = buildWhereClausePg(conditions);
-                const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${pgClause} ORDER BY 1 ASC`;
-                const res = await pgClient.query(q, pgParams);
+                const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterOpt, pgParams.length + 1);
+                const finalClause = dfClause ? (pgClause ? `${pgClause} AND ${dfClause}` : `WHERE ${dfClause}`) : pgClause;
+                const finalParams = [...pgParams, ...dfParams];
+                const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${finalClause} ORDER BY 1 ASC`;
+                const res = await pgClient.query(q, finalParams);
                 return (res.rows || []).map(normalizeRow);
               } finally {
                 await pgClient.end();
@@ -776,7 +785,14 @@ async function executeEtlPipeline(
             throw new Error(`JOIN con Firebird: conexión secundaria tipo "${connection.type}" no soportada. Usá Firebird o Postgres.`);
           };
 
-          const rightRows = await fetchFromConnection(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions);
+          const resolveRightColCase = (col: string) =>
+            rightColumns.find((rc: string) => rc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
+          const dateFilterForRight =
+            dateFilter?.column && /^join_0\./i.test(dateFilter.column)
+              ? { ...dateFilter, column: resolveRightColCase((dateFilter.column || "").replace(/^join_0\./i, "").trim()) }
+              : undefined;
+
+          const rightRows = await fetchFromConnection(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions, dateFilterForRight);
           const rightColNorm = rightCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
           const rightMap = new Map<string, Record<string, any>[]>();
           for (const r of rightRows) {
@@ -795,9 +811,11 @@ async function executeEtlPipeline(
           const { clause: leftClause, params: leftParams } = buildWhereClauseFirebird(leftFbConditions);
           const rawDateCol = (dateFilter?.column || "").replace(/^primary\./i, "").trim();
           const resolvedDateCol = rawDateCol ? resolveColCase(rawDateCol) : rawDateCol;
-          const leftDateFilterFb = dateFilter?.column
-            ? { ...dateFilter, column: resolvedDateCol }
-            : dateFilter;
+          const isDateFilterOnRight = /^join_\d+\./i.test(dateFilter?.column ?? "");
+          const leftDateFilterFb =
+            dateFilter?.column && !isDateFilterOnRight
+              ? { ...dateFilter, column: resolvedDateCol }
+              : undefined;
           const { clause: leftDfClause, params: leftDfParams } = buildDateFilterWhereFragmentFirebird(leftDateFilterFb);
           const mergedLeftClause = leftDfClause ? (leftClause ? `${leftClause} AND ${leftDfClause}` : `WHERE ${leftDfClause}`) : leftClause;
           const mergedLeftParams = [...leftParams, ...leftDfParams];
