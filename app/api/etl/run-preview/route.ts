@@ -549,9 +549,9 @@ export async function POST(req: NextRequest) {
               .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
               .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
 
-            const leftCols = joinConf.leftColumns ?? [];
+            const leftColumnNames = joinConf.leftColumns ?? [];
             const resolveLeftColCase = (col: string) =>
-              leftCols.find((lc: string) => lc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
+              leftColumnNames.find((lc: string) => lc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
             const dateFilterForLeft = dateFilter?.column
               ? { ...dateFilter, column: resolveLeftColCase((dateFilter.column || "").replace(/^primary\./i, "").trim()) }
               : dateFilter;
