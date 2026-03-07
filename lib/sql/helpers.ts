@@ -276,11 +276,14 @@ function firebirdUnquotedIdent(name: string): string {
   return s || "COL";
 }
 
-/** Firebird: identificador entre comillas dobles para preservar mayúsculas/minúsculas (evita -206 Column unknown en columnas creadas con comillas). */
+/** Firebird: identificador entre comillas dobles para preservar mayúsculas/minúsculas (evita -206 Column unknown).
+ * Si el nombre es solo minúsculas/numéricos (ej. claves normalizadas de la vista previa), se cita en mayúsculas
+ * para coincidir con columnas creadas sin comillas en Firebird (guardadas en mayúsculas). */
 function firebirdQuotedIdent(name: string): string {
   let s = (name || "").trim();
   s = s.replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
   if (!s) return '"COL"';
+  if (/^[a-z0-9_]+$/.test(s)) s = s.toUpperCase();
   return `"${s.replace(/"/g, '""')}"`;
 }
 
