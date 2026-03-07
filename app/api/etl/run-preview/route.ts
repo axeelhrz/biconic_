@@ -728,7 +728,16 @@ export async function POST(req: NextRequest) {
             });
 
             const { clause: mcClause, params: mcParams } = buildWhereClausePg(mappedConds);
-            const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, mcParams.length + 1, "l.");
+            const dateFilterForLeft =
+              dateFilter?.column != null
+                ? {
+                    column: (dateFilter.column || "").replace(/^primary\./i, "").trim(),
+                    years: dateFilter.years,
+                    months: dateFilter.months,
+                    exactDates: dateFilter.exactDates,
+                  }
+                : undefined;
+            const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterForLeft, mcParams.length + 1, "l.");
             const whereClause = dfClause ? (mcClause ? `${mcClause} AND ${dfClause}` : `WHERE ${dfClause}`) : mcClause;
             const params = [...mcParams, ...dfParams];
 
@@ -819,6 +828,18 @@ export async function POST(req: NextRequest) {
               (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
             );
             const { clause, params } = buildWhereClauseFirebird(rawConditions);
+            const dateFilterFb =
+              dateFilter?.column != null
+                ? {
+                    column: (dateFilter.column || "").replace(/^primary\./i, "").trim(),
+                    years: dateFilter.years,
+                    months: dateFilter.months,
+                    exactDates: dateFilter.exactDates,
+                  }
+                : undefined;
+            const { clause: dfClauseFb, params: dfParamsFb } = buildDateFilterWhereFragmentFirebird(dateFilterFb);
+            const mergedClauseFb = dfClauseFb ? (clause ? `${clause} AND ${dfClauseFb}` : `WHERE ${dfClauseFb}`) : clause;
+            const mergedParamsFb = [...params, ...dfParamsFb];
             const escapeFbLiteral = (v: any): string => {
               if (v == null) return "NULL";
               if (typeof v === "boolean") return v ? "1" : "0";
@@ -829,8 +850,8 @@ export async function POST(req: NextRequest) {
               const s = String(v);
               return `'${s.replace(/'/g, "''")}'`;
             };
-            let clauseInlined = clause;
-            for (const p of params) {
+            let clauseInlined = mergedClauseFb;
+            for (const p of mergedParamsFb) {
               const pos = clauseInlined.indexOf("?");
               if (pos === -1) break;
               clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);

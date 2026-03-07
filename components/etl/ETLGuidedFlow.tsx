@@ -453,6 +453,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     (t) => `${t.schema}.${t.name}` === selectedTable
   );
 
+  // Sugerir columna de fecha para el filtro cuando la tabla tiene columnas tipo Fecha y aún no se eligió columna
+  useEffect(() => {
+    if (restoringFromConfigRef.current || (dateFilterColumn ?? "") !== "") return;
+    const cols = selectedTableInfo?.columns as { name: string; dataType?: string; inferredType?: string }[] | undefined;
+    if (!cols?.length) return;
+    const firstDate = cols.find((c) => {
+      const t = c.inferredType ?? (c.dataType ? dataTypeToLabel(c.dataType) : undefined);
+      return t === "Fecha";
+    });
+    if (firstDate) setDateFilterColumn(firstDate.name);
+  }, [selectedTableInfo?.columns, dateFilterColumn]);
+
   /** Clave usada en columnDisplay para esta columna (la vista previa puede tener keys en minúsculas). */
   const getColumnDisplayKey = useCallback((previewKey: string): string => {
     if (columnDisplay[previewKey] !== undefined) return previewKey;
@@ -1068,8 +1080,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           setPreviewError(null);
           setPreviewRowsProcessed((data as { rowsProcessed?: number }).rowsProcessed ?? data.previewRows.length);
         } else if (data.ok && !Array.isArray(data.previewRows)) {
-          setPreviewRows(null);
-          setPreviewRowsProcessed(null);
+          previewLoadedOnceRef.current = true;
+          setPreviewRows([]);
+          setPreviewRowsProcessed(0);
           setPreviewError("La respuesta del servidor no incluyó datos de vista previa.");
         } else {
           setPreviewRows(null);
@@ -1115,6 +1128,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     unionRightItems,
     useJoin,
     joinItems,
+    dateFilterColumn,
+    dateFilterYears,
+    dateFilterMonths,
+    dateFilterExactDatesText,
   ]);
 
   const saveGuidedConfigToServer = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
@@ -2960,6 +2977,24 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     </dd>
                   </div>
                   <div>
+                    <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Filtro por fecha</dt>
+                    <dd className="font-medium" style={{ color: "var(--platform-fg)" }}>
+                      {dateFilterColumn
+                        ? (() => {
+                            const parsedExact = dateFilterExactDatesText.trim().split(/[,\s]+/).map((s) => s.trim()).filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s));
+                            const hasRestriction = dateFilterYears.length > 0 || dateFilterMonths.length > 0 || parsedExact.length > 0;
+                            if (!hasRestriction) return "Columna elegida (sin restricción)";
+                            const monthLabels = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+                            const parts: string[] = [`Columna: ${dateFilterColumn.replace(/^primary\./i, "").trim()}`];
+                            if (dateFilterYears.length > 0) parts.push(`Años: ${[...dateFilterYears].sort((a, b) => a - b).join(", ")}`);
+                            if (dateFilterMonths.length > 0) parts.push(`Meses: ${[...dateFilterMonths].sort((a, b) => a - b).map((m) => monthLabels[m - 1]).join(", ")}`);
+                            if (parsedExact.length > 0) parts.push(`Días: ${parsedExact.join(", ")}`);
+                            return parts.join(" · ");
+                          })()
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div>
                     <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Transformación</dt>
                     <dd className="font-medium" style={{ color: "var(--platform-fg)" }}>
                       {buildCleanConfig() || (useUnion && unionRightItems.length > 0) || (useJoin && (joinItems.length > 0 || (joinSecondaryConnectionId && joinSecondaryTable)))
@@ -3063,7 +3098,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               })()}
               {!previewError && !previewLoading && (!previewRows || previewRows.length === 0) && connectionId && selectedTable && previewLoadedOnceRef.current && (
                 <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
-                  La consulta se ejecutó pero no devolvió filas. Revisá los filtros o probá otra tabla. Podés tocar <strong>Actualizar</strong> para volver a cargar.
+                  {dateFilterColumn && (dateFilterYears.length > 0 || dateFilterMonths.length > 0 || dateFilterExactDatesText.trim().split(/[,\s]+/).some((s) => /^\d{4}-\d{2}-\d{2}$/.test(s.trim())))
+                    ? "La consulta no devolvió filas. Revisá el filtro por fecha (años/meses/días) o las condiciones. Podés tocar Actualizar para volver a cargar."
+                    : "La consulta se ejecutó pero no devolvió filas. Revisá los filtros o probá otra tabla. Podés tocar Actualizar para volver a cargar."}
                 </p>
               )}
               {!previewError && !previewLoading && (!previewRows || previewRows.length === 0) && connectionId && selectedTable && !previewLoadedOnceRef.current && (
