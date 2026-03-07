@@ -205,7 +205,16 @@ function buildChartConfigFromRows(
   if (!xKey || yKeys.length === 0) return undefined;
 
   const overrides = agg?.chartLabelOverrides;
-  const labelOverride = (v: string) => (overrides && v in overrides ? overrides[v] : v);
+  const labelOverride = (v: string) => {
+    if (!overrides) return v;
+    const s = String(v ?? "").trim();
+    if (s === "") return v;
+    if (s in overrides) return overrides[s];
+    for (const [k, val] of Object.entries(overrides)) {
+      if (String(k).trim() === s) return val;
+    }
+    return v;
+  };
 
   const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
   const basePalette = widget.color ? [widget.color, ...defaultPalette] : accentColor ? [accentColor, ...defaultPalette] : defaultPalette;

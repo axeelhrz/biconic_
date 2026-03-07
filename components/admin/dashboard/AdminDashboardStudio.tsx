@@ -32,6 +32,36 @@ import type { SavedMetricForm } from "./AddMetricConfigForm";
 
 type SavedMetric = SavedMetricForm;
 
+/** Análisis guardado: configuración de un gráfico (métricas + dimensiones + tipo + etiquetas) para añadir al dashboard. */
+export type SavedAnalysis = {
+  id: string;
+  name: string;
+  metricIds: string[];
+  dimension?: string;
+  dimensions?: string[];
+  chartType?: string;
+  chartXAxis?: string;
+  chartYAxes?: string[];
+  chartSeriesField?: string;
+  chartLabelOverrides?: Record<string, string>;
+  chartValueType?: string;
+  chartValueScale?: string;
+  chartCurrencySymbol?: string;
+  chartThousandSep?: boolean;
+  chartDecimals?: number;
+  chartSeriesColors?: Record<string, string>;
+  chartSortDirection?: string;
+  chartSortBy?: string;
+  chartRankingEnabled?: boolean;
+  chartRankingTop?: number;
+  chartRankingMetric?: string;
+  filters?: AggregationFilter[];
+  orderBy?: { field: string; direction: "ASC" | "DESC" };
+  limit?: number;
+  dateDimension?: string;
+  [key: string]: unknown;
+};
+
 // Tipos compatibles con el layout guardado en DB (mismo formato que DashboardViewer/DashboardEditor)
 type AggregationMetric = {
   id: string;
@@ -155,6 +185,7 @@ export function AdminDashboardStudio({
   const [pages, setPages] = useState<StudioPage[]>([{ id: "page-1", name: "Página 1" }]);
   const [activePageId, setActivePageId] = useState<string | null>("page-1");
   const [savedMetrics, setSavedMetrics] = useState<SavedMetric[]>([]);
+  const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalysis[]>([]);
   const [derivedColumnsFromLayout, setDerivedColumnsFromLayout] = useState<{ name: string; expression: string; defaultAggregation: string }[]>([]);
   const [layoutLoaded, setLayoutLoaded] = useState(false);
   const loadedOnce = useRef(false);
@@ -252,6 +283,7 @@ export function AdminDashboardStudio({
     let cancelled = false;
     (async () => {
       const all: SavedMetric[] = [];
+      const allAnalyses: SavedAnalysis[] = [];
       const allDerived: { name: string; expression: string; defaultAggregation: string }[] = [];
       for (const etlId of etlIds) {
         try {
@@ -259,6 +291,9 @@ export function AdminDashboardStudio({
           const json = await res.json();
           if (json.ok && Array.isArray(json.data?.savedMetrics)) {
             all.push(...(json.data.savedMetrics as SavedMetric[]));
+          }
+          if (json.ok && Array.isArray(json.data?.savedAnalyses)) {
+            allAnalyses.push(...(json.data.savedAnalyses as SavedAnalysis[]));
           }
           if (json.ok && Array.isArray(json.data?.datasetConfig?.derivedColumns)) {
             allDerived.push(...(json.data.datasetConfig.derivedColumns as { name: string; expression: string; defaultAggregation: string }[]));
@@ -273,6 +308,7 @@ export function AdminDashboardStudio({
         const fromEtl = all.filter((m) => !byName.has(m.name));
         return fromEtl.length > 0 ? [...prev, ...fromEtl] : prev;
       });
+      if (allAnalyses.length > 0) setSavedAnalyses(allAnalyses);
       if (allDerived.length > 0) {
         setDerivedColumnsFromLayout((prev) => {
           const byName = new Set(prev.map((d) => d.name.toLowerCase()));
@@ -410,7 +446,16 @@ export function AdminDashboardStudio({
       };
 
       const overrides = agg.chartLabelOverrides;
-      const labelOverride = (v: string) => (overrides && v in overrides ? overrides[v]! : v);
+      const labelOverride = (v: string) => {
+        if (!overrides) return v;
+        const s = String(v ?? "").trim();
+        if (s === "") return v;
+        if (s in overrides) return overrides[s]!;
+        for (const [k, val] of Object.entries(overrides)) {
+          if (String(k).trim() === s) return val;
+        }
+        return v;
+      };
 
       const effectiveChartType = agg.chartType || widgetType || "bar";
       const isPieOrDoughnut = effectiveChartType === "pie" || effectiveChartType === "doughnut";
@@ -900,6 +945,82 @@ export function AdminDashboardStudio({
     [widgets, activePageId, etlData, loadMetricData]
   );
 
+  /** Añade al dashboard un análisis ya creado (métricas + dimensiones + tipo de gráfico). */
+  const addSavedAnalysisToDashboard = useCallback(
+    (analysis: SavedAnalysis) => {
+      const metricConfigs: AggregationMetric[] = [];
+      for (const mid of analysis.metricIds || []) {
+        const saved = savedMetrics.find((s) => String(s.id) === String(mid));
+        if (!saved) continue;
+        const cfg = (saved.aggregationConfig ?? {}) as Record<string, unknown>;
+        const list = Array.isArray(cfg.metrics) ? cfg.metrics : (saved.metric ? [saved.metric] : []);
+        list.forEach((m: any) => metricConfigs.push({
+          id: m.id || `m-${Date.now()}`,
+          field: m.field || "",
+          func: m.func || "SUM",
+          alias: m.alias || "",
+          condition: m.condition,
+          formula: m.formula,
+          expression: m.expression,
+        }));
+      }
+      const chartType = (analysis.chartType as string) || "bar";
+      const dims = Array.isArray(analysis.dimensions) ? analysis.dimensions : [analysis.dimension].filter(Boolean) as string[];
+      const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
+      const sources = etlData?.dataSources;
+      const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
+      const newWidget: StudioWidget = {
+        id: `w-${analysis.id}-${Date.now()}`,
+        type: chartType,
+        title: analysis.name,
+        x: 0,
+        y: 0,
+        w: 400,
+        h: 280,
+        gridOrder: currentPageWidgets.length,
+        gridSpan: chartType === "kpi" ? 1 : 2,
+        pageId: activePageId ?? "page-1",
+        aggregationConfig: {
+          enabled: true,
+          dimension: dims[0] || undefined,
+          dimension2: dims[1] || undefined,
+          dimensions: dims.length > 0 ? dims : undefined,
+          metrics: metricConfigs.length > 0 ? metricConfigs : [{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" }],
+          filters: analysis.filters,
+          orderBy: analysis.orderBy,
+          limit: analysis.limit ?? 100,
+          dateDimension: analysis.dateDimension,
+          chartType,
+          chartXAxis: analysis.chartXAxis,
+          chartYAxes: analysis.chartYAxes,
+          chartSeriesField: analysis.chartSeriesField,
+          chartLabelOverrides: analysis.chartLabelOverrides,
+          chartValueType: analysis.chartValueType,
+          chartValueScale: analysis.chartValueScale,
+          chartCurrencySymbol: analysis.chartCurrencySymbol,
+          chartThousandSep: analysis.chartThousandSep,
+          chartDecimals: analysis.chartDecimals,
+          chartSeriesColors: analysis.chartSeriesColors,
+          chartSortDirection: analysis.chartSortDirection,
+          chartSortBy: analysis.chartSortBy,
+          chartRankingEnabled: analysis.chartRankingEnabled,
+          chartRankingTop: analysis.chartRankingTop,
+          chartRankingMetric: analysis.chartRankingMetric,
+        },
+        excludeGlobalFilters: false,
+        dataSourceId: primaryId,
+      };
+      setWidgets((prev) => [...prev, newWidget]);
+      setSelectedId(null);
+      setIsDirty(true);
+      setAddMetricOpen(false);
+      setAddMetricStep("list");
+      setAddMetricInitialIntent(null);
+      if (etlData) setTimeout(() => loadMetricData(newWidget.id), 300);
+    },
+    [widgets, activePageId, etlData, savedMetrics, loadMetricData]
+  );
+
   const openAddMetricList = useCallback(() => {
     setAddMetricOpen(true);
     setAddMetricStep("list");
@@ -1280,29 +1401,29 @@ export function AdminDashboardStudio({
         <DialogContent className="studio-modal-content border-0 p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col">
           <div className="studio-modal-inner p-6 pb-4">
             <DialogHeader>
-              <DialogTitle>Añadir métrica</DialogTitle>
+              <DialogTitle>Añadir análisis</DialogTitle>
               <DialogDescription>
-                Elegí una métrica ya creada para agregar al dashboard. Para crear nuevas métricas, andá a la pestaña de métricas del ETL.
+                Elegí un análisis ya creado para agregar al dashboard. Los análisis son gráficos configurados (métricas + dimensiones + tipo). Para crear nuevos, andá a Métricas del ETL y guardá un análisis en el paso C o D.
               </DialogDescription>
             </DialogHeader>
-            {savedMetrics.length > 0 ? (
+            {savedAnalyses.length > 0 ? (
               <div className="mt-4 space-y-2 max-h-[280px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
-                {savedMetrics.map((m) => (
+                {savedAnalyses.map((a) => (
                   <button
-                    key={m.id}
+                    key={a.id}
                     type="button"
-                    onClick={() => addSavedMetricToDashboard(m)}
+                    onClick={() => addSavedAnalysisToDashboard(a)}
                     className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
                     style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
                   >
-                    <span className="font-medium truncate">{m.name}</span>
+                    <span className="font-medium truncate">{a.name}</span>
                     <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir al dashboard</span>
                   </button>
                 ))}
               </div>
             ) : (
               <p className="mt-3 text-sm" style={{ color: "var(--studio-fg-muted)" }}>
-                No hay métricas creadas para este ETL. Creá métricas en la página de métricas del ETL.
+                No hay análisis guardados para este ETL. En la página de métricas del ETL, completá el paso C (Análisis) o D (Gráfico) y usá «Guardar como análisis» para que aparezcan aquí.
               </p>
             )}
           </div>

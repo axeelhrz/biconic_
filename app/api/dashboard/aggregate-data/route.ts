@@ -291,6 +291,8 @@ function expressionToSql(expression: string, derivedLookup?: Record<string, Deri
   if (!expression || typeof expression !== "string") return null;
   let s = expression.replace(/\s+/g, " ").trim();
   if (!s) return null;
+  // Normalizar comillas tipográficas/Unicode a comillas rectas (evita fallos con IF(primary.X="FB";...))
+  s = s.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"').replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'");
   // Permitir literales: números, cadenas con ' o ", ^ para potencia, = <> ! para comparaciones (IF, COUNTIF, etc.)
   const allowed = /^[a-zA-Z0-9_*+\-/().,\s'"%;^=<>!]+$/;
   if (!allowed.test(s)) return null;
@@ -910,6 +912,12 @@ export async function POST(req: NextRequest) {
             // Ratio: num/den -> agregar como SUM(num)/NULLIF(SUM(den),0) para que al cambiar dimensión sea correcto
             const ratioParsed = parseRatioExpression(resolvedExpr);
             if (ratioParsed) {
+              const numHasAgg = /\b(SUM|AVG|COUNT|MIN|MAX|COUNTA)\s*\(/i.test(ratioParsed.numerator);
+              const denHasAgg = /\b(SUM|AVG|COUNT|MIN|MAX|COUNTA)\s*\(/i.test(ratioParsed.denominator);
+              if (numHasAgg || denHasAgg) {
+                (m as any)._ratioAggregateError = true;
+                return "1";
+              }
               const numSql = expressionToSql(ratioParsed.numerator, derivedByName);
               const denSql = expressionToSql(ratioParsed.denominator, derivedByName);
               if (numSql && denSql) {
@@ -986,6 +994,13 @@ export async function POST(req: NextRequest) {
         return `${aggExpr} AS "${internalAlias}"`;
       })
       .join(", ");
+
+    if (metricsBase.some((m) => (m as any)._ratioAggregateError)) {
+      return NextResponse.json(
+        { error: "No se puede usar una expresión que sea «agregado / agregado» (ej. sum(...)/count(...)) como una sola métrica. Creá dos métricas (numerador y denominador), guardalas, y luego en Cálculo usá «Reutilizar métricas existentes» con fórmula metric_0 / NULLIF(metric_1, 0)." },
+        { status: 400 }
+      );
+    }
 
     // 2. Dimensiones (una o varias) + dateGroupBy (DATE_TRUNC)
     const dimList = (body.dimensions && body.dimensions.length > 0)

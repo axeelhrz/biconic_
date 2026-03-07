@@ -48,12 +48,14 @@ export async function GET(
 
     const layout = etlRow.layout as {
       saved_metrics?: unknown[];
+      saved_analyses?: unknown[];
       dataset_config?: {
         derivedColumns?: { name: string; expression: string; defaultAggregation?: string }[];
         derived_columns?: { name: string; expression: string; default_aggregation?: string }[];
       };
     } | undefined;
     const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
+    const savedAnalyses = Array.isArray(layout?.saved_analyses) ? layout.saved_analyses : [];
     const datasetConfig = layout?.dataset_config && typeof layout.dataset_config === "object" ? layout.dataset_config : undefined;
     const rawDerived = datasetConfig?.derivedColumns ?? datasetConfig?.derived_columns;
     const derivedColumns = Array.isArray(rawDerived)
@@ -71,6 +73,7 @@ export async function GET(
       ok: true,
       data: {
         savedMetrics,
+        savedAnalyses,
         ...(derivedColumns != null && { datasetConfig: { derivedColumns } }),
         linkedDashboardId,
         dashboardFilters,
@@ -117,6 +120,7 @@ export async function PUT(
         : undefined;
     const linkedDashboardId = typeof body.dashboardId === "string" ? body.dashboardId : undefined;
     const dashboardFilters = Array.isArray(body.dashboardFilters) ? body.dashboardFilters : undefined;
+    const savedAnalyses = Array.isArray(body.savedAnalyses) ? body.savedAnalyses : undefined;
 
     const adminClient = createServiceRoleClient();
     const { data: etlRow, error: fetchError } = await adminClient
@@ -133,6 +137,7 @@ export async function PUT(
     const updatedLayout = {
       ...currentLayout,
       saved_metrics: JSON.parse(JSON.stringify(savedMetrics)),
+      ...(savedAnalyses !== undefined && { saved_analyses: JSON.parse(JSON.stringify(savedAnalyses)) }),
       ...(dateColumnPeriodicityOverrides !== undefined && { date_column_periodicity_overrides: dateColumnPeriodicityOverrides }),
       ...(datasetConfig !== undefined && { dataset_config: JSON.parse(JSON.stringify(datasetConfig)) }),
       ...(linkedDashboardId !== undefined && { linked_dashboard_id: linkedDashboardId }),

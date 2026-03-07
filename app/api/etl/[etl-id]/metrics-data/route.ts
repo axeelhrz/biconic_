@@ -660,8 +660,9 @@ export async function GET(
     }
 
     const etlInfo = { id: etlRow.id, title: (etlRow as any).title, name: (etlRow as any).name };
-    const layout = (etlRow as { layout?: { saved_metrics?: unknown[]; guided_config?: Record<string, unknown> } }).layout;
+    const layout = (etlRow as { layout?: { saved_metrics?: unknown[]; saved_analyses?: unknown[]; guided_config?: Record<string, unknown> } }).layout;
     const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
+    const savedAnalyses = Array.isArray(layout?.saved_analyses) ? layout.saved_analyses : [];
     // Columnas elegidas en el ETL (Columnas a incluir): usar siempre para que Profiling muestre lo mismo que el ETL
     const guided = layout?.guided_config && typeof layout.guided_config === "object" ? layout.guided_config : undefined;
     const filterConfig = guided?.filter && typeof guided.filter === "object" ? (guided.filter as Record<string, unknown>) : undefined;
@@ -681,6 +682,7 @@ export async function GET(
           fields: { all: [], numeric: [], string: [], date: [] },
           rowCount: 0,
           savedMetrics,
+          savedAnalyses,
           rawRows: [],
         },
       });
@@ -917,6 +919,7 @@ export async function GET(
         fields,
         rowCount,
         savedMetrics,
+        savedAnalyses,
         rawRows,
         dateColumnPeriodicity,
         dateColumnPeriodicityOverrides,

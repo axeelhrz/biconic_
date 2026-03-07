@@ -330,6 +330,7 @@ type MetricsDataResponse = {
     fields: { all: string[]; numeric: string[]; string: string[]; date: string[] };
     rowCount: number;
     savedMetrics: SavedMetricForm[];
+    savedAnalyses?: { id: string; name: string; metricIds: string[]; [key: string]: unknown }[];
     rawRows?: Record<string, unknown>[];
     /** Periodicidad natural inferida por columna de fecha (Diaria, Semanal, Mensual, Anual, Irregular). El admin puede editarla en la UI. */
     dateColumnPeriodicity?: Record<string, string>;
@@ -445,6 +446,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [analysisDateFormat, setAnalysisDateFormat] = useState<"short" | "monthYear" | "year" | "datetime">("short");
   /** IDs de métricas guardadas seleccionadas para este análisis (wizard C). Si tiene elementos, el payload usa estas en lugar de formMetrics. */
   const [analysisSelectedMetricIds, setAnalysisSelectedMetricIds] = useState<string[]>([]);
+  /** En paso B, ratio entre métricas guardadas: IDs de 2+ métricas en orden (metric_0, metric_1, ...). */
+  const [formulaFromSavedMetricIds, setFormulaFromSavedMetricIds] = useState<string[]>([]);
+  /** Fórmula cuando se usa formulaFromSavedMetricIds (ej. metric_0 / NULLIF(metric_1, 0)). */
+  const [formulaFromReuseExpr, setFormulaFromReuseExpr] = useState("metric_0 / NULLIF(metric_1, 0)");
+  /** Nombre al guardar un análisis (paso C/D) para el dashboard. */
+  const [analysisNameToSave, setAnalysisNameToSave] = useState("");
+  const [savingAnalysis, setSavingAnalysis] = useState(false);
   /** Nombre al guardar una nueva métrica desde el paso B (Preview). */
   const [metricNameToSave, setMetricNameToSave] = useState("");
   /** Tras guardar métrica o columna en B, mostrar acciones «Crear otra» / «Ir a Análisis». */
@@ -1188,7 +1196,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
   const tableNameForPreview = data?.schema && data?.tableName ? `${data.schema}.${data.tableName}` : null;
 
-  /** En Análisis (C) o Gráfico (D) con métricas seleccionadas, usa esas; si no, usa formMetrics (ej. métrica recién creada en B). */
+  /** En Análisis (C) o Gráfico (D) con métricas seleccionadas, usa esas; en B con "ratio entre métricas guardadas", usa esas + fórmula; si no, usa formMetrics. */
   const effectiveFormMetrics = useMemo((): AggregationMetricEdit[] => {
     if ((wizard === "C" || wizard === "D") && analysisSelectedMetricIds.length > 0) {
       return analysisSelectedMetricIds
@@ -1200,8 +1208,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
           return list.map((m, i) => ({ ...m, id: (m as { id?: string }).id || `${s.id}-${i}` })) as AggregationMetricEdit[];
         });
     }
+    if (wizard === "B" && formulaFromSavedMetricIds.length >= 2) {
+      const ordered = formulaFromSavedMetricIds
+        .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
+        .filter((s): s is SavedMetricForm => s != null);
+      if (ordered.length >= 2) {
+        const baseMetrics = ordered.flatMap((s) => {
+          const cfg = s.aggregationConfig;
+          const list = cfg?.metrics?.length ? cfg.metrics : (s.metric ? [s.metric] : []);
+          return list.map((m, i) => ({ ...(m as object), id: (m as { id?: string }).id || `${s.id}-${i}` }));
+        }) as AggregationMetricEdit[];
+        return [...baseMetrics, { formula: formulaFromReuseExpr, func: "FORMULA", alias: formName } as AggregationMetricEdit];
+      }
+    }
     return formMetrics;
-  }, [wizard, analysisSelectedMetricIds, savedMetrics, formMetrics]);
+  }, [wizard, analysisSelectedMetricIds, savedMetrics, formMetrics, formulaFromSavedMetricIds, formulaFromReuseExpr, formName]);
 
   const fetchPreview = useCallback(async () => {
     if (effectiveFormMetrics.length === 0) return;
@@ -1356,6 +1377,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
   }, [wizard, wizardStep, showForm]);
 
+  /** Única fuente de sugerencias de tipo de gráfico según métricas, dimensiones y datos (evitar duplicar lógica en otros pasos). */
   const { recommendationText, suggestedChartType } = useMemo(() => {
     const hasDim = formDimensions.filter(Boolean).length > 0;
     const dimCount = formDimensions.filter(Boolean).length;
@@ -2046,23 +2068,45 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       toast.error("Escribí un nombre para la métrica (campo «Nombre de la métrica»).");
       return;
     }
-    const firstMetric = formMetrics[0];
-    if (!firstMetric) return;
-    const expr = (firstMetric as { expression?: string })?.expression?.trim();
-    if (!expr) {
-      toast.error("Escribí una fórmula para la métrica.");
-      return;
+    const useReuseFlow = formulaFromSavedMetricIds.length >= 2 && formulaFromReuseExpr.trim();
+    let metricsToStore: AggregationMetricEdit[];
+    let metricToSave: AggregationMetricEdit & { id?: string };
+    if (useReuseFlow) {
+      const ordered = formulaFromSavedMetricIds
+        .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
+        .filter((s): s is SavedMetricForm => s != null);
+      if (ordered.length < 2) {
+        toast.error("Seleccioná al menos dos métricas guardadas para el ratio.");
+        return;
+      }
+      const baseMetrics = ordered.flatMap((s) => {
+        const cfg = s.aggregationConfig;
+        const list = cfg?.metrics?.length ? cfg.metrics : (s.metric ? [s.metric] : []);
+        return list.map((m, i) => ({ ...(m as object), id: (m as { id?: string }).id || `m-${Date.now()}-${i}` }));
+      }) as AggregationMetricEdit[];
+      const formulaMetric: AggregationMetricEdit = { id: `m-formula-${Date.now()}`, field: "", func: "FORMULA", alias: name, formula: formulaFromReuseExpr.trim() };
+      metricsToStore = [...baseMetrics, formulaMetric];
+      metricToSave = formulaMetric;
+    } else {
+      const firstMetric = formMetrics[0];
+      if (!firstMetric) return;
+      const expr = (firstMetric as { expression?: string })?.expression?.trim();
+      if (!expr) {
+        toast.error("Escribí una fórmula para la métrica o usá «Ratio entre métricas guardadas».");
+        return;
+      }
+      if (formulaSyntaxError) {
+        toast.error(formulaSyntaxError);
+        return;
+      }
+      metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
+      metricsToStore = formMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` }));
     }
-    if (formulaSyntaxError) {
-      toast.error(formulaSyntaxError);
-      return;
-    }
-    const metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
     const aggregationConfig = {
       dimension: formDimensions[0] || undefined,
       dimension2: formDimensions[1] || undefined,
       dimensions: formDimensions.length > 0 ? formDimensions : undefined,
-      metrics: formMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` })),
+      metrics: metricsToStore,
       filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
@@ -2168,6 +2212,67 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       toast.error("Error al eliminar");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveAnalysisToEtl = async () => {
+    const name = analysisNameToSave.trim();
+    if (!name) {
+      toast.error("Escribí un nombre para el análisis.");
+      return;
+    }
+    if (analysisSelectedMetricIds.length === 0) {
+      toast.error("Seleccioná al menos una métrica para el análisis.");
+      return;
+    }
+    const newAnalysis = {
+      id: `sa-${Date.now()}`,
+      name,
+      metricIds: [...analysisSelectedMetricIds],
+      dimensions: formDimensions.length > 0 ? formDimensions : undefined,
+      dimension: formDimensions[0] || undefined,
+      dimension2: formDimensions[1] || undefined,
+      chartType: formChartType || undefined,
+      chartXAxis: chartXAxis || undefined,
+      chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
+      chartSeriesField: chartSeriesField || undefined,
+      chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
+      chartValueType: chartValueType !== "number" ? chartValueType : undefined,
+      chartValueScale: chartValueScale !== "none" ? chartValueScale : undefined,
+      chartCurrencySymbol: chartValueType === "currency" ? chartCurrencySymbol : undefined,
+      chartThousandSep,
+      chartDecimals,
+      chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
+      chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
+      chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
+      chartRankingEnabled: chartRankingEnabled || undefined,
+      chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
+      chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
+      filters: formFilters.length ? formFilters : undefined,
+      orderBy: formOrderBy ?? undefined,
+      limit: formLimit ?? 100,
+      dateDimension: timeColumn || undefined,
+    };
+    const nextAnalyses = [...(data?.savedAnalyses ?? []), newAnalysis];
+    setSavingAnalysis(true);
+    try {
+      const res = await fetch(`/api/etl/${etlId}/metrics`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedMetrics: savedMetrics, savedAnalyses: nextAnalyses }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        toast.error(json.error ?? "Error al guardar el análisis");
+        return;
+      }
+      setData((prev) => (prev ? { ...prev, savedAnalyses: nextAnalyses } : null));
+      toast.success(`Análisis «${name}» guardado. Aparecerá al añadir al dashboard.`);
+      setAnalysisNameToSave("");
+    } catch {
+      toast.error("Error al guardar el análisis");
+    } finally {
+      setSavingAnalysis(false);
     }
   };
 
@@ -3120,6 +3225,51 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                               disablePortal
                             />
                           </div>
+                          {savedMetrics.length >= 2 && (
+                            <div className="rounded-lg border p-3 space-y-2 col-span-full" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-surface)" }}>
+                              <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Reutilizar métricas existentes (ratio)</Label>
+                              <p className="text-xs mb-2" style={{ color: "var(--platform-fg-muted)" }}>Elegí dos métricas guardadas y una fórmula con metric_0 (primera) y metric_1 (segunda). Ej.: metric_0 / NULLIF(metric_1, 0).</p>
+                              <div className="flex flex-wrap gap-3 items-end">
+                                <div className="flex flex-col gap-1">
+                                  <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Métrica 1 (metric_0)</Label>
+                                  <Select
+                                    value={formulaFromSavedMetricIds[0] ?? ""}
+                                    onChange={(val: string) => setFormulaFromSavedMetricIds((prev) => [val ?? "", prev[1] ?? ""])}
+                                    options={[{ value: "", label: "—" }, ...savedMetrics.map((s) => ({ value: String(s.id), label: s.name ?? String(s.id) }))]}
+                                    placeholder="Seleccionar"
+                                    className="min-w-[160px]"
+                                    buttonClassName="h-9 text-sm"
+                                    disablePortal
+                                  />
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                  <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Métrica 2 (metric_1)</Label>
+                                  <Select
+                                    value={formulaFromSavedMetricIds[1] ?? ""}
+                                    onChange={(val: string) => setFormulaFromSavedMetricIds((prev) => [prev[0] ?? "", val ?? ""])}
+                                    options={[{ value: "", label: "—" }, ...savedMetrics.filter((s) => String(s.id) !== formulaFromSavedMetricIds[0]).map((s) => ({ value: String(s.id), label: s.name ?? String(s.id) }))]}
+                                    placeholder="Seleccionar"
+                                    className="min-w-[160px]"
+                                    buttonClassName="h-9 text-sm"
+                                    disablePortal
+                                  />
+                                </div>
+                                <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
+                                  <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Fórmula (metric_0, metric_1)</Label>
+                                  <Input
+                                    value={formulaFromReuseExpr}
+                                    onChange={(e) => setFormulaFromReuseExpr(e.target.value)}
+                                    placeholder="metric_0 / NULLIF(metric_1, 0)"
+                                    className="font-mono text-sm rounded-lg !bg-[var(--platform-bg)]"
+                                    style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                                  />
+                                </div>
+                              </div>
+                              {formulaFromSavedMetricIds.length >= 2 && (
+                                <p className="text-xs" style={{ color: "var(--platform-accent)" }}>Vista previa usará estas dos métricas + la fórmula. Guardá con el nombre de la métrica abajo.</p>
+                              )}
+                            </div>
+                          )}
                           {formMetrics.length > 1 && (
                             <div className="flex flex-col gap-1">
                               <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Combinar métricas de este análisis (metric_0, metric_1…)</Label>
@@ -3181,7 +3331,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                             <div className="space-y-2">
                               <Label className="text-xs block" style={{ color: "var(--platform-fg-muted)" }}>Nombre de la métrica (para «Guardar como métrica»)</Label>
                               <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Ej. Ventas totales, Cantidad vendida" className="h-9 text-sm rounded-lg w-full max-w-[220px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                              <Button type="button" className="rounded-xl h-9" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetricFromCalculationStep} disabled={saving || !exprValue.trim() || !formName.trim() || !!formulaSyntaxError}>
+                              <Button type="button" className="rounded-xl h-9" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetricFromCalculationStep} disabled={saving || !formName.trim() || (!(formulaFromSavedMetricIds.length >= 2 && formulaFromReuseExpr.trim()) && (!exprValue.trim() || !!formulaSyntaxError))}>
                                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                                 {saving ? " Guardando…" : " Guardar como métrica"}
                               </Button>
@@ -3971,6 +4121,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       <p className="text-sm" dangerouslySetInnerHTML={{ __html: recommendationText.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
                     </div>
                   </section>
+                  {(formChartType === "pie" || formChartType === "doughnut") && analysisSelectedMetricIds.length > 1 && (
+                    <p className="text-xs mb-3 py-2 px-3 rounded-lg border" style={{ borderColor: "var(--platform-warning, #eab308)", background: "rgba(234,179,8,0.08)", color: "var(--platform-fg)" }}>
+                      Pie/Dona solo muestra la primera métrica. Las demás no se usarán en este gráfico.
+                    </p>
+                  )}
+                  {formChartType === "combo" && effectiveFormMetrics.length < 2 && (
+                    <p className="text-xs mb-3 py-2 px-3 rounded-lg border" style={{ borderColor: "var(--platform-warning, #eab308)", background: "rgba(234,179,8,0.08)", color: "var(--platform-fg)" }}>
+                      Combo requiere al menos 2 métricas (barras + línea). Seleccioná otra métrica en el paso Análisis.
+                    </p>
+                  )}
+                  {analysisSelectedMetricIds.length > 1 && !["pie", "doughnut", "combo"].includes(formChartType) && (
+                    <p className="text-xs mb-3 py-2 px-3 rounded-lg border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg-muted)" }}>
+                      Este tipo de gráfico puede mostrar varias métricas como series.
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                     {CHART_TYPES.map(({ value, label, icon: Icon, description }) => {
                       const isSelected = formChartType === value;
@@ -4747,6 +4912,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                       </div>
                     );
                   })()}
+                  {analysisSelectedMetricIds.length > 0 && (
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-surface)" }}>
+                      <Label className="text-sm font-medium block mb-2" style={{ color: "var(--platform-fg)" }}>Guardar como análisis (para dashboards)</Label>
+                      <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Guardá esta configuración como análisis para poder añadirla al dashboard desde «Añadir análisis».</p>
+                      <div className="flex flex-wrap gap-2 items-end">
+                        <Input value={analysisNameToSave} onChange={(e) => setAnalysisNameToSave(e.target.value)} placeholder="Nombre del análisis" className="h-9 rounded-lg max-w-[220px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        <Button type="button" className="rounded-xl h-9" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveAnalysisToEtl} disabled={savingAnalysis || !analysisNameToSave.trim()}>
+                          {savingAnalysis ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                          {savingAnalysis ? " Guardando…" : " Guardar como análisis"}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex justify-between items-center">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
                     <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>

@@ -97,6 +97,20 @@ export async function POST(req: NextRequest) {
     }
     if (!body.field) throw new Error("Campo requerido");
 
+    /** Normaliza nombre de columna del front (primary.COL, join_N.COL) al nombre físico en la tabla ETL (primary_col, join_n_col). */
+    function fieldToPhysical(name: string): string {
+      const n = (name || "").trim();
+      if (/^primary\.[a-zA-Z_][a-zA-Z0-9_]*$/i.test(n))
+        return "primary_" + n.slice(8).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+      const joinMatch = n.match(/^join_(\d+)\.[a-zA-Z_][a-zA-Z0-9_]*$/i);
+      if (joinMatch)
+        return `join_${joinMatch[1]}_` + n.slice(joinMatch[0].indexOf(".") + 1).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+      if (/^primary_[a-zA-Z0-9_]+$/i.test(n)) return n.toLowerCase();
+      if (/^join_\d+_[a-zA-Z0-9_]+$/i.test(n)) return n.toLowerCase();
+      return n;
+    }
+    const physicalField = fieldToPhysical(body.field);
+
     const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -118,7 +132,7 @@ export async function POST(req: NextRequest) {
       table,
     });
 
-    const safeField = body.field.replace(/"/g, '""');
+    const safeField = physicalField.replace(/"/g, '""');
     const safeTable = table.replace(/"/g, '""');
 
     let selectExpression = `"${safeField}"`;
@@ -160,7 +174,7 @@ export async function POST(req: NextRequest) {
       const whereClauses = body.filters
         .filter((f) => f.field && f.operator)
         .map((f) => {
-          const fld = f.field.replace(/"/g, '""');
+          const fld = fieldToPhysical(f.field!).replace(/"/g, '""');
           const op = (f.operator || "=").toUpperCase().trim();
           if (!ALLOWED_OPERATORS.has(op)) {
             throw new Error(`Operador no permitido: ${op}`);

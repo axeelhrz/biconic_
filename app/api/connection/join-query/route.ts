@@ -99,6 +99,22 @@ function quoteQualified(qname: string, dbType: "postgres" | "mysql"): string {
   return parts.map((p) => quoteIdent(p, dbType)).join(".");
 }
 
+/** Obtiene nombres de columnas de una tabla en PostgreSQL (evita p.* / j*.* para alias consistentes). */
+async function getTableColumnsPg(
+  client: PgClient,
+  qualifiedTable: string,
+  defaultSchema = "public"
+): Promise<string[]> {
+  const [schema, table] = qualifiedTable.includes(".")
+    ? qualifiedTable.split(".", 2)
+    : [defaultSchema, qualifiedTable];
+  const res = await client.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
+    [schema, table]
+  );
+  return (res.rows || []).map((r: any) => String(r.column_name ?? ""));
+}
+
 function buildJoinClause(
   joinConditions: JoinCondition[],
   dbType: "postgres" | "mysql",
@@ -533,8 +549,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           );
 
           const selectParts: string[] = [];
-          if (primaryColumns && primaryColumns.length > 0)
-            primaryColumns.forEach((col) =>
+          let primaryCols = primaryColumns && primaryColumns.length > 0 ? primaryColumns : [];
+          if (primaryCols.length === 0) {
+            try {
+              primaryCols = await getTableColumnsPg(client, pPhysical, "data_warehouse");
+            } catch (e) {
+              log("No se pudieron obtener columnas de la tabla principal, usando p.*", e);
+            }
+          }
+          if (primaryCols.length > 0)
+            primaryCols.forEach((col) =>
               selectParts.push(
                 `p.${quoteIdent(col, "postgres")} AS "primary_${col.replace(
                   /"/g,
@@ -543,9 +567,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               )
             );
           else selectParts.push("p.*");
-          joins.forEach((jn, idx) => {
-            if (jn.secondaryColumns && jn.secondaryColumns.length > 0)
-              jn.secondaryColumns.forEach((col) =>
+          for (let idx = 0; idx < joins.length; idx++) {
+            const jn = joins[idx];
+            let secCols = jn.secondaryColumns && jn.secondaryColumns.length > 0 ? jn.secondaryColumns : [];
+            if (secCols.length === 0 && jPhysicals[idx]) {
+              try {
+                secCols = await getTableColumnsPg(client, jPhysicals[idx] as string, "data_warehouse");
+              } catch (e) {
+                log(`No se pudieron obtener columnas del join ${idx}, usando j${idx}.*`, e);
+              }
+            }
+            if (secCols.length > 0)
+              secCols.forEach((col) =>
                 selectParts.push(
                   `j${idx}.${quoteIdent(
                     col,
@@ -554,7 +587,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 )
               );
             else selectParts.push(`j${idx}.*`);
-          });
+          }
 
           let fromJoin = `FROM ${pQualified} AS p`;
           joins.forEach((jn, idx) => {
@@ -683,8 +716,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           );
 
           const selectParts: string[] = [];
-          if (primaryColumns && primaryColumns.length > 0)
-            primaryColumns.forEach((col) =>
+          let primaryCols = primaryColumns && primaryColumns.length > 0 ? primaryColumns : [];
+          if (primaryCols.length === 0) {
+            try {
+              primaryCols = await getTableColumnsPg(client, primaryTable, "public");
+            } catch (e) {
+              log("No se pudieron obtener columnas de la tabla principal, usando p.*", e);
+            }
+          }
+          if (primaryCols.length > 0)
+            primaryCols.forEach((col) =>
               selectParts.push(
                 `p.${quoteIdent(col, "postgres")} AS "primary_${col.replace(
                   /"/g,
@@ -693,9 +734,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               )
             );
           else selectParts.push("p.*");
-          joins.forEach((jn, idx) => {
-            if (jn.secondaryColumns && jn.secondaryColumns.length > 0)
-              jn.secondaryColumns.forEach((col) =>
+          for (let idx = 0; idx < joins.length; idx++) {
+            const jn = joins[idx];
+            let secCols = jn.secondaryColumns && jn.secondaryColumns.length > 0 ? jn.secondaryColumns : [];
+            if (secCols.length === 0 && jn.secondaryTable) {
+              try {
+                secCols = await getTableColumnsPg(client, jn.secondaryTable, "public");
+              } catch (e) {
+                log(`No se pudieron obtener columnas del join ${idx}, usando j${idx}.*`, e);
+              }
+            }
+            if (secCols.length > 0)
+              secCols.forEach((col) =>
                 selectParts.push(
                   `j${idx}.${quoteIdent(
                     col,
@@ -704,7 +754,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 )
               );
             else selectParts.push(`j${idx}.*`);
-          });
+          }
 
           let fromJoin = `FROM ${pQualified} AS p`;
           joins.forEach((jn, idx) => {
