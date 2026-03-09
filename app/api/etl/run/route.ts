@@ -441,7 +441,7 @@ async function executeEtlPipeline(
         // Base schema: from body.filter.columns when present (so all selected columns exist even if first row has nulls)
         const filterColumns = body!.filter?.columns as string[] | undefined;
         const explicitColumnNames: string[] =
-          filterColumns?.length > 0
+          filterColumns && filterColumns.length > 0
             ? filterColumns.map((c) => toSaneKey(c))
             : firstRow
             ? Object.keys(firstRow).map((k) => toSaneKey(k))
