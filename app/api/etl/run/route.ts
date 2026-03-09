@@ -1079,7 +1079,20 @@ async function executeEtlPipeline(
           throw new Error(`JOIN entre conexiones: tipo "${connection.type}" no soportado para la conexión secundaria.`);
         };
 
-        const rightRows = await fetchFromConnectionCrossDb(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions, undefined, undefined);
+        const resolveRightColCase = (col: string) =>
+          rightColumns.find((rc: string) => rc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
+        const dateFilterCol = dateFilter?.column ?? "";
+        const isDateFilterOnRight = /^join_\d+\./i.test(dateFilterCol);
+        const dateFilterForRight =
+          dateFilter?.column && /^join_0\./i.test(dateFilter.column)
+            ? { ...dateFilter, column: resolveRightColCase((dateFilter.column || "").replace(/^join_0\./i, "").trim()) }
+            : undefined;
+        const leftDateFilter =
+          dateFilter && !isDateFilterOnRight && dateFilterCol.trim()
+            ? { ...dateFilter, column: (dateFilter.column || "").replace(/^primary\./i, "").trim() }
+            : undefined;
+
+        const rightRows = await fetchFromConnectionCrossDb(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions, undefined, undefined, dateFilterForRight);
         const rightColNorm = rightCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
         const rightMap = new Map<string, Record<string, any>[]>();
         for (const r of rightRows) {
@@ -1103,10 +1116,6 @@ async function executeEtlPipeline(
           else for (const key in row) out["join_0_" + key] = row[key];
           return out;
         };
-
-        const leftDateFilter = dateFilter?.column
-          ? { ...dateFilter, column: (dateFilter.column || "").replace(/^primary\./i, "").trim() }
-          : dateFilter;
         let leftOffset = 0;
         for (;;) {
           const leftNorm = await fetchFromConnectionCrossDb(conn, leftTable, leftColumns.length ? leftColumns : undefined, leftConditions, pageSize, leftOffset, leftDateFilter);
