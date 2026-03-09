@@ -1451,7 +1451,7 @@ async function executeEtlPipeline(
     while (!iterResult.done && rawBatch != null) {
       if (rawBatch.length === 0) {
         iterResult = await gen.next();
-        rawBatch = iterResult.value;
+        rawBatch = iterResult.value as any[] | undefined;
         continue;
       }
       rowsProcessed += rawBatch.length;
@@ -1496,13 +1496,13 @@ async function executeEtlPipeline(
              if (!globalCountOriginalValues.has(key)) globalCountOriginalValues.set(key, val);
          }
          iterResult = await gen.next();
-         rawBatch = iterResult.value;
+         rawBatch = iterResult.value as any[] | undefined;
          continue;
       }
 
       if (transformedBatch.length === 0) {
         iterResult = await gen.next();
-        rawBatch = iterResult.value;
+        rawBatch = iterResult.value as any[] | undefined;
         continue;
       }
 
@@ -1531,7 +1531,7 @@ async function executeEtlPipeline(
       }
 
       iterResult = await nextPromise;
-      rawBatch = iterResult.value;
+      rawBatch = iterResult.value as any[] | undefined;
     }
 
     // --- FINAL COUNT INSERTION IF NEEDED ---
