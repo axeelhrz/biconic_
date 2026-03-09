@@ -330,6 +330,10 @@ async function executeEtlPipeline(
   let rowsProcessed = 0;
   const pipelineStartedAt = Date.now();
 
+  const dbUrl = process.env.SUPABASE_DB_URL;
+  if (!dbUrl) throw new Error("Variable de entorno SUPABASE_DB_URL no encontrada.");
+  const sqlPersistent = postgres(dbUrl);
+
   try {
     const regex = new RegExp("[-:.]", "g");
     const timestamp = new Date().toISOString().replace(regex, "").slice(0, 14);
@@ -370,7 +374,7 @@ async function executeEtlPipeline(
 
     /** Lotes más grandes = menos iteraciones y más throughput; 60k permite ~900k+ filas en 800s. Si hay timeouts en producción, reducir (p. ej. 20000–30000). */
     const pageSize = 60000;
-    const INSERT_CHUNK_SIZE_DEFAULT = 5000;
+    const INSERT_CHUNK_SIZE_DEFAULT = 15000;
     /** Postgres limita ~65535 parámetros por query. chunkSize * numColumnas debe quedar por debajo. Aumentar INSERT_CHUNK si hay pocas columnas para menos round-trips. */
     const MAX_PARAMS_PER_QUERY = 65000;
     let tableCreated = false;
@@ -395,14 +399,14 @@ async function executeEtlPipeline(
     /** Quita el byte nulo (0x00) de strings; convierte undefined a null (postgres no admite undefined).
      * Strings que parecen fecha (Date.toString(), ISO, o parseables por Date) se normalizan a ISO
      * para que Postgres acepte DATE/TIMESTAMP sin "Conversion error from string". */
+    const _jsDateRe = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s|GMT|UTC|Coordinated|Greenwich/;
     const sanitizeForPostgres = (val: unknown): unknown => {
       if (val === undefined || val === null) return null;
       if (typeof val === "string") {
-        const s = val.replace(/\u0000/g, "");
-        const d = new Date(s);
-        if (!isNaN(d.getTime())) {
-          const looksLikeJsDate = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s/.test(s) || /GMT|UTC|Coordinated|Greenwich/.test(s);
-          if (looksLikeJsDate) return d.toISOString();
+        const s = val.indexOf("\u0000") >= 0 ? val.replace(/\u0000/g, "") : val;
+        if (_jsDateRe.test(s)) {
+          const d = new Date(s);
+          if (!isNaN(d.getTime())) return d.toISOString();
         }
         return s;
       }
@@ -530,39 +534,31 @@ async function executeEtlPipeline(
           `[Background] Preparando tabla destino (modo=${mode}): etl_output.${newTableName}`
         );
 
-        const dbUrl = process.env.SUPABASE_DB_URL;
-        if (!dbUrl) throw new Error("Variable de entorno SUPABASE_DB_URL no encontrada.");
-
-        const sql = postgres(dbUrl);
-        try {
-          if (mode === "overwrite" || mode === "replace") {
-            const dropQuery = `DROP TABLE IF EXISTS etl_output."${newTableName}" CASCADE;`;
-            await sql.unsafe(dropQuery);
-          }
-          if (mode === "append") {
-            const existsRes = await sql.unsafe(
-              `SELECT to_regclass('etl_output."${newTableName}"') AS reg`
-            );
-            const exists = Array.isArray(existsRes) && existsRes[0]?.reg;
-            if (exists) {
-              tableCreated = true;
-            }
-          }
-          if (!tableCreated) {
-            const createTableQuery = `CREATE TABLE etl_output."${newTableName}" (${columnParts.join(", ")});`;
-            await sql.unsafe(createTableQuery);
+        if (mode === "overwrite" || mode === "replace") {
+          const dropQuery = `DROP TABLE IF EXISTS etl_output."${newTableName}" CASCADE;`;
+          await sqlPersistent.unsafe(dropQuery);
+        }
+        if (mode === "append") {
+          const existsRes = await sqlPersistent.unsafe(
+            `SELECT to_regclass('etl_output."${newTableName}"') AS reg`
+          );
+          const exists = Array.isArray(existsRes) && existsRes[0]?.reg;
+          if (exists) {
             tableCreated = true;
-            tableColumnNames = Object.keys(columnsDefinition).map((k) => k.replace(/^"|"$/g, ""));
           }
-          if (mode === "append" && tableCreated && !tableColumnNames) {
-            const colsRes = await sql.unsafe(
-              `SELECT column_name FROM information_schema.columns WHERE table_schema = 'etl_output' AND table_name = $1 ORDER BY ordinal_position`,
-              [newTableName]
-            );
-            tableColumnNames = Array.isArray(colsRes) ? colsRes.map((r) => String((r as unknown as { column_name: string }).column_name)) : [];
-          }
-        } finally {
-          await sql.end();
+        }
+        if (!tableCreated) {
+          const createTableQuery = `CREATE TABLE etl_output."${newTableName}" (${columnParts.join(", ")});`;
+          await sqlPersistent.unsafe(createTableQuery);
+          tableCreated = true;
+          tableColumnNames = Object.keys(columnsDefinition).map((k) => k.replace(/^"|"$/g, ""));
+        }
+        if (mode === "append" && tableCreated && !tableColumnNames) {
+          const colsRes = await sqlPersistent.unsafe(
+            `SELECT column_name FROM information_schema.columns WHERE table_schema = 'etl_output' AND table_name = $1 ORDER BY ordinal_position`,
+            [newTableName]
+          );
+          tableColumnNames = Array.isArray(colsRes) ? colsRes.map((r) => String((r as unknown as { column_name: string }).column_name)) : [];
         }
       }
 
@@ -603,10 +599,6 @@ async function executeEtlPipeline(
         return saneRow;
       });
 
-      const dbUrlInsert = process.env.SUPABASE_DB_URL;
-      if (!dbUrlInsert) throw new Error("SUPABASE_DB_URL no encontrada.");
-      const sqlInsert = postgres(dbUrlInsert);
-
       const numColumns = batchToInsert[0] ? Object.keys(batchToInsert[0]).length : 1;
       const insertChunkSize = Math.min(
         INSERT_CHUNK_SIZE_DEFAULT,
@@ -618,15 +610,13 @@ async function executeEtlPipeline(
           const chunk = batchToInsert.slice(i, i + insertChunkSize);
           if (chunk.length > 0) {
             await withRetry(
-              () => sqlInsert`INSERT INTO etl_output.${sqlInsert(newTableName)} ${sqlInsert(chunk)}`,
+              () => sqlPersistent`INSERT INTO etl_output.${sqlPersistent(newTableName)} ${sqlPersistent(chunk)}`,
               { label: "insert-batch" }
             );
           }
         }
       } catch (insErr: any) {
         throw new Error(`Error guardando lote: ${insErr.message}`);
-      } finally {
-        await sqlInsert.end();
       }
     };
 
@@ -681,7 +671,7 @@ async function executeEtlPipeline(
             const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(options?.dateFilter, condParams.length + 1);
             const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
             const params = [...condParams, ...dfParams];
-            const base = `SELECT ${selectList} FROM ${tableQ} ${clause} ORDER BY 1 ASC`;
+            const base = `SELECT ${selectList} FROM ${tableQ} ${clause} `;
             const batches: any[][] = [];
             let offset = 0;
             for (;;) {
@@ -854,7 +844,7 @@ async function executeEtlPipeline(
                 const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterOpt, pgParams.length + 1);
                 const finalClause = dfClause ? (pgClause ? `${pgClause} AND ${dfClause}` : `WHERE ${dfClause}`) : pgClause;
                 const finalParams = [...pgParams, ...dfParams];
-                const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${finalClause} ORDER BY 1 ASC`;
+                const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${finalClause} `;
                 const res = await pgClient.query(q, finalParams);
                 return (res.rows || []).map(normalizeRow);
               } finally {
@@ -1114,7 +1104,7 @@ async function executeEtlPipeline(
               const { clause, params } = buildWhereWithDateFilter();
               const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
               const offsetVal = offset ?? 0;
-              const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause} ORDER BY 1 ASC LIMIT ${limitVal} OFFSET ${offsetVal}`;
+              const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause}  LIMIT ${limitVal} OFFSET ${offsetVal}`;
               const res = await pgClient.query(q, params);
               return (res.rows || []).map(normalizeRowCrossDb);
             } finally {
@@ -1138,7 +1128,7 @@ async function executeEtlPipeline(
               const { clause, params } = buildWhereWithDateFilter();
               const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
               const offsetVal = offset ?? 0;
-              const q = `SELECT ${sel} FROM ${quoteQualified(physicalTable)} ${clause} ORDER BY 1 ASC LIMIT ${limitVal} OFFSET ${offsetVal}`;
+              const q = `SELECT ${sel} FROM ${quoteQualified(physicalTable)} ${clause}  LIMIT ${limitVal} OFFSET ${offsetVal}`;
               const res = await excelClient.query(q, params);
               return (res.rows || []).map(normalizeRowCrossDb);
             } finally {
@@ -1398,7 +1388,7 @@ async function executeEtlPipeline(
                      const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, starParams.length + 1, "p.", (star.joins||[]).length);
                      const mergedClause = dfClause ? (starClause ? `${starClause} AND ${dfClause}` : `WHERE ${dfClause}`) : starClause;
                      const mergedParams = [...starParams, ...dfParams];
-                     baseQuery = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause} ORDER BY 1 ASC`;
+                     baseQuery = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause} `;
                      queryParams = mergedParams;
                   } finally {
                      await internalClient.end();
@@ -1492,7 +1482,7 @@ async function executeEtlPipeline(
            const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, condParams.length + 1);
            const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
            const params = [...condParams, ...dfParams];
-           baseQuery = `SELECT ${selectList} FROM ${tableQ} ${clause} ORDER BY 1 ASC`;
+           baseQuery = `SELECT ${selectList} FROM ${tableQ} ${clause} `;
            queryParams = params;
         }
 
@@ -1676,6 +1666,7 @@ async function executeEtlPipeline(
         });
       }
     } catch (_) {}
+    try { await sqlPersistent.end(); } catch (_) {}
     const elapsedMs = Date.now() - pipelineStartedAt;
     console.log(`[Background Run ${runId}] Finished in ${elapsedMs}ms.`);
   }
