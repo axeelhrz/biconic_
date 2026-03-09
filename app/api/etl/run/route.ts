@@ -325,11 +325,18 @@ async function executeEtlPipeline(
   supabaseAdmin: any, // Typed as any to avoid conflicts with different client versions
   user: any
 ) {
+  const asPositiveInt = (raw: string | undefined, fallback: number) => {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  };
   let newTableName = "";
   const completedAt = () => new Date().toISOString();
   let rowsProcessed = 0;
   const pipelineStartedAt = Date.now();
-  const PIPELINE_TIMEOUT_MS = 750_000;
+  const PIPELINE_TIMEOUT_MS = asPositiveInt(process.env.ETL_PIPELINE_TIMEOUT_MS, 750_000);
+  const PAGE_SIZE = asPositiveInt(process.env.ETL_PAGE_SIZE, 60000);
+  const JOIN_KEYSET_SIZE = asPositiveInt(process.env.ETL_JOIN_KEYSET_SIZE, 3000);
+  const METRICS_LOG_EVERY_BATCHES = asPositiveInt(process.env.ETL_METRICS_LOG_EVERY_BATCHES, 5);
   let pipelineTimedOut = false;
 
   const pipelineTimer = setTimeout(async () => {
@@ -386,8 +393,8 @@ async function executeEtlPipeline(
     const previewRows: Record<string, any>[] = [];
     const PREVIEW_LIMIT = 5000;
 
-    /** Lotes más grandes = menos iteraciones y más throughput; 60k permite ~900k+ filas en 800s. Si hay timeouts en producción, reducir (p. ej. 20000–30000). */
-    const pageSize = 60000;
+    /** Lotes más grandes = menos iteraciones y más throughput; ajustable por ETL_PAGE_SIZE. */
+    const pageSize = PAGE_SIZE;
     const INSERT_CHUNK_SIZE_DEFAULT = 15000;
     /** Postgres limita ~65535 parámetros por query. chunkSize * numColumnas debe quedar por debajo. Aumentar INSERT_CHUNK si hay pocas columnas para menos round-trips. */
     const MAX_PARAMS_PER_QUERY = 65000;
@@ -764,13 +771,13 @@ async function executeEtlPipeline(
         };
 
         if (isJoin) {
-          // JOIN en memoria: resolver tabla izquierda (Firebird) y derecha (Firebird o Postgres)
           const isStar = isStarJoin && Array.isArray(joinObj.joins) && joinObj.joins.length > 0;
           const leftTable = isStar ? (joinObj.primaryTable || (body!.filter?.table || "").trim()) : (joinObj.leftTable || "").trim();
           const rightTable = isStar ? (joinObj.joins![0] as any).secondaryTable : (joinObj.rightTable || "").trim();
           const jc = isStar ? (joinObj.joins![0] as any) : (joinObj.joinConditions?.[0] || {});
           const leftCol = (jc.primaryColumn || jc.leftColumn || "").trim();
           const rightCol = (jc.secondaryColumn || jc.rightColumn || "").trim();
+          const joinType = (jc.joinType || "INNER").toString().toUpperCase();
           const secondaryConnId = isStar ? (joinObj.joins![0] as any).secondaryConnectionId : joinObj.secondaryConnectionId;
           if (!leftTable || !rightTable || !leftCol || !rightCol || !secondaryConnId)
             throw new Error("JOIN con Firebird requiere tabla izquierda, tabla derecha, columnas de enlace y conexión secundaria.");
@@ -788,128 +795,13 @@ async function executeEtlPipeline(
             .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
             .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
 
-          const fetchFromConnection = async (
-            connection: any,
-            tableName: string,
-            columns: string[] | undefined,
-            conditions: FilterCondition[],
-            dateFilterOpt?: DateFilterSpec
-          ): Promise<Record<string, any>[]> => {
-            const connType = (connection.type || "").toLowerCase();
-            const pwd = connection.db_password_encrypted
-              ? decryptConnectionPassword(connection.db_password_encrypted)
-              : (connection.db_password ?? "");
-            const tablePart = tableName.includes(".")
-              ? (tableName.split(".").pop() || tableName).trim().toUpperCase()
-              : safePart(tableName.trim());
-            const { clause, params } = buildWhereClauseFirebird(
-              conditions.map((c) => ({ ...c, column: (c.column || "").trim() })).filter((c) => (c.column ?? "").length > 0)
-            );
-            if (connType === "firebird") {
-              const colForFb = (dateFilterOpt?.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
-              const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(
-                dateFilterOpt?.column ? { ...dateFilterOpt, column: colForFb } : dateFilterOpt
-              );
-              const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
-              const mergedParams = [...params, ...dfParams];
-              const Firebird = require("node-firebird");
-              const opts = {
-                host: connection.db_host || "localhost",
-                port: connection.db_port ? Number(connection.db_port) : 15421,
-                database: connection.db_name,
-                user: connection.db_user,
-                password: pwd || "",
-                lowercase_keys: false,
-              };
-              const limit = ETL_MAX_ROWS_CEILING;
-              return new Promise((resolve, reject) => {
-                Firebird.attach(opts, (err: Error | null, db: any) => {
-                  if (err) return reject(err);
-                  const cols = "*";
-                  const escapeFb = (v: any): string => {
-                    if (v == null) return "NULL";
-                    if (typeof v === "boolean") return v ? "1" : "0";
-                    if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${v}' AS DOUBLE PRECISION)`;
-                    return `'${String(v).replace(/'/g, "''")}'`;
-                  };
-                  let clauseInlined = mergedClause;
-                  for (const p of mergedParams) {
-                    const pos = clauseInlined.indexOf("?");
-                    if (pos === -1) break;
-                    clauseInlined = clauseInlined.slice(0, pos) + escapeFb(p) + clauseInlined.slice(pos + 1);
-                  }
-                  db.query(`SELECT FIRST ${limit} ${cols} FROM ${tablePart} ${clauseInlined}`.trim(), [], (qerr: Error | null, rows: any[]) => {
-                    if (db?.detach) try { db.detach(() => {}); } catch (_) {}
-                    if (qerr) return reject(qerr);
-                    resolve((rows || []).map(normalizeRow));
-                  });
-                });
-              });
-            }
-            if (connType === "postgres" || connType === "postgresql") {
-              const pgClient = new PgClient({
-                host: connection.db_host,
-                user: connection.db_user,
-                database: connection.db_name,
-                port: connection.db_port ?? 5432,
-                password: pwd || undefined,
-                connectionTimeoutMillis: 15000,
-                statement_timeout: 600000,
-              });
-              await pgClient.connect();
-              try {
-                const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
-                const { clause: pgClause, params: pgParams } = buildWhereClausePg(conditions);
-                const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterOpt, pgParams.length + 1);
-                const finalClause = dfClause ? (pgClause ? `${pgClause} AND ${dfClause}` : `WHERE ${dfClause}`) : pgClause;
-                const finalParams = [...pgParams, ...dfParams];
-                const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${finalClause} `;
-                const res = await pgClient.query(q, finalParams);
-                return (res.rows || []).map(normalizeRow);
-              } finally {
-                await pgClient.end();
-              }
-            }
-            throw new Error(`JOIN con Firebird: conexión secundaria tipo "${connection.type}" no soportada. Usá Firebird o Postgres.`);
-          };
+          const rawDateCol = (dateFilter?.column ?? "").trim();
+          const isDateFilterOnRight = /^join_0\.\s*/i.test(rawDateCol);
+          const leftDateFilter = !isDateFilterOnRight && rawDateCol ? { ...dateFilter, column: rawDateCol.replace(/^primary\./i, "").trim() } : undefined;
+          const rightDateFilter = isDateFilterOnRight && rawDateCol ? { ...dateFilter, column: rawDateCol.replace(/^join_0\.\s*/i, "").trim() } : undefined;
 
-          const resolveRightColCase = (col: string) =>
-            rightColumns.find((rc: string) => rc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
-          const rawDateColFb = (dateFilter?.column ?? "").trim();
-          const isDateFilterOnRightFb = /^join_0\.\s*/i.test(rawDateColFb);
-          const dateFilterForRight =
-            dateFilter?.column && isDateFilterOnRightFb
-              ? { ...dateFilter, column: resolveRightColCase(rawDateColFb.replace(/^join_0\.\s*/i, "").trim()) }
-              : undefined;
-
-          const rightRows = await fetchFromConnection(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions, dateFilterForRight);
-          const rightColNorm = rightCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-          const rightMap = new Map<string, Record<string, any>[]>();
-          for (const r of rightRows) {
-            const key = String(r[rightColNorm] ?? (r as any)[rightCol] ?? "");
-            if (!rightMap.has(key)) rightMap.set(key, []);
-            rightMap.get(key)!.push(r);
-          }
-          const leftColNorm = leftCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-          const joinType = (jc.joinType || "INNER").toString().toUpperCase();
-
-          const leftTablePart = leftTable.includes(".") ? (leftTable.split(".").pop() || leftTable).trim().toUpperCase() : safePart(leftTable);
-          const resolveColCase = (col: string) => leftColumns.find((lc) => lc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
-          const leftFbConditions = leftConditions
-            .map((c) => ({ ...c, column: resolveColCase(c.column || "") }))
-            .filter((c) => c.column.length > 0);
-          const { clause: leftClause, params: leftParams } = buildWhereClauseFirebird(leftFbConditions);
-          const rawDateColLeft = (dateFilter?.column ?? "").trim().replace(/^primary\./i, "").trim();
-          const resolvedDateCol = rawDateColLeft ? resolveColCase(rawDateColLeft) : rawDateColLeft;
-          const leftDateFilterFb =
-            dateFilter?.column && !isDateFilterOnRightFb && rawDateColLeft
-              ? { ...dateFilter, column: resolvedDateCol }
-              : undefined;
-          const { clause: leftDfClause, params: leftDfParams } = buildDateFilterWhereFragmentFirebird(leftDateFilterFb);
-          const mergedLeftClause = leftDfClause ? (leftClause ? `${leftClause} AND ${leftDfClause}` : `WHERE ${leftDfClause}`) : leftClause;
-          const mergedLeftParams = [...leftParams, ...leftDfParams];
           const Firebird = require("node-firebird");
-          const opts = {
+          const fbOpts = {
             host: conn.db_host || "localhost",
             port: conn.db_port ? Number(conn.db_port) : 15421,
             database: conn.db_name,
@@ -917,67 +809,243 @@ async function executeEtlPipeline(
             password: password || "",
             lowercase_keys: false,
           };
-          const leftCols = leftColumns.length ? leftColumns : [];
+          const escapeFb = (v: any): string => {
+            if (v == null) return "NULL";
+            if (typeof v === "boolean") return v ? "1" : "0";
+            if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${v}' AS DOUBLE PRECISION)`;
+            return `'${String(v).replace(/'/g, "''")}'`;
+          };
+          const inlineClauseParams = (clause: string, params: any[]) => {
+            let text = clause;
+            for (const p of params) {
+              const pos = text.indexOf("?");
+              if (pos === -1) break;
+              text = text.slice(0, pos) + escapeFb(p) + text.slice(pos + 1);
+            }
+            return text;
+          };
+          const aliasWhereFirebird = (conds: FilterCondition[], alias: string) => {
+            const params: any[] = [];
+            const parts = conds
+              .map((c) => ({ ...c, column: (c.column || "").trim() }))
+              .filter((c) => (c.column ?? "").length > 0)
+              .map((c) => {
+                const col = `${alias}.${safePart(c.column || "")}`;
+                switch (c.operator) {
+                  case "is null":
+                    return `${col} IS NULL`;
+                  case "is not null":
+                    return `${col} IS NOT NULL`;
+                  case "contains":
+                    params.push(`%${c.value ?? ""}%`);
+                    return `${col} CONTAINING ?`;
+                  case "startsWith":
+                    params.push(`${c.value ?? ""}%`);
+                    return `${col} LIKE ?`;
+                  case "endsWith":
+                    params.push(`%${c.value ?? ""}`);
+                    return `${col} LIKE ?`;
+                  case "in": {
+                    const list = (c.value ?? "").split(",").map((v) => v.trim()).filter(Boolean);
+                    const qs = list.map(() => "?");
+                    params.push(...list);
+                    return list.length ? `${col} IN (${qs.join(", ")})` : "1=1";
+                  }
+                  default:
+                    params.push(c.value ?? null);
+                    return `${col} ${c.operator} ?`;
+                }
+              });
+            return { clause: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
+          };
+
+          const isSameFirebirdConnection =
+            String(primaryConnId) === String(secondaryConnId) &&
+            String((conn2 as any).type || "").toLowerCase() === "firebird";
+          const canUseNativeJoin = isSameFirebirdConnection && leftColumns.length > 0 && rightColumns.length > 0;
+
+          if (canUseNativeJoin) {
+            let db: any = null;
+            try {
+              db = await withRetry(
+                () =>
+                  new Promise<any>((resolve, reject) => {
+                    Firebird.attach(fbOpts, (err: Error | null, connection: any) => {
+                      if (err) reject(err);
+                      else resolve(connection);
+                    });
+                  }),
+                { label: "firebird-attach-native-join" }
+              );
+              let offset = 0;
+              for (;;) {
+                const lTable = leftTable.includes(".") ? safePart((leftTable.split(".").pop() || leftTable).trim()) : safePart(leftTable);
+                const rTable = rightTable.includes(".") ? safePart((rightTable.split(".").pop() || rightTable).trim()) : safePart(rightTable);
+                const selectParts = [
+                  ...leftColumns.map((c) => `l.${safePart(c)} AS "primary_${c.replace(/"/g, '""')}"`),
+                  ...rightColumns.map((c) => `r.${safePart(c)} AS "join_0_${c.replace(/"/g, '""')}"`),
+                ];
+                const onClause = `l.${safePart(leftCol)} = r.${safePart(rightCol)}`;
+                const { clause: lClause, params: lParams } = aliasWhereFirebird(leftConditions, "l");
+                const { clause: rClause, params: rParams } = aliasWhereFirebird(rightConditions, "r");
+                const { clause: leftDf, params: leftDfParams } = buildDateFilterWhereFragmentFirebird(leftDateFilter);
+                const { clause: rightDf, params: rightDfParams } = buildDateFilterWhereFragmentFirebird(rightDateFilter);
+                const whereParts: string[] = [];
+                if (lClause) whereParts.push(lClause.replace(/^WHERE\s+/i, ""));
+                if (rClause) whereParts.push(rClause.replace(/^WHERE\s+/i, ""));
+                if (leftDf && leftDateFilter?.column) {
+                  whereParts.push(leftDf.replace(new RegExp(`"${leftDateFilter.column.replace(/"/g, '""')}"`, "g"), `l.${safePart(leftDateFilter.column)}`));
+                }
+                if (rightDf && rightDateFilter?.column) {
+                  whereParts.push(rightDf.replace(new RegExp(`"${rightDateFilter.column.replace(/"/g, '""')}"`, "g"), `r.${safePart(rightDateFilter.column)}`));
+                }
+                const whereClause = whereParts.length ? ` WHERE ${whereParts.join(" AND ")}` : "";
+                const sql = `SELECT FIRST ${pageSize} SKIP ${offset} ${selectParts.join(", ")} FROM ${lTable} l ${joinType} JOIN ${rTable} r ON ${onClause}${whereClause}`;
+                const sqlInlined = inlineClauseParams(sql, [...lParams, ...rParams, ...leftDfParams, ...rightDfParams]);
+                const rows = await withRetry(
+                  () =>
+                    new Promise<any[]>((resolve, reject) => {
+                      db.query(sqlInlined, [], (err: Error | null, r: any[]) => {
+                        if (err) reject(err);
+                        else resolve(r || []);
+                      });
+                    }),
+                  { label: "firebird-native-join-query" }
+                );
+                const normalized = rows.map(normalizeRow);
+                if (normalized.length === 0) break;
+                yield normalized;
+                if (normalized.length < pageSize) break;
+                offset += pageSize;
+              }
+            } finally {
+              if (db?.detach) db.detach(() => {});
+            }
+            return;
+          }
+
+          // Fallback por keyset: evita precargar tabla derecha completa en memoria.
+          const leftTablePart = leftTable.includes(".") ? (leftTable.split(".").pop() || leftTable).trim().toUpperCase() : safePart(leftTable);
+          const rightTablePart = rightTable.includes(".") ? (rightTable.split(".").pop() || rightTable).trim().toUpperCase() : safePart(rightTable);
+          const leftColNorm = leftCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+          const rightColNorm = rightCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+          const { clause: leftClause, params: leftParams } = buildWhereClauseFirebird(leftConditions);
+          const { clause: leftDfClause, params: leftDfParams } = buildDateFilterWhereFragmentFirebird(leftDateFilter);
+          const mergedLeftClause = leftDfClause ? (leftClause ? `${leftClause} AND ${leftDfClause}` : `WHERE ${leftDfClause}`) : leftClause;
+          const mergedLeftParams = [...leftParams, ...leftDfParams];
+          const rightKeyQuery = async (keys: string[]): Promise<Record<string, any>[]> => {
+            if (keys.length === 0) return [];
+            const escapedList = keys.map((k) => escapeFb(k)).join(", ");
+            const rightKeyCond = { column: rightCol, operator: "in" as const, value: keys.join(",") };
+            const allRightConditions = [...rightConditions, rightKeyCond];
+            const { clause: rClause, params: rParams } = buildWhereClauseFirebird(allRightConditions);
+            const { clause: rDfClause, params: rDfParams } = buildDateFilterWhereFragmentFirebird(rightDateFilter);
+            const mergedRightClause = rDfClause ? (rClause ? `${rClause} AND ${rDfClause}` : `WHERE ${rDfClause}`) : rClause;
+            const mergedRightParams = [...rParams, ...rDfParams];
+            if (String((conn2 as any).type || "").toLowerCase() === "firebird") {
+              const pwd2 = (conn2 as any).db_password_encrypted ? decryptConnectionPassword((conn2 as any).db_password_encrypted) : (conn2 as any).db_password ?? "";
+              const opts2 = { host: conn2.db_host || "localhost", port: conn2.db_port ? Number(conn2.db_port) : 15421, database: conn2.db_name, user: conn2.db_user, password: pwd2 || "", lowercase_keys: false };
+              return new Promise((resolve, reject) => {
+                Firebird.attach(opts2, (err: Error | null, db2: any) => {
+                  if (err) return reject(err);
+                  const cols = rightColumns.length ? rightColumns.map((c) => safePart(c)).join(", ") : "*";
+                  let sql = `SELECT FIRST ${ETL_MAX_ROWS_CEILING} ${cols} FROM ${rightTablePart} ${mergedRightClause}`.trim();
+                  sql = inlineClauseParams(sql, mergedRightParams);
+                  if (!/IN\s*\(/i.test(sql)) {
+                    sql = `${sql}${mergedRightClause ? " AND" : " WHERE"} ${safePart(rightCol)} IN (${escapedList})`;
+                  }
+                  db2.query(sql, [], (qerr: Error | null, rows: any[]) => {
+                    if (db2?.detach) try { db2.detach(() => {}); } catch (_) {}
+                    if (qerr) return reject(qerr);
+                    resolve((rows || []).map(normalizeRow));
+                  });
+                });
+              });
+            }
+            const pwdPg = (conn2 as any).db_password_encrypted ? decryptConnectionPassword((conn2 as any).db_password_encrypted) : (conn2 as any).db_password ?? "";
+            const pgClient = new PgClient({
+              host: conn2.db_host,
+              user: conn2.db_user,
+              database: conn2.db_name,
+              port: conn2.db_port ?? 5432,
+              password: pwdPg || undefined,
+              connectionTimeoutMillis: 15000,
+              statement_timeout: 600000,
+            });
+            await pgClient.connect();
+            try {
+              const sel = rightColumns.length ? rightColumns.map((c) => quoteIdent(c)).join(", ") : "*";
+              const q = `SELECT ${sel} FROM ${quoteQualified(rightTable)} WHERE ${quoteIdent(rightCol)} = ANY($1::text[])`;
+              const res = await pgClient.query(q, [keys]);
+              return (res.rows || []).map(normalizeRow);
+            } finally {
+              await pgClient.end();
+            }
+          };
+
           let db: any = null;
           try {
             db = await withRetry(
               () =>
                 new Promise<any>((resolve, reject) => {
-                  Firebird.attach(opts, (err: Error | null, connection: any) => {
+                  Firebird.attach(fbOpts, (err: Error | null, connection: any) => {
                     if (err) reject(err);
                     else resolve(connection);
                   });
                 }),
-              { label: "firebird-attach-join" }
+              { label: "firebird-attach-join-keyset" }
             );
             let offset = 0;
             for (;;) {
-              // Firebird: SELECT * para evitar -206 (Column unknown) por nombre/casing.
-              const cols = "*";
-              const sql =
-                offset === 0
-                  ? `SELECT FIRST ${pageSize} ${cols} FROM ${leftTablePart} ${mergedLeftClause}`
-                  : `SELECT FIRST ${pageSize} SKIP ${offset} ${cols} FROM ${leftTablePart} ${mergedLeftClause}`;
+              const leftSql = inlineClauseParams(
+                `SELECT FIRST ${pageSize} SKIP ${offset} * FROM ${leftTablePart} ${mergedLeftClause}`,
+                mergedLeftParams
+              );
               const leftRows = await withRetry(
                 () =>
                   new Promise<any[]>((resolve, reject) => {
-                    db.query(sql, mergedLeftParams, (err: Error | null, r: any[]) => {
+                    db.query(leftSql, [], (err: Error | null, r: any[]) => {
                       if (err) reject(err);
                       else resolve(r || []);
                     });
                   }),
-                { label: "firebird-query-join" }
+                { label: "firebird-left-batch-keyset" }
               );
               const leftNorm = leftRows.map(normalizeRow);
               if (leftNorm.length === 0) break;
+              const uniqueKeys = Array.from(
+                new Set(leftNorm.map((lr) => String(lr[leftColNorm] ?? (lr as any)[leftCol] ?? "")).filter(Boolean))
+              );
+              const rightMap = new Map<string, Record<string, any>[]>();
+              for (let i = 0; i < uniqueKeys.length; i += JOIN_KEYSET_SIZE) {
+                const chunkKeys = uniqueKeys.slice(i, i + JOIN_KEYSET_SIZE);
+                const rightRowsChunk = await rightKeyQuery(chunkKeys);
+                for (const rr of rightRowsChunk) {
+                  const key = String(rr[rightColNorm] ?? (rr as any)[rightCol] ?? "");
+                  if (!rightMap.has(key)) rightMap.set(key, []);
+                  rightMap.get(key)!.push(rr);
+                }
+              }
 
-              const leftKeys = leftCols.length ? leftCols.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : (leftNorm[0] ? Object.keys(leftNorm[0]) : []);
-              const rightKeys = rightColumns.length ? rightColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : (rightRows[0] ? Object.keys(rightRows[0]) : []);
-
-              const prefixLeft = (row: Record<string, any>) => {
-                const out: Record<string, any> = {};
-                if (leftKeys.length) for (const k of leftKeys) out["primary_" + k] = row[k];
-                else for (const key in row) out["primary_" + key] = row[key];
-                return out;
-              };
-              const prefixRight = (row: Record<string, any>) => {
-                const out: Record<string, any> = {};
-                if (rightKeys.length) for (const k of rightKeys) out["join_0_" + k] = row[k];
-                else for (const key in row) out["join_0_" + key] = row[key];
-                return out;
-              };
-
+              const leftKeys = leftColumns.length ? leftColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : (leftNorm[0] ? Object.keys(leftNorm[0]) : []);
+              const rightKeys = rightColumns.length ? rightColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : [];
               const batch: Record<string, any>[] = [];
               for (const lr of leftNorm) {
                 const key = String(lr[leftColNorm] ?? (lr as any)[leftCol] ?? "");
                 const matches = rightMap.get(key) ?? [];
                 if (matches.length > 0) {
-                  for (const rr of matches) batch.push({ ...prefixLeft(lr), ...prefixRight(rr) });
-                } else if ((joinType === "LEFT" || joinType === "FULL") && !isDateFilterOnRightFb) {
-                  const rightNulls: Record<string, any> = {};
-                  for (const k of rightKeys) rightNulls["join_0_" + k] = null;
-                  if (!rightKeys.length) for (const key in (rightRows[0] || {})) rightNulls["join_0_" + key] = null;
-                  batch.push({ ...prefixLeft(lr), ...rightNulls });
+                  for (const rr of matches) {
+                    const out: Record<string, any> = {};
+                    for (const lk of leftKeys) out["primary_" + lk] = lr[lk];
+                    if (rightKeys.length) for (const rk of rightKeys) out["join_0_" + rk] = rr[rk];
+                    else for (const rk in rr) out["join_0_" + rk] = rr[rk];
+                    batch.push(out);
+                  }
+                } else if (joinType === "LEFT" || joinType === "FULL") {
+                  const out: Record<string, any> = {};
+                  for (const lk of leftKeys) out["primary_" + lk] = lr[lk];
+                  for (const rk of rightKeys) out["join_0_" + rk] = null;
+                  batch.push(out);
                 }
               }
               if (batch.length > 0) yield batch;
@@ -1539,19 +1607,28 @@ async function executeEtlPipeline(
     const LOG_UPDATE_EVERY_ROWS = 5000;
     const LOG_UPDATE_EARLY_UNTIL = 20000;
     let lastLoggedRows = 0;
+    let batchCounter = 0;
+    let totalTransformMs = 0;
+    let totalInsertMs = 0;
+    let totalFetchWaitMs = 0;
 
     const gen = dataSourceGenerator();
     let iterResult = await gen.next();
     let rawBatch = iterResult.value as any[] | undefined;
 
     while (!iterResult.done && rawBatch != null && !pipelineTimedOut) {
+      const batchStartedAt = Date.now();
       if (rawBatch.length === 0) {
+        const fetchAt = Date.now();
         iterResult = await gen.next();
+        totalFetchWaitMs += Date.now() - fetchAt;
         rawBatch = iterResult.value as any[] | undefined;
         continue;
       }
       rowsProcessed += rawBatch.length;
+      batchCounter += 1;
 
+      const transformStartedAt = Date.now();
       let transformedBatch = rawBatch;
       if (excludeRowsRules.length > 0) {
         transformedBatch = rawBatch.filter(
@@ -1582,6 +1659,7 @@ async function executeEtlPipeline(
          if (body.arithmetic?.operations?.length) transformedBatch = applyArithmeticOperations(transformedBatch, body.arithmetic);
          if (body.condition?.rules?.length) transformedBatch = applyConditionRules(transformedBatch, body.condition);
       }
+      totalTransformMs += Date.now() - transformStartedAt;
 
       if (body.count?.attribute) {
          const attr = body.count.attribute;
@@ -1603,9 +1681,11 @@ async function executeEtlPipeline(
       }
 
       // Pipeline: insertar este lote y pedir el siguiente en paralelo (los registros entran más rápido)
+      const insertStartedAt = Date.now();
       const insertPromise = insertBatch(transformedBatch);
       const nextPromise = gen.next();
       await insertPromise;
+      totalInsertMs += Date.now() - insertStartedAt;
 
       // --- REALTIME UPDATE: primer batch enseguida; al inicio cada 2k; después cada 5k ---
       const interval =
@@ -1626,8 +1706,18 @@ async function executeEtlPipeline(
          }
       }
 
+      const waitNextAt = Date.now();
       iterResult = await nextPromise;
+      totalFetchWaitMs += Date.now() - waitNextAt;
       rawBatch = iterResult.value as any[] | undefined;
+
+      if (batchCounter % METRICS_LOG_EVERY_BATCHES === 0) {
+        console.log(
+          `[Background Run ${runId}] Perf batches=${batchCounter} rows=${rowsProcessed} ` +
+            `transformMs=${totalTransformMs} insertMs=${totalInsertMs} waitFetchMs=${totalFetchWaitMs} ` +
+            `lastBatchMs=${Date.now() - batchStartedAt}`
+        );
+      }
     }
 
     // --- FINAL COUNT INSERTION IF NEEDED ---
