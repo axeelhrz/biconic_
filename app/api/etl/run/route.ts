@@ -1437,13 +1437,23 @@ async function executeEtlPipeline(
       }
     }
 
-    // --- MAIN EXECUTION LOOP ---
-    /** Actualizar monitoreo cada N filas; valor mayor = menos writes y más throughput. */
-    const LOG_UPDATE_EVERY_ROWS = 10000;
+    // --- MAIN EXECUTION LOOP (pipeline: leer siguiente lote mientras se inserta el actual) ---
+    /** Al inicio cada 2k para que se vea que avanza; después cada 5k. Evita que parezca "clavado". */
+    const LOG_UPDATE_EARLY_EVERY = 2000;
+    const LOG_UPDATE_EVERY_ROWS = 5000;
+    const LOG_UPDATE_EARLY_UNTIL = 20000;
     let lastLoggedRows = 0;
 
-    for await (const rawBatch of dataSourceGenerator()) {
-      if (rawBatch.length === 0) continue;
+    const gen = dataSourceGenerator();
+    let iterResult = await gen.next();
+    let rawBatch: any[] | undefined = iterResult.value;
+
+    while (!iterResult.done && rawBatch != null) {
+      if (rawBatch.length === 0) {
+        iterResult = await gen.next();
+        rawBatch = iterResult.value;
+        continue;
+      }
       rowsProcessed += rawBatch.length;
 
       let transformedBatch = rawBatch;
@@ -1485,18 +1495,29 @@ async function executeEtlPipeline(
              globalCountMap.set(key, (globalCountMap.get(key) || 0) + 1);
              if (!globalCountOriginalValues.has(key)) globalCountOriginalValues.set(key, val);
          }
+         iterResult = await gen.next();
+         rawBatch = iterResult.value;
          continue;
       }
 
-      if (transformedBatch.length === 0) continue;
-      
-      await insertBatch(transformedBatch);
+      if (transformedBatch.length === 0) {
+        iterResult = await gen.next();
+        rawBatch = iterResult.value;
+        continue;
+      }
 
-      // --- REALTIME UPDATE: primer batch para que el monitor no quede en "-"; luego cada LOG_UPDATE_EVERY_ROWS ---
+      // Pipeline: insertar este lote y pedir el siguiente en paralelo (los registros entran más rápido)
+      const insertPromise = insertBatch(transformedBatch);
+      const nextPromise = gen.next();
+      await insertPromise;
+
+      // --- REALTIME UPDATE: primer batch enseguida; al inicio cada 2k; después cada 5k ---
+      const interval =
+        rowsProcessed <= LOG_UPDATE_EARLY_UNTIL ? LOG_UPDATE_EARLY_EVERY : LOG_UPDATE_EVERY_ROWS;
       const shouldUpdate =
         lastLoggedRows === 0
           ? rowsProcessed > 0
-          : rowsProcessed - lastLoggedRows >= LOG_UPDATE_EVERY_ROWS;
+          : rowsProcessed - lastLoggedRows >= interval;
       if (shouldUpdate) {
          try {
             await supabaseAdmin
@@ -1508,6 +1529,9 @@ async function executeEtlPipeline(
             console.warn("[Background] Log update failed (non-fatal):", logErr);
          }
       }
+
+      iterResult = await nextPromise;
+      rawBatch = iterResult.value;
     }
 
     // --- FINAL COUNT INSERTION IF NEEDED ---
