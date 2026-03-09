@@ -1446,7 +1446,7 @@ async function executeEtlPipeline(
 
     const gen = dataSourceGenerator();
     let iterResult = await gen.next();
-    let rawBatch: any[] | undefined = iterResult.value;
+    let rawBatch = iterResult.value as any[] | undefined;
 
     while (!iterResult.done && rawBatch != null) {
       if (rawBatch.length === 0) {
