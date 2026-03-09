@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 import { randomUUID } from "crypto";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 import { buildDateFilterWhereFragmentPg, type DateFilterSpec } from "@/lib/sql/helpers";
@@ -469,14 +470,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       ].filter((id): id is string | number => id != null);
       const uniqueConnectionIds = [...new Set(allConnectionIds)];
 
-      const connectionPromises = uniqueConnectionIds.map((id) =>
-        supabase
+      const supabaseService = createServiceRoleClient();
+      const connectionPromises = uniqueConnectionIds.map(async (id) => {
+        const idStr = String(id);
+        const ownRes = await supabase
           .from("connections")
           .select("*, db_password_secret_id")
-          .eq("id", String(id))
+          .eq("id", idStr)
           .eq("user_id", currentUser.id)
-          .single()
-      );
+          .single();
+        if (ownRes.data) return ownRes;
+        // Fallback: algunos flujos usan conexiones compartidas/no-propias.
+        const svcRes = await supabaseService
+          .from("connections")
+          .select("*, db_password_secret_id")
+          .eq("id", idStr)
+          .single();
+        return { data: svcRes.data, error: svcRes.error } as typeof ownRes;
+      });
 
       const connectionResults = await Promise.all(connectionPromises);
       const connectionsMap = new Map<string, any>();
