@@ -340,11 +340,11 @@ async function executeEtlPipeline(
     const previewRows: Record<string, any>[] = [];
     const PREVIEW_LIMIT = 5000;
 
-    /** Lotes más grandes = menos iteraciones; Pro 800s permite varios millones de filas. */
-    const pageSize = 40000;
-    const INSERT_CHUNK_SIZE_DEFAULT = 3000;
+    /** Lotes más grandes = menos iteraciones y más throughput; 60k permite ~900k+ filas en 800s. */
+    const pageSize = 60000;
+    const INSERT_CHUNK_SIZE_DEFAULT = 5000;
     /** Postgres limita ~65535 parámetros por query. chunkSize * numColumnas debe quedar por debajo. */
-    const MAX_PARAMS_PER_QUERY = 60000;
+    const MAX_PARAMS_PER_QUERY = 65000;
     let tableCreated = false;
     /** Columnas de la tabla destino; al insertar solo se usan estas para evitar "column X does not exist". */
     let tableColumnNames: string[] | null = null;
@@ -1438,8 +1438,8 @@ async function executeEtlPipeline(
     }
 
     // --- MAIN EXECUTION LOOP ---
-    /** Actualizar monitoreo cada N filas para no saturar Supabase (Pro: muchos más registros por run). */
-    const LOG_UPDATE_EVERY_ROWS = 5000;
+    /** Actualizar monitoreo cada N filas; valor mayor = menos writes y más throughput. */
+    const LOG_UPDATE_EVERY_ROWS = 10000;
     let lastLoggedRows = 0;
 
     for await (const rawBatch of dataSourceGenerator()) {
@@ -1582,8 +1582,8 @@ async function executeEtlPipeline(
 // ===================================================================
 // LÓGICA PRINCIPAL DE LA API ROUTE (FIRE-AND-FORGET)
 // ===================================================================
-/** Máximo permitido por plataforma: Hobby 300s, Pro/Fluid 800s, Enterprise sin Fluid 900s. Usar 900 para soportar runs largos (900k+ registros). */
-export const maxDuration = 900;
+/** Límite Vercel: Hobby 300s, Pro 800s (máx). No superar 800 en Pro. */
+export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {
   const runId = uuidv4();
