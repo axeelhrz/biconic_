@@ -672,11 +672,19 @@ async function executeEtlPipeline(
         const clientUnion = new PgClient({ connectionString: dbUrlUnion, connectionTimeoutMillis: 15000, statement_timeout: 600000 });
         await withRetry(() => clientUnion.connect(), { label: "union-connect" });
         try {
-          const runSource = async (
+          await clientUnion.query("BEGIN");
+          let cursorIdx = 0;
+          const normalizeRow = (r: Record<string, any>) => {
+            const out: Record<string, any> = {};
+            for (const k in r) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = r[k];
+            return out;
+          };
+
+          async function* runSourceCursor(
             source: { connectionId: string; filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] } },
             tableQualified: string,
             options?: { conditionsOverride?: FilterCondition[]; dateFilter?: DateFilterSpec }
-          ) => {
+          ): AsyncGenerator<any[], void, void> {
             const filter = source.filter || {};
             const tableQ = quoteQualified(tableQualified);
             const selectList = filter.columns?.length ? filter.columns.map((c: string) => quoteIdent(c, "postgres")).join(", ") : "*";
@@ -685,38 +693,32 @@ async function executeEtlPipeline(
             const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(options?.dateFilter, condParams.length + 1);
             const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
             const params = [...condParams, ...dfParams];
-            const base = `SELECT ${selectList} FROM ${tableQ} ${clause} `;
-            const batches: any[][] = [];
-            let offset = 0;
-            for (;;) {
-              const q = `${base} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-              const res = await clientUnion.query(q, [...params, pageSizeUnion, offset]);
-              const rows = (res.rows || []).map((r: Record<string, any>) => {
-                const out: Record<string, any> = {};
-                for (const k in r) {
-                  out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = r[k];
-                }
-                return out;
-              });
-              if (rows.length === 0) break;
-              batches.push(rows);
-              if (rows.length < pageSizeUnion) break;
-              offset += pageSizeUnion;
+            const base = `SELECT ${selectList} FROM ${tableQ} ${clause}`;
+            const cursorName = `union_cursor_${cursorIdx++}`;
+            await clientUnion.query(`DECLARE ${cursorName} NO SCROLL CURSOR FOR ${base}`, params);
+            try {
+              for (;;) {
+                const res = await clientUnion.query(`FETCH ${pageSizeUnion} FROM ${cursorName}`);
+                const rows = (res.rows || []).map(normalizeRow);
+                if (rows.length === 0) break;
+                yield rows;
+                if (rows.length < pageSizeUnion) break;
+              }
+            } finally {
+              await clientUnion.query(`CLOSE ${cursorName}`).catch(() => {});
             }
-            return batches;
-          };
+          }
 
           const leftTable = leftInfo.table;
           let leftCols: string[] | null = null;
-          for (const batch of await runSource(left, leftTable, { conditionsOverride: sqlConditions, dateFilter })) {
+          for await (const batch of runSourceCursor(left, leftTable, { conditionsOverride: sqlConditions, dateFilter })) {
             if (batch.length && leftCols === null) leftCols = Object.keys(batch[0]).sort();
             yield batch;
           }
           for (let r = 0; r < rightSources.length; r++) {
             const right = rightSources[r];
             const rightInfo = rightInfos[r];
-            const rightBatches = await runSource(right, rightInfo.table, { dateFilter });
-            for (const batch of rightBatches) {
+            for await (const batch of runSourceCursor(right, rightInfo.table, { dateFilter })) {
               if (batch.length) {
                 const rightCols = Object.keys(batch[0]).sort();
                 if (leftCols && rightCols.join(",") !== leftCols.join(","))
@@ -725,6 +727,7 @@ async function executeEtlPipeline(
               yield batch;
             }
           }
+          await clientUnion.query("COMMIT").catch(() => {});
         } finally {
           await clientUnion.end();
         }
@@ -1506,16 +1509,23 @@ async function executeEtlPipeline(
            queryParams = params;
         }
 
-        // --- FETCH AND PROCESS BATCHES ---
-        let offset = 0;
-        for (;;) {
-          const batchQuery = `${baseQuery} LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
-          const res = await client.query(batchQuery, [...queryParams, pageSize, offset]);
-          const rows = res.rows || [];
-          if (rows.length === 0) break;
-          yield rows;
-          if (rows.length < pageSize) break;
-          offset += pageSize;
+        // --- FETCH AND PROCESS BATCHES (cursor: evalúa JOIN una sola vez) ---
+        await client.query("BEGIN");
+        await client.query(
+          `DECLARE etl_cursor NO SCROLL CURSOR FOR ${baseQuery}`,
+          queryParams
+        );
+        try {
+          for (;;) {
+            const res = await client.query(`FETCH ${pageSize} FROM etl_cursor`);
+            const rows = res.rows || [];
+            if (rows.length === 0) break;
+            yield rows;
+            if (rows.length < pageSize) break;
+          }
+        } finally {
+          await client.query("CLOSE etl_cursor").catch(() => {});
+          await client.query("COMMIT").catch(() => {});
         }
 
       } finally {

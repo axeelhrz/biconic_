@@ -159,8 +159,6 @@ export function buildDateFilterWhereFragmentPg(
   } else {
     col = tablePrefix + quoteIdent(rawColumn, "postgres");
   }
-  const castCol = `${col}::date`;
-
   const years = Array.isArray(dateFilter.years) ? dateFilter.years.map((y) => Number(y)).filter((n) => !Number.isNaN(n)) : [];
   const months = Array.isArray(dateFilter.months) ? dateFilter.months.map((m) => Number(m)).filter((n) => !Number.isNaN(n)) : [];
   const exactDates = Array.isArray(dateFilter.exactDates) ? dateFilter.exactDates.filter((d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) : [];
@@ -176,7 +174,7 @@ export function buildDateFilterWhereFragmentPg(
         const endYear = m === 12 ? y + 1 : y;
         const end = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
         params.push(start, end);
-        rangeParts.push(`(${castCol} >= $${idx++}::date AND ${castCol} < $${idx++}::date)`);
+        rangeParts.push(`(${col} >= $${idx++}::date AND ${col} < $${idx++}::date)`);
       }
     }
     parts.push(rangeParts.length === 1 ? rangeParts[0] : `(${rangeParts.join(" OR ")})`);
@@ -184,19 +182,22 @@ export function buildDateFilterWhereFragmentPg(
     const rangeParts: string[] = [];
     for (const y of years) {
       params.push(`${y}-01-01`, `${y + 1}-01-01`);
-      rangeParts.push(`(${castCol} >= $${idx++}::date AND ${castCol} < $${idx++}::date)`);
+      rangeParts.push(`(${col} >= $${idx++}::date AND ${col} < $${idx++}::date)`);
     }
     parts.push(rangeParts.length === 1 ? rangeParts[0] : `(${rangeParts.join(" OR ")})`);
   } else if (months.length) {
     const placeholders = months.map(() => `$${idx++}`);
     months.forEach((m) => params.push(m));
-    parts.push(`EXTRACT(MONTH FROM ${castCol}) IN (${placeholders.join(", ")})`);
+    parts.push(`EXTRACT(MONTH FROM ${col}) IN (${placeholders.join(", ")})`);
   }
 
   if (exactDates.length) {
-    exactDates.forEach((d) => params.push(d));
-    const placeholders = exactDates.map(() => `$${idx++}`);
-    parts.push(`${castCol} IN (${placeholders.map((p) => `${p}::date`).join(", ")})`);
+    const rangeParts: string[] = [];
+    for (const d of exactDates) {
+      params.push(d, d);
+      rangeParts.push(`(${col} >= $${idx++}::date AND ${col} < $${idx++}::date + interval '1 day')`);
+    }
+    parts.push(rangeParts.length === 1 ? rangeParts[0] : `(${rangeParts.join(" OR ")})`);
   }
 
   if (parts.length === 0) return { clause: "", params };
