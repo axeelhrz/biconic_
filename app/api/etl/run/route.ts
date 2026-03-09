@@ -242,7 +242,7 @@ function pgCastExpr(columnIdentifier: string, targetType: CastTargetType) {
 
 const ETL_RETRIES = 3;
 const ETL_RETRY_DELAY_MS = 2000;
-const STALE_RUN_MINUTES = 10;
+const STALE_RUN_MINUTES = 20;
 
 async function withRetry<T>(
   fn: () => Promise<T>,
@@ -329,6 +329,20 @@ async function executeEtlPipeline(
   const completedAt = () => new Date().toISOString();
   let rowsProcessed = 0;
   const pipelineStartedAt = Date.now();
+  const PIPELINE_TIMEOUT_MS = 750_000;
+  let pipelineTimedOut = false;
+
+  const pipelineTimer = setTimeout(async () => {
+    pipelineTimedOut = true;
+    console.error(`[Background Run ${runId}] Timeout de seguridad alcanzado (${PIPELINE_TIMEOUT_MS / 1000}s). Marcando como fallido.`);
+    try {
+      await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
+        completed_at: new Date().toISOString(),
+        error_message: `Timeout de seguridad (${PIPELINE_TIMEOUT_MS / 1000}s): el ETL tardó demasiado. Filas procesadas: ${rowsProcessed}. Considere reducir el volumen de datos o agregar filtros.`,
+        rows_processed: rowsProcessed,
+      });
+    } catch (_) {}
+  }, PIPELINE_TIMEOUT_MS);
 
   const dbUrl = process.env.SUPABASE_DB_URL;
   if (!dbUrl) throw new Error("Variable de entorno SUPABASE_DB_URL no encontrada.");
@@ -655,7 +669,7 @@ async function executeEtlPipeline(
             throw new Error("UNION con varias conexiones solo soportado cuando todas son Excel. Usá la misma conexión para Postgres.");
         }
 
-        const clientUnion = new PgClient({ connectionString: dbUrlUnion });
+        const clientUnion = new PgClient({ connectionString: dbUrlUnion, connectionTimeoutMillis: 15000, statement_timeout: 600000 });
         await withRetry(() => clientUnion.connect(), { label: "union-connect" });
         try {
           const runSource = async (
@@ -836,6 +850,8 @@ async function executeEtlPipeline(
                 database: connection.db_name,
                 port: connection.db_port ?? 5432,
                 password: pwd || undefined,
+                connectionTimeoutMillis: 15000,
+                statement_timeout: 600000,
               });
               await pgClient.connect();
               try {
@@ -1070,46 +1086,20 @@ async function executeEtlPipeline(
           return out;
         };
 
-        const fetchFromConnectionCrossDb = async (
-          connection: any,
-          tableName: string,
-          columns: string[] | undefined,
-          conditions: FilterCondition[],
-          limit?: number,
-          offset?: number,
-          dateFilter?: DateFilterSpec
-        ): Promise<Record<string, any>[]> => {
+        const createCrossDbClient = async (connection: any): Promise<{ client: PgClient; resolvedTable: string }> => {
           const connType = (connection.type || "").toLowerCase();
           const pwd = connection.db_password_encrypted
             ? decryptConnectionPassword(connection.db_password_encrypted)
             : (connection.db_password ?? "");
-          const buildWhereWithDateFilter = () => {
-            const { clause: condClause, params: condParams } = buildWhereClausePg(conditions);
-            const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, condParams.length + 1);
-            const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
-            const params = [...condParams, ...dfParams];
-            return { clause, params };
-          };
           if (connType === "postgres" || connType === "postgresql") {
-            const pgClient = new PgClient({
-              host: connection.db_host,
-              user: connection.db_user,
-              database: connection.db_name,
-              port: connection.db_port ?? 5432,
+            const c = new PgClient({
+              host: connection.db_host, user: connection.db_user,
+              database: connection.db_name, port: connection.db_port ?? 5432,
               password: pwd || undefined,
+              connectionTimeoutMillis: 15000, statement_timeout: 600000,
             });
-            await pgClient.connect();
-            try {
-              const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
-              const { clause, params } = buildWhereWithDateFilter();
-              const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
-              const offsetVal = offset ?? 0;
-              const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause}  LIMIT ${limitVal} OFFSET ${offsetVal}`;
-              const res = await pgClient.query(q, params);
-              return (res.rows || []).map(normalizeRowCrossDb);
-            } finally {
-              await pgClient.end();
-            }
+            await c.connect();
+            return { client: c, resolvedTable: "" };
           }
           if (connType === "excel_file") {
             const dbUrl = process.env.SUPABASE_DB_URL;
@@ -1121,21 +1111,32 @@ async function executeEtlPipeline(
               .single();
             if (!meta?.physical_table_name) throw new Error("Metadatos Excel no encontrados para la conexión secundaria.");
             const physicalTable = `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
-            const excelClient = new PgClient({ connectionString: dbUrl });
-            await excelClient.connect();
-            try {
-              const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
-              const { clause, params } = buildWhereWithDateFilter();
-              const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
-              const offsetVal = offset ?? 0;
-              const q = `SELECT ${sel} FROM ${quoteQualified(physicalTable)} ${clause}  LIMIT ${limitVal} OFFSET ${offsetVal}`;
-              const res = await excelClient.query(q, params);
-              return (res.rows || []).map(normalizeRowCrossDb);
-            } finally {
-              await excelClient.end();
-            }
+            const c = new PgClient({ connectionString: dbUrl, connectionTimeoutMillis: 15000, statement_timeout: 600000 });
+            await c.connect();
+            return { client: c, resolvedTable: physicalTable };
           }
-          throw new Error(`JOIN entre conexiones: tipo "${connection.type}" no soportado para la conexión secundaria.`);
+          throw new Error(`JOIN entre conexiones: tipo "${connection.type}" no soportado.`);
+        };
+
+        const queryCrossDb = async (
+          pgClient: PgClient,
+          tableName: string,
+          columns: string[] | undefined,
+          conditions: FilterCondition[],
+          limit?: number,
+          offset?: number,
+          dateFilter?: DateFilterSpec
+        ): Promise<Record<string, any>[]> => {
+          const { clause: condClause, params: condParams } = buildWhereClausePg(conditions);
+          const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, condParams.length + 1);
+          const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
+          const params = [...condParams, ...dfParams];
+          const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
+          const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
+          const offsetVal = offset ?? 0;
+          const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause}  LIMIT ${limitVal} OFFSET ${offsetVal}`;
+          const res = await pgClient.query(q, params);
+          return (res.rows || []).map(normalizeRowCrossDb);
         };
 
         const resolveRightColCase = (col: string) =>
@@ -1151,50 +1152,67 @@ async function executeEtlPipeline(
             ? { ...dateFilter, column: dateFilterCol.replace(/^primary\./i, "").trim() }
             : undefined;
 
-        const rightRows = await fetchFromConnectionCrossDb(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions, undefined, undefined, dateFilterForRight);
-        const rightColNorm = rightCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-        const rightMap = new Map<string, Record<string, any>[]>();
-        for (const r of rightRows) {
-          const key = String(r[rightColNorm] ?? (r as any)[rightCol] ?? "");
-          if (!rightMap.has(key)) rightMap.set(key, []);
-          rightMap.get(key)!.push(r);
-        }
-        const leftColNorm = leftCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-        const rightKeys = rightColumns.length ? rightColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : (rightRows[0] ? Object.keys(rightRows[0]) : []);
-
-        const prefixLeft = (row: Record<string, any>) => {
-          const out: Record<string, any> = {};
-          const leftKeys = leftColumns.length ? leftColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : Object.keys(row);
-          if (leftKeys.length) for (const k of leftKeys) out["primary_" + k] = row[k];
-          else for (const key in row) out["primary_" + key] = row[key];
-          return out;
-        };
-        const prefixRight = (row: Record<string, any>) => {
-          const out: Record<string, any> = {};
-          if (rightKeys.length) for (const k of rightKeys) out["join_0_" + k] = row[k];
-          else for (const key in row) out["join_0_" + key] = row[key];
-          return out;
-        };
-        let leftOffset = 0;
-        for (;;) {
-          const leftNorm = await fetchFromConnectionCrossDb(conn, leftTable, leftColumns.length ? leftColumns : undefined, leftConditions, pageSize, leftOffset, leftDateFilter);
-          if (leftNorm.length === 0) break;
-          const batch: Record<string, any>[] = [];
-          for (const lr of leftNorm) {
-            const key = String(lr[leftColNorm] ?? (lr as any)[leftCol] ?? "");
-            const matches = rightMap.get(key) ?? [];
-            if (matches.length > 0) {
-              for (const rr of matches) batch.push({ ...prefixLeft(lr), ...prefixRight(rr) });
-            } else if ((joinType === "LEFT" || joinType === "FULL") && !isDateFilterOnRight) {
-              const rightNulls: Record<string, any> = {};
-              for (const k of rightKeys) rightNulls["join_0_" + k] = null;
-              if (!rightKeys.length) for (const key in (rightRows[0] || {})) rightNulls["join_0_" + key] = null;
-              batch.push({ ...prefixLeft(lr), ...rightNulls });
+        const { client: rightClient, resolvedTable: rightResolvedTable } = await createCrossDbClient(conn2);
+        const rightTableQ = rightResolvedTable || rightTable;
+        const { client: leftClient, resolvedTable: leftResolvedTable } = await createCrossDbClient(conn);
+        const leftTableQ = leftResolvedTable || leftTable;
+        try {
+          const rightColNorm = rightCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+          const rightMap = new Map<string, Record<string, any>[]>();
+          let rightSampleRow: Record<string, any> | undefined;
+          let rightOffset = 0;
+          for (;;) {
+            const rightBatch = await queryCrossDb(rightClient, rightTableQ, rightColumns.length ? rightColumns : undefined, rightConditions, pageSize, rightOffset, dateFilterForRight);
+            for (const r of rightBatch) {
+              if (!rightSampleRow) rightSampleRow = r;
+              const key = String(r[rightColNorm] ?? (r as any)[rightCol] ?? "");
+              if (!rightMap.has(key)) rightMap.set(key, []);
+              rightMap.get(key)!.push(r);
             }
+            if (rightBatch.length < pageSize) break;
+            rightOffset += pageSize;
           }
-          if (batch.length > 0) yield batch;
-          if (leftNorm.length < pageSize) break;
-          leftOffset += pageSize;
+
+          const leftColNorm = leftCol.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+          const rightKeys = rightColumns.length ? rightColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : (rightSampleRow ? Object.keys(rightSampleRow) : []);
+
+          const prefixLeft = (row: Record<string, any>) => {
+            const out: Record<string, any> = {};
+            const leftKeys = leftColumns.length ? leftColumns.map((c) => c.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()) : Object.keys(row);
+            if (leftKeys.length) for (const k of leftKeys) out["primary_" + k] = row[k];
+            else for (const key in row) out["primary_" + key] = row[key];
+            return out;
+          };
+          const prefixRight = (row: Record<string, any>) => {
+            const out: Record<string, any> = {};
+            if (rightKeys.length) for (const k of rightKeys) out["join_0_" + k] = row[k];
+            else for (const key in row) out["join_0_" + key] = row[key];
+            return out;
+          };
+          let leftOffset = 0;
+          for (;;) {
+            const leftNorm = await queryCrossDb(leftClient, leftTableQ, leftColumns.length ? leftColumns : undefined, leftConditions, pageSize, leftOffset, leftDateFilter);
+            if (leftNorm.length === 0) break;
+            const batch: Record<string, any>[] = [];
+            for (const lr of leftNorm) {
+              const key = String(lr[leftColNorm] ?? (lr as any)[leftCol] ?? "");
+              const matches = rightMap.get(key) ?? [];
+              if (matches.length > 0) {
+                for (const rr of matches) batch.push({ ...prefixLeft(lr), ...prefixRight(rr) });
+              } else if ((joinType === "LEFT" || joinType === "FULL") && !isDateFilterOnRight) {
+                const rightNulls: Record<string, any> = {};
+                for (const k of rightKeys) rightNulls["join_0_" + k] = null;
+                if (!rightKeys.length && rightSampleRow) for (const key in rightSampleRow) rightNulls["join_0_" + key] = null;
+                batch.push({ ...prefixLeft(lr), ...rightNulls });
+              }
+            }
+            if (batch.length > 0) yield batch;
+            if (leftNorm.length < pageSize) break;
+            leftOffset += pageSize;
+          }
+        } finally {
+          await rightClient.end().catch(() => {});
+          await leftClient.end().catch(() => {});
         }
         return;
       }
@@ -1203,7 +1221,7 @@ async function executeEtlPipeline(
       if (conn.type === "excel_file") {
         const dbUrl = process.env.SUPABASE_DB_URL;
         if (!dbUrl) throw new Error("SUPABASE_DB_URL no disponible.");
-        client = new PgClient({ connectionString: dbUrl });
+        client = new PgClient({ connectionString: dbUrl, connectionTimeoutMillis: 15000, statement_timeout: 600000 });
       } else if (conn.type === "postgres" || conn.type === "postgresql") {
         const password =
           (conn as any).db_password_encrypted
@@ -1215,6 +1233,8 @@ async function executeEtlPipeline(
           database: conn.db_name || undefined,
           port: conn.db_port ?? 5432,
           password: password || undefined,
+          connectionTimeoutMillis: 15000,
+          statement_timeout: 600000,
         });
       } else {
         throw new Error(`Tipo de conexión no soportado: ${conn.type}.`);
@@ -1321,7 +1341,7 @@ async function executeEtlPipeline(
                });
 
                if (dbType === "excel_file") {
-                  const internalClient = new PgClient({ connectionString: process.env.SUPABASE_DB_URL });
+                  const internalClient = new PgClient({ connectionString: process.env.SUPABASE_DB_URL, connectionTimeoutMillis: 15000, statement_timeout: 600000 });
                   await internalClient.connect();
                   try {
                      const resolvePhysical = async (connId: string | number) => {
@@ -1514,7 +1534,7 @@ async function executeEtlPipeline(
     let iterResult = await gen.next();
     let rawBatch = iterResult.value as any[] | undefined;
 
-    while (!iterResult.done && rawBatch != null) {
+    while (!iterResult.done && rawBatch != null && !pipelineTimedOut) {
       if (rawBatch.length === 0) {
         iterResult = await gen.next();
         rawBatch = iterResult.value as any[] | undefined;
@@ -1650,22 +1670,24 @@ async function executeEtlPipeline(
       console.error("Failed to log fatal error to DB:", logErr);
     }
   } finally {
-    // Nunca dejar el run en "started" o "running" sin cerrar
-    try {
-      const { data: row } = await supabaseAdmin
-        .from("etl_runs_log")
-        .select("status")
-        .eq("id", runId)
-        .maybeSingle();
-      const status = (row as any)?.status;
-      if (status === "started" || status === "running") {
-        await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
-          completed_at: completedAt(),
-          error_message: "Ejecución interrumpida o error no registrado",
-          rows_processed: rowsProcessed,
-        });
-      }
-    } catch (_) {}
+    clearTimeout(pipelineTimer);
+    if (!pipelineTimedOut) {
+      try {
+        const { data: row } = await supabaseAdmin
+          .from("etl_runs_log")
+          .select("status")
+          .eq("id", runId)
+          .maybeSingle();
+        const status = (row as any)?.status;
+        if (status === "started" || status === "running") {
+          await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
+            completed_at: completedAt(),
+            error_message: "Ejecución interrumpida o error no registrado",
+            rows_processed: rowsProcessed,
+          });
+        }
+      } catch (_) {}
+    }
     try { await sqlPersistent.end(); } catch (_) {}
     const elapsedMs = Date.now() - pipelineStartedAt;
     console.log(`[Background Run ${runId}] Finished in ${elapsedMs}ms.`);
