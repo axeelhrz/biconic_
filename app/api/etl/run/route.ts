@@ -896,7 +896,7 @@ async function executeEtlPipeline(
                 const matches = rightMap.get(key) ?? [];
                 if (matches.length > 0) {
                   for (const rr of matches) batch.push({ ...prefixLeft(lr), ...prefixRight(rr) });
-                } else if (joinType === "LEFT" || joinType === "FULL") {
+                } else if ((joinType === "LEFT" || joinType === "FULL") && !isDateFilterOnRightFb) {
                   const rightNulls: Record<string, any> = {};
                   for (const k of rightKeys) rightNulls["join_0_" + k] = null;
                   if (!rightKeys.length) for (const key in (rightRows[0] || {})) rightNulls["join_0_" + key] = null;
@@ -1127,7 +1127,7 @@ async function executeEtlPipeline(
             const matches = rightMap.get(key) ?? [];
             if (matches.length > 0) {
               for (const rr of matches) batch.push({ ...prefixLeft(lr), ...prefixRight(rr) });
-            } else if (joinType === "LEFT" || joinType === "FULL") {
+            } else if ((joinType === "LEFT" || joinType === "FULL") && !isDateFilterOnRight) {
               const rightNulls: Record<string, any> = {};
               for (const k of rightKeys) rightNulls["join_0_" + k] = null;
               if (!rightKeys.length) for (const key in (rightRows[0] || {})) rightNulls["join_0_" + key] = null;
