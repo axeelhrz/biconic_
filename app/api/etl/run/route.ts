@@ -340,10 +340,10 @@ async function executeEtlPipeline(
     const previewRows: Record<string, any>[] = [];
     const PREVIEW_LIMIT = 5000;
 
-    /** Lotes más grandes = menos iteraciones y más throughput; 60k permite ~900k+ filas en 800s. */
+    /** Lotes más grandes = menos iteraciones y más throughput; 60k permite ~900k+ filas en 800s. Si hay timeouts en producción, reducir (p. ej. 20000–30000). */
     const pageSize = 60000;
     const INSERT_CHUNK_SIZE_DEFAULT = 5000;
-    /** Postgres limita ~65535 parámetros por query. chunkSize * numColumnas debe quedar por debajo. */
+    /** Postgres limita ~65535 parámetros por query. chunkSize * numColumnas debe quedar por debajo. Aumentar INSERT_CHUNK si hay pocas columnas para menos round-trips. */
     const MAX_PARAMS_PER_QUERY = 65000;
     let tableCreated = false;
     /** Columnas de la tabla destino; al insertar solo se usan estas para evitar "column X does not exist". */
@@ -383,6 +383,9 @@ async function executeEtlPipeline(
       return val;
     };
 
+    /** Normaliza nombre de columna a identificador válido para tabla (mismo criterio que en inserts). */
+    const toSaneKey = (key: string) => key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+
     const insertBatch = async (batch: Record<string, any>[]) => {
       if (batch.length === 0) return;
 
@@ -390,19 +393,18 @@ async function executeEtlPipeline(
         const firstRow = batch[0];
         const columnsDefinition: Record<string, string> = {};
 
-        // Map explicit cast target types
+        // Map explicit cast target types (by column name; may be "col" or "primary.col")
         const castTypeOverrides: Record<string, string> = {};
-        if (body!.cast?.conversions?.length && firstRow) {
-          const keys = Object.keys(firstRow);
+        if (body!.cast?.conversions?.length) {
+          const allKeys = batch.some((r) => r && typeof r === "object")
+            ? Array.from(new Set(batch.flatMap((r) => Object.keys(r))))
+            : firstRow ? Object.keys(firstRow) : [];
           const resolveTargets = (simple: string) => {
-            const matches = keys.filter(
-              (k) => k === simple || k.endsWith(`_${simple}`)
+            const sane = toSaneKey(simple);
+            const matches = allKeys.filter(
+              (k) => toSaneKey(k) === sane || k === simple || k.endsWith(`_${simple}`)
             );
-            return matches.length
-              ? matches
-              : keys.includes(simple)
-              ? [simple]
-              : [];
+            return matches.length ? matches : allKeys.includes(simple) ? [simple] : [];
           };
           for (const cv of body!.cast!.conversions) {
             let pgType: string = "TEXT";
@@ -431,17 +433,55 @@ async function executeEtlPipeline(
             }
             const targets = resolveTargets(cv.column);
             for (const key of targets) {
-              const saneKey = key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-              castTypeOverrides[saneKey] = pgType;
+              castTypeOverrides[toSaneKey(key)] = pgType;
             }
           }
         }
 
-        for (const key in firstRow) {
-          const saneKey = key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-          const overrideType = castTypeOverrides[saneKey];
-          columnsDefinition[`"${saneKey}"`] = overrideType || inferPostgresType(firstRow[key]);
+        // Base schema: from body.filter.columns when present (so all selected columns exist even if first row has nulls)
+        const filterColumns = body!.filter?.columns as string[] | undefined;
+        const explicitColumnNames: string[] =
+          filterColumns?.length > 0
+            ? filterColumns.map((c) => toSaneKey(c))
+            : firstRow
+            ? Object.keys(firstRow).map((k) => toSaneKey(k))
+            : [];
+
+        const seen = new Set<string>();
+        for (const colName of explicitColumnNames) {
+          if (!colName || seen.has(colName)) continue;
+          seen.add(colName);
+          const overrideType = castTypeOverrides[colName];
+          if (overrideType) {
+            columnsDefinition[`"${colName}"`] = overrideType;
+            continue;
+          }
+          // Infer type from first batch: find any row key that normalizes to colName
+          let inferred: string = "TEXT";
+          for (const row of batch) {
+            if (!row || typeof row !== "object") continue;
+            for (const key in row) {
+              if (toSaneKey(key) === colName) {
+                inferred = inferPostgresType(row[key]);
+                break;
+              }
+            }
+            if (inferred !== "TEXT") break;
+          }
+          columnsDefinition[`"${colName}"`] = inferred;
         }
+
+        // When not using filter.columns, preserve any extra keys from first row (e.g. from SELECT *)
+        if (!filterColumns?.length && firstRow) {
+          for (const key in firstRow) {
+            const saneKey = toSaneKey(key);
+            if (seen.has(saneKey)) continue;
+            seen.add(saneKey);
+            const overrideType = castTypeOverrides[saneKey];
+            columnsDefinition[`"${saneKey}"`] = overrideType || inferPostgresType(firstRow[key]);
+          }
+        }
+
         if (body!.etlId) {
           columnsDefinition['"etl_id"'] = "UUID";
         }
@@ -1606,7 +1646,7 @@ async function executeEtlPipeline(
 // ===================================================================
 // LÓGICA PRINCIPAL DE LA API ROUTE (FIRE-AND-FORGET)
 // ===================================================================
-/** Límite Vercel: Hobby 300s, Pro 800s (máx). No superar 800 en Pro. */
+/** Límite Vercel: Hobby 300s, Pro 800s (máx). vercel.json fija 300s para esta ruta; si la ejecución supera ese tiempo, la función puede ser terminada y el run quedará "En progreso". El cron /api/etl/mark-stale-runs-failed (cada 10 min) marca esos runs como fallidos. Para cargas muy grandes, considerar un worker externo. */
 export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {

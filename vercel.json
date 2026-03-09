@@ -4,5 +4,11 @@
     "app/api/etl/run/route.ts": { "maxDuration": 300 },
     "app/api/etl/run-preview/route.ts": { "maxDuration": 60 },
     "app/api/etl/[etl-id]/metrics-data/route.ts": { "maxDuration": 30 }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/etl/mark-stale-runs-failed",
+      "schedule": "*/10 * * * *"
+    }
+  ]
 }

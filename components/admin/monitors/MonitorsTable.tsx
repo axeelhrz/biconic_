@@ -21,7 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AlertCircle, CheckCircle2, CircleDashed, Trash2, X, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, CircleDashed, Trash2, X, XCircle, Loader2 } from "lucide-react";
 import { deleteMonitorRunsAdmin } from "@/app/admin/(main)/monitors/actions";
 import { toast } from "sonner";
 
@@ -53,6 +53,7 @@ export default function MonitorsTable({
   const [bulkDeleteModalOpen, setBulkDeleteModalOpen] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [markingFailedId, setMarkingFailedId] = useState<string | null>(null);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -185,6 +186,32 @@ export default function MonitorsTable({
       toast.success("Registro eliminado.");
     } else {
       toast.error(res.error || "Error al eliminar");
+    }
+  };
+
+  const handleMarkRunFailed = async (log: LogEntry) => {
+    if (!log.etl_id || (log.status !== "started" && log.status !== "running")) return;
+    setMarkingFailedId(log.id);
+    try {
+      const res = await fetch(`/api/etl/${log.etl_id}/mark-run-failed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runId: log.id,
+          error_message: "Marcado como fallido (timeout o interrupción).",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        loadLogs(false);
+        toast.success("Run marcado como fallido.");
+      } else {
+        toast.error(data?.error || "Error al marcar como fallido");
+      }
+    } catch (e: any) {
+      toast.error(e?.message || "Error al marcar como fallido");
+    } finally {
+      setMarkingFailedId(null);
     }
   };
 
@@ -380,6 +407,20 @@ export default function MonitorsTable({
                     {log.error_message || "-"}
                   </TableCell>
                   <TableCell style={{ borderColor: "var(--platform-border)" }}>
+                    <div className="flex items-center gap-1">
+                    {(log.status === "started" || log.status === "running") && log.etl_id && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 rounded-lg text-[var(--platform-fg-muted)] hover:text-amber-600"
+                        onClick={() => handleMarkRunFailed(log)}
+                        disabled={markingFailedId === log.id}
+                        title="Marcar como fallido (timeout o interrupción)"
+                      >
+                        {markingFailedId === log.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="ghost"
@@ -391,6 +432,7 @@ export default function MonitorsTable({
                     >
                       {deletingId === log.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                     </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
