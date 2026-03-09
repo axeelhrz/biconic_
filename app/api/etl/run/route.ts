@@ -323,7 +323,8 @@ async function executeEtlPipeline(
   body: RunBody,
   runId: string,
   supabaseAdmin: any, // Typed as any to avoid conflicts with different client versions
-  user: any
+  user: any,
+  req: NextRequest
 ) {
   const asPositiveInt = (raw: string | undefined, fallback: number) => {
     const parsed = Number(raw);
@@ -772,6 +773,50 @@ async function executeEtlPipeline(
 
         if (isJoin) {
           const isStar = isStarJoin && Array.isArray(joinObj.joins) && joinObj.joins.length > 0;
+          if (isStar && Array.isArray(joinObj.joins) && joinObj.joins.length > 1) {
+            const selectedCols = (body!.filter?.columns || []) as string[];
+            const primaryColumns = selectedCols
+              .filter((c: string) => /^primary\./i.test(c))
+              .map((c: string) => c.replace(/^primary\./i, "").trim());
+            const joinsWithCols = (joinObj.joins || []).map((jn: any, idx: number) => ({
+              ...jn,
+              secondaryColumns: selectedCols
+                .filter((c: string) => new RegExp(`^join_${idx}\\.`, "i").test(c))
+                .map((c: string) => c.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim()),
+            }));
+            const joinQueryBody = {
+              primaryConnectionId: joinObj.primaryConnectionId,
+              primaryTable: joinObj.primaryTable || (body!.filter?.table || "").trim(),
+              joins: joinsWithCols,
+              primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
+              conditions: body!.filter?.conditions || [],
+              dateFilter: body!.filter?.dateFilter ?? undefined,
+              limit: ETL_MAX_ROWS_CEILING,
+              offset: 0,
+              count: false,
+            };
+            const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");
+            const cookieHeader = req.headers.get("cookie");
+            const starRes = await fetch(`${origin}/api/connection/join-query`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+              },
+              body: JSON.stringify(joinQueryBody),
+            });
+            const starData = await starRes.json();
+            if (!starRes.ok || !starData?.ok) {
+              throw new Error(
+                `Error ejecutando JOIN múltiple: ${starData?.error || `estado ${starRes.status}`}`
+              );
+            }
+            if (!Array.isArray(starData.rows)) {
+              throw new Error("JOIN múltiple devolvió una respuesta inválida.");
+            }
+            if (starData.rows.length > 0) yield starData.rows;
+            return;
+          }
           const leftTable = isStar ? (joinObj.primaryTable || (body!.filter?.table || "").trim()) : (joinObj.leftTable || "").trim();
           const rightTable = isStar ? (joinObj.joins![0] as any).secondaryTable : (joinObj.rightTable || "").trim();
           const jc = isStar ? (joinObj.joins![0] as any) : (joinObj.joinConditions?.[0] || {});
@@ -787,18 +832,18 @@ async function executeEtlPipeline(
 
           const selectedCols = (body!.filter?.columns || []) as string[];
           const leftColumns = selectedCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, "").trim());
-          const rightColumns = selectedCols.filter((c: string) => /^join_0\./i.test(c)).map((c: string) => c.replace(/^join_0\./i, "").trim());
+          const rightColumns = selectedCols.filter((c: string) => /^join_\d+\./i.test(c)).map((c: string) => c.replace(/^join_\d+\./i, "").trim());
           const leftConditions = (sqlConditions as FilterCondition[])
             .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
             .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^primary\./i, "").trim() }));
           const rightConditions = (sqlConditions as FilterCondition[])
-            .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
-            .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
+            .filter((c: FilterCondition) => /^join_\d+\./i.test(c.column || ""))
+            .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_\d+\./i, "").trim() }));
 
           const rawDateCol = (dateFilter?.column ?? "").trim();
-          const isDateFilterOnRight = /^join_0\.\s*/i.test(rawDateCol);
+          const isDateFilterOnRight = /^join_\d+\.\s*/i.test(rawDateCol);
           const leftDateFilter = !isDateFilterOnRight && rawDateCol ? { ...dateFilter, column: rawDateCol.replace(/^primary\./i, "").trim() } : undefined;
-          const rightDateFilter = isDateFilterOnRight && rawDateCol ? { ...dateFilter, column: rawDateCol.replace(/^join_0\.\s*/i, "").trim() } : undefined;
+          const rightDateFilter = isDateFilterOnRight && rawDateCol ? { ...dateFilter, column: rawDateCol.replace(/^join_\d+\.\s*/i, "").trim() } : undefined;
 
           const Firebird = require("node-firebird");
           const fbOpts = {
@@ -1141,13 +1186,13 @@ async function executeEtlPipeline(
         const joinType = (jc.joinType || "INNER").toString().toUpperCase();
         const selectedCols = (body!.filter?.columns || []) as string[];
         const leftColumns = selectedCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, "").trim());
-        const rightColumns = selectedCols.filter((c: string) => /^join_0\./i.test(c)).map((c: string) => c.replace(/^join_0\./i, "").trim());
+        const rightColumns = selectedCols.filter((c: string) => /^join_\d+\./i.test(c)).map((c: string) => c.replace(/^join_\d+\./i, "").trim());
         const leftConditions = (sqlConditions as FilterCondition[])
           .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
           .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^primary\./i, "").trim() }));
         const rightConditions = (sqlConditions as FilterCondition[])
-          .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
-          .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
+          .filter((c: FilterCondition) => /^join_\d+\./i.test(c.column || ""))
+          .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_\d+\./i, "").trim() }));
         if (!leftTable || !rightTable || !leftCol || !rightCol)
           throw new Error("JOIN entre conexiones distintas requiere tabla izquierda, derecha y columnas de enlace.");
 
@@ -1213,10 +1258,10 @@ async function executeEtlPipeline(
         const resolveRightColCase = (col: string) =>
           rightColumns.find((rc: string) => rc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
         const dateFilterCol = (dateFilter?.column ?? "").trim();
-        const isDateFilterOnRight = /^join_0\.\s*/i.test(dateFilterCol);
+        const isDateFilterOnRight = /^join_\d+\.\s*/i.test(dateFilterCol);
         const dateFilterForRight =
           dateFilter?.column && isDateFilterOnRight
-            ? { ...dateFilter, column: resolveRightColCase(dateFilterCol.replace(/^join_0\.\s*/i, "").trim()) }
+            ? { ...dateFilter, column: resolveRightColCase(dateFilterCol.replace(/^join_\d+\.\s*/i, "").trim()) }
             : undefined;
         const leftDateFilter =
           dateFilter && !isDateFilterOnRight && dateFilterCol
@@ -1334,7 +1379,7 @@ async function executeEtlPipeline(
               const mappedConds = (sqlConditions as FilterCondition[]).map((c) => {
                   const col = c.column || "";
                   let mapped = col.replace(/^primary\./i, "left.");
-                  mapped = mapped.replace(/^join_0\./i, "right.");
+                  mapped = mapped.replace(/^join_\d+\./i, "right.");
                   return { ...c, column: mapped } as any;
               });
                if (conn.type === "excel_file") {
@@ -1361,9 +1406,9 @@ async function executeEtlPipeline(
                  const joinClause = buildJoinClauseBinary(joinConditions, "postgres", rQ);
                  const { clause: mcClause, params: mcParams } = buildWhereClausePg(mappedConds);
                  const rawDateColBin = (dateFilter?.column ?? "").trim();
-                 const isDateOnRightBin = /^join_0\.\s*/i.test(rawDateColBin);
+                 const isDateOnRightBin = /^join_\d+\.\s*/i.test(rawDateColBin);
                  const binaryDateFilter = !dateFilter ? undefined : rawDateColBin
-                   ? { ...dateFilter, column: isDateOnRightBin ? rawDateColBin.replace(/^join_0\.\s*/i, "").trim() : rawDateColBin.replace(/^primary\./i, "").trim() }
+                   ? { ...dateFilter, column: isDateOnRightBin ? rawDateColBin.replace(/^join_\d+\.\s*/i, "").trim() : rawDateColBin.replace(/^primary\./i, "").trim() }
                    : dateFilter;
                  const binaryDatePrefix = isDateOnRightBin ? "r." : "l.";
                  const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(binaryDateFilter, mcParams.length + 1, binaryDatePrefix);
@@ -1384,9 +1429,9 @@ async function executeEtlPipeline(
                  const joinClause = buildJoinClauseBinary(joinConditions, "postgres", rQ);
                  const { clause: mcClause2, params: mcParams2 } = buildWhereClausePg(mappedConds);
                  const rawDateColBin2 = (dateFilter?.column ?? "").trim();
-                 const isDateOnRightBin2 = /^join_0\.\s*/i.test(rawDateColBin2);
+                 const isDateOnRightBin2 = /^join_\d+\.\s*/i.test(rawDateColBin2);
                  const binaryDateFilter2 = !dateFilter ? undefined : rawDateColBin2
-                   ? { ...dateFilter, column: isDateOnRightBin2 ? rawDateColBin2.replace(/^join_0\.\s*/i, "").trim() : rawDateColBin2.replace(/^primary\./i, "").trim() }
+                   ? { ...dateFilter, column: isDateOnRightBin2 ? rawDateColBin2.replace(/^join_\d+\.\s*/i, "").trim() : rawDateColBin2.replace(/^primary\./i, "").trim() }
                    : dateFilter;
                  const binaryDatePrefix2 = isDateOnRightBin2 ? "r." : "l.";
                  const { clause: dfClause2, params: dfParams2 } = buildDateFilterWhereFragmentPg(binaryDateFilter2, mcParams2.length + 1, binaryDatePrefix2);
@@ -1872,7 +1917,7 @@ export async function POST(req: NextRequest) {
      }
 
       // 2. Run pipeline (síncrono si waitForCompletion, sino fire-and-forget)
-      const pipelinePromise = executeEtlPipeline(body, runId, supabaseAdmin, user);
+      const pipelinePromise = executeEtlPipeline(body, runId, supabaseAdmin, user, req);
 
       if (body.waitForCompletion) {
         await pipelinePromise;

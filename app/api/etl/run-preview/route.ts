@@ -194,7 +194,7 @@ export async function POST(req: NextRequest) {
       const first = guidedJoin.joins[0];
       const filterCols = (body!.filter?.columns as string[] | undefined) || [];
       const leftCols = filterCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, ""));
-      const rightCols = filterCols.filter((c: string) => /^join_0\./i.test(c)).map((c: string) => c.replace(/^join_0\./i, ""));
+      const rightCols = filterCols.filter((c: string) => /^join_\d+\./i.test(c)).map((c: string) => c.replace(/^join_\d+\./i, ""));
       (body as any).join = {
         connectionId: String(guidedJoin.primaryConnectionId),
         secondaryConnectionId: first.secondaryConnectionId != null ? String(first.secondaryConnectionId) : undefined,
@@ -503,11 +503,17 @@ export async function POST(req: NextRequest) {
               body: JSON.stringify(joinQueryBody),
             });
             const data = await res.json();
-            if (data?.ok && Array.isArray(data.rows)) {
-              yield { rows: data.rows.slice(0, effectiveLimit), query: "Star JOIN (múltiples tablas)" };
+            if (!res.ok || !data?.ok) {
+              const detail = (data?.error && String(data.error).trim()) || `Error del servidor (${res.status})`;
+              throw new Error(`Error en JOIN múltiple: ${detail}`);
             }
+            if (!Array.isArray(data.rows)) {
+              throw new Error("Error en JOIN múltiple: la respuesta no incluyó filas válidas.");
+            }
+            yield { rows: data.rows.slice(0, effectiveLimit), query: "Star JOIN (múltiples tablas)" };
           } catch (e) {
             console.error("[Preview] Star join fetch error:", e);
+            throw e instanceof Error ? e : new Error("No se pudo ejecutar el JOIN múltiple.");
           }
           return;
         }
@@ -546,8 +552,8 @@ export async function POST(req: NextRequest) {
               .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
               .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^primary\./i, "").trim() }));
             const rightConditions = (sqlConditions as FilterCondition[])
-              .filter((c: FilterCondition) => /^join_0\./i.test(c.column || ""))
-              .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_0\./i, "").trim() }));
+              .filter((c: FilterCondition) => /^join_\d+\./i.test(c.column || ""))
+              .map((c: FilterCondition) => ({ ...c, column: (c.column || "").replace(/^join_\d+\./i, "").trim() }));
 
             const leftColumnNames = joinConf.leftColumns ?? [];
             const rightColumnNames = joinConf.rightColumns ?? [];
@@ -562,10 +568,10 @@ export async function POST(req: NextRequest) {
                 ? { ...dateFilter, column: resolveLeftColCase((dateFilter.column || "").replace(/^primary\./i, "").trim()) }
                 : undefined;
             const dateFilterForRight =
-              dateFilter?.column && /^join_0\./i.test(dateFilter.column)
+              dateFilter?.column && /^join_\d+\./i.test(dateFilter.column)
                 ? {
                     ...dateFilter,
-                    column: resolveRightColCase((dateFilter.column || "").replace(/^join_0\./i, "").trim()),
+                    column: resolveRightColCase((dateFilter.column || "").replace(/^join_\d+\./i, "").trim()),
                   }
                 : undefined;
 
@@ -768,7 +774,7 @@ export async function POST(req: NextRequest) {
             const mappedConds = (sqlConditions as FilterCondition[]).map((c) => {
                const col = c.column || "";
                let mapped = col.replace(/^primary\./i, "left."); // or l.
-               mapped = mapped.replace(/^join_0\./i, "right.");   // or r.
+               mapped = mapped.replace(/^join_\d+\./i, "right.");   // or r.
                // Helper expects l. or r. prefixes for binary logic
                return { ...c, column: mapped } as any;
             });

@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { randomUUID } from "crypto";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 import { buildDateFilterWhereFragmentPg, type DateFilterSpec } from "@/lib/sql/helpers";
+import { decryptConnectionPassword } from "@/lib/connection-secret";
 
 // --- TIPOS DE DATOS ---
 type FilterCondition = {
@@ -511,6 +512,269 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       log(`Tipo de base de datos determinada: ${dbType}`);
 
       // --- LÓGICA DE BIFURCACIÓN BASADA EN EL TIPO DE BD ---
+      const joinsConnections = (joins || []).map((jn) =>
+        connectionsMap.get(String(jn.secondaryConnectionId))
+      );
+      const hasFirebirdInChain = [primaryConn, ...joinsConnections].some(
+        (c: any) => String(c?.type || "").toLowerCase() === "firebird"
+      );
+      const sameConnectionChain =
+        (joins || []).every(
+          (jn) => String(jn.secondaryConnectionId ?? "") === String(primaryConnectionId ?? "")
+        );
+      const useInMemoryStarJoin = hasFirebirdInChain || !sameConnectionChain;
+
+      if (useInMemoryStarJoin) {
+        log("Iniciando flujo de JOIN star en memoria (Firebird/cross-connection).");
+        try {
+          const sourceLimit = Math.min(
+            ETL_MAX_ROWS_CEILING,
+            Math.max((offset ?? 0) + (limit ?? 50) * 8, 2000)
+          );
+          const normalizeKey = (k: string) =>
+            String(k || "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+          const normalizeRow = (row: Record<string, any>) => {
+            const out: Record<string, any> = {};
+            for (const key of Object.keys(row || {})) out[normalizeKey(key)] = row[key];
+            return out;
+          };
+          const getByColumnName = (row: Record<string, any>, col: string) => {
+            const n = normalizeKey(col);
+            if (row[n] !== undefined) return row[n];
+            for (const k of Object.keys(row)) if (normalizeKey(k) === n) return row[k];
+            return undefined;
+          };
+          const firebirdSafePart = (s: string) =>
+            /^[A-Z0-9_]+$/i.test(String(s).trim())
+              ? String(s).trim().toUpperCase()
+              : `"${String(s).trim().replace(/"/g, '""')}"`;
+          const resolvePhysicalIfExcel = async (conn: any, table: string) => {
+            if (String(conn?.type || "").toLowerCase() !== "excel_file") return table;
+            const { data: meta, error: mErr } = await supabase
+              .from("data_tables")
+              .select("physical_schema_name, physical_table_name")
+              .eq("connection_id", String(conn.id))
+              .single();
+            if (mErr || !meta?.physical_table_name) {
+              throw new Error(`Metadatos de tabla física no encontrados para conexión ${conn.id}`);
+            }
+            return `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
+          };
+          const fetchRowsFromConn = async (
+            conn: any,
+            table: string,
+            columns?: string[]
+          ): Promise<Record<string, any>[]> => {
+            const cType = String(conn?.type || "").toLowerCase();
+            const resolvedTable = await resolvePhysicalIfExcel(conn, table);
+            if (cType === "firebird") {
+              const Firebird = require("node-firebird");
+              let pwd =
+                (conn as any).db_password_encrypted
+                  ? decryptConnectionPassword((conn as any).db_password_encrypted)
+                  : (conn as any).db_password ?? "";
+              if (!pwd) {
+                pwd = (await getPasswordFromSecret((conn as any).db_password_secret_id)) || "";
+              }
+              const opts = {
+                host: conn.db_host || "localhost",
+                port: conn.db_port ? Number(conn.db_port) : 15421,
+                database: conn.db_name,
+                user: conn.db_user,
+                password: pwd || process.env.FLEXXUS_PASSWORD || process.env.DB_PASSWORD_PLACEHOLDER || "",
+                lowercase_keys: false,
+              };
+              const tablePart = resolvedTable.includes(".")
+                ? (resolvedTable.split(".").pop() || resolvedTable).trim().toUpperCase()
+                : firebirdSafePart(resolvedTable);
+              const cols = columns?.length ? columns.map((c) => firebirdSafePart(c)).join(", ") : "*";
+              return await new Promise<Record<string, any>[]>((resolve, reject) => {
+                Firebird.attach(opts, (err: Error | null, db: any) => {
+                  if (err) return reject(err);
+                  const sql = `SELECT FIRST ${sourceLimit} ${cols} FROM ${tablePart}`;
+                  db.query(sql, [], (qErr: Error | null, rows: any[]) => {
+                    if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                    if (qErr) return reject(qErr);
+                    resolve((rows || []).map(normalizeRow));
+                  });
+                });
+              });
+            }
+
+            const password =
+              body.password ||
+              (conn.db_password_encrypted
+                ? await getPasswordFromSecret(conn.db_password_secret_id)
+                : conn.db_password || "");
+            const connectionString =
+              cType === "excel_file"
+                ? process.env.SUPABASE_DB_URL
+                : `postgres://${conn.db_user}:${encodeURIComponent(String(password || ""))}@${conn.db_host}:${conn.db_port || 5432}/${conn.db_name}?sslmode=require`;
+            if (!connectionString) throw new Error("No se pudo resolver la conexión para JOIN en memoria.");
+            const client = new PgClient({ connectionString, connectionTimeoutMillis: 12000, statement_timeout: 600000 });
+            await client.connect();
+            try {
+              const sel = columns?.length ? columns.map((c) => quoteIdent(c, "postgres")).join(", ") : "*";
+              const q = `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")} LIMIT ${sourceLimit}`;
+              const res = await client.query(q);
+              return (res.rows || []).map((r: any) => normalizeRow(r));
+            } finally {
+              await client.end().catch(() => {});
+            }
+          };
+          const mapPrefixedValue = (row: Record<string, any>, ref: string) => {
+            const raw = (ref || "").trim();
+            if (/^primary\./i.test(raw)) return row[`primary_${raw.replace(/^primary\./i, "").trim()}`];
+            const jm = raw.match(/^join_(\d+)\.(.+)$/i);
+            if (jm) return row[`join_${Number(jm[1])}_${jm[2].trim()}`];
+            return row[`primary_${raw}`];
+          };
+          const passesCondition = (row: Record<string, any>, cond: FilterCondition) => {
+            const raw = String(cond.column || "").trim();
+            const value = /^primary\./i.test(raw) || /^join_\d+\./i.test(raw)
+              ? mapPrefixedValue(row, raw)
+              : row[raw];
+            const opVal = cond.value ?? "";
+            switch (cond.operator) {
+              case "is null":
+                return value == null;
+              case "is not null":
+                return value != null;
+              case "contains":
+                return String(value ?? "").toLowerCase().includes(String(opVal).toLowerCase());
+              case "startsWith":
+                return String(value ?? "").toLowerCase().startsWith(String(opVal).toLowerCase());
+              case "endsWith":
+                return String(value ?? "").toLowerCase().endsWith(String(opVal).toLowerCase());
+              case "in": {
+                const list = String(opVal).split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
+                return list.includes(String(value ?? "").trim().toLowerCase());
+              }
+              case "not in": {
+                const list = String(opVal).split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
+                return !list.includes(String(value ?? "").trim().toLowerCase());
+              }
+              case "=":
+                return String(value ?? "") === String(opVal ?? "");
+              case "!=":
+                return String(value ?? "") !== String(opVal ?? "");
+              case ">":
+                return Number(value) > Number(opVal);
+              case ">=":
+                return Number(value) >= Number(opVal);
+              case "<":
+                return Number(value) < Number(opVal);
+              case "<=":
+                return Number(value) <= Number(opVal);
+              default:
+                return true;
+            }
+          };
+          const passesDateFilter = (row: Record<string, any>, df?: DateFilterSpec) => {
+            if (!df?.column) return true;
+            const raw = mapPrefixedValue(row, df.column);
+            if (raw == null || raw === "") return false;
+            const d = new Date(raw as any);
+            if (Number.isNaN(d.getTime())) return false;
+            const y = d.getUTCFullYear();
+            const m = d.getUTCMonth() + 1;
+            if (Array.isArray(df.years) && df.years.length > 0 && !df.years.includes(y)) return false;
+            if (Array.isArray(df.months) && df.months.length > 0 && !df.months.includes(m)) return false;
+            if (Array.isArray(df.exactDates) && df.exactDates.length > 0) {
+              const iso = d.toISOString().slice(0, 10);
+              if (!df.exactDates.includes(iso)) return false;
+            }
+            return true;
+          };
+
+          const primaryTableResolved = await resolvePhysicalIfExcel(primaryConn, primaryTable || "");
+          const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns);
+          const primaryCols =
+            primaryColumns && primaryColumns.length > 0
+              ? primaryColumns
+              : primaryRowsRaw[0]
+              ? Object.keys(primaryRowsRaw[0])
+              : [];
+          let joinedRows: Record<string, any>[] = primaryRowsRaw.map((r) => {
+            const out: Record<string, any> = {};
+            for (const c of primaryCols) out[`primary_${c}`] = getByColumnName(r, c);
+            return out;
+          });
+
+          for (let idx = 0; idx < (joins || []).length; idx++) {
+            const jn = joins[idx];
+            const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
+            if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
+            const secTableResolved = await resolvePhysicalIfExcel(secConn, jn.secondaryTable || "");
+            const secRowsRaw = await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns);
+            const secCols =
+              jn.secondaryColumns && jn.secondaryColumns.length > 0
+                ? jn.secondaryColumns
+                : secRowsRaw[0]
+                ? Object.keys(secRowsRaw[0])
+                : [];
+            const rightCol = String(jn.secondaryColumn || "").trim();
+            const leftRef = String(jn.primaryColumn || "").trim();
+            const joinType = String(jn.joinType || "INNER").toUpperCase();
+            const rightMap = new Map<string, Record<string, any>[]>();
+            const rightUsed = new Set<number>();
+            secRowsRaw.forEach((rr, rrIdx) => {
+              const key = String(getByColumnName(rr, rightCol) ?? "");
+              const withIdx = { ...rr, __rrIdx__: rrIdx };
+              if (!rightMap.has(key)) rightMap.set(key, []);
+              rightMap.get(key)!.push(withIdx);
+            });
+
+            const previousKeys = joinedRows[0] ? Object.keys(joinedRows[0]) : [];
+            const nextRows: Record<string, any>[] = [];
+            for (const lr of joinedRows) {
+              const lk = String(mapPrefixedValue(lr, leftRef) ?? "");
+              const matches = rightMap.get(lk) ?? [];
+              if (matches.length > 0) {
+                for (const rr of matches) {
+                  if (rr.__rrIdx__ != null) rightUsed.add(Number(rr.__rrIdx__));
+                  const prefRight: Record<string, any> = {};
+                  for (const c of secCols) prefRight[`join_${idx}_${c}`] = getByColumnName(rr, c);
+                  nextRows.push({ ...lr, ...prefRight });
+                }
+              } else if (joinType === "LEFT" || joinType === "FULL") {
+                const nulls: Record<string, any> = {};
+                for (const c of secCols) nulls[`join_${idx}_${c}`] = null;
+                nextRows.push({ ...lr, ...nulls });
+              }
+            }
+
+            if (joinType === "RIGHT" || joinType === "FULL") {
+              for (let rrIdx = 0; rrIdx < secRowsRaw.length; rrIdx++) {
+                if (rightUsed.has(rrIdx)) continue;
+                const rr = secRowsRaw[rrIdx];
+                const leftNulls: Record<string, any> = {};
+                previousKeys.forEach((k) => (leftNulls[k] = null));
+                const prefRight: Record<string, any> = {};
+                for (const c of secCols) prefRight[`join_${idx}_${c}`] = getByColumnName(rr, c);
+                nextRows.push({ ...leftNulls, ...prefRight });
+              }
+            }
+            joinedRows = nextRows;
+          }
+
+          const filteredRows = joinedRows
+            .filter((r) => (conditions || []).every((c) => passesCondition(r, c)))
+            .filter((r) => passesDateFilter(r, body.dateFilter));
+          const totalOut = count ? filteredRows.length : undefined;
+          const rowsPage = filteredRows.slice(offset ?? 0, (offset ?? 0) + (limit ?? 50));
+          return NextResponse.json({ ok: true, rows: rowsPage, total: totalOut });
+        } catch (e: any) {
+          log("Error en JOIN star en memoria.", {
+            message: e?.message,
+            stack: e?.stack,
+          });
+          return NextResponse.json(
+            { ok: false, error: `Error en JOIN múltiple en memoria: ${e?.message || "Error inesperado"}` },
+            { status: 500 }
+          );
+        }
+      }
 
       if (dbType === "excel_file") {
         log("Detectado tipo 'excel_file'. Iniciando flujo de JOIN interno.");
