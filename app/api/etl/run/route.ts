@@ -300,6 +300,7 @@ async function executeEtlPipeline(
 ) {
   let newTableName = "";
   const completedAt = () => new Date().toISOString();
+  let rowsProcessed = 0;
 
   try {
     const regex = new RegExp("[-:.]", "g");
@@ -339,7 +340,6 @@ async function executeEtlPipeline(
     const previewRows: Record<string, any>[] = [];
     const PREVIEW_LIMIT = 5000;
 
-    let rowsProcessed = 0;
     /** Lotes más grandes = menos iteraciones; Pro 800s permite varios millones de filas. */
     const pageSize = 40000;
     const INSERT_CHUNK_SIZE_DEFAULT = 3000;
