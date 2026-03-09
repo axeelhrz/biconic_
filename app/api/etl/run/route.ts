@@ -1492,8 +1492,12 @@ async function executeEtlPipeline(
       
       await insertBatch(transformedBatch);
 
-      // --- REALTIME UPDATE (throttled: cada LOG_UPDATE_EVERY_ROWS) ---
-      if (rowsProcessed - lastLoggedRows >= LOG_UPDATE_EVERY_ROWS) {
+      // --- REALTIME UPDATE: primer batch para que el monitor no quede en "-"; luego cada LOG_UPDATE_EVERY_ROWS ---
+      const shouldUpdate =
+        lastLoggedRows === 0
+          ? rowsProcessed > 0
+          : rowsProcessed - lastLoggedRows >= LOG_UPDATE_EVERY_ROWS;
+      if (shouldUpdate) {
          try {
             await supabaseAdmin
               .from("etl_runs_log")
@@ -1578,8 +1582,8 @@ async function executeEtlPipeline(
 // ===================================================================
 // LÓGICA PRINCIPAL DE LA API ROUTE (FIRE-AND-FORGET)
 // ===================================================================
-/** Pro (Fluid): máx 800s. Hobby: 300s. Enterprise sin Fluid: 900s. */
-export const maxDuration = 800;
+/** Máximo permitido por plataforma: Hobby 300s, Pro/Fluid 800s, Enterprise sin Fluid 900s. Usar 900 para soportar runs largos (900k+ registros). */
+export const maxDuration = 900;
 
 export async function POST(req: NextRequest) {
   const runId = uuidv4();
