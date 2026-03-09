@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 
-/** Minutos desde started_at para considerar un run "stale" (por encima de maxDuration 300s de Vercel). El cron en vercel.json invoca este endpoint cada 10 min (*/10 * * * *). */
+/** Minutos desde started_at para considerar un run "stale" (por encima de maxDuration 300s de Vercel). El cron en vercel.json invoca este endpoint cada 10 min. */
 const STALE_MINUTES = 10;
 
 function getSecret(req: NextRequest): string | null {
