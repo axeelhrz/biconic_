@@ -798,9 +798,11 @@ async function executeEtlPipeline(
 
           const resolveRightColCase = (col: string) =>
             rightColumns.find((rc: string) => rc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
+          const rawDateColFb = (dateFilter?.column ?? "").trim();
+          const isDateFilterOnRightFb = /^join_0\.\s*/i.test(rawDateColFb);
           const dateFilterForRight =
-            dateFilter?.column && /^join_0\./i.test(dateFilter.column)
-              ? { ...dateFilter, column: resolveRightColCase((dateFilter.column || "").replace(/^join_0\./i, "").trim()) }
+            dateFilter?.column && isDateFilterOnRightFb
+              ? { ...dateFilter, column: resolveRightColCase(rawDateColFb.replace(/^join_0\.\s*/i, "").trim()) }
               : undefined;
 
           const rightRows = await fetchFromConnection(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions, dateFilterForRight);
@@ -820,11 +822,10 @@ async function executeEtlPipeline(
             .map((c) => ({ ...c, column: resolveColCase(c.column || "") }))
             .filter((c) => c.column.length > 0);
           const { clause: leftClause, params: leftParams } = buildWhereClauseFirebird(leftFbConditions);
-          const rawDateCol = (dateFilter?.column || "").replace(/^primary\./i, "").trim();
-          const resolvedDateCol = rawDateCol ? resolveColCase(rawDateCol) : rawDateCol;
-          const isDateFilterOnRight = /^join_\d+\./i.test(dateFilter?.column ?? "");
+          const rawDateColLeft = (dateFilter?.column ?? "").trim().replace(/^primary\./i, "").trim();
+          const resolvedDateCol = rawDateColLeft ? resolveColCase(rawDateColLeft) : rawDateColLeft;
           const leftDateFilterFb =
-            dateFilter?.column && !isDateFilterOnRight
+            dateFilter?.column && !isDateFilterOnRightFb && rawDateColLeft
               ? { ...dateFilter, column: resolvedDateCol }
               : undefined;
           const { clause: leftDfClause, params: leftDfParams } = buildDateFilterWhereFragmentFirebird(leftDateFilterFb);
@@ -1081,15 +1082,15 @@ async function executeEtlPipeline(
 
         const resolveRightColCase = (col: string) =>
           rightColumns.find((rc: string) => rc.toUpperCase() === (col || "").trim().toUpperCase()) ?? (col || "").trim();
-        const dateFilterCol = dateFilter?.column ?? "";
-        const isDateFilterOnRight = /^join_\d+\./i.test(dateFilterCol);
+        const dateFilterCol = (dateFilter?.column ?? "").trim();
+        const isDateFilterOnRight = /^join_0\.\s*/i.test(dateFilterCol);
         const dateFilterForRight =
-          dateFilter?.column && /^join_0\./i.test(dateFilter.column)
-            ? { ...dateFilter, column: resolveRightColCase((dateFilter.column || "").replace(/^join_0\./i, "").trim()) }
+          dateFilter?.column && isDateFilterOnRight
+            ? { ...dateFilter, column: resolveRightColCase(dateFilterCol.replace(/^join_0\.\s*/i, "").trim()) }
             : undefined;
         const leftDateFilter =
-          dateFilter && !isDateFilterOnRight && dateFilterCol.trim()
-            ? { ...dateFilter, column: (dateFilter.column || "").replace(/^primary\./i, "").trim() }
+          dateFilter && !isDateFilterOnRight && dateFilterCol
+            ? { ...dateFilter, column: dateFilterCol.replace(/^primary\./i, "").trim() }
             : undefined;
 
         const rightRows = await fetchFromConnectionCrossDb(conn2, rightTable, rightColumns.length ? rightColumns : undefined, rightConditions, undefined, undefined, dateFilterForRight);
@@ -1211,9 +1212,9 @@ async function executeEtlPipeline(
                  const joinClause = buildJoinClauseBinary(joinConditions, "postgres", rQ);
                  const { clause: mcClause, params: mcParams } = buildWhereClausePg(mappedConds);
                  const rawDateColBin = (dateFilter?.column ?? "").trim();
-                 const isDateOnRightBin = /^join_0\./i.test(rawDateColBin);
+                 const isDateOnRightBin = /^join_0\.\s*/i.test(rawDateColBin);
                  const binaryDateFilter = !dateFilter ? undefined : rawDateColBin
-                   ? { ...dateFilter, column: isDateOnRightBin ? rawDateColBin.replace(/^join_0\./i, "").trim() : rawDateColBin.replace(/^primary\./i, "").trim() }
+                   ? { ...dateFilter, column: isDateOnRightBin ? rawDateColBin.replace(/^join_0\.\s*/i, "").trim() : rawDateColBin.replace(/^primary\./i, "").trim() }
                    : dateFilter;
                  const binaryDatePrefix = isDateOnRightBin ? "r." : "l.";
                  const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(binaryDateFilter, mcParams.length + 1, binaryDatePrefix);
@@ -1234,9 +1235,9 @@ async function executeEtlPipeline(
                  const joinClause = buildJoinClauseBinary(joinConditions, "postgres", rQ);
                  const { clause: mcClause2, params: mcParams2 } = buildWhereClausePg(mappedConds);
                  const rawDateColBin2 = (dateFilter?.column ?? "").trim();
-                 const isDateOnRightBin2 = /^join_0\./i.test(rawDateColBin2);
+                 const isDateOnRightBin2 = /^join_0\.\s*/i.test(rawDateColBin2);
                  const binaryDateFilter2 = !dateFilter ? undefined : rawDateColBin2
-                   ? { ...dateFilter, column: isDateOnRightBin2 ? rawDateColBin2.replace(/^join_0\./i, "").trim() : rawDateColBin2.replace(/^primary\./i, "").trim() }
+                   ? { ...dateFilter, column: isDateOnRightBin2 ? rawDateColBin2.replace(/^join_0\.\s*/i, "").trim() : rawDateColBin2.replace(/^primary\./i, "").trim() }
                    : dateFilter;
                  const binaryDatePrefix2 = isDateOnRightBin2 ? "r." : "l.";
                  const { clause: dfClause2, params: dfParams2 } = buildDateFilterWhereFragmentPg(binaryDateFilter2, mcParams2.length + 1, binaryDatePrefix2);
@@ -1438,7 +1439,7 @@ async function executeEtlPipeline(
 
     // --- MAIN EXECUTION LOOP ---
     /** Actualizar monitoreo cada N filas para no saturar Supabase (Pro: muchos más registros por run). */
-    const LOG_UPDATE_EVERY_ROWS = 100000;
+    const LOG_UPDATE_EVERY_ROWS = 5000;
     let lastLoggedRows = 0;
 
     for await (const rawBatch of dataSourceGenerator()) {
@@ -1549,6 +1550,7 @@ async function executeEtlPipeline(
       await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
         completed_at: completedAt(),
         error_message: (err?.message || "Error desconocido").slice(0, 500),
+        rows_processed: rowsProcessed,
       });
     } catch (logErr) {
       console.error("Failed to log fatal error to DB:", logErr);
@@ -1566,6 +1568,7 @@ async function executeEtlPipeline(
         await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
           completed_at: completedAt(),
           error_message: "Ejecución interrumpida o error no registrado",
+          rows_processed: rowsProcessed,
         });
       }
     } catch (_) {}
