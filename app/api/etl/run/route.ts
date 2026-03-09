@@ -1210,7 +1210,13 @@ async function executeEtlPipeline(
                  
                  const joinClause = buildJoinClauseBinary(joinConditions, "postgres", rQ);
                  const { clause: mcClause, params: mcParams } = buildWhereClausePg(mappedConds);
-                 const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, mcParams.length + 1, "l.");
+                 const rawDateColBin = (dateFilter?.column ?? "").trim();
+                 const isDateOnRightBin = /^join_0\./i.test(rawDateColBin);
+                 const binaryDateFilter = !dateFilter ? undefined : rawDateColBin
+                   ? { ...dateFilter, column: isDateOnRightBin ? rawDateColBin.replace(/^join_0\./i, "").trim() : rawDateColBin.replace(/^primary\./i, "").trim() }
+                   : dateFilter;
+                 const binaryDatePrefix = isDateOnRightBin ? "r." : "l.";
+                 const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(binaryDateFilter, mcParams.length + 1, binaryDatePrefix);
                  const clause = dfClause ? (mcClause ? `${mcClause} AND ${dfClause}` : `WHERE ${dfClause}`) : mcClause;
                  const params = [...mcParams, ...dfParams];
                  baseQuery = `SELECT ${selectParts.join(", ")} FROM ${lQ} AS l ${joinClause} ${clause}`;
@@ -1227,7 +1233,13 @@ async function executeEtlPipeline(
 
                  const joinClause = buildJoinClauseBinary(joinConditions, "postgres", rQ);
                  const { clause: mcClause2, params: mcParams2 } = buildWhereClausePg(mappedConds);
-                 const { clause: dfClause2, params: dfParams2 } = buildDateFilterWhereFragmentPg(dateFilter, mcParams2.length + 1, "l.");
+                 const rawDateColBin2 = (dateFilter?.column ?? "").trim();
+                 const isDateOnRightBin2 = /^join_0\./i.test(rawDateColBin2);
+                 const binaryDateFilter2 = !dateFilter ? undefined : rawDateColBin2
+                   ? { ...dateFilter, column: isDateOnRightBin2 ? rawDateColBin2.replace(/^join_0\./i, "").trim() : rawDateColBin2.replace(/^primary\./i, "").trim() }
+                   : dateFilter;
+                 const binaryDatePrefix2 = isDateOnRightBin2 ? "r." : "l.";
+                 const { clause: dfClause2, params: dfParams2 } = buildDateFilterWhereFragmentPg(binaryDateFilter2, mcParams2.length + 1, binaryDatePrefix2);
                  const clause2 = dfClause2 ? (mcClause2 ? `${mcClause2} AND ${dfClause2}` : `WHERE ${dfClause2}`) : mcClause2;
                  const params2 = [...mcParams2, ...dfParams2];
                  baseQuery = `SELECT ${selectParts.join(", ")} FROM ${lQ} AS l ${joinClause} ${clause2}`;
