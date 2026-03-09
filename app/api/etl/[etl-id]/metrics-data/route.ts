@@ -397,6 +397,17 @@ async function resolveEtlToTableAndFields(
 
   const schema = latestRun.destination_schema || "etl_output";
   const tableName = latestRun.destination_table_name;
+  if (schema === "etl_output") {
+    const pgResult = await fetchFromEtlOutputViaPostgres(tableName, 500);
+    if (pgResult.tableExists === false) return null;
+    return {
+      schema,
+      tableName,
+      created_at: latestRun.completed_at ?? null,
+      sampleData: pgResult.rows ?? [],
+      rowCount: pgResult.rowCount ?? 0,
+    };
+  }
   const client = (schema === "etl_output" && tableReader) ? tableReader : supabase;
   const schemaClient = client.schema(schema as "public" | "etl_output") as any;
   const { count, error: countError } = await schemaClient
@@ -405,19 +416,6 @@ async function resolveEtlToTableAndFields(
   if (countError && schema !== "etl_output") return null;
   const rowCount = count ?? 0;
   let sampleData: any[] = [];
-  // Si es etl_output y no hay filas o falló el count, verificar que la tabla exista (Postgres directo)
-  if (schema === "etl_output" && (countError || rowCount === 0)) {
-    const pgResult = await fetchFromEtlOutputViaPostgres(tableName, 1);
-    if (pgResult.tableExists === false) return null; // tabla no existe → dejar que guided_config devuelva stub
-    sampleData = pgResult.rows ?? [];
-    return {
-      schema,
-      tableName,
-      created_at: latestRun.completed_at ?? null,
-      sampleData,
-      rowCount: pgResult.rowCount ?? 0,
-    };
-  }
   if (rowCount > 0) {
     const { data } = await schemaClient.from(tableName).select("*").limit(500);
     sampleData = data || [];
@@ -457,6 +455,18 @@ async function resolveFromGuidedConfig(
 
   for (const schemaName of ["etl_output", "public"]) {
     try {
+      if (schemaName === "etl_output") {
+        const pgResult = await fetchFromEtlOutputViaPostgres(tableName, 500);
+        if (pgResult.tableExists === false) continue;
+        return {
+          schema: schemaName,
+          tableName,
+          created_at: null,
+          sampleData: pgResult.rows ?? [],
+          rowCount: pgResult.rowCount ?? 0,
+          columnsFromConfig: columnsFromConfig && columnsFromConfig.length > 0 ? columnsFromConfig : undefined,
+        };
+      }
       const client = (schemaName === "etl_output" && tableReader) ? tableReader : supabase;
       const schemaClient = client.schema(schemaName as "public" | "etl_output") as any;
       const { count, error: countErr } = await schemaClient
@@ -518,6 +528,17 @@ async function resolveFromLayoutWidgets(
 
   for (const schemaName of ["etl_output", "public"]) {
     try {
+      if (schemaName === "etl_output") {
+        const pgResult = await fetchFromEtlOutputViaPostgres(tableName, 500);
+        if (pgResult.tableExists === false) continue;
+        return {
+          schema: schemaName,
+          tableName,
+          created_at: null,
+          sampleData: pgResult.rows ?? [],
+          rowCount: pgResult.rowCount ?? 0,
+        };
+      }
       const client = (schemaName === "etl_output" && tableReader) ? tableReader : supabase;
       const schemaClient = client.schema(schemaName as "public" | "etl_output") as any;
       const { count, error: countErr } = await schemaClient
@@ -567,6 +588,17 @@ async function resolveFromOutputTable(
   if (!tableName) return null;
   for (const schemaName of ["etl_output", "public"]) {
     try {
+      if (schemaName === "etl_output") {
+        const pgResult = await fetchFromEtlOutputViaPostgres(tableName, 500);
+        if (pgResult.tableExists === false) continue;
+        return {
+          schema: schemaName,
+          tableName,
+          created_at: null,
+          sampleData: pgResult.rows ?? [],
+          rowCount: pgResult.rowCount ?? 0,
+        };
+      }
       const client = (schemaName === "etl_output" && tableReader) ? tableReader : supabase;
       const schemaClient = client.schema(schemaName as "public" | "etl_output") as any;
       const { count, error: countErr } = await schemaClient
@@ -727,6 +759,9 @@ export async function GET(
 
     const url = new URL(request.url);
     const unlimited = url.searchParams.get("unlimited") === "1" || url.searchParams.get("unlimited") === "true";
+    const restrictToSelectedColumns =
+      url.searchParams.get("restrictToSelectedColumns") === "1" ||
+      url.searchParams.get("restrictToSelectedColumns") === "true";
     const sampleRowsParam = parseInt(url.searchParams.get("sampleRows") ?? "0", 10) || 0;
     const sampleRows = unlimited ? MAX_PROFILE_ROWS : Math.min(MAX_PROFILE_ROWS, Math.max(0, sampleRowsParam));
     const dateColumnParam = url.searchParams.get("dateColumn") ?? url.searchParams.get("date_column") ?? "";
@@ -832,9 +867,10 @@ export async function GET(
       return out;
     };
 
-    // Restringir a las columnas elegidas en el ETL (Columnas a incluir) para que Profiling muestre lo mismo que la previsualización del ETL
+    // Por defecto exponemos todas las columnas del dataset para habilitar métricas.
+    // Solo restringimos si el cliente lo solicita explícitamente.
     const sameStr = (a: string, b: string) => a.toLowerCase().trim() === b.toLowerCase().trim();
-    if (selectedColumns && selectedColumns.length > 0 && rawRows.length > 0) {
+    if (restrictToSelectedColumns && selectedColumns && selectedColumns.length > 0 && rawRows.length > 0) {
       rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, selectedColumns));
       if (schemaTypes && schemaTypes.all.length > 0) {
         fields = {
@@ -847,7 +883,7 @@ export async function GET(
         fields = deriveFieldsFromSample(rawRows);
       }
       if (fields.all.length === 0) fields = { all: selectedColumns, numeric: selectedColumns, string: selectedColumns, date: [] };
-    } else {
+    } else if (restrictToSelectedColumns) {
       const columnsFromConfig = (resolved as any).columnsFromConfig as string[] | undefined;
       if (columnsFromConfig?.length && rawRows.length > 0 && fields.all.length > 0) {
         rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, fields.all));
@@ -925,6 +961,7 @@ export async function GET(
         dateColumnPeriodicityOverrides,
         columnDisplay,
         datasetConfig,
+        selectedColumns,
       },
     });
   } catch (error: unknown) {

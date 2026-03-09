@@ -242,6 +242,7 @@ function pgCastExpr(columnIdentifier: string, targetType: CastTargetType) {
 
 const ETL_RETRIES = 3;
 const ETL_RETRY_DELAY_MS = 2000;
+const STALE_RUN_MINUTES = 10;
 
 async function withRetry<T>(
   fn: () => Promise<T>,
@@ -283,6 +284,32 @@ async function ensureRunTerminalState(
   );
 }
 
+/** Cierra runs previos colgados de un ETL para evitar "En progreso" perpetuo en UI. */
+async function markStaleRunsForEtl(
+  supabaseAdmin: any,
+  etlId: string
+): Promise<void> {
+  const threshold = new Date(Date.now() - STALE_RUN_MINUTES * 60 * 1000).toISOString();
+  const { data: staleRows, error } = await supabaseAdmin
+    .from("etl_runs_log")
+    .select("id")
+    .eq("etl_id", etlId)
+    .in("status", ["started", "running"])
+    .lt("started_at", threshold);
+  if (error || !staleRows?.length) return;
+  const ids = staleRows.map((r: { id: string }) => r.id);
+  await supabaseAdmin
+    .from("etl_runs_log")
+    .update({
+      status: "failed",
+      completed_at: new Date().toISOString(),
+      error_message:
+        "Ejecución anterior cerrada automáticamente por timeout/interrupción.",
+    })
+    .in("id", ids)
+    .in("status", ["started", "running"]);
+}
+
 // ===================================================================
 // LÓGICA DE FONDO (BACKGROUND WORKER)
 // ===================================================================
@@ -301,6 +328,7 @@ async function executeEtlPipeline(
   let newTableName = "";
   const completedAt = () => new Date().toISOString();
   let rowsProcessed = 0;
+  const pipelineStartedAt = Date.now();
 
   try {
     const regex = new RegExp("[-:.]", "g");
@@ -1362,7 +1390,11 @@ async function executeEtlPipeline(
                         fromJoin += ` ${jt} JOIN ${jQs[idx]} AS j${idx} ON ${on}`;
                      });
                      
-                     const { clause: starClause, params: starParams } = buildWhereClausePgStar(sqlConditions, (star.joins||[]).length);
+                     const { clause: starClause, params: starParams } = buildWhereClausePgStar(
+                       sqlConditions,
+                       (star.joins || []).length,
+                       true
+                     );
                      const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, starParams.length + 1, "p.", (star.joins||[]).length);
                      const mergedClause = dfClause ? (starClause ? `${starClause} AND ${dfClause}` : `WHERE ${dfClause}`) : starClause;
                      const mergedParams = [...starParams, ...dfParams];
@@ -1422,7 +1454,11 @@ async function executeEtlPipeline(
                       fromJoin += ` ${jt} JOIN ${jQs[idx]} AS j${idx} ON ${on}`;
                   });
                    
-                  const { clause: starClause, params: starParams } = buildWhereClausePgStar(sqlConditions, (star.joins||[]).length);
+                  const { clause: starClause, params: starParams } = buildWhereClausePgStar(
+                    sqlConditions,
+                    (star.joins || []).length,
+                    true
+                  );
                   const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, starParams.length + 1, "p.", (star.joins||[]).length);
                   const mergedClause = dfClause ? (starClause ? `${starClause} AND ${dfClause}` : `WHERE ${dfClause}`) : starClause;
                   const mergedParams = [...starParams, ...dfParams];
@@ -1640,6 +1676,8 @@ async function executeEtlPipeline(
         });
       }
     } catch (_) {}
+    const elapsedMs = Date.now() - pipelineStartedAt;
+    console.log(`[Background Run ${runId}] Finished in ${elapsedMs}ms.`);
   }
 }
 
@@ -1651,6 +1689,7 @@ export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {
   const runId = uuidv4();
+  let runLogInserted = false;
   
   try {
      const body = (await req.json()) as RunBody | null;
@@ -1672,6 +1711,14 @@ export async function POST(req: NextRequest) {
      }
      if (!user) throw new Error("No autorizado");
 
+     if (body.etlId) {
+       try {
+         await markStaleRunsForEtl(supabaseAdmin, body.etlId);
+       } catch (cleanupErr) {
+         console.warn("[ETL] No se pudieron cerrar runs stale al iniciar:", cleanupErr);
+       }
+     }
+
      // 1. Log Initial "started" state
      // We do this BEFORE starting background work to ensure the ID exists for realtime listeners
      // Calculate initial table name (same logic as background, but simple version for log)
@@ -1688,6 +1735,7 @@ export async function POST(req: NextRequest) {
          destination_table_name: cleanTable,
        })
        .throwOnError();
+     runLogInserted = true;
 
      // Guardar configuración del flujo guiado en el ETL para poder cargarla al editar
      if (body.etlId) {
@@ -1735,6 +1783,17 @@ export async function POST(req: NextRequest) {
 
   } catch (err: any) {
      console.error("Error initiating ETL run:", err);
+     if (runLogInserted) {
+       try {
+         const admin = await createServiceRoleClient();
+         await ensureRunTerminalState(admin, runId, "failed", {
+           completed_at: new Date().toISOString(),
+           error_message: (err?.message || "Error al iniciar ETL").slice(0, 500),
+         });
+       } catch (logErr) {
+         console.error("Error marking failed run during initialization:", logErr);
+       }
+     }
      return NextResponse.json(
         { ok: false, error: err?.message || "Error al iniciar ETL" },
         { status: 500 }

@@ -60,6 +60,8 @@ type JoinQueryBody = {
   limit?: number;
   offset?: number;
   count?: boolean;
+  /** exact: total exacto (más lento), fast: evita COUNT pesado */
+  countMode?: "exact" | "fast";
 };
 
 type StarJoin = {
@@ -282,6 +284,24 @@ function buildWhereClausePgStar(conds: FilterCondition[], joinsCount: number) {
   return { clause, params };
 }
 
+function normalizeStarConditions(
+  conds: FilterCondition[],
+  joinsCount: number
+): FilterCondition[] {
+  return conds.map((c) => {
+    const raw = (c.column || "").trim();
+    if (/^primary\./i.test(raw)) return c;
+    const m = raw.match(/^join_(\d+)\.(.+)$/i);
+    if (m) {
+      const idx = Number(m[1]);
+      if (!Number.isNaN(idx) && idx >= 0 && idx < joinsCount) return c;
+    }
+    throw new Error(
+      `Filtro inválido '${raw}'. En JOIN use prefijos explícitos (primary.<col> o join_n.<col>).`
+    );
+  });
+}
+
 function buildWhereClauseMyStar(conds: FilterCondition[], joinsCount: number) {
   const params: any[] = [];
   const parts = conds.map((c) => {
@@ -399,6 +419,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     let { limit, offset } = body;
     if (!limit || limit < 1 || limit > ETL_MAX_ROWS_CEILING) limit = 50;
     if (!offset || offset < 0) offset = 0;
+    const countMode = body.countMode || "fast";
 
     log("Autenticando usuario...");
     const supabase = await createClient();
@@ -616,8 +637,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             fromJoin += ` ${jt} JOIN ${jQualified[idx]} AS j${idx} ON ${on}`;
           });
 
-          const { clause, params } = buildWhereClausePgStar(
+          const normalizedConditions = normalizeStarConditions(
             conditions || [],
+            joins.length
+          );
+          const { clause, params } = buildWhereClausePgStar(
+            normalizedConditions,
             joins.length
           );
           const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(
@@ -645,14 +670,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
           let totalOut: number | undefined = undefined;
           if (count) {
-            const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${mergedClause}`;
-            log("Ejecutando consulta de conteo de Excel:", {
-              sql: countSql,
-              params: mergedParams,
-            });
-            const cntRes = await client.query(countSql, mergedParams);
-            totalOut = cntRes.rows?.[0]?.c ?? 0;
-            log(`Conteo de Excel ejecutado, total: ${totalOut}.`);
+            if (countMode === "exact") {
+              const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${mergedClause}`;
+              log("Ejecutando consulta de conteo de Excel:", {
+                sql: countSql,
+                params: mergedParams,
+              });
+              const cntRes = await client.query(countSql, mergedParams);
+              totalOut = cntRes.rows?.[0]?.c ?? 0;
+              log(`Conteo de Excel ejecutado, total: ${totalOut}.`);
+            } else {
+              const rowsLen = resDb.rows?.length ?? 0;
+              totalOut = rowsLen < (limit ?? 0) ? (offset ?? 0) + rowsLen : undefined;
+            }
           }
           return NextResponse.json({
             ok: true,
@@ -783,8 +813,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             fromJoin += ` ${jt} JOIN ${jQualified[idx]} AS j${idx} ON ${on}`;
           });
 
-          const { clause, params } = buildWhereClausePgStar(
+          const normalizedConditions = normalizeStarConditions(
             conditions || [],
+            joins.length
+          );
+          const { clause, params } = buildWhereClausePgStar(
+            normalizedConditions,
             joins.length
           );
           const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(
@@ -812,14 +846,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
           let totalOut: number | undefined = undefined;
           if (count) {
-            const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${mergedClause}`;
-            log("Ejecutando consulta de conteo en PostgreSQL:", {
-              sql: countSql,
-              params: mergedParams,
-            });
-            const cntRes = await client.query(countSql, mergedParams);
-            totalOut = cntRes.rows?.[0]?.c ?? 0;
-            log(`Consulta de conteo ejecutada, total: ${totalOut}.`);
+            if (countMode === "exact") {
+              const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${mergedClause}`;
+              log("Ejecutando consulta de conteo en PostgreSQL:", {
+                sql: countSql,
+                params: mergedParams,
+              });
+              const cntRes = await client.query(countSql, mergedParams);
+              totalOut = cntRes.rows?.[0]?.c ?? 0;
+              log(`Consulta de conteo ejecutada, total: ${totalOut}.`);
+            } else {
+              const rowsLen = resDb.rows?.length ?? 0;
+              totalOut = rowsLen < (limit ?? 0) ? (offset ?? 0) + rowsLen : undefined;
+            }
           }
           return NextResponse.json({
             ok: true,

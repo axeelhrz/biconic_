@@ -327,7 +327,8 @@ export function buildWhereClauseFirebird(conds: FilterCondition[] = []) {
 // Star schema WHERE (primary./join_i.) for Postgres
 export function buildWhereClausePgStar(
   conds: FilterCondition[] = [],
-  joinsCount: number
+  joinsCount: number,
+  strictPrefixed = false
 ) {
   const params: any[] = [];
   const parts = conds.map((c) => {
@@ -342,7 +343,14 @@ export function buildWhereClausePgStar(
       if (!Number.isNaN(idx) && idx >= 0 && idx < joinsCount)
         col = `j${idx}.${quoteIdent(name, "postgres")}`;
       else col = quoteIdent(raw, "postgres");
-    } else col = quoteIdent(raw, "postgres");
+    } else {
+      if (strictPrefixed) {
+        throw new Error(
+          `Filtro '${raw}' sin prefijo en JOIN. Use primary.<col> o join_n.<col>.`
+        );
+      }
+      col = quoteIdent(raw, "postgres");
+    }
     switch (c.operator) {
       case "is null":
         return `${col} IS NULL`;
@@ -384,7 +392,8 @@ export function buildWhereClausePgStar(
 // Star schema WHERE for MySQL
 export function buildWhereClauseMyStar(
   conds: FilterCondition[] = [],
-  joinsCount: number
+  joinsCount: number,
+  strictPrefixed = false
 ) {
   const params: any[] = [];
   const parts = conds.map((c) => {
@@ -399,7 +408,14 @@ export function buildWhereClauseMyStar(
       if (!Number.isNaN(idx) && idx >= 0 && idx < joinsCount)
         col = `j${idx}.${quoteIdent(name, "mysql")}`;
       else col = quoteIdent(raw, "mysql");
-    } else col = quoteIdent(raw, "mysql");
+    } else {
+      if (strictPrefixed) {
+        throw new Error(
+          `Filtro '${raw}' sin prefijo en JOIN. Use primary.<col> o join_n.<col>.`
+        );
+      }
+      col = quoteIdent(raw, "mysql");
+    }
     switch (c.operator) {
       case "is null":
         return `${col} IS NULL`;

@@ -44,6 +44,8 @@ type CountQueryBody = {
   limit?: number;
   offset?: number;
   count?: boolean;
+  /** exact: total exacto (más lento), fast: evita COUNT pesado en joins grandes */
+  countMode?: "exact" | "fast";
   join?: {
     primaryConnectionId: string | number;
     primaryTable: string;
@@ -87,6 +89,7 @@ function resolveColumnPg(
   knownColumns: string[] = []
 ): string {
   let clean = col.replace(/"/g, "");
+  const hasJoinAliases = Object.keys(aliases).some((k) => k.startsWith("join_"));
 
   // 1. Si ya tiene prefijo explícito, lo resolvemos directamente
   if (clean.startsWith("primary.") || clean.startsWith("primary_")) {
@@ -105,11 +108,11 @@ function resolveColumnPg(
   // 2. Si no tiene prefijo, buscamos en la lista de columnas conocidas (body.columns)
   // Ejemplo: si busco "categoria_es" y en columns existe "join_3.categoria_es"
   if (knownColumns && knownColumns.length > 0) {
-    const match = knownColumns.find(
+    const matches = knownColumns.filter(
       (k) => k.endsWith(`.${clean}`) || k.endsWith(`_${clean}`)
     );
-
-    if (match) {
+    if (matches.length === 1) {
+      const match = matches[0];
       console.log(
         `[DEBUG RESOLVE] Auto-detectando tabla para '${clean}' -> '${match}'`
       );
@@ -118,9 +121,19 @@ function resolveColumnPg(
         return resolveColumnPg(match, aliases, []);
       }
     }
+    if (matches.length > 1) {
+      throw new Error(
+        `Columna ambigua '${clean}'. Use prefijo explícito (primary.${clean} o join_n.${clean}).`
+      );
+    }
   }
 
-  // 3. Fallback: Asumir tabla primaria
+  // 3. Fallback estricto cuando hay joins para evitar filtros incorrectos.
+  if (hasJoinAliases) {
+    throw new Error(
+      `Columna '${clean}' sin prefijo en contexto JOIN. Use primary.${clean} o join_n.${clean}.`
+    );
+  }
   return `${aliases.primary}."${clean.replace(/"/g, '""')}"`;
 }
 
@@ -225,6 +238,7 @@ function buildWhereClauseMy(conds: FilterCondition[]) {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
+    const startedAt = Date.now();
     const body = (await req.json()) as CountQueryBody | null;
 
     if (!body)
@@ -249,6 +263,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       limit,
       offset,
       count,
+      countMode,
       join,
       columns, // Importante: Usamos esto para resolver ambigüedades
     } = body;
@@ -402,15 +417,32 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
         let total: number | undefined = undefined;
         if (count) {
-          const cntRes = await client.query(
-            `SELECT COUNT(*)::int as c FROM (
-                SELECT 1 FROM ${sqlFrom} ${clause} GROUP BY ${attrCol}
-            ) sub`,
-            params
-          );
-          total = cntRes.rows?.[0]?.c ?? undefined;
+          const effectiveMode = countMode || "fast";
+          if (effectiveMode === "exact") {
+            try {
+              await client.query(`SET statement_timeout = '5000ms'`);
+              const cntRes = await client.query(
+                `SELECT COUNT(*)::int as c FROM (
+                    SELECT 1 FROM ${sqlFrom} ${clause} GROUP BY ${attrCol}
+                ) sub`,
+                params
+              );
+              total = cntRes.rows?.[0]?.c ?? undefined;
+            } catch {
+              total = undefined;
+            } finally {
+              try {
+                await client.query(`SET statement_timeout = DEFAULT`);
+              } catch {}
+            }
+          } else {
+            // Fast mode: evita subquery de count en joins pesados.
+            const rowsLen = res.rows?.length ?? 0;
+            total = rowsLen < (limit ?? 0) ? (offset ?? 0) + rowsLen : undefined;
+          }
         }
 
+        console.log("[COUNT API - JOIN] elapsedMs=", Date.now() - startedAt);
         return NextResponse.json({ ok: true, rows: res.rows, total });
       } catch (e: any) {
         console.error("[COUNT API - JOIN ERROR]", e);
@@ -514,14 +546,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
         let totalOut: number | undefined = undefined;
         if (count) {
-          const cntRes = await client.query(
-            `SELECT COUNT(*)::int as c FROM (
-              SELECT 1 FROM ${fullTable} ${clause} GROUP BY ${attr}
-            ) sub`,
-            params
-          );
-          totalOut = cntRes.rows?.[0]?.c ?? undefined;
+          const effectiveMode = countMode || "fast";
+          if (effectiveMode === "exact") {
+            const cntRes = await client.query(
+              `SELECT COUNT(*)::int as c FROM (
+                SELECT 1 FROM ${fullTable} ${clause} GROUP BY ${attr}
+              ) sub`,
+              params
+            );
+            totalOut = cntRes.rows?.[0]?.c ?? undefined;
+          } else {
+            const rowsLen = (resDb.rows as any[])?.length ?? 0;
+            totalOut = rowsLen < (limit ?? 0) ? (offset ?? 0) + rowsLen : undefined;
+          }
         }
+        console.log("[COUNT API - EXCEL] elapsedMs=", Date.now() - startedAt);
         return NextResponse.json({
           ok: true,
           rows: resDb.rows,
@@ -601,14 +640,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
         let total: number | undefined = undefined;
         if (count) {
-          const cntRes = await client.query(
-            `SELECT COUNT(*)::int as c FROM (
-              SELECT 1 FROM ${fullTable} ${clause} GROUP BY ${attr}
-            ) sub`,
-            params
-          );
-          total = cntRes.rows?.[0]?.c ?? undefined;
+          const effectiveMode = countMode || "fast";
+          if (effectiveMode === "exact") {
+            const cntRes = await client.query(
+              `SELECT COUNT(*)::int as c FROM (
+                SELECT 1 FROM ${fullTable} ${clause} GROUP BY ${attr}
+              ) sub`,
+              params
+            );
+            total = cntRes.rows?.[0]?.c ?? undefined;
+          } else {
+            const rowsLen = res.rows?.length ?? 0;
+            total = rowsLen < (limit ?? 0) ? (offset ?? 0) + rowsLen : undefined;
+          }
         }
+        console.log("[COUNT API - PG] elapsedMs=", Date.now() - startedAt);
         return NextResponse.json({ ok: true, rows: res.rows, total });
       } catch (e) {
         console.error("[COUNT API - PG ERROR]", e);
@@ -670,14 +716,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
         let total: number | undefined = undefined;
         if (count) {
-          const [cnt] = await connection.execute(
-            `SELECT COUNT(*) as c FROM (
-              SELECT 1 FROM ${fullTable} ${clause} GROUP BY ${attr}
-            ) sub`,
-            params
-          );
-          total = Array.isArray(cnt) ? (cnt as any)[0]?.c : undefined;
+          const effectiveMode = countMode || "fast";
+          if (effectiveMode === "exact") {
+            const [cnt] = await connection.execute(
+              `SELECT COUNT(*) as c FROM (
+                SELECT 1 FROM ${fullTable} ${clause} GROUP BY ${attr}
+              ) sub`,
+              params
+            );
+            total = Array.isArray(cnt) ? (cnt as any)[0]?.c : undefined;
+          } else {
+            const rowsLen = Array.isArray(rows) ? rows.length : 0;
+            total = rowsLen < (limit ?? 0) ? (offset ?? 0) + rowsLen : undefined;
+          }
         }
+        console.log("[COUNT API - MYSQL] elapsedMs=", Date.now() - startedAt);
         return NextResponse.json({ ok: true, rows, total });
       } finally {
         await connection.end();

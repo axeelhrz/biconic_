@@ -8585,18 +8585,6 @@ function EndRunButton({
       } else {
         // upstream is multi-join (star schema) -> fallback to legacy when only one join
         const j = (upstreamNode as any).join || ({} as any);
-        const allSelected = filterNode!.filter?.columns || [];
-        const primarySelected = allSelected
-          .filter((c) => c.startsWith("primary."))
-          .map((c) => c.slice("primary.".length));
-        const joinsSelected: Record<string, string[]> = {};
-        (j.joins || []).forEach((jn: any, idx: number) => {
-          const prefix = `join_${idx}.`;
-          joinsSelected[jn.id] = allSelected
-            .filter((c) => c.startsWith(prefix))
-            .map((c) => c.slice(prefix.length));
-        });
-        
         if (j.joins?.length === 1) {
           const only = j.joins[0];
           payload = {
@@ -8615,15 +8603,11 @@ function EndRunButton({
                   joinType: only.joinType || "INNER",
                 },
               ],
-              leftColumns: primarySelected.length
-                ? primarySelected
-                : (j.primaryColumns as string[] | undefined),
-              rightColumns: joinsSelected[only.id]?.length
-                ? joinsSelected[only.id]
-                : (only.secondaryColumns as string[] | undefined),
+              // En ejecución real priorizamos columnas completas del JOIN para métricas.
+              leftColumns: (j.primaryColumns as string[] | undefined),
+              rightColumns: (only.secondaryColumns as string[] | undefined),
             },
             filter: {
-              columns: allSelected,
               conditions: filterNode!.filter?.conditions || [],
               ...(filterNode!.filter?.dateFilter?.column && {
                 dateFilter: {
@@ -8643,9 +8627,8 @@ function EndRunButton({
             join: {
               primaryConnectionId: j.primaryConnectionId,
               primaryTable: j.primaryTable,
-              primaryColumns: primarySelected.length
-                ? primarySelected
-                : (j.primaryColumns as string[] | undefined),
+              // En ejecución real priorizamos columnas completas del JOIN para métricas.
+              primaryColumns: (j.primaryColumns as string[] | undefined),
               joins: (j.joins || []).map((jn: any) => ({
                 id: jn.id,
                 secondaryConnectionId: jn.secondaryConnectionId,
@@ -8653,13 +8636,10 @@ function EndRunButton({
                 joinType: jn.joinType,
                 primaryColumn: jn.primaryColumn,
                 secondaryColumn: jn.secondaryColumn,
-                secondaryColumns: joinsSelected[jn.id]?.length
-                  ? joinsSelected[jn.id]
-                  : (jn.secondaryColumns as string[] | undefined),
+                secondaryColumns: (jn.secondaryColumns as string[] | undefined),
               })),
             },
             filter: {
-              columns: allSelected,
               conditions: filterNode!.filter?.conditions || [],
               ...(filterNode!.filter?.dateFilter?.column && {
                 dateFilter: {
