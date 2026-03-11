@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { getEtlForPreview, updateEtlAdmin } from "@/app/admin/(main)/etl/actions";
 import { getConnections } from "@/lib/actions/connections";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -158,7 +159,7 @@ export default function EditEtlModal({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ connectionId }),
     })
-      .then((r) => r.json())
+      .then((r) => safeJsonResponse<{ metadata?: { tables?: { schema: string; name: string }[] }; error?: string }>(r))
       .then((res) => {
         if (res?.metadata?.tables) setTables(res.metadata.tables);
         else setTables([]);
@@ -178,7 +179,7 @@ export default function EditEtlModal({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ connectionId, tableName: table }),
     })
-      .then((r) => r.json())
+      .then((r) => safeJsonResponse<{ metadata?: { tables?: { columns?: { name: string }[] }[] }; error?: string }>(r))
       .then((res) => {
         if (res?.metadata?.tables?.[0]?.columns) {
           const cols = (res.metadata.tables[0].columns as { name: string }[]).map((c) => c.name);
@@ -244,7 +245,7 @@ export default function EditEtlModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ etlId, guidedConfig }),
       });
-      const json = await resConfig.json();
+      const json = await safeJsonResponse(resConfig);
       if (!json.ok) {
         toast.error(json.error ?? "Error al guardar configuración");
         return;

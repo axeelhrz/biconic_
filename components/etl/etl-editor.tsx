@@ -23,6 +23,8 @@ import {
 } from "chart.js";
 import { Bar, Line, Pie } from "react-chartjs-2";
 
+import { safeJsonResponse } from "@/lib/safe-json-response";
+
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -864,12 +866,12 @@ export function ETLEditor({
       try {
         setMetaLoading(true);
         const res = await fetchMetadataWithTimeout(selected.connectionId);
-        const data = await res.json();
+        const data = await safeJsonResponse(res);
         if (!res.ok || !data.ok) {
           throw new Error(data?.error || "No se pudo obtener metadata");
         }
         if (!abort) {
-          setConnMeta(data.metadata);
+          setConnMeta((data as { metadata?: NonNullable<typeof connMeta> }).metadata ?? null);
         }
       } catch (e: any) {
         if (!abort) {
@@ -994,11 +996,11 @@ export function ETLEditor({
       try {
         if (!connWidget.connectionId) return;
         const res = await fetchMetadataWithTimeout(connWidget.connectionId);
-        const data = await res.json();
+        const data = await safeJsonResponse(res);
         if (!res.ok || !data.ok)
           throw new Error(data?.error || "No se pudo obtener metadata");
         if (!abort)
-          setMetaByNode((m) => ({ ...m, [connWidget.id]: data.metadata }));
+          setMetaByNode((m) => ({ ...m, [connWidget.id]: (data as { metadata?: DbMetadata }).metadata! }));
       } catch (e: any) {
         if (!abort)
           setFilterMetaError(
@@ -1039,11 +1041,11 @@ export function ETLEditor({
             if (!metaByNode[key]) {
               try {
                 const res = await fetchMetadataWithTimeout(conn.id);
-                const data = await res.json();
+                const data = await safeJsonResponse(res);
                 if (!res.ok || !data.ok)
                   throw new Error(data?.error || "No se pudo obtener metadata");
                 if (!abort)
-                  setMetaByNode((m) => ({ ...m, [key]: data.metadata }));
+                  setMetaByNode((m) => ({ ...m, [key]: (data as { metadata?: DbMetadata }).metadata! }));
               } catch (e: any) {
                 if (!abort)
                   setFilterMetaError(
@@ -1074,11 +1076,11 @@ export function ETLEditor({
       setLoadingColumnsFor(qualifiedName);
       try {
         const res = await fetchMetadataWithTimeout(connectionId, qualifiedName);
-        const data = await res.json();
-        if (!res.ok || !data.ok || !data.metadata?.tables?.length) {
+        const data = await safeJsonResponse(res);
+        if (!res.ok || !data.ok || !(data as { metadata?: DbMetadata }).metadata?.tables?.length) {
           return;
         }
-        const tableWithCols = data.metadata.tables[0];
+        const tableWithCols = (data as { metadata: DbMetadata }).metadata.tables[0];
         const mergeColumnsIntoMeta = (prev: DbMetadata | null): DbMetadata | null => {
           if (!prev?.tables) return prev;
           return {
@@ -4773,11 +4775,11 @@ export function ETLEditor({
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify(payload),
                           });
-                          const data = await res.json();
+                          const data = await safeJsonResponse(res);
                           if (!res.ok || !data.ok) {
                             throw new Error(data?.error || "Error al detectar tipos");
                           }
-                          const inferred = data.inferredTypes || [];
+                          const inferred = Array.isArray(data.inferredTypes) ? data.inferredTypes : [];
                           if (inferred.length === 0) {
                             setCastDetectError("No se obtuvieron filas para inferir tipos.");
                             return;
@@ -4785,7 +4787,7 @@ export function ETLEditor({
                           setCasts(
                             inferred.map((t: { column: string; inferredType: string }) => ({
                               column: t.column,
-                              targetType: t.inferredType,
+                              targetType: t.inferredType as "string" | "number" | "boolean" | "date" | "integer" | "decimal" | "datetime",
                               inputFormat: null,
                               outputFormat: null,
                             }))
@@ -6227,7 +6229,7 @@ export function ETLEditor({
                                     headers: { "Content-Type": "application/json" },
                                     body: JSON.stringify({ runId: activeRunId }),
                                   });
-                                  const data = await res.json().catch(() => ({}));
+                                  const data = await safeJsonResponse(res);
                                   if (res.ok && data.ok) {
                                     toast.success("Run marcado como fallido.");
                                     setActiveRunStatus("failed");
@@ -6635,13 +6637,8 @@ function FilterExportExcelButton({
       }
 
       if (!res.ok) {
-        // Try to parse JSON error
-        try {
-          const data = await res.json();
-          throw new Error(data?.error || "Error exportando Excel");
-        } catch (_) {
-          throw new Error("Error exportando Excel");
-        }
+        const data = await safeJsonResponse(res);
+        throw new Error(data?.error || "Error exportando Excel");
       }
 
       // Get filename from header if present
@@ -6952,18 +6949,17 @@ function FilterPreviewButton({
             count: true,
           }),
         });
-        const data = await res.json();
+        const data = await safeJsonResponse(res);
         if (!res.ok || !data.ok)
            throw new Error(data?.error || "Error al leer JOIN");
            
         setPreviewData({
-          rows: data.rows || [],
-          total: data.total,
- 
+          rows: Array.isArray(data.rows) ? data.rows : [],
+          total: typeof data.total === "number" ? data.total : undefined,
           sourceNodeId: widget.id,
           pageSize: pageSize,
         });
-        addLog("Success", `Vista previa generada: ${(data.rows || []).length} filas (Filter)`);
+        addLog("Success", `Vista previa generada: ${(Array.isArray(data.rows) ? data.rows : []).length} filas (Filter)`);
         setActiveTab("Data");
 
       } else {
@@ -6992,7 +6988,7 @@ function FilterPreviewButton({
           }),
         });
 
-        const data = await res.json();
+        const data = await safeJsonResponse(res);
         if (!res.ok || !data.ok)
           throw new Error(data?.error || "Error al leer datos");
 
@@ -7002,7 +6998,7 @@ function FilterPreviewButton({
             const parts = c.split(".");
             return parts[parts.length - 1];
         });
-        const pruned = (data.rows || []).map((row: any) => {
+        const pruned = (Array.isArray(data.rows) ? data.rows : []).map((row: any) => {
           if (aliasKeys.length === 0) return row;
           const out: Record<string, any> = {};
           for (const k of aliasKeys) {
@@ -7013,8 +7009,8 @@ function FilterPreviewButton({
 
         setPreviewData({
           rows: pruned,
-          total: data.total,
-        sourceNodeId: widget.id,
+          total: typeof data.total === "number" ? data.total : undefined,
+          sourceNodeId: widget.id,
           pageSize: pageSize,
         });
         addLog("Success", `Vista previa generada: ${pruned.length} filas (Filter)`);
@@ -7203,7 +7199,7 @@ function CountPreviewButton({
           body: JSON.stringify(payload),
         });
 
-        const data = await res.json();
+        const data = await safeJsonResponse(res);
         if (!res.ok || !data.ok)
            throw new Error(data?.error || "Error de conteo");
            
@@ -7233,7 +7229,7 @@ function CountPreviewButton({
         // Just keeping existing pruning logic + resultCol is likely safe.
         
         const aliasKeys = [...aliasKeysBase, resultCol];
-        const pruned = (data.rows || []).map((row: any) => {
+        const pruned = (Array.isArray(data.rows) ? data.rows : []).map((row: any) => {
            if (aliasKeys.length <= 1 && aliasKeysBase.length === 0) return row; 
            const out: Record<string, any> = {};
            for (const k of aliasKeys) if (k in row) out[k] = row[k];
@@ -7446,7 +7442,7 @@ function ArithmeticPreviewButton({
              body: JSON.stringify(payload),
           });
 
-          const json = await res.json();
+          const json = await safeJsonResponse(res);
           if (!res.ok) {
              throw new Error(json.error || "Error en consulta aritmética (JOIN)");
           }
@@ -7474,7 +7470,7 @@ function ArithmeticPreviewButton({
             }),
          });
 
-         const json = await res.json();
+         const json = await safeJsonResponse(res);
          if (!res.ok) {
             throw new Error(json.error || "Error en consulta aritmética");
          }
@@ -7491,7 +7487,7 @@ function ArithmeticPreviewButton({
       );
       const conditionCols = collectedRules.map((r: any) => r.resultColumn);
       const aliasKeys = [...new Set([...aliasKeysBase, ...resultCols, ...conditionCols])];
-      const pruned = (data.rows || []).map((row: any) => {
+      const pruned = (Array.isArray(data.rows) ? data.rows : []).map((row: any) => {
         if (aliasKeys.length === 0) return row;
         const out: Record<string, any> = {};
         for (const k of aliasKeys) if (k in row) out[k] = row[k];
@@ -7624,7 +7620,7 @@ function ConditionPreviewButton({
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const data = await safeJsonResponse(res);
       if (!res.ok || !data.ok)
         throw new Error(
           data?.error || "No se pudo ejecutar la consulta de condiciones"
@@ -7644,7 +7640,7 @@ function ConditionPreviewButton({
       );
       
       const aliasKeys = [...new Set([...aliasKeysBase, ...ruleCols, ...upstreamRuleCols, ...arithCols])];
-      const pruned = (data.rows || []).map((row: any) => {
+      const pruned = (Array.isArray(data.rows) ? data.rows : []).map((row: any) => {
         if (aliasKeys.length === 0) return row;
         const out: Record<string, any> = {};
         for (const k of aliasKeys) if (k in row) out[k] = row[k];
@@ -7788,7 +7784,7 @@ function CastPreviewButton({
           body: JSON.stringify(payload),
         });
 
-        const data = await res.json();
+        const data = await safeJsonResponse(res);
         if (!res.ok || !data.ok)
            throw new Error(data?.error || "Error al obtener datos para cast");
 
@@ -7812,7 +7808,7 @@ function CastPreviewButton({
         const aliasKeys = Array.from(keysToKeep);
 
         // Map rows
-        const processedRows = (data.rows || []).map((row: any) => {
+        const processedRows = (Array.isArray(data.rows) ? data.rows : []).map((row: any) => {
             const out: Record<string, any> = {};
             if (aliasKeys.length === 0 && !filterNode?.filter?.columns?.length) {
                 Object.assign(out, row);
@@ -7986,20 +7982,20 @@ function JoinPreviewButton({ widget }: { widget: Widget }) {
         }),
       });
 
-      const data = await res.json();
+      const data = await safeJsonResponse(res);
       if (!res.ok || !data.ok)
         throw new Error(
           data?.error || "No se pudo ejecutar la consulta JOIN"
         );
 
       setPreviewData({
-        rows: data.rows || [],
+        rows: Array.isArray(data.rows) ? data.rows : [],
         total: typeof data.total === "number" ? data.total : undefined,
         sourceNodeId: widget.id,
         pageSize: pageSize,
       });
 
-      addLog("Success", `Vista previa generada: ${(data.rows || []).length} filas (JOIN)`);
+      addLog("Success", `Vista previa generada: ${(Array.isArray(data.rows) ? data.rows : []).length} filas (JOIN)`);
       setActiveTab("Data");
 
     } catch (e: any) {
@@ -8295,14 +8291,14 @@ function EndPreviewButton({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const data = await safeJsonResponse(res);
       if (!res.ok || !data.ok)
         throw new Error(data?.error || "Error al generar vista previa");
       
-      setRows(data.previewRows || []);
+      setRows(Array.isArray(data.previewRows) ? data.previewRows : []);
       setQueryInfo({
-        extractionQuery: data.extractionQuery,
-        transformationSteps: data.transformationSteps,
+        extractionQuery: typeof data.extractionQuery === "string" ? data.extractionQuery : undefined,
+        transformationSteps: Array.isArray(data.transformationSteps) ? data.transformationSteps : undefined,
       });
     } catch (e: any) {
       const msg = e?.message || "Error al generar vista previa";

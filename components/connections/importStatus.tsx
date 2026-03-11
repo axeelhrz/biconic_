@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
 
@@ -91,12 +92,12 @@ export default function ImportStatus({
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ dataTableId }),
             });
-            const json = await res.json();
+            const json = await safeJsonResponse<{ stale?: boolean; message?: string }>(res);
             if (json?.stale) {
               setStatus({
                 import_status: "failed",
                 total_rows: null,
-                error_message: json?.message || "El procesamiento no completó a tiempo.",
+                error_message: json?.message ?? "El procesamiento no completó a tiempo.",
                 physical_table_name: null,
               });
               setProgress(100);

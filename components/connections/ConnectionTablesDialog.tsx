@@ -10,6 +10,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { createClient } from "@/lib/supabase/client";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
 import { Table2, Loader2, ChevronDown, ChevronUp, CheckSquare, Square } from "lucide-react";
 
@@ -67,7 +68,7 @@ export default function ConnectionTablesDialog({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ connectionId, discoverTables: true }),
-    }).then((r) => r.json());
+    }).then((r) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: TableRow[] }; error?: string }>(r));
 
     Promise.all([loadConnectionTables, loadMetadata])
       .then(([connRes, metaData]) => {

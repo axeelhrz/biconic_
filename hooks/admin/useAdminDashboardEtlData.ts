@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 // import { createClient } from "@/lib/supabase/client"; // Not used directly in fetchData but good to keep if needed later
 
 export interface DashboardDataSource {
@@ -47,13 +48,13 @@ export function useAdminDashboardEtlData(
       const endpoint = `/api/dashboard/${dashboardId}/etl-data`;
 
       const response = await fetch(endpoint);
-      const result = await response.json();
+      const result = await safeJsonResponse<{ data?: ETLDataResponse | null }>(response);
 
       if (!response.ok || !result.ok) {
         throw new Error(result.error || "Error al cargar datos del ETL (Admin)");
       }
 
-      setData(result.data);
+      setData(result.data ?? null);
     } catch (err: any) {
       console.error("Error fetching ETL data:", err);
       setError(err.message || "Error al cargar datos del ETL");

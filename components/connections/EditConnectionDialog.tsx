@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import ConnectionForm from "./ConnectionForm";
 import { createClient } from "@/lib/supabase/client";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
 
 type EditConnectionDialogProps = {
@@ -128,7 +129,7 @@ export default function EditConnectionDialog({
           port: values.port,
         }),
       });
-      const data = await res.json();
+      const data = await safeJsonResponse(res);
       if (!res.ok || !data.ok) {
         throw new Error(data?.error || "Fallo en la prueba de conexión");
       }

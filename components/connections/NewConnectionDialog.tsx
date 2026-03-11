@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { toast } from "sonner";
 import ConnectionForm from "./ConnectionForm";
 import { createClient } from "@/lib/supabase/client";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 type NewConnectionDialogProps = {
@@ -142,7 +143,7 @@ export default function NewConnectionDialog({
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await safeJsonResponse(response);
         throw new Error(
           errorData.error || "El servidor no pudo iniciar el proceso."
         );

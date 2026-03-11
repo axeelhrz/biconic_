@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 
 export interface DashboardDataSource {
   id: string;
@@ -89,13 +90,13 @@ export function useDashboardEtlData(
       }
 
       const response = await fetch(endpoint);
-      const result = await response.json();
+      const result = await safeJsonResponse<{ data?: ETLDataResponse | null }>(response);
 
       if (!response.ok || !result.ok) {
         throw new Error(result.error || "Error al cargar datos del ETL");
       }
 
-      setData(result.data);
+      setData(result.data ?? null);
     } catch (err: any) {
       console.error("Error fetching ETL data:", err);
       setError(err.message || "Error al cargar datos del ETL");

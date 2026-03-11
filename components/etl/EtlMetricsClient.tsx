@@ -37,6 +37,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import type { SavedMetricForm, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
 
 ChartJS.register(
@@ -603,7 +604,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         : `/api/etl/${etlId}/metrics-data?sampleRows=${cappedSample}`;
       if (opts?.bustCache) url += `&_t=${Date.now()}`;
       const res = await fetch(url);
-      const json: MetricsDataResponse = await res.json();
+      const json = await safeJsonResponse<MetricsDataResponse>(res);
       if (!res.ok || !json.ok || !json.data) {
         toast.error(json.data ? "Error al cargar datos" : (json as { error?: string }).error ?? "Error");
         return;
@@ -669,15 +670,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
     setConnectionTablesLoading(true);
     setRelationFormTableKey("");
+    type MetadataRes = { metadata?: { tables?: { schema?: string; name?: string; columns?: { name: string }[] }[] } };
     fetch("/api/connection/metadata", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ connectionId: relationFormConnectionId, discoverTables: true }),
     })
-      .then((r) => r.json())
+      .then((r) => safeJsonResponse<MetadataRes>(r))
       .then((json) => {
         if (json?.metadata?.tables && Array.isArray(json.metadata.tables)) {
-          setConnectionTables(json.metadata.tables);
+          setConnectionTables(
+            json.metadata.tables.map((t) => ({
+              schema: t.schema ?? "",
+              name: t.name ?? "",
+              columns: t.columns ?? [],
+            }))
+          );
         } else {
           setConnectionTables([]);
         }
@@ -688,15 +696,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
   const loadTableColumns = useCallback((connId: string, tableKey: string): Promise<string[]> => {
     if (!tableKey) return Promise.resolve([]);
+    type MetadataRes = { metadata?: { tables?: { schema?: string; name?: string; columns?: { name: string }[] }[] } };
     return fetch("/api/connection/metadata", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ connectionId: connId, tableName: tableKey }),
     })
-      .then((r) => r.json())
+      .then((r) => safeJsonResponse<MetadataRes>(r))
       .then((json) => {
         if (json?.metadata?.tables?.[0]?.columns) {
-          return json.metadata.tables[0].columns.map((c: { name: string }) => c.name);
+          return json.metadata.tables[0].columns.map((c) => c.name);
         }
         return [] as string[];
       })
@@ -831,7 +840,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     if (!etlId || savedMetrics.length === 0) return;
     setDashboardListLoading(true);
     fetch(`/api/dashboard?etl_id=${encodeURIComponent(etlId)}`)
-      .then((r) => r.json())
+      .then((r) => safeJsonResponse(r))
       .then((json) => {
         if (json?.ok && Array.isArray(json.dashboards)) setAvailableDashboards(json.dashboards);
       })
@@ -1229,8 +1238,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     setPreviewLoading(true);
     setPreviewData(null);
     try {
+      type MetricsDataRes = { data?: { schema?: string; tableName?: string; datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation?: string }[]; derived_columns?: { name: string; expression: string; default_aggregation?: string }[] } } };
       const metricsRes = await fetch(`/api/etl/${etlId}/metrics-data`);
-      const metricsJson = await metricsRes.json();
+      const metricsJson = await safeJsonResponse<MetricsDataRes>(metricsRes);
       const freshSchema = metricsJson?.data?.schema;
       const freshTableName = metricsJson?.data?.tableName;
       const tableName = freshSchema && freshTableName ? `${freshSchema}.${freshTableName}` : tableNameForPreview;
@@ -1245,8 +1255,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         freshDerived = ((cfg as { derived_columns: { name: string; expression: string; default_aggregation?: string }[] }).derived_columns).map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.default_aggregation || "SUM" }));
       if (!freshDerived?.length && (formMetrics.some((m) => m.field && !(m as { expression?: string }).expression) || derivedColumns.length > 0)) {
         try {
+          type MetricsApiRes = { data?: { datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation?: string }[] } } };
           const metricsApiRes = await fetch(`/api/etl/${etlId}/metrics`);
-          const metricsApiJson = await metricsApiRes.json();
+          const metricsApiJson = await safeJsonResponse<MetricsApiRes>(metricsApiRes);
           const fromMetrics = metricsApiJson?.data?.datasetConfig?.derivedColumns;
           if (Array.isArray(fromMetrics) && fromMetrics.length > 0) freshDerived = fromMetrics as { name: string; expression: string; defaultAggregation?: string }[];
         } catch {
@@ -1348,7 +1359,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok) {
         const msg = (json?.error ?? "Error al cargar previsualización") as string;
         toast.error(msg);
@@ -1739,7 +1750,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
             ...(etlClientId ? { client_id: etlClientId } : {}),
           }),
         });
-        const createJson = await createRes.json();
+        const createJson = await safeJsonResponse(createRes);
         if (!createRes.ok || !createJson.ok) {
           toast.error("Error al crear el dashboard");
           return;
@@ -1850,7 +1861,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
           title: linkedDashboardName || undefined,
         }),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
         toast.error(json.error ?? "Error al sincronizar dashboard");
         return;
@@ -1981,7 +1992,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
           ...(datasetConfigToSave != null && { datasetConfig: datasetConfigToSave }),
         }),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
         toast.error(json.error ?? "Error al guardar");
         return;
@@ -2044,7 +2055,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ savedMetrics: savedMetrics, datasetConfig: datasetConfigToSave }),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
         toast.error(json.error ?? "Error al crear la columna");
         return;
@@ -2176,7 +2187,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ savedMetrics: next }),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
         toast.error(json.error ?? "Error al guardar la métrica");
         return;
@@ -2200,7 +2211,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ savedMetrics: next }),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
         toast.error(json.error ?? "Error al eliminar");
         return;
@@ -2261,7 +2272,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ savedMetrics: savedMetrics, savedAnalyses: nextAnalyses }),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
         toast.error(json.error ?? "Error al guardar el análisis");
         return;
@@ -2289,7 +2300,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ savedMetrics: savedMetrics, datasetConfig: datasetConfigToSave }),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
         toast.error(json.error ?? "Error al eliminar la columna calculada");
         return;
@@ -2331,7 +2342,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ savedMetrics: savedMetrics, dateColumnPeriodicityOverrides: overrides }),
         });
-        const json = await res.json();
+        const json = await safeJsonResponse(res);
         if (!res.ok || !json.ok) toast.error(json.error ?? "Error al guardar periodicidad");
         else setData((prev) => (prev ? { ...prev, dateColumnPeriodicityOverrides: overrides } : null));
       } catch {
@@ -3495,7 +3506,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                   disablePortal
                                 />
                               )}
-                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const dateLevel = dateFields.includes(f.field) ? (filterDateLevel[f.id] || "year") : undefined; const url = dateLevel ? `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}&dateLevel=${encodeURIComponent(dateLevel)}` : `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`; const res = await fetch(url); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
+                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const dateLevel = dateFields.includes(f.field) ? (filterDateLevel[f.id] || "year") : undefined; const url = dateLevel ? `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}&dateLevel=${encodeURIComponent(dateLevel)}` : `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`; const res = await fetch(url); const data = await safeJsonResponse(res); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values as string[] })); } finally { setFilterFieldLoading(null); } }}>
                                 {filterFieldLoading === f.field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Cargar lista"}
                               </Button>
                               {listValues.length ? (
@@ -3566,7 +3577,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           setMetricsDistinctValues([]);
                           try {
                             const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(metricsDistinctColumn)}`);
-                            const data = await res.json();
+                            const data = await safeJsonResponse(res);
                             if (data.ok && Array.isArray(data.values)) setMetricsDistinctValues(data.values);
                             else toast.error(data?.error || "No se pudieron cargar los valores");
                           } catch (e: unknown) {
@@ -3900,7 +3911,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                   disablePortal
                                 />
                               )}
-                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const dateLevel = dateFields.includes(f.field) ? (filterDateLevel[f.id] || "year") : undefined; const url = dateLevel ? `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}&dateLevel=${encodeURIComponent(dateLevel)}` : `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`; const res = await fetch(url); const data = await res.json(); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values })); } finally { setFilterFieldLoading(null); } }}>
+                              <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} disabled={filterFieldLoading === f.field} onClick={async () => { setFilterFieldLoading(f.field); try { const dateLevel = dateFields.includes(f.field) ? (filterDateLevel[f.id] || "year") : undefined; const url = dateLevel ? `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}&dateLevel=${encodeURIComponent(dateLevel)}` : `/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(f.field)}`; const res = await fetch(url); const data = await safeJsonResponse(res); if (res.ok && Array.isArray(data.values)) setFilterFieldValues((prev) => ({ ...prev, [f.field]: data.values as string[] })); } finally { setFilterFieldLoading(null); } }}>
                                 {filterFieldLoading === f.field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Cargar lista"}
                               </Button>
                               {listValuesC.length ? (
@@ -3944,7 +3955,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Cargá los valores posibles de una columna para elegir mejor al definir filtros.</p>
                     <div className="flex flex-wrap gap-2 items-center">
                       <Select value={metricsDistinctColumn ?? ""} onChange={(val: string) => { const col = val || null; setMetricsDistinctColumn(col); setMetricsDistinctValues([]); setMetricsDistinctSearch(""); }} options={[{ value: "", label: "Elegir columna" }, ...allColumnsForRoles.map((col) => ({ value: col, label: derivedColumnsByName[col] ? `${col} (calculada)` : getSampleDisplayLabel(col) }))]} placeholder="Elegir columna" className="min-w-[160px]" disablePortal />
-                      <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} disabled={!metricsDistinctColumn || metricsDistinctLoading} onClick={async () => { if (!metricsDistinctColumn) return; setMetricsDistinctLoading(true); setMetricsDistinctValues([]); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(metricsDistinctColumn)}`); const data = await res.json(); if (data.ok && Array.isArray(data.values)) setMetricsDistinctValues(data.values); else toast.error(data?.error || "No se pudieron cargar los valores"); } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Error al cargar"); } finally { setMetricsDistinctLoading(false); } }}>{metricsDistinctLoading ? "Cargando…" : "Cargar valores"}</Button>
+                      <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} disabled={!metricsDistinctColumn || metricsDistinctLoading} onClick={async () => { if (!metricsDistinctColumn) return; setMetricsDistinctLoading(true); setMetricsDistinctValues([]); try { const res = await fetch(`/api/etl/${etlId}/distinct-values?column=${encodeURIComponent(metricsDistinctColumn)}`); const data = await safeJsonResponse(res); if (data.ok && Array.isArray(data.values)) setMetricsDistinctValues(data.values); else toast.error(data?.error || "No se pudieron cargar los valores"); } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Error al cargar"); } finally { setMetricsDistinctLoading(false); } }}>{metricsDistinctLoading ? "Cargando…" : "Cargar valores"}</Button>
                     </div>
                     {metricsDistinctValues.length > 0 && metricsDistinctColumn && (
                       <>

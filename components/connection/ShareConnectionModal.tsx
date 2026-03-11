@@ -14,6 +14,7 @@ import {
 import { Separator } from "@radix-ui/react-dropdown-menu";
 import { createClient } from "@/lib/supabase/client";
 import { useUser } from "@/hooks/useUser";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 
 type PermissionItem = {
   id: string;
@@ -68,7 +69,7 @@ export function ShareConnectionModal({
         connectionId
       )}`
     );
-    const json = await res.json();
+    const json = await safeJsonResponse<{ ok?: boolean; error?: string; permissions?: PermissionItem[] }>(res);
     if (!res.ok || !json?.ok)
       throw new Error(json?.error || "Error al obtener permisos");
     const list: PermissionItem[] = json.permissions ?? [];
@@ -222,7 +223,7 @@ export function ShareConnectionModal({
           permissionType: selectedPermission,
         }),
       });
-      const json = await res.json().catch(() => ({}));
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json?.ok) {
         console.error("[ShareConnectionModal] Add permission failed", json);
         // Optionally surface error to user
@@ -252,7 +253,7 @@ export function ShareConnectionModal({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ permissionId, connectionId }),
     });
-    const json = await res.json().catch(() => ({}));
+    const json = await safeJsonResponse(res);
     if (!res.ok || !json?.ok) {
       console.error("[ShareConnectionModal] Remove permission failed", json);
       return;

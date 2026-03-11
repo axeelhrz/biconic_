@@ -10,6 +10,7 @@ import {
 } from "@/types/dashboard";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget, type ChartConfig } from "./DashboardWidgetRenderer";
 import type { ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -457,8 +458,9 @@ export function DashboardViewer({
             body: JSON.stringify(body),
           });
           if (!res.ok) continue;
-          const values = await res.json();
+          const data = await safeJsonResponse(res);
           if (cancelled) break;
+          const values = Array.isArray(data) ? data : (data as { values?: unknown[] })?.values;
           if (Array.isArray(values)) {
             setGlobalFilterDistinctValues((prev) => ({ ...prev, [gf.id]: values }));
           }
@@ -643,8 +645,9 @@ export function DashboardViewer({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(bodyPayload),
           });
-          if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Error aggregate");
-          dataArray = await res.json();
+          const aggData = await safeJsonResponse(res);
+          if (!res.ok) throw new Error(aggData.error || "Error aggregate");
+          dataArray = (Array.isArray(aggData) ? aggData : (aggData as { rows?: Record<string, unknown>[] })?.rows ?? []) as Record<string, unknown>[];
         } else {
           const url = apiEndpoints?.rawData ?? "/api/dashboard/raw-data";
           const res = await fetch(url, {
@@ -656,8 +659,9 @@ export function DashboardViewer({
               limit: aggConfig?.limit ?? 5000,
             }),
           });
-          if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Error raw");
-          dataArray = await res.json();
+          const rawData = await safeJsonResponse(res);
+          if (!res.ok) throw new Error(rawData.error || "Error raw");
+          dataArray = (Array.isArray(rawData) ? rawData : (rawData as { rows?: Record<string, unknown>[] })?.rows ?? []) as Record<string, unknown>[];
         }
 
         if (!Array.isArray(dataArray) || dataArray.length === 0) {

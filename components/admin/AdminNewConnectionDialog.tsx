@@ -7,6 +7,7 @@ import ConnectionForm from "@/components/connections/ConnectionForm";
 import { createClient } from "@/lib/supabase/client";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import ShareConnectionModal from "@/components/connection/ShareConnectionModal";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
@@ -126,10 +127,10 @@ export default function AdminNewConnectionDialog({
           client_id: selectedClientId.trim() || undefined,
         }),
       });
-      const data = await res.json();
+      const data = await safeJsonResponse<{ ok?: boolean; error?: string; data?: { id: string } }>(res);
       if (!data.ok) throw new Error(data.error || "Error al crear la conexión.");
       toast.success("Conexión creada correctamente. Seleccioná las tablas para JOIN y datos.");
-      setCreatedConnectionId(data.data.id);
+      setCreatedConnectionId(data.data?.id ?? "");
       setConnectionNameCreated(values.connectionName);
       setShowTableSelection(true);
       // onCreated se llama al hacer clic en "Listo" para que la tabla se refresque entonces
@@ -158,7 +159,7 @@ export default function AdminNewConnectionDialog({
           port: values.port,
         }),
       });
-      const data = await res.json();
+      const data = await safeJsonResponse(res);
       if (data.ok) {
         toast.success("Conexión exitosa.");
         return true;
@@ -274,7 +275,7 @@ export default function AdminNewConnectionDialog({
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await safeJsonResponse(response);
         throw new Error(
           errorData.error || "El servidor no pudo iniciar el proceso."
         );
@@ -307,10 +308,10 @@ export default function AdminNewConnectionDialog({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ connectionId: createdConnectionId }),
     })
-      .then((r) => r.json())
+      .then((r) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { schema: string; name: string }[] }; error?: string }>(r))
       .then((data) => {
         if (data.ok && Array.isArray(data.metadata?.tables)) {
-          const tables = data.metadata.tables as { schema: string; name: string }[];
+          const tables = data.metadata.tables;
           setTablesFromMetadata(tables);
           setSelectedTableKeys(new Set(tables.map((t) => `${t.schema}.${t.name}`)));
         } else {

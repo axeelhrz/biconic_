@@ -18,6 +18,7 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 
 interface NewDashboardFormData {
   name: string;
@@ -119,7 +120,7 @@ export default function NewDashboardDialog({ children }: NewDashboardDialogProps
         }),
       });
 
-      const result = await response.json();
+      const result = await safeJsonResponse(response);
 
       if (!response.ok || !result?.ok) {
         throw new Error(result?.error || "No se pudo crear el dashboard");

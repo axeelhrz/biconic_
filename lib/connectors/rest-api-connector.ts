@@ -10,6 +10,7 @@ import {
   ConnectorErrorCode,
   ConnectorValidators,
 } from './base-connector';
+import { safeJsonResponse } from '../safe-json-response';
 
 /**
  * Conector para APIs REST
@@ -117,7 +118,10 @@ export class RestApiConnector extends BaseConnector {
         params: { limit: 10, offset: 0 },
       });
 
-      const data = await response.json() as Record<string, unknown>;
+      const data = await safeJsonResponse<Record<string, unknown>>(response) as Record<string, unknown>;
+      if (data && typeof data === 'object' && (data as { ok?: boolean }).ok === false && 'error' in data) {
+        throw new ConnectorError(ConnectorErrorCode.QUERY_FAILED, String((data as { error?: string }).error));
+      }
       const items = this.extractData(data, dataPath);
 
       if (!Array.isArray(items) || items.length === 0) {
@@ -183,7 +187,10 @@ export class RestApiConnector extends BaseConnector {
           params,
         });
 
-        const responseData = await response.json() as Record<string, unknown>;
+        const responseData = await safeJsonResponse<Record<string, unknown>>(response) as Record<string, unknown>;
+        if (responseData && typeof responseData === 'object' && (responseData as { ok?: boolean }).ok === false && 'error' in responseData) {
+          throw new ConnectorError(ConnectorErrorCode.QUERY_FAILED, String((responseData as { error?: string }).error));
+        }
         const items = this.extractData(responseData, dataPath);
 
         if (!Array.isArray(items) || items.length === 0) {
@@ -237,7 +244,10 @@ export class RestApiConnector extends BaseConnector {
         method: 'GET',
       });
 
-      const data = await response.json() as unknown;
+      const data = await safeJsonResponse(response) as unknown;
+      if (data && typeof data === 'object' && (data as { ok?: boolean }).ok === false && 'error' in (data as object)) {
+        throw new ConnectorError(ConnectorErrorCode.QUERY_FAILED, String((data as { error?: string }).error));
+      }
       return Array.isArray(data) ? data : [data as Record<string, unknown>];
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);

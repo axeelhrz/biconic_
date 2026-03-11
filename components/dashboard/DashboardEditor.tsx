@@ -14,6 +14,7 @@ import {
   DEFAULT_DASHBOARD_THEME,
   mergeTheme,
 } from "@/types/dashboard";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
 
 type AggregationFilter = {
@@ -114,7 +115,7 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
     setLayoutLoading(true);
     try {
       const res = await fetch(`/api/dashboard/${dashboardId}/layout`);
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
         setWidgets([]);
         setLayoutLoading(false);
@@ -155,7 +156,7 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
           title,
         }),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) throw new Error(json.error || "Error al guardar");
       toast.success("Diseño guardado");
     } catch (e: any) {

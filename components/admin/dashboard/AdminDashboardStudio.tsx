@@ -16,6 +16,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { useAdminDashboardEtlData } from "@/hooks/admin/useAdminDashboardEtlData";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { searchEtls, addDashboardDataSource, removeDashboardDataSource } from "@/app/admin/(main)/dashboard/actions";
 import {
   type DashboardTheme,
@@ -289,7 +290,7 @@ export function AdminDashboardStudio({
       for (const etlId of etlIds) {
         try {
           const res = await fetch(`/api/etl/${etlId}/metrics`);
-          const json = await res.json();
+          const json = await safeJsonResponse<{ ok?: boolean; data?: { savedMetrics?: unknown[]; savedAnalyses?: unknown[]; datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] } } }>(res);
           if (json.ok && Array.isArray(json.data?.savedMetrics)) {
             all.push(...(json.data.savedMetrics as SavedMetric[]));
           }
@@ -333,7 +334,7 @@ export function AdminDashboardStudio({
       if (etlId) {
         try {
           const metricsRes = await fetch(`/api/etl/${etlId}/metrics`);
-          const metricsJson = await metricsRes.json();
+          const metricsJson = await safeJsonResponse<{ ok?: boolean; data?: { datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] } } }>(metricsRes);
           if (metricsJson?.ok && Array.isArray(metricsJson?.data?.datasetConfig?.derivedColumns) && metricsJson.data.datasetConfig.derivedColumns.length > 0) {
             datasetConfig = { derivedColumns: metricsJson.data.datasetConfig.derivedColumns };
           }
@@ -357,7 +358,7 @@ export function AdminDashboardStudio({
           global_filters_config: globalFilters,
         }),
       });
-      const json = await res.json();
+      const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
         throw new Error(json.error ?? "No se pudo guardar");
       }
@@ -733,7 +734,7 @@ export function AdminDashboardStudio({
               ...(savedMetricsForBody.length > 0 && { savedMetrics: savedMetricsForBody }),
             }),
           });
-          const dataArray = await res.json();
+          const dataArray = await safeJsonResponse(res);
           if (!res.ok) {
             const errMsg = (dataArray && typeof dataArray === "object" && dataArray.error) ? dataArray.error : "Error en agregación";
             throw new Error(typeof errMsg === "string" ? errMsg : "Error en agregación");
@@ -757,7 +758,7 @@ export function AdminDashboardStudio({
             body: JSON.stringify({ tableName, filters, limit: 500 }),
           });
           if (!res.ok) throw new Error("Error al cargar datos");
-          const dataArray = await res.json();
+          const dataArray = await safeJsonResponse(res);
           if (!Array.isArray(dataArray) || dataArray.length === 0) {
             setWidgets((prev) =>
               prev.map((w) =>

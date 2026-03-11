@@ -28,6 +28,7 @@ import {
 import { Connection as ServerConnection } from "@/components/connections/ConnectionsCard";
 import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 
 const STEPS = [
   { id: "conexion", label: "Conexión", icon: Link2 },
@@ -426,7 +427,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     let cancelled = false;
     setLoadingMeta(true);
     fetchMetadata(connectionId)
-      .then((res) => res.json())
+      .then((res) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { schema: string; name: string; columns: { name: string }[] }[] }; error?: string }>(res))
       .then((data) => {
         if (cancelled || !data.ok || !data.metadata?.tables) return;
         setTables(data.metadata.tables || []);
@@ -544,7 +545,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ connectionId, table: selectedTable, column: distinctColumn }),
     })
-      .then((res) => res.json())
+      .then((res) => safeJsonResponse(res))
       .then((data) => {
         if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
         else if (data?.error) toast.error(data.error);
@@ -559,7 +560,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (!connectionId || !selectedTable) return;
     setLoadingColumns(selectedTable);
     fetchMetadata(connectionId, selectedTable)
-      .then((res) => res.json())
+      .then((res) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { schema: string; name: string; columns?: { name: string; dataType?: string }[] }[] }; error?: string }>(res))
       .then(async (data) => {
         if (!data.ok || !data.metadata?.tables?.length) {
           setLoadingColumns(null);
@@ -581,7 +582,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ connectionId, tableName: selectedTable }),
           });
-          const inferJson = await inferRes.json();
+          const inferJson = await safeJsonResponse(inferRes);
           if (inferJson.ok && inferJson.columnTypes && typeof inferJson.columnTypes === "object") {
             const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
             const getInferred = (colName: string) =>
@@ -634,7 +635,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ connectionId, tableName: selectedTable }),
     })
-      .then((res) => res.json())
+      .then((res) => safeJsonResponse<{ ok?: boolean; columnTypes?: Record<string, string>; error?: string }>(res))
       .then((inferJson) => {
         if (!inferJson.ok || !inferJson.columnTypes || typeof inferJson.columnTypes !== "object") return;
         const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
@@ -678,7 +679,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (item.availableColumns?.length) return;
       try {
         const res = await fetchMetadata(item.connectionId, item.table);
-        const data = await res.json();
+        const data = await safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { columns?: { name: string }[] }[] }; error?: string }>(res);
         const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
         setUnionRightItems((prev) =>
           prev.map((it, i) => (i === index ? { ...it, availableColumns: colNames.map((n: string) => ({ name: n })) } : it))
@@ -697,7 +698,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (item.availableColumns?.length) return;
       try {
         const res = await fetchMetadata(item.connectionId, item.table);
-        const data = await res.json();
+        const data = await safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { columns?: { name: string }[] }[] }; error?: string }>(res);
         const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
         setJoinItems((prev) =>
           prev.map((it, i) => (i === index ? { ...it, availableColumns: colNames.map((n: string) => ({ name: n })) } : it))
@@ -721,7 +722,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     let cancelled = false;
     setLoadingUnionMeta(true);
     fetchMetadata(unionRightConnectionId)
-      .then((res) => res.json())
+      .then((res) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { schema: string; name: string; columns?: { name: string }[] }[] }; error?: string }>(res))
       .then((data) => {
         if (cancelled || !data.ok || !data.metadata?.tables) return;
         setUnionRightTables(data.metadata.tables || []);
@@ -742,7 +743,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     let cancelled = false;
     setLoadingJoinMeta(true);
     fetchMetadata(joinSecondaryConnectionId)
-      .then((res) => res.json())
+      .then((res) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { schema: string; name: string; columns?: { name: string }[] }[] }; error?: string }>(res))
       .then((data) => {
         if (cancelled || !data.ok || !data.metadata?.tables) return;
         setJoinRightTables(data.metadata.tables || []);
@@ -851,13 +852,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     }
     // Pedir columnas si la tabla no las trae
     fetchMetadata(joinSecondaryConnectionId, joinSecondaryTable)
-      .then((res) => res.json())
+      .then((res) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { columns?: { name: string }[] }[] }; error?: string }>(res))
       .then((data) => {
         if (!data.ok || !data.metadata?.tables?.[0]?.columns) return;
         const cols = data.metadata.tables[0].columns.map((c: { name: string }) => c.name);
         setJoinRightTables((prev) =>
           prev.map((t) =>
-            `${t.schema}.${t.name}` === joinSecondaryTable ? { ...t, columns: data.metadata.tables[0].columns } : t
+            `${t.schema}.${t.name}` === joinSecondaryTable ? { ...t, columns: data.metadata?.tables?.[0]?.columns ?? [] } : t
           )
         );
         setJoinRightColumns(cols);
@@ -1084,7 +1085,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             throw new Error(errMsg);
           });
         }
-        return res.json();
+        return safeJsonResponse(res);
       })
       .then((data) => {
         if (data.ok && Array.isArray(data.previewRows)) {
@@ -1167,7 +1168,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ etlId, guidedConfig }),
       });
-      const data = await res.json();
+      const data = await safeJsonResponse(res);
       if (!res.ok || !data.ok) {
         toast.error(data?.error || "Error al guardar");
         return false;
@@ -1736,7 +1737,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 if (!unionRightConnectionId || !unionRightTable) return;
                                 try {
                                   const res = await fetchMetadata(unionRightConnectionId, unionRightTable);
-                                  const data = await res.json();
+                                  const data = await safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { columns?: { name: string }[] }[] }; error?: string }>(res);
                                   const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
                                   const mainCols = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
                                   const defaultCols = mainCols.filter((c) => colNames.includes(c));
@@ -2139,7 +2140,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ connectionId, tableName: selectedTable }),
                     })
-                      .then((res) => res.json())
+                      .then((res) => safeJsonResponse<{ ok?: boolean; columnTypes?: Record<string, string>; error?: string }>(res))
                       .then((inferJson) => {
                         if (!inferJson.ok || !inferJson.columnTypes || typeof inferJson.columnTypes !== "object") {
                           toast.error(inferJson?.error ?? "No se pudieron inferir los tipos");
