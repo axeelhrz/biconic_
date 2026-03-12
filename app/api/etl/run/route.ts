@@ -841,8 +841,10 @@ async function executeEtlPipeline(
                 : (jc.leftColumn && jc.rightColumn)
                   ? [{ primaryColumn: (jc.leftColumn || "").trim(), secondaryColumn: (jc.rightColumn || "").trim() }]
                   : []);
-          const leftColsFb = joinConditionPairsFb.map((p) => (p.primaryColumn || "").trim()).filter(Boolean);
-          const rightColsFb = joinConditionPairsFb.map((p) => (p.secondaryColumn || "").trim()).filter(Boolean);
+          const stripTablePrefix = (col: string) =>
+            (col || "").trim().replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
+          const leftColsFb = joinConditionPairsFb.map((p) => stripTablePrefix(p.primaryColumn || "")).filter(Boolean);
+          const rightColsFb = joinConditionPairsFb.map((p) => stripTablePrefix(p.secondaryColumn || "")).filter(Boolean);
           const leftCol = leftColsFb[0] ?? "";
           const rightCol = rightColsFb[0] ?? "";
           const joinType = (jc.joinType || "INNER").toString().toUpperCase();
@@ -962,10 +964,12 @@ async function executeEtlPipeline(
                 if (lClause) whereParts.push(lClause.replace(/^WHERE\s+/i, ""));
                 if (rClause) whereParts.push(rClause.replace(/^WHERE\s+/i, ""));
                 if (leftDf && leftDateFilter?.column) {
-                  whereParts.push(leftDf.replace(new RegExp(`"${leftDateFilter.column.replace(/"/g, '""')}"`, "g"), `l.${safePart(leftDateFilter.column)}`));
+                  const leftDfCol = stripTablePrefix(leftDateFilter.column);
+                  whereParts.push(leftDf.replace(new RegExp(`"${leftDateFilter.column.replace(/"/g, '""')}"`, "g"), `l.${safePart(leftDfCol)}`));
                 }
                 if (rightDf && rightDateFilter?.column) {
-                  whereParts.push(rightDf.replace(new RegExp(`"${rightDateFilter.column.replace(/"/g, '""')}"`, "g"), `r.${safePart(rightDateFilter.column)}`));
+                  const rightDfCol = stripTablePrefix(rightDateFilter.column);
+                  whereParts.push(rightDf.replace(new RegExp(`"${rightDateFilter.column.replace(/"/g, '""')}"`, "g"), `r.${safePart(rightDfCol)}`));
                 }
                 const whereClause = whereParts.length ? ` WHERE ${whereParts.join(" AND ")}` : "";
                 const sql = `SELECT FIRST ${pageSize} SKIP ${offset} ${selectParts.join(", ")} FROM ${lTable} l ${joinType} JOIN ${rTable} r ON ${onClause}${whereClause}`;
