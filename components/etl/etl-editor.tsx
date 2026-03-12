@@ -8213,7 +8213,7 @@ function EndPreviewButton({
                 leftTable: j.primaryTable,
                 rightTable: only.secondaryTable,
                 joinConditions: (only.conditions?.length
-                  ? only.conditions.map((c) => ({
+                  ? only.conditions.map((c: { primaryColumn: string; secondaryColumn: string }) => ({
                       leftTable: j.primaryTable,
                       leftColumn: c.primaryColumn,
                       rightTable: only.secondaryTable,
@@ -8612,7 +8612,7 @@ function EndRunButton({
               leftTable: j.primaryTable,
               rightTable: only.secondaryTable,
               joinConditions: (only.conditions?.length
-                ? only.conditions.map((c) => ({
+                ? only.conditions.map((c: { primaryColumn: string; secondaryColumn: string }) => ({
                     leftTable: j.primaryTable,
                     leftColumn: c.primaryColumn,
                     rightTable: only.secondaryTable,
