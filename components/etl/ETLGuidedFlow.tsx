@@ -150,6 +150,8 @@ export type GuidedConfig = {
       primaryColumn?: string;
       secondaryColumn?: string;
       secondaryColumns?: string[];
+      /** Clave compuesta: varios pares (primaryColumn, secondaryColumn). */
+      conditions?: Array<{ primaryColumn: string; secondaryColumn: string }>;
     }>;
   };
   clean?: {
@@ -251,14 +253,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [joinRightTables, setJoinRightTables] = useState<{ schema: string; name: string; columns?: { name: string }[] }[]>([]);
   const [joinRightColumns, setJoinRightColumns] = useState<string[]>([]);
   const [loadingJoinMeta, setLoadingJoinMeta] = useState(false);
-  /** Lista de tablas añadidas para JOIN: cada una con connectionId, table, joinType, leftColumn, rightColumn, rightColumns */
+  /** Lista de tablas añadidas para JOIN: cada una con connectionId, table, joinType, conditions (pares left/right), rightColumns */
   const [joinItems, setJoinItems] = useState<Array<{
     id: string;
     connectionId: string | number;
     table: string;
     joinType: "INNER" | "LEFT" | "RIGHT" | "FULL";
-    leftColumn: string;
-    rightColumn: string;
+    /** Condiciones de enlace: varios pares (leftColumn, rightColumn) para clave compuesta. */
+    conditions: Array<{ leftColumn: string; rightColumn: string }>;
     rightColumns: string[];
     availableColumns?: { name: string }[];
   }>>([]);
@@ -383,16 +385,22 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     const join = cfg.join;
     if (join?.joins?.length) {
       setUseJoin(true);
-      type JoinItem = { id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[] };
-      setJoinItems(join.joins.map((j: JoinItem, i: number) => ({
-        id: j.id ?? `join_${i}_${Date.now()}`,
-        connectionId: j.secondaryConnectionId ?? "",
-        table: j.secondaryTable ?? "",
-        joinType: (j.joinType ?? "INNER") as "INNER" | "LEFT" | "RIGHT" | "FULL",
-        leftColumn: j.primaryColumn ?? "",
-        rightColumn: j.secondaryColumn ?? "",
-        rightColumns: j.secondaryColumns ?? [],
-      })));
+      type JoinItem = { id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[]; conditions?: Array<{ primaryColumn: string; secondaryColumn: string }> };
+      setJoinItems(join.joins.map((j: JoinItem, i: number) => {
+        const conditions = (j.conditions && j.conditions.length > 0)
+          ? j.conditions.map((c) => ({ leftColumn: c.primaryColumn ?? "", rightColumn: c.secondaryColumn ?? "" }))
+          : (j.primaryColumn != null || j.secondaryColumn != null)
+            ? [{ leftColumn: j.primaryColumn ?? "", rightColumn: j.secondaryColumn ?? "" }]
+            : [{ leftColumn: "", rightColumn: "" }];
+        return {
+          id: j.id ?? `join_${i}_${Date.now()}`,
+          connectionId: j.secondaryConnectionId ?? "",
+          table: j.secondaryTable ?? "",
+          joinType: (j.joinType ?? "INNER") as "INNER" | "LEFT" | "RIGHT" | "FULL",
+          conditions,
+          rightColumns: j.secondaryColumns ?? [],
+        };
+      }));
     }
     const clean = cfg.clean;
     if (clean) {
@@ -763,7 +771,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       joinItems.length > 0
         ? joinItems
         : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
-          ? [{ id: "join_0", table: joinSecondaryTable, rightColumns: joinRightColumns, availableColumns: joinRightTableInfo?.columns ?? [] }]
+          ? [{ id: "join_0", table: joinSecondaryTable, conditions: [{ leftColumn: joinLeftColumn, rightColumn: joinRightColumn }], rightColumns: joinRightColumns, availableColumns: joinRightTableInfo?.columns ?? [] }]
           : [],
     [joinItems, joinSecondaryConnectionId, joinSecondaryTable, joinLeftColumn, joinRightColumn, joinRightColumns, joinRightTableInfo?.columns]
   );
@@ -796,7 +804,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       joinItems.length > 0
         ? joinItems
         : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
-          ? [{ id: "join_0", connectionId: joinSecondaryConnectionId, table: joinSecondaryTable, joinType, leftColumn: joinLeftColumn, rightColumn: joinRightColumn, rightColumns: joinRightColumns, availableColumns: joinRightTableInfo?.columns ?? [] }]
+          ? [{ id: "join_0", connectionId: joinSecondaryConnectionId, table: joinSecondaryTable, joinType, conditions: [{ leftColumn: joinLeftColumn, rightColumn: joinRightColumn }], rightColumns: joinRightColumns, availableColumns: joinRightTableInfo?.columns ?? [] }]
           : [];
     if (effectiveJoinItems.length > 0) {
       const primaryPart = effectiveColumns.map((colName: string) => {
@@ -867,12 +875,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   const hasColumnsToRun =
     columns.length > 0 || (selectedTableInfo?.columns?.length ?? 0) > 0;
+  const joinConditionsValid = !useJoin || (joinItems.length > 0
+    ? joinItems.every((j) => (j.conditions?.length ?? 0) >= 1 && (j.conditions ?? []).every((c) => (c.leftColumn ?? "").trim() && (c.rightColumn ?? "").trim()))
+    : !!(joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn));
   const canRun =
     !!connectionId &&
     !!selectedTable &&
     hasColumnsToRun &&
     outputTableName.trim().length > 0 &&
-    /^[a-zA-Z0-9_]+$/.test(outputTableName.trim());
+    /^[a-zA-Z0-9_]+$/.test(outputTableName.trim()) &&
+    joinConditionsValid;
 
   // Construir config de limpieza para la API (mismo formato que el editor avanzado)
   const buildCleanConfig = useCallback(() => {
@@ -979,7 +991,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       const effectiveJoinItems = joinItems.length > 0
         ? joinItems
         : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
-          ? [{ id: "join_0", connectionId: joinSecondaryConnectionId, table: joinSecondaryTable, joinType, leftColumn: joinLeftColumn, rightColumn: joinRightColumn, rightColumns: joinRightColumns }]
+          ? [{ id: "join_0", connectionId: joinSecondaryConnectionId, table: joinSecondaryTable, joinType, conditions: [{ leftColumn: joinLeftColumn, rightColumn: joinRightColumn }], rightColumns: joinRightColumns }]
           : [];
       if (effectiveJoinItems.length > 0) {
         body.connectionId = connectionId;
@@ -995,15 +1007,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         body.join = {
           primaryConnectionId: connectionId,
           primaryTable: selectedTable,
-          joins: effectiveJoinItems.map((j: { connectionId: string | number; table: string; joinType: string; leftColumn: string; rightColumn: string; rightColumns?: string[] }, i: number) => ({
-            id: `join_${i}`,
-            secondaryConnectionId: j.connectionId,
-            secondaryTable: j.table,
-            joinType: j.joinType,
-            primaryColumn: j.leftColumn,
-            secondaryColumn: j.rightColumn,
-            secondaryColumns: j.rightColumns?.length ? j.rightColumns : undefined,
-          })),
+          joins: effectiveJoinItems.map((j: { connectionId: string | number; table: string; joinType: string; conditions: Array<{ leftColumn: string; rightColumn: string }>; rightColumns?: string[] }, i: number) => {
+            const first = j.conditions?.[0];
+            return {
+              id: `join_${i}`,
+              secondaryConnectionId: j.connectionId,
+              secondaryTable: j.table,
+              joinType: j.joinType,
+              primaryColumn: first?.leftColumn,
+              secondaryColumn: first?.rightColumn,
+              conditions: j.conditions?.length ? j.conditions.map((c) => ({ primaryColumn: c.leftColumn, secondaryColumn: c.rightColumn })) : undefined,
+              secondaryColumns: j.rightColumns?.length ? j.rightColumns : undefined,
+            };
+          }),
         };
       } else {
         body.filter = { ...filterPayload, table: selectedTable, columns: effectiveColumns.length > 0 ? effectiveColumns : undefined, conditions: filterConditions };
@@ -1921,8 +1937,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                     connectionId: joinSecondaryConnectionId,
                                     table: joinSecondaryTable,
                                     joinType,
-                                    leftColumn: joinLeftColumn,
-                                    rightColumn: joinRightColumn,
+                                    conditions: [{ leftColumn: joinLeftColumn, rightColumn: joinRightColumn }],
                                     rightColumns: [joinRightColumn],
                                     availableColumns: joinRightTableInfo?.columns ?? [],
                                   },
@@ -1944,10 +1959,36 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               <div key={item.id} className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
-                                  <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{item.joinType} · {item.leftColumn} = {item.rightColumn}</span>
+                                  <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{item.joinType} · {(item.conditions || []).map((c) => `${c.leftColumn || "?"} = ${c.rightColumn || "?"}`).join(", ")}</span>
                                   <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setJoinItems((prev) => prev.filter((_, i) => i !== idx))}>Quitar</button>
                                 </div>
                                 <div className="space-y-2">
+                                  <div className="space-y-1.5">
+                                    <span className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Condiciones de enlace (clave compuesta)</span>
+                                    {(item.conditions || []).map((cond, condIdx) => (
+                                      <div key={condIdx} className="flex flex-wrap gap-2 items-center">
+                                        <Select
+                                          value={cond.leftColumn}
+                                          onChange={(v: string) => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: (it.conditions || []).map((cc, ci) => ci === condIdx ? { ...cc, leftColumn: v } : cc) } : it))}
+                                          options={leftColumnOptionsForNextJoin}
+                                          placeholder="Col. principal"
+                                          className="min-w-[140px]"
+                                        />
+                                        <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>=</span>
+                                        <Select
+                                          value={cond.rightColumn}
+                                          onChange={(v: string) => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: (it.conditions || []).map((cc, ci) => ci === condIdx ? { ...cc, rightColumn: v } : cc) } : it))}
+                                          options={(item.availableColumns ?? []).map((c) => ({ value: c.name, label: c.name }))}
+                                          placeholder="Col. secundaria"
+                                          className="min-w-[140px]"
+                                        />
+                                        {(item.conditions?.length ?? 0) > 1 && (
+                                          <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: (it.conditions || []).filter((_, ci) => ci !== condIdx) } : it))}>Quitar condición</button>
+                                        )}
+                                      </div>
+                                    ))}
+                                    <Button type="button" variant="outline" size="sm" className="rounded-lg h-7 text-xs" style={{ borderColor: "var(--platform-border)" }} onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: [...(it.conditions || []), { leftColumn: "", rightColumn: "" }] } : it))}>Agregar condición</Button>
+                                  </div>
                                   <div className="flex flex-wrap gap-2 items-center">
                                     <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas a traer:</span>
                                     <Button

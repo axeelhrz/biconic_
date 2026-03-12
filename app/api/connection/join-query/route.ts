@@ -66,6 +66,8 @@ type JoinQueryBody = {
   countMode?: "exact" | "fast";
 };
 
+type StarJoinConditionPair = { primaryColumn: string; secondaryColumn: string };
+
 type StarJoin = {
   primaryConnectionId?: string | number;
   primaryTable?: string;
@@ -79,6 +81,8 @@ type StarJoin = {
     primaryColumn?: string;
     secondaryColumn?: string;
     secondaryColumns?: string[];
+    /** Clave compuesta: varios pares (primaryColumn, secondaryColumn). Si no se envía, se usa primaryColumn/secondaryColumn como un solo par. */
+    conditions?: StarJoinConditionPair[];
   }>;
   conditions?: FilterCondition[];
   dateFilter?: DateFilterSpec;
@@ -86,6 +90,20 @@ type StarJoin = {
   offset?: number;
   count?: boolean;
 };
+
+/** Devuelve los pares (leftColumn, rightColumn) para un join: conditions si existe, si no el par único primaryColumn/secondaryColumn. */
+function getJoinConditionPairs(jn: { conditions?: StarJoinConditionPair[]; primaryColumn?: string; secondaryColumn?: string }): Array<{ leftColumn: string; rightColumn: string }> {
+  if (jn.conditions && jn.conditions.length > 0) {
+    return jn.conditions.map((c) => ({
+      leftColumn: (c.primaryColumn || "").trim(),
+      rightColumn: (c.secondaryColumn || "").trim(),
+    })).filter((p) => p.leftColumn || p.rightColumn);
+  }
+  const pc = (jn.primaryColumn || "").trim();
+  const sc = (jn.secondaryColumn || "").trim();
+  if (pc || sc) return [{ leftColumn: pc, rightColumn: sc }];
+  return [];
+}
 
 // --- FUNCIONES HELPER ---
 
@@ -403,7 +421,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   log("Petición JOIN recibida.");
   try {
-    const body = (await req.json()) as (JoinQueryBody & StarJoin) | null;
+    let body: (JoinQueryBody & StarJoin) | null;
+    try {
+      body = (await req.json()) as (JoinQueryBody & StarJoin) | null;
+    } catch (parseErr) {
+      log("Error: Cuerpo de la petición inválido o demasiado grande.", { parseErr: parseErr instanceof Error ? parseErr.message : String(parseErr) });
+      return NextResponse.json(
+        { ok: false, error: "Cuerpo de la petición inválido o demasiado grande" },
+        { status: 400 }
+      );
+    }
     if (!body) {
       log("Error: Cuerpo de la petición vacío.");
       return NextResponse.json(
@@ -712,8 +739,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             return out;
           });
 
+          const COMPOSITE_KEY_SEP = "\u0001";
+          const buildCompositeKey = (row: Record<string, any>, pairs: Array<{ leftColumn: string; rightColumn: string }>, useRight: boolean) =>
+            pairs.map((p) => String((useRight ? getByColumnName(row, p.rightColumn) : mapPrefixedValue(row, p.leftColumn)) ?? "")).join(COMPOSITE_KEY_SEP);
+
           for (let idx = 0; idx < (joins || []).length; idx++) {
             const jn = joins[idx];
+            const pairs = getJoinConditionPairs(jn);
+            if (pairs.length === 0) throw new Error(`Join ${idx}: se requiere al menos una condición de enlace (columnas principal y secundaria).`);
             const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
             if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
             const secTableResolved = await resolvePhysicalIfExcel(secConn, jn.secondaryTable || "");
@@ -724,13 +757,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 : secRowsRaw[0]
                 ? Object.keys(secRowsRaw[0])
                 : [];
-            const rightCol = String(jn.secondaryColumn || "").trim();
-            const leftRef = String(jn.primaryColumn || "").trim();
             const joinType = String(jn.joinType || "INNER").toUpperCase();
             const rightMap = new Map<string, Record<string, any>[]>();
             const rightUsed = new Set<number>();
             secRowsRaw.forEach((rr, rrIdx) => {
-              const key = String(getByColumnName(rr, rightCol) ?? "");
+              const key = buildCompositeKey(rr, pairs, true);
               const withIdx = { ...rr, __rrIdx__: rrIdx };
               if (!rightMap.has(key)) rightMap.set(key, []);
               rightMap.get(key)!.push(withIdx);
@@ -739,7 +770,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             const previousKeys = joinedRows[0] ? Object.keys(joinedRows[0]) : [];
             const nextRows: Record<string, any>[] = [];
             for (const lr of joinedRows) {
-              const lk = String(mapPrefixedValue(lr, leftRef) ?? "");
+              const lk = buildCompositeKey(lr, pairs, false);
               const matches = rightMap.get(lk) ?? [];
               if (matches.length > 0) {
                 for (const rr of matches) {
@@ -888,27 +919,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           let fromJoin = `FROM ${pQualified} AS p`;
           joins.forEach((jn, idx) => {
             const jt = (jn.joinType || "INNER").toUpperCase();
-            const pc = (jn.primaryColumn || "").trim();
-            let leftAlias = "p";
-            let leftCol = pc;
-            if (pc.includes(".")) {
-              if (/^primary\./i.test(pc)) {
-                leftCol = pc.replace(/^primary\./i, "").trim();
-              } else {
-                const m = pc.match(/^join_(\d+)\.(.+)$/i);
-                if (m) {
-                  const i = Number(m[1]);
-                  if (!Number.isNaN(i) && i >= 0 && i < idx) {
-                    leftAlias = `j${i}`;
-                    leftCol = m[2].trim();
+            const pairs = getJoinConditionPairs(jn);
+            if (pairs.length === 0) throw new Error(`Join ${idx}: se requiere al menos una condición de enlace.`);
+            const onClauses = pairs.map(({ leftColumn: pc, rightColumn: sc }) => {
+              let leftAlias = "p";
+              let leftCol = (pc || "").trim();
+              if (leftCol.includes(".")) {
+                if (/^primary\./i.test(leftCol)) {
+                  leftCol = leftCol.replace(/^primary\./i, "").trim();
+                } else {
+                  const m = leftCol.match(/^join_(\d+)\.(.+)$/i);
+                  if (m) {
+                    const i = Number(m[1]);
+                    if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                      leftAlias = `j${i}`;
+                      leftCol = m[2].trim();
+                    }
                   }
                 }
               }
-            }
-            const on = `${leftAlias}.${quoteIdent(
-              leftCol,
-              "postgres"
-            )} = j${idx}.${quoteIdent(jn.secondaryColumn || "", "postgres")}`;
+              return `${leftAlias}.${quoteIdent(leftCol, "postgres")} = j${idx}.${quoteIdent((sc || "").trim(), "postgres")}`;
+            });
+            const on = onClauses.join(" AND ");
             fromJoin += ` ${jt} JOIN ${jQualified[idx]} AS j${idx} ON ${on}`;
           });
 
@@ -1064,27 +1096,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           let fromJoin = `FROM ${pQualified} AS p`;
           joins.forEach((jn, idx) => {
             const jt = (jn.joinType || "INNER").toUpperCase();
-            const pc = (jn.primaryColumn || "").trim();
-            let leftAlias = "p";
-            let leftCol = pc;
-            if (pc.includes(".")) {
-              if (/^primary\./i.test(pc)) {
-                leftCol = pc.replace(/^primary\./i, "").trim();
-              } else {
-                const m = pc.match(/^join_(\d+)\.(.+)$/i);
-                if (m) {
-                  const i = Number(m[1]);
-                  if (!Number.isNaN(i) && i >= 0 && i < idx) {
-                    leftAlias = `j${i}`;
-                    leftCol = m[2].trim();
+            const pairs = getJoinConditionPairs(jn);
+            if (pairs.length === 0) throw new Error(`Join ${idx}: se requiere al menos una condición de enlace.`);
+            const onClauses = pairs.map(({ leftColumn: pc, rightColumn: sc }) => {
+              let leftAlias = "p";
+              let leftCol = (pc || "").trim();
+              if (leftCol.includes(".")) {
+                if (/^primary\./i.test(leftCol)) {
+                  leftCol = leftCol.replace(/^primary\./i, "").trim();
+                } else {
+                  const m = leftCol.match(/^join_(\d+)\.(.+)$/i);
+                  if (m) {
+                    const i = Number(m[1]);
+                    if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                      leftAlias = `j${i}`;
+                      leftCol = m[2].trim();
+                    }
                   }
                 }
               }
-            }
-            const on = `${leftAlias}.${quoteIdent(
-              leftCol,
-              "postgres"
-            )} = j${idx}.${quoteIdent(jn.secondaryColumn || "", "postgres")}`;
+              return `${leftAlias}.${quoteIdent(leftCol, "postgres")} = j${idx}.${quoteIdent((sc || "").trim(), "postgres")}`;
+            });
+            const on = onClauses.join(" AND ");
             fromJoin += ` ${jt} JOIN ${jQualified[idx]} AS j${idx} ON ${on}`;
           });
 

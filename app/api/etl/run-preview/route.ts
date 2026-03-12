@@ -477,7 +477,7 @@ export async function POST(req: NextRequest) {
       }
 
         // Star join (multiple JOINs): call join-query API to get preview rows
-        const starJoin = body.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[] }> } | undefined;
+        const starJoin = body.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[]; conditions?: Array<{ primaryColumn: string; secondaryColumn: string }> }> } | undefined;
         if (starJoin?.primaryConnectionId && Array.isArray(starJoin.joins) && starJoin.joins.length > 0) {
           const filterCols = (body.filter?.columns as string[] | undefined) || [];
           const primaryColumns = filterCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, ""));
@@ -502,7 +502,15 @@ export async function POST(req: NextRequest) {
               headers: { "Content-Type": "application/json", ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
               body: JSON.stringify(joinQueryBody),
             });
-            const data = await res.json();
+            const text = await res.text();
+            let data: { ok?: boolean; error?: string; rows?: unknown[] };
+            try {
+              data = text ? JSON.parse(text) : {};
+            } catch {
+              throw new Error(
+                `El servidor de JOIN devolvió una respuesta no JSON. Detalle: ${(text || "").slice(0, 300)}`
+              );
+            }
             if (!res.ok || !data?.ok) {
               const detail = (data?.error && String(data.error).trim()) || `Error del servidor (${res.status})`;
               throw new Error(`Error en JOIN múltiple: ${detail}`);

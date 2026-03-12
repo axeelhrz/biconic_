@@ -79,10 +79,12 @@ export type JoinConfig = {
     id: string; // id único para esta unión
     secondaryTable?: string; // schema.table secundaria
     secondaryConnectionId?: string | number;
-    primaryColumn?: string; // columna de la tabla principal para la condición
-    secondaryColumn?: string; // columna de la tabla secundaria para la condición
+    primaryColumn?: string; // columna de la tabla principal para la condición (retrocompat / primer par)
+    secondaryColumn?: string; // columna de la tabla secundaria para la condición (retrocompat / primer par)
     joinType: "INNER" | "LEFT" | "RIGHT" | "FULL";
     secondaryColumns?: string[]; // columnas seleccionadas de la tabla secundaria (opcional)
+    /** Clave compuesta: varios pares (primaryColumn, secondaryColumn). Si existe, se usa en lugar de un solo par. */
+    conditions?: Array<{ primaryColumn: string; secondaryColumn: string }>;
   }>;
 };
 
@@ -1970,8 +1972,7 @@ export function ETLEditor({
                               className="text-xs text-gray-600 mt-1"
                             >
                               {j.secondaryTable || "(sin tabla)"} · {j.joinType}{" "}
-                              · {j.primaryColumn || "?"} ={" "}
-                              {j.secondaryColumn || "?"}
+                              · {(j.conditions?.length ? j.conditions.map((c) => `${c.primaryColumn || "?"} = ${c.secondaryColumn || "?"}`) : [`${j.primaryColumn || "?"} = ${j.secondaryColumn || "?"}`]).join(", ")}
                             </div>
                           ))}
                           <div className="mt-2">
@@ -4659,9 +4660,15 @@ export function ETLEditor({
                             );
                           joinCfg?.joins?.forEach((j) => {
                             j.secondaryColumns?.forEach((c) => colSet.add(c));
-                            if (j.primaryColumn) colSet.add(j.primaryColumn);
-                            if (j.secondaryColumn)
-                              colSet.add(j.secondaryColumn);
+                            if (j.conditions?.length) {
+                              j.conditions.forEach((c) => {
+                                if (c.primaryColumn) colSet.add(c.primaryColumn);
+                                if (c.secondaryColumn) colSet.add(c.secondaryColumn);
+                              });
+                            } else {
+                              if (j.primaryColumn) colSet.add(j.primaryColumn);
+                              if (j.secondaryColumn) colSet.add(j.secondaryColumn);
+                            }
                           });
                           columns = Array.from(colSet).map((c) => ({
                             name: c.split(".").slice(-1)[0],
@@ -6574,10 +6581,13 @@ function FilterExportExcelButton({
             "Configura el JOIN (principal y al menos un secundario) antes de exportar"
           );
         }
-        // Validate join pairs
+        // Validate join pairs (clave simple o compuesta)
+        const hasValidJoinConditions = (jn: typeof j.joins[0]) =>
+          (jn.conditions?.length > 0 && (jn.conditions ?? []).every((c) => (c.primaryColumn ?? "").trim() && (c.secondaryColumn ?? "").trim())) ||
+          ((jn.primaryColumn ?? "").trim() && (jn.secondaryColumn ?? "").trim());
         for (const jn of j.joins) {
-          if (!jn.primaryColumn || !jn.secondaryColumn) {
-            throw new Error("Completa las columnas de unión en cada join");
+          if (!hasValidJoinConditions(jn)) {
+            throw new Error("Completa las columnas de unión en cada join (al menos un par por join)");
           }
         }
         // Map columnas seleccionadas del filtro (prefijos primary./join_X.)
@@ -6609,6 +6619,7 @@ function FilterExportExcelButton({
               joinType: jn.joinType,
               primaryColumn: jn.primaryColumn,
               secondaryColumn: jn.secondaryColumn,
+              conditions: jn.conditions?.length ? jn.conditions : undefined,
               secondaryColumns: joinsSelected[jn.id]?.length
                 ? joinsSelected[jn.id]
                 : jn.secondaryColumns,
@@ -6912,10 +6923,9 @@ function FilterPreviewButton({
         ) {
           throw new Error("Configura el JOIN antes de previsualizar");
         }
+        const hasValidJoin = (jn: any) => (jn.conditions?.length > 0 && (jn.conditions ?? []).every((c: any) => (c.primaryColumn ?? "").trim() && (c.secondaryColumn ?? "").trim())) || ((jn.primaryColumn ?? "").trim() && (jn.secondaryColumn ?? "").trim());
         for (const jn of j.joins) {
-          if (!jn.primaryColumn || !jn.secondaryColumn) {
-            throw new Error("Completa las columnas de unión en cada join");
-          }
+          if (!hasValidJoin(jn)) throw new Error("Completa las columnas de unión en cada join (al menos un par)");
         }
         // Map selected filter columns into star-schema primary/secondary selections
         const selectedCols: string[] = filterNode.filter?.columns || [];
@@ -6939,12 +6949,13 @@ function FilterPreviewButton({
               joinType: jn.joinType,
               primaryColumn: jn.primaryColumn,
               secondaryColumn: jn.secondaryColumn,
+              conditions: jn.conditions?.length ? jn.conditions : undefined,
               secondaryColumns: jn.secondaryColumns,
               index: idx,
             })),
             limit: pageSize,
             offset: (pageNum - 1) * pageSize,
-        
+
             conditions: filterNode.filter?.conditions || [],
             count: true,
           }),
@@ -7952,12 +7963,14 @@ function JoinPreviewButton({ widget }: { widget: Widget }) {
       if (!widget.join?.joins || widget.join.joins.length === 0) {
         throw new Error("Agrega al menos una tabla secundaria al JOIN");
       }
-      // Validate each join has required info
+      const hasValidJoinConditions = (jn: (typeof widget.join.joins)[0]) =>
+        (jn.conditions?.length > 0 && (jn.conditions ?? []).every((c) => (c.primaryColumn ?? "").trim() && (c.secondaryColumn ?? "").trim())) ||
+        ((jn.primaryColumn ?? "").trim() && (jn.secondaryColumn ?? "").trim());
       for (const jn of widget.join.joins) {
         if (!jn.secondaryTable)
           throw new Error("Selecciona la tabla secundaria");
-        if (!jn.primaryColumn || !jn.secondaryColumn)
-          throw new Error("Configura las columnas de unión");
+        if (!hasValidJoinConditions(jn))
+          throw new Error("Configura las columnas de unión (al menos un par por join)");
       }
 
       const res = await fetch("/api/connection/join-query", {
@@ -7973,6 +7986,7 @@ function JoinPreviewButton({ widget }: { widget: Widget }) {
             joinType: jn.joinType,
             primaryColumn: jn.primaryColumn,
             secondaryColumn: jn.secondaryColumn,
+            conditions: jn.conditions?.length ? jn.conditions : undefined,
             secondaryColumns: jn.secondaryColumns,
             index: idx,
           })),
@@ -8090,10 +8104,9 @@ function EndPreviewButton({
           ) {
             throw new Error("Configura el JOIN antes de ejecutar el flujo");
           }
+          const hasValidJoin = (jn: any) => (jn.conditions?.length > 0 && (jn.conditions ?? []).every((c: any) => (c.primaryColumn ?? "").trim() && (c.secondaryColumn ?? "").trim())) || ((jn.primaryColumn ?? "").trim() && (jn.secondaryColumn ?? "").trim());
           for (const jn of j.joins) {
-            if (!jn.primaryColumn || !jn.secondaryColumn) {
-              throw new Error("Completa las columnas de unión en cada join");
-            }
+            if (!hasValidJoin(jn)) throw new Error("Completa las columnas de unión en cada join (al menos un par)");
           }
           if (!j.primaryConnectionId) {
             throw new Error("Selecciona la tabla principal del JOIN");
@@ -8199,15 +8212,23 @@ function EndPreviewButton({
                 secondaryConnectionId: only.secondaryConnectionId,
                 leftTable: j.primaryTable,
                 rightTable: only.secondaryTable,
-                joinConditions: [
-                  {
-                    leftTable: j.primaryTable,
-                    leftColumn: only.primaryColumn,
-                    rightTable: only.secondaryTable,
-                    rightColumn: only.secondaryColumn,
-                    joinType: only.joinType || "INNER",
-                  },
-                ],
+                joinConditions: (only.conditions?.length
+                  ? only.conditions.map((c) => ({
+                      leftTable: j.primaryTable,
+                      leftColumn: c.primaryColumn,
+                      rightTable: only.secondaryTable,
+                      rightColumn: c.secondaryColumn,
+                      joinType: only.joinType || "INNER",
+                    }))
+                  : [
+                      {
+                        leftTable: j.primaryTable,
+                        leftColumn: only.primaryColumn,
+                        rightTable: only.secondaryTable,
+                        rightColumn: only.secondaryColumn,
+                        joinType: only.joinType || "INNER",
+                      },
+                    ]) as { leftTable: string; leftColumn: string; rightTable: string; rightColumn: string; joinType: string }[],
                 leftColumns: primarySelected.length
                   ? primarySelected
                   : (j.primaryColumns as string[] | undefined),
@@ -8239,6 +8260,7 @@ function EndPreviewButton({
                     joinType: jn.joinType,
                     primaryColumn: jn.primaryColumn,
                     secondaryColumn: jn.secondaryColumn,
+                    conditions: jn.conditions?.length ? jn.conditions : undefined,
                     secondaryColumns: joinsSelected[jn.id]?.length
                       ? joinsSelected[jn.id]
                       : (jn.secondaryColumns as string[] | undefined),
@@ -8494,10 +8516,9 @@ function EndRunButton({
           ) {
             throw new Error("Configura el JOIN antes de ejecutar el flujo");
           }
+          const hasValidJoin = (jn: any) => (jn.conditions?.length > 0 && (jn.conditions ?? []).every((c: any) => (c.primaryColumn ?? "").trim() && (c.secondaryColumn ?? "").trim())) || ((jn.primaryColumn ?? "").trim() && (jn.secondaryColumn ?? "").trim());
           for (const jn of j.joins) {
-            if (!jn.primaryColumn || !jn.secondaryColumn) {
-              throw new Error("Completa las columnas de unión en cada join");
-            }
+            if (!hasValidJoin(jn)) throw new Error("Completa las columnas de unión en cada join (al menos un par)");
           }
           if (!j.primaryConnectionId) {
             throw new Error("Selecciona la tabla principal del JOIN");
@@ -8590,16 +8611,23 @@ function EndRunButton({
               secondaryConnectionId: only.secondaryConnectionId,
               leftTable: j.primaryTable,
               rightTable: only.secondaryTable,
-              joinConditions: [
-                {
-                  leftTable: j.primaryTable,
-                  leftColumn: only.primaryColumn,
-                  rightTable: only.secondaryTable,
-                  rightColumn: only.secondaryColumn,
-                  joinType: only.joinType || "INNER",
-                },
-              ],
-              // En ejecución real priorizamos columnas completas del JOIN para métricas.
+              joinConditions: (only.conditions?.length
+                ? only.conditions.map((c) => ({
+                    leftTable: j.primaryTable,
+                    leftColumn: c.primaryColumn,
+                    rightTable: only.secondaryTable,
+                    rightColumn: c.secondaryColumn,
+                    joinType: only.joinType || "INNER",
+                  }))
+                : [
+                    {
+                      leftTable: j.primaryTable,
+                      leftColumn: only.primaryColumn,
+                      rightTable: only.secondaryTable,
+                      rightColumn: only.secondaryColumn,
+                      joinType: only.joinType || "INNER",
+                    },
+                  ]) as { leftTable: string; leftColumn: string; rightTable: string; rightColumn: string; joinType: string }[],
               leftColumns: (j.primaryColumns as string[] | undefined),
               rightColumns: (only.secondaryColumns as string[] | undefined),
             },
@@ -8623,7 +8651,6 @@ function EndRunButton({
             join: {
               primaryConnectionId: j.primaryConnectionId,
               primaryTable: j.primaryTable,
-              // En ejecución real priorizamos columnas completas del JOIN para métricas.
               primaryColumns: (j.primaryColumns as string[] | undefined),
               joins: (j.joins || []).map((jn: any) => ({
                 id: jn.id,
@@ -8632,6 +8659,7 @@ function EndRunButton({
                 joinType: jn.joinType,
                 primaryColumn: jn.primaryColumn,
                 secondaryColumn: jn.secondaryColumn,
+                conditions: jn.conditions?.length ? jn.conditions : undefined,
                 secondaryColumns: (jn.secondaryColumns as string[] | undefined),
               })),
             },
