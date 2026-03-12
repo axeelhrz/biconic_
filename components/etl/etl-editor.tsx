@@ -6583,7 +6583,7 @@ function FilterExportExcelButton({
         }
         // Validate join pairs (clave simple o compuesta)
         const hasValidJoinConditions = (jn: typeof j.joins[0]) =>
-          (jn.conditions?.length > 0 && (jn.conditions ?? []).every((c: { primaryColumn?: string; secondaryColumn?: string }) => (c.primaryColumn ?? "").trim() && (c.secondaryColumn ?? "").trim())) ||
+          ((jn.conditions?.length ?? 0) > 0 && (jn.conditions ?? []).every((c: { primaryColumn?: string; secondaryColumn?: string }) => (c.primaryColumn ?? "").trim() && (c.secondaryColumn ?? "").trim())) ||
           ((jn.primaryColumn ?? "").trim() && (jn.secondaryColumn ?? "").trim());
         for (const jn of j.joins) {
           if (!hasValidJoinConditions(jn)) {
@@ -7964,7 +7964,7 @@ function JoinPreviewButton({ widget }: { widget: Widget }) {
         throw new Error("Agrega al menos una tabla secundaria al JOIN");
       }
       const hasValidJoinConditions = (jn: (typeof widget.join.joins)[0]) =>
-        (jn.conditions?.length > 0 && (jn.conditions ?? []).every((c: { primaryColumn?: string; secondaryColumn?: string }) => (c.primaryColumn ?? "").trim() && (c.secondaryColumn ?? "").trim())) ||
+        ((jn.conditions?.length ?? 0) > 0 && (jn.conditions ?? []).every((c: { primaryColumn?: string; secondaryColumn?: string }) => (c.primaryColumn ?? "").trim() && (c.secondaryColumn ?? "").trim())) ||
         ((jn.primaryColumn ?? "").trim() && (jn.secondaryColumn ?? "").trim());
       for (const jn of widget.join.joins) {
         if (!jn.secondaryTable)
