@@ -414,6 +414,9 @@ async function getPasswordFromSecret(
 }
 
 // --- ROUTE HANDLER PRINCIPAL CON LOGGING ---
+/** Límite de ejecución para JOINs pesados (Vercel: 300s en Pro). Evita FUNCTION_INVOCATION_TIMEOUT. */
+export const maxDuration = 300;
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const requestId = randomUUID();
   const log = (message: string, data?: object) =>

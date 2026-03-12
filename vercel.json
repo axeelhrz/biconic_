@@ -3,7 +3,8 @@
     "app/api/**/*.ts": { "maxDuration": 30 },
     "app/api/etl/run/route.ts": { "maxDuration": 800 },
     "app/api/etl/run-preview/route.ts": { "maxDuration": 60 },
-    "app/api/etl/[etl-id]/metrics-data/route.ts": { "maxDuration": 30 }
+    "app/api/etl/[etl-id]/metrics-data/route.ts": { "maxDuration": 30 },
+    "app/api/connection/join-query/route.ts": { "maxDuration": 300 }
   },
   "crons": [
     {
