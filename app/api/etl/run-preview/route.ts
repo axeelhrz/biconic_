@@ -781,18 +781,35 @@ export async function POST(req: NextRequest) {
             });
 
             const { clause: mcClause, params: mcParams } = buildWhereClausePg(mappedConds);
+            const dateFilterCol = (dateFilter?.column ?? "").trim();
+            const isDateFilterOnRight = /^join_\d+\./i.test(dateFilterCol);
             const dateFilterForLeft =
-              dateFilter?.column != null
+              dateFilter && dateFilterCol && !isDateFilterOnRight
                 ? {
-                    column: (dateFilter.column || "").replace(/^primary\./i, "").trim(),
+                    column: dateFilterCol.replace(/^primary\./i, "").trim(),
                     years: dateFilter.years,
                     months: dateFilter.months,
                     exactDates: dateFilter.exactDates,
                   }
                 : undefined;
-            const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterForLeft, mcParams.length + 1, "l.");
-            const whereClause = dfClause ? (mcClause ? `${mcClause} AND ${dfClause}` : `WHERE ${dfClause}`) : mcClause;
-            const params = [...mcParams, ...dfParams];
+            const dateFilterForRight =
+              dateFilter && dateFilterCol && isDateFilterOnRight
+                ? {
+                    column: dateFilterCol.replace(/^join_\d+\./i, "").trim(),
+                    years: dateFilter.years,
+                    months: dateFilter.months,
+                    exactDates: dateFilter.exactDates,
+                  }
+                : undefined;
+            const { clause: dfClauseLeft, params: dfParamsLeft } = buildDateFilterWhereFragmentPg(dateFilterForLeft, mcParams.length + 1, "l.");
+            let paramOffset = mcParams.length + dfParamsLeft.length + 1;
+            const { clause: dfClauseRight, params: dfParamsRight } = buildDateFilterWhereFragmentPg(dateFilterForRight, paramOffset, "r.");
+            const dateParts: string[] = [];
+            if (dfClauseLeft) dateParts.push(dfClauseLeft);
+            if (dfClauseRight) dateParts.push(dfClauseRight);
+            const dateClause = dateParts.length > 0 ? dateParts.join(" AND ") : "";
+            const whereClause = dateClause ? (mcClause ? `${mcClause} AND ${dateClause}` : `WHERE ${dateClause}`) : mcClause;
+            const params = [...mcParams, ...dfParamsLeft, ...dfParamsRight];
 
             const baseQuery = `SELECT ${selectParts.join(", ")} FROM ${lQ} AS l ${joinClause} ${whereClause}`;
 

@@ -747,12 +747,48 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 return true;
             }
           };
+          /** Parsea valor de celda (Date, ISO string, DD.MM.YYYY, DD/MM/YYYY) a Date para filtro por fecha. */
+          const parseDateFlexible = (raw: unknown): Date | null => {
+            if (raw == null) return null;
+            if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw;
+            const d = new Date(raw as string | number);
+            if (!Number.isNaN(d.getTime())) return d;
+            const s = typeof raw === "string" ? raw.trim() : "";
+            if (!s) return null;
+            const iso = /^\d{4}-\d{2}-\d{2}(T|\s|$)/.exec(s);
+            if (iso) {
+              const d2 = new Date(s.slice(0, 10));
+              return !Number.isNaN(d2.getTime()) ? d2 : null;
+            }
+            const parts = s.split(/[./\-]/).map((p) => parseInt(p, 10)).filter((n) => !Number.isNaN(n));
+            if (parts.length >= 3) {
+              let year: number, month: number, day: number;
+              if (parts[0] >= 1000) {
+                year = parts[0];
+                month = parts[1];
+                day = parts[2];
+              } else if (parts[2] >= 1000) {
+                day = parts[0];
+                month = parts[1];
+                year = parts[2];
+              } else {
+                day = parts[0];
+                month = parts[1];
+                year = parts[2] < 100 ? 2000 + parts[2] : parts[2];
+              }
+              if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+                const d3 = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+                return !Number.isNaN(d3.getTime()) ? d3 : null;
+              }
+            }
+            return null;
+          };
           const passesDateFilter = (row: Record<string, any>, df?: DateFilterSpec) => {
             if (!df?.column) return true;
             const raw = mapPrefixedValue(row, df.column);
             if (raw == null || raw === "") return false;
-            const d = new Date(raw as any);
-            if (Number.isNaN(d.getTime())) return false;
+            const d = parseDateFlexible(raw);
+            if (!d) return false;
             const y = d.getUTCFullYear();
             const m = d.getUTCMonth() + 1;
             if (Array.isArray(df.years) && df.years.length > 0 && !df.years.includes(y)) return false;
