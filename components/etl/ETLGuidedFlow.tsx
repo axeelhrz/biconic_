@@ -2999,12 +2999,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    fetchPreviewRef.current();
+                    if (!connectionId || !selectedTable) return;
+                    previewAbortRef.current?.abort();
+                    requestAnimationFrame(() => {
+                      fetchPreviewRef.current?.();
+                    });
                   }}
-                  disabled={previewLoading || !connectionId || !selectedTable}
-                  title={connectionId && selectedTable ? "Actualizar vista previa" : "Elegí conexión y tabla para habilitar"}
+                  disabled={!connectionId || !selectedTable}
+                  title={connectionId && selectedTable ? "Actualizar vista previa (si ya está cargando, reinicia la consulta)" : "Elegí conexión y tabla para habilitar"}
                 >
-                  <RefreshCw className="h-3.5 w-3.5" />
+                  <RefreshCw className={previewLoading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
                   Actualizar
                 </Button>
               </div>
