@@ -418,11 +418,30 @@ async function getPasswordFromSecret(
 /** Límite de ejecución para JOINs pesados (Vercel: 300s en Pro). Evita FUNCTION_INVOCATION_TIMEOUT. */
 export const maxDuration = 300;
 
+/** Timeout interno (ms) para devolver 504 JSON antes de que Vercel mate la función (300s). */
+const JOIN_INTERNAL_TIMEOUT_MS = 270_000;
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const requestId = randomUUID();
   const log = (message: string, data?: object) =>
     console.log(`[ReqID: ${requestId}] ${message}`, data || "");
 
+  const timeoutResponse: Promise<NextResponse> = new Promise((resolve) => {
+    setTimeout(() => {
+      resolve(
+        NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Timeout: la consulta JOIN superó el tiempo permitido. Reduzca el volumen o use filtros.",
+          },
+          { status: 504 }
+        )
+      );
+    }, JOIN_INTERNAL_TIMEOUT_MS);
+  });
+
+  const main = async (): Promise<NextResponse> => {
   log("Petición JOIN recibida.");
   try {
     let body: (JoinQueryBody & StarJoin) | null;
@@ -591,6 +610,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             for (const k of Object.keys(row)) if (normalizeKey(k) === n) return row[k];
             return undefined;
           };
+          /** Resuelve un valor por clave de forma case-insensitive (p. ej. primary_TIPOCOMPROBANTE → primary_tipocomprobante). */
+          const getRowValueByKey = (row: Record<string, any>, key: string) => {
+            if (row[key] !== undefined) return row[key];
+            const n = normalizeKey(key);
+            for (const k of Object.keys(row)) if (normalizeKey(k) === n) return row[k];
+            return undefined;
+          };
           const firebirdSafePart = (s: string) =>
             /^[A-Z0-9_]+$/i.test(String(s).trim())
               ? String(s).trim().toUpperCase()
@@ -671,10 +697,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           };
           const mapPrefixedValue = (row: Record<string, any>, ref: string) => {
             const raw = (ref || "").trim();
-            if (/^primary\./i.test(raw)) return row[`primary_${raw.replace(/^primary\./i, "").trim()}`];
-            const jm = raw.match(/^join_(\d+)\.(.+)$/i);
-            if (jm) return row[`join_${Number(jm[1])}_${jm[2].trim()}`];
-            return row[`primary_${raw}`];
+            let key: string;
+            if (/^primary\./i.test(raw)) key = `primary_${raw.replace(/^primary\./i, "").trim()}`;
+            else {
+              const jm = raw.match(/^join_(\d+)\.(.+)$/i);
+              if (jm) key = `join_${Number(jm[1])}_${jm[2].trim()}`;
+              else key = `primary_${raw}`;
+            }
+            return getRowValueByKey(row, key);
           };
           const passesCondition = (row: Record<string, any>, cond: FilterCondition) => {
             const raw = String(cond.column || "").trim();
@@ -1300,4 +1330,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { status: 500 }
     );
   }
+  };
+
+  return Promise.race([timeoutResponse, main()]);
 }

@@ -24,7 +24,7 @@ import {
   getValue,
   CastTargetType
 } from "@/lib/etl/transformations";
-import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
+import { ETL_MAX_ROWS_CEILING, ETL_JOIN_CHUNK_SIZE_DEFAULT } from "@/lib/etl/limits";
 
 // ===================================================================
 // TIPOS Y DEFINICIONES
@@ -337,6 +337,7 @@ async function executeEtlPipeline(
   const PIPELINE_TIMEOUT_MS = asPositiveInt(process.env.ETL_PIPELINE_TIMEOUT_MS, 750_000);
   const PAGE_SIZE = asPositiveInt(process.env.ETL_PAGE_SIZE, 60000);
   const JOIN_KEYSET_SIZE = asPositiveInt(process.env.ETL_JOIN_KEYSET_SIZE, 3000);
+  const JOIN_CHUNK_SIZE = asPositiveInt(process.env.ETL_JOIN_CHUNK_SIZE, ETL_JOIN_CHUNK_SIZE_DEFAULT);
   const METRICS_LOG_EVERY_BATCHES = asPositiveInt(process.env.ETL_METRICS_LOG_EVERY_BATCHES, 5);
   let pipelineTimedOut = false;
 
@@ -784,45 +785,56 @@ async function executeEtlPipeline(
                 .filter((c: string) => new RegExp(`^join_${idx}\\.`, "i").test(c))
                 .map((c: string) => c.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim()),
             }));
-            const joinQueryBody = {
-              primaryConnectionId: joinObj.primaryConnectionId,
-              primaryTable: joinObj.primaryTable || (body!.filter?.table || "").trim(),
-              joins: joinsWithCols,
-              primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
-              conditions: body!.filter?.conditions || [],
-              dateFilter: body!.filter?.dateFilter ?? undefined,
-              limit: ETL_MAX_ROWS_CEILING,
-              offset: 0,
-              count: false,
-            };
             const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");
             const cookieHeader = req.headers.get("cookie");
-            const starRes = await fetch(`${origin}/api/connection/join-query`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-              },
-              body: JSON.stringify(joinQueryBody),
-            });
-            const text = await starRes.text();
-            let starData: { ok?: boolean; error?: string; rows?: unknown[] };
-            try {
-              starData = text ? JSON.parse(text) : {};
-            } catch {
-              throw new Error(
-                `El servidor de JOIN devolvió una respuesta no válida (posible timeout o error del servidor). Detalle: ${(text || "").slice(0, 300)}`
-              );
+            let starOffset = 0;
+            while (true) {
+              const joinQueryBody = {
+                primaryConnectionId: joinObj.primaryConnectionId,
+                primaryTable: joinObj.primaryTable || (body!.filter?.table || "").trim(),
+                joins: joinsWithCols,
+                primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
+                conditions: body!.filter?.conditions || [],
+                dateFilter: body!.filter?.dateFilter ?? undefined,
+                limit: JOIN_CHUNK_SIZE,
+                offset: starOffset,
+                count: false,
+              };
+              const starRes = await fetch(`${origin}/api/connection/join-query`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+                },
+                body: JSON.stringify(joinQueryBody),
+              });
+              const text = await starRes.text();
+              let starData: { ok?: boolean; error?: string; rows?: unknown[] };
+              try {
+                starData = text ? JSON.parse(text) : {};
+              } catch {
+                const isTimeout =
+                  starRes.status === 504 ||
+                  /timeout|FUNCTION_INVOCATION_TIMEOUT/i.test(text || "");
+                throw new Error(
+                  isTimeout
+                    ? "La consulta JOIN superó el tiempo límite (5 min). Reduzca el volumen de datos, use filtros o ejecute de nuevo; el ETL obtiene los datos por lotes para evitar este error."
+                    : `El servidor de JOIN devolvió una respuesta no válida (posible timeout o error del servidor). Detalle: ${(text || "").slice(0, 300)}`
+                );
+              }
+              if (!starRes.ok || !starData?.ok) {
+                throw new Error(
+                  `Error ejecutando JOIN múltiple: ${starData?.error || `estado ${starRes.status}`}`
+                );
+              }
+              if (!Array.isArray(starData.rows)) {
+                throw new Error("JOIN múltiple devolvió una respuesta inválida.");
+              }
+              if (starData.rows.length === 0) break;
+              yield starData.rows;
+              starOffset += starData.rows.length;
+              if (starData.rows.length < JOIN_CHUNK_SIZE) break;
             }
-            if (!starRes.ok || !starData?.ok) {
-              throw new Error(
-                `Error ejecutando JOIN múltiple: ${starData?.error || `estado ${starRes.status}`}`
-              );
-            }
-            if (!Array.isArray(starData.rows)) {
-              throw new Error("JOIN múltiple devolvió una respuesta inválida.");
-            }
-            if (starData.rows.length > 0) yield starData.rows;
             return;
           }
           const leftTable = isStar ? (joinObj.primaryTable || (body!.filter?.table || "").trim()) : (joinObj.leftTable || "").trim();
