@@ -50,7 +50,9 @@ export async function POST(
       ? layout.guided_config
       : null;
 
-    if (!guidedConfig || (!guidedConfig.connectionId && !guidedConfig.join?.primaryConnectionId && !guidedConfig.union?.left?.connectionId)) {
+    const join = guidedConfig.join as { primaryConnectionId?: string } | undefined;
+    const union = guidedConfig.union as { left?: { connectionId?: string } } | undefined;
+    if (!guidedConfig || (!guidedConfig.connectionId && !join?.primaryConnectionId && !union?.left?.connectionId)) {
       return NextResponse.json(
         { ok: false, error: "El ETL no tiene configuración de ejecución guardada (guided_config). Edítalo y ejecútalo al menos una vez." },
         { status: 400 }
@@ -59,7 +61,7 @@ export async function POST(
 
     const body = {
       etlId: (etlRow as { id: string }).id,
-      connectionId: guidedConfig.connectionId ?? guidedConfig.union?.left?.connectionId ?? (guidedConfig.join as { primaryConnectionId?: string })?.primaryConnectionId,
+      connectionId: guidedConfig.connectionId ?? union?.left?.connectionId ?? join?.primaryConnectionId,
       filter: guidedConfig.filter,
       union: guidedConfig.union,
       join: guidedConfig.join,
