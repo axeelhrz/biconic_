@@ -131,6 +131,10 @@ export type SavedMetricAggregationConfig = {
   chartLabelOverrides?: Record<string, string>;
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   chartComboSyncAxes?: boolean;
+  chartGridXDisplay?: boolean;
+  chartGridYDisplay?: boolean;
+  chartGridColor?: string;
+  chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
   interCrossFilter?: boolean;
   interCrossFilterFields?: string[];

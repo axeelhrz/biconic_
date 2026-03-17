@@ -62,6 +62,7 @@ type JoinQueryBody = {
   limit?: number;
   offset?: number;
   count?: boolean;
+  unlimited?: boolean;
   /** exact: total exacto (más lento), fast: evita COUNT pesado */
   countMode?: "exact" | "fast";
 };
@@ -448,8 +449,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       sanitizedBody.secondaryPassword = "[REDACTED]";
     log("Cuerpo de la petición (sanitizado):", sanitizedBody);
 
-    let { limit, offset } = body;
-    if (!limit || limit < 1 || limit > ETL_MAX_ROWS_CEILING) limit = 50;
+    let { limit, offset, unlimited } = body;
+    limit =
+      unlimited === true || limit === ETL_MAX_ROWS_CEILING
+        ? ETL_MAX_ROWS_CEILING
+        : limit != null && limit >= 1 && limit <= ETL_MAX_ROWS_CEILING
+          ? limit
+          : 50;
     if (!offset || offset < 0) offset = 0;
     const countMode = body.countMode || "fast";
 

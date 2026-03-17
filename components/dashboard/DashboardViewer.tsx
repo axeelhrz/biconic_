@@ -10,8 +10,9 @@ import {
 } from "@/types/dashboard";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget, type ChartConfig } from "./DashboardWidgetRenderer";
 import type { ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
+import { buildChartConfig } from "@/lib/dashboard/buildChartConfig";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // Types compatible with persisted layout and API
@@ -21,8 +22,10 @@ type AggregationFilter = {
   operator: string;
   value: unknown;
   convertToNumber?: boolean;
-  inputType?: "text" | "select" | "number" | "date";
+  inputType?: "text" | "select" | "multi" | "search" | "number" | "date";
   distinctValues?: unknown[];
+  applyTo?: "all" | "selected";
+  applyToWidgetIds?: string[];
 };
 
 type AggregationMetric = {
@@ -176,193 +179,6 @@ function buildChartMetricStyles(agg: AggregationConfig | undefined): (ChartStyle
   return yKeys.map((key) => buildChartStyleFromMetricFormat(agg.chartMetricFormats?.[key], agg));
 }
 
-function buildChartConfigFromRows(
-  dataArray: Record<string, unknown>[],
-  widget: Widget,
-  accentColor: string
-): ChartConfig | undefined {
-  if (!Array.isArray(dataArray) || dataArray.length === 0) return undefined;
-  const sample = dataArray[0] || {};
-  const resultKeys = Object.keys(sample);
-  const agg = widget.aggregationConfig;
-  const metricAliases = agg?.enabled && agg.metrics?.length
-    ? agg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
-    : [];
-  const xKey =
-    (agg as AggregationConfig & { chartXAxis?: string })?.chartXAxis && resultKeys.includes((agg as any).chartXAxis)
-      ? (agg as any).chartXAxis
-      : (agg?.dimension || widget.source?.labelField || resultKeys.find((k) => !metricAliases.includes(k) && typeof (sample as any)[k] === "string") || resultKeys[0]);
-  let yKeys: string[] = [];
-  if ((agg as any)?.chartYAxes?.length > 0) {
-    yKeys = ((agg as any).chartYAxes as string[]).filter((k) => resultKeys.includes(k));
-  }
-  if (yKeys.length === 0 && metricAliases.length > 0) {
-    yKeys = metricAliases.filter((k) => resultKeys.includes(k));
-  }
-  if (yKeys.length === 0) {
-    const numKeys = resultKeys.filter((k) => typeof (sample as any)[k] === "number");
-    yKeys = numKeys.length > 0 ? numKeys : resultKeys.filter((k) => k !== xKey).slice(0, 1);
-  }
-  if (!xKey || yKeys.length === 0) return undefined;
-
-  const overrides = agg?.chartLabelOverrides;
-  const labelOverride = (v: string) => {
-    if (!overrides) return v;
-    const s = String(v ?? "").trim();
-    if (s === "") return v;
-    if (s in overrides) return overrides[s];
-    for (const [k, val] of Object.entries(overrides)) {
-      if (String(k).trim() === s) return val;
-    }
-    return v;
-  };
-
-  const defaultPalette = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
-  const basePalette = widget.color ? [widget.color, ...defaultPalette] : accentColor ? [accentColor, ...defaultPalette] : defaultPalette;
-  const cfgSeriesColors = (agg as any)?.chartSeriesColors;
-  const colorKeys = cfgSeriesColors ? Object.keys(cfgSeriesColors) : [];
-  const aliasForYKey = (yKey: string): string => {
-    const match = yKey.match(/^metric_(\d+)$/);
-    if (match && agg?.metrics?.[Number(match[1])]) {
-      return agg.metrics[Number(match[1])].alias || yKey;
-    }
-    return yKey;
-  };
-  const resolveColor = (key: string): string | undefined => {
-    if (!cfgSeriesColors) return undefined;
-    const k = key?.trim?.() ?? key;
-    return cfgSeriesColors[key] ?? cfgSeriesColors[k] ?? (typeof key === "string" && key.match(/^metric_\d+$/) ? cfgSeriesColors[aliasForYKey(key)] : undefined);
-  };
-  const getColor = (label: string, idx: number) => {
-    const c = resolveColor(label) ?? resolveColor(aliasForYKey(label)) ?? (colorKeys[idx] != null ? cfgSeriesColors?.[colorKeys[idx]] : undefined);
-    return c ?? basePalette[idx % basePalette.length];
-  };
-  const getColorStable = (label: string) => {
-    const c = resolveColor(label) ?? resolveColor(aliasForYKey(label));
-    if (c) return c;
-    let hash = 0;
-    for (let i = 0; i < String(label).length; i++) hash = (hash << 5) - hash + String(label).charCodeAt(i);
-    return basePalette[Math.abs(hash) % basePalette.length];
-  };
-
-  let rows = [...dataArray];
-  const resolvedType = (agg as any)?.chartType || widget.type;
-  if ((agg as any)?.chartRankingEnabled && (agg as any)?.chartRankingTop > 0) {
-    const rKey = (agg as any)?.chartRankingMetric && resultKeys.includes((agg as any).chartRankingMetric)
-      ? (agg as any).chartRankingMetric
-      : yKeys[0] || resultKeys[0];
-    if (rKey) {
-      rows.sort((a: any, b: any) => Number(b?.[rKey] ?? 0) - Number(a?.[rKey] ?? 0));
-      rows = rows.slice(0, (agg as any).chartRankingTop);
-    }
-  }
-
-  const isPieOrDoughnut = resolvedType === "pie" || resolvedType === "doughnut";
-  const seriesField = (agg as any)?.chartSeriesField;
-
-  if (resolvedType === "kpi") {
-    const valueField = yKeys[0];
-    const sum = rows.reduce((acc, row) => acc + Number(row?.[valueField] ?? 0), 0);
-    return { labels: ["Total"], datasets: [{ label: aliasForYKey(valueField), data: [sum] }] };
-  }
-
-  if (seriesField && resultKeys.includes(seriesField) && !isPieOrDoughnut) {
-    const uniqueX = [...new Set(rows.map((r: any) => String(r[xKey] ?? "")))];
-    const seriesValues = [...new Set(rows.map((r: any) => String(r[seriesField] ?? "")))];
-    return {
-      labels: uniqueX.map(labelOverride),
-      datasets: seriesValues.map((sv, idx) => ({
-        label: labelOverride(sv),
-        data: uniqueX.map((xv) => {
-          const match = rows.find((r: any) => String(r[xKey] ?? "") === xv && String(r[seriesField] ?? "") === sv);
-          return match ? Number((match as any)[yKeys[0]] ?? 0) : 0;
-        }),
-        backgroundColor: (getColor(sv, idx) as string) + "99",
-        borderColor: getColor(sv, idx) as string,
-        borderWidth: 2,
-      })),
-    };
-  }
-
-  if (isPieOrDoughnut) {
-    const labels = rows.map((r: any) => labelOverride(String(r[xKey] ?? "")));
-    const firstYKey = yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
-    return {
-      labels,
-      datasets: [{
-        label: aliasForYKey(firstYKey),
-        data: rows.map((r: any) => Number(r[firstYKey] ?? 0)),
-        backgroundColor: labels.map((l) => getColorStable(l) as string),
-        borderColor: "#fff",
-        borderWidth: 2,
-      }],
-    };
-  }
-
-  if (resolvedType === "combo" && yKeys.length >= 2) {
-    const labels = rows.map((r: any) => labelOverride(String(r[xKey] ?? "")));
-    const label0 = aliasForYKey(yKeys[0]);
-    const label1 = aliasForYKey(yKeys[1]);
-    return {
-      labels,
-      datasets: [
-        {
-          label: label0,
-          data: rows.map((r: any) => Number(r[yKeys[0]] ?? 0)),
-          backgroundColor: (getColor(label0, 0) as string) + "80",
-          borderColor: getColor(label0, 0) as string,
-          borderWidth: 2,
-          type: "bar",
-          yAxisID: "y",
-        },
-        {
-          label: label1,
-          data: rows.map((r: any) => Number(r[yKeys[1]] ?? 0)),
-          backgroundColor: (getColor(label1, 1) as string) + "20",
-          borderColor: getColor(label1, 1) as string,
-          borderWidth: 2,
-          type: "line",
-          fill: false,
-          yAxisID: "y1",
-        },
-      ],
-    };
-  }
-
-  const labels = rows.map((r: any) => labelOverride(String(r[xKey] ?? "")));
-  const isBarOrHorizontalBar = resolvedType === "bar" || resolvedType === "horizontalBar";
-  const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
-  if (oneMetricManyCategories) {
-    const yKey = yKeys[0];
-    const displayLabel = aliasForYKey(yKey);
-    const barColors = labels.map((l) => getColorStable(l) as string);
-    return {
-      labels,
-      datasets: [{
-        label: displayLabel,
-        data: rows.map((r: any) => Number(r[yKey] ?? 0)),
-        backgroundColor: barColors.map((c) => c + "99"),
-        borderColor: barColors,
-        borderWidth: 2,
-      }],
-    };
-  }
-  return {
-    labels,
-    datasets: yKeys.map((yKey, idx) => {
-      const displayLabel = aliasForYKey(yKey);
-      return {
-        label: displayLabel,
-        data: rows.map((r: any) => Number(r[yKey] ?? 0)),
-        backgroundColor: (resolvedType === "area" ? (getColor(displayLabel, idx) as string) + "40" : (getColor(displayLabel, idx) as string) + "99"),
-        borderColor: getColor(displayLabel, idx) as string,
-        borderWidth: resolvedType === "line" || resolvedType === "area" ? 2 : 1,
-        ...(resolvedType === "area" ? { fill: true } : {}),
-      };
-    }),
-  };
-}
-
 export interface DashboardViewerProps {
   dashboardId: string;
   apiEndpoints?: {
@@ -424,9 +240,11 @@ export function DashboardViewer({
     setGlobalFilters(Array.isArray(dashboard.global_filters_config) ? (dashboard.global_filters_config as AggregationFilter[]) : []);
   }, [etlData, initialWidgets, initialTitle, initialGlobalFilters]);
 
-  // Cargar distinct values para cada filtro global (select / single|multi por dimensión)
+  // Cargar distinct values para cada filtro global; si el campo es dimensión semántica, usar tabla y columna física de la fuente primaria
   useEffect(() => {
-    const dataSources = (etlData as any)?.dataSources as { schema?: string; tableName?: string }[] | undefined;
+    const dataSources = (etlData as any)?.dataSources as { id: string; schema?: string; tableName?: string; fields?: { date?: string[] } }[] | undefined;
+    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>>; primarySourceId?: string })?.datasetDimensions;
+    const primarySourceId = (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
     let primaryTableName: string | undefined;
     if (dataSources?.[0]?.tableName) {
       primaryTableName = `${dataSources[0].schema ?? "etl_output"}.${dataSources[0].tableName}`;
@@ -437,18 +255,27 @@ export function DashboardViewer({
     if (!primaryTableName || !globalFilters.length) return;
     const distinctUrl = apiEndpoints?.distinctValues ?? "/api/dashboard/distinct-values";
     const selectFilters = globalFilters.filter(
-      (gf) => gf.field && ((gf as any).inputType === "select" || (gf as any).filterType === "single" || (gf as any).filterType === "multi")
+      (gf) =>
+        gf.field &&
+        ((gf as any).inputType === "select" ||
+          (gf as any).inputType === "multi" ||
+          (gf as any).filterType === "single" ||
+          (gf as any).filterType === "multi")
     );
     let cancelled = false;
-    const dateFields = (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
+    const primaryDateFields = dataSources?.[0]?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
     (async () => {
       for (const gf of selectFilters) {
         if (cancelled) break;
         try {
-          const isDateField = gf.field && dateFields.some((d: string) => (d || "").toLowerCase() === (gf.field || "").toLowerCase());
+          const physicalField =
+            datasetDimensions?.[gf.field!]?.[primarySourceId!] ?? gf.field!;
+          const isDateField =
+            physicalField &&
+            primaryDateFields.some((d: string) => (d || "").toLowerCase() === (physicalField || "").toLowerCase());
           const body: { tableName: string; field: string; limit: number; transform?: string } = {
             tableName: primaryTableName,
-            field: gf.field!,
+            field: physicalField,
             limit: 200,
           };
           if (isDateField) body.transform = "YEAR";
@@ -476,10 +303,15 @@ export function DashboardViewer({
 
   const getTableNameForWidget = useCallback(
     (widget: Widget): string | null => {
-      let fullTableName = "";
-      if (widget.source?.table) fullTableName = widget.source.table;
-      else if ((etlData as any)?.etlData?.name) fullTableName = (etlData as any).etlData.name;
-      if (fullTableName) return fullTableName;
+      const dataSources = (etlData as { dataSources?: { id: string; schema?: string; tableName: string }[] })?.dataSources;
+      if (dataSources?.length) {
+        const primarySourceId = (etlData as { primarySourceId?: string })?.primarySourceId;
+        const sourceId = widget.dataSourceId ?? primarySourceId ?? dataSources[0]?.id;
+        const src = dataSources.find((s) => s.id === sourceId) ?? dataSources[0];
+        if (src) return `${src.schema ?? "etl_output"}.${src.tableName}`;
+      }
+      if (widget.source?.table) return widget.source.table;
+      if ((etlData as any)?.etlData?.name) return (etlData as any).etlData.name;
       return null;
     },
     [etlData]
@@ -536,10 +368,25 @@ export function DashboardViewer({
           value: filterValues[w.id],
           convertToNumber: (w as any).filterConfig!.inputType === "number",
         }));
-      // Filtros globales efectivos: usar filterValues[gf.id] (no f.value, que viene vacío para filtros dinámicos)
+      // Dataset del Dashboard: traducir dimensión semántica a columna física por fuente del widget; si no hay mapeo para esta fuente, no aplicar el filtro
+      const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
+      const dataSourcesList = (etlData as { dataSources?: { id: string }[]; primarySourceId?: string })?.dataSources;
+      const widgetSourceId = widget.dataSourceId ?? (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSourcesList?.[0]?.id;
+      const resolvePhysicalField = (semanticOrPhysicalField: string): string | null => {
+        if (!semanticOrPhysicalField) return null;
+        const bySource = datasetDimensions?.[semanticOrPhysicalField];
+        if (bySource && widgetSourceId && bySource[widgetSourceId]) return bySource[widgetSourceId];
+        return semanticOrPhysicalField;
+      };
+      // Filtros globales efectivos: usar filterValues[gf.id]; respetar applyTo/applyToWidgetIds; si el campo es semántico y esta fuente no tiene mapeo, omitir el filtro
       const effectiveGlobalFilters: AggregationFilter[] = (widget as any).excludeGlobalFilters
         ? []
         : (globalFilters
+            .filter((f) => {
+              if ((f as AggregationFilter).applyTo === "selected" && Array.isArray((f as AggregationFilter).applyToWidgetIds) && (f as AggregationFilter).applyToWidgetIds!.length > 0)
+                return (f as AggregationFilter).applyToWidgetIds!.includes(widgetId);
+              return true;
+            })
             .filter((f) => !fieldsWithWidgets.has(f.field))
             .map((f): AggregationFilter | null => {
               const userValue = filterValues[f.id];
@@ -549,6 +396,9 @@ export function DashboardViewer({
                 userValue === undefined ||
                 (Array.isArray(userValue) && userValue.length === 0);
               if (isEmpty) return null;
+              const isSemantic = datasetDimensions && f.field in datasetDimensions;
+              if (isSemantic && !datasetDimensions[f.field]?.[widgetSourceId!]) return null;
+              const physicalField = resolvePhysicalField(f.field);
               const op = f.operator || "=";
               const value: unknown =
                 op === "IN"
@@ -558,7 +408,7 @@ export function DashboardViewer({
                   : userValue;
               return {
                 id: f.id,
-                field: f.field,
+                field: physicalField ?? f.field,
                 operator: op,
                 value,
                 convertToNumber: f.convertToNumber,
@@ -571,6 +421,7 @@ export function DashboardViewer({
         operator: f.operator || "=",
         value: f.value,
         cast: f.convertToNumber ? "numeric" : undefined,
+        ...(f.id != null && { id: f.id }),
       }));
 
       setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: true } : w)));
@@ -686,7 +537,7 @@ export function DashboardViewer({
           return "unknown";
         };
         const columnsDetected = Object.keys(sample).map((k) => ({ name: k, type: inferType((sample as any)[k]) }));
-        const config = buildChartConfigFromRows(dataArray, widget, accentColor);
+        const config = buildChartConfig(dataArray, widget, accentColor);
 
         setWidgets((prev) =>
           prev.map((w) =>
@@ -744,6 +595,50 @@ export function DashboardViewer({
     return widgets;
   }, [widgets]);
   const placements = useMemo(() => computeGridPlacements(orderedWidgets), [orderedWidgets]);
+
+  // Filtros dinámicos: por cada widget, etiquetas de filtros globales que tienen valor pero no aplican a este gráfico (no contiene esa columna)
+  const nonApplicableFilterLabelsByWidget = useMemo(() => {
+    const dataSources = (etlData as any)?.dataSources as { id: string; fields?: { all?: string[] } }[] | undefined;
+    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>>; primarySourceId?: string })?.datasetDimensions;
+    const primarySourceId = (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
+    const out: Record<string, string[]> = {};
+    if (!dataSources?.length || !globalFilters.length) return out;
+    for (const widget of widgets) {
+      if (widget.type === "filter" || (widget as Widget).excludeGlobalFilters) continue;
+      const widgetSourceId = widget.dataSourceId ?? primarySourceId ?? dataSources[0]?.id;
+      const source = dataSources.find((s) => s.id === widgetSourceId) ?? dataSources[0];
+      const sourceFieldsAll = (source?.fields?.all ?? []).map((c: string) => (c || "").toLowerCase());
+      const resolvePhysicalField = (semanticOrPhysical: string) => {
+        if (!semanticOrPhysical) return "";
+        const bySource = datasetDimensions?.[semanticOrPhysical];
+        if (bySource && widgetSourceId && bySource[widgetSourceId]) return bySource[widgetSourceId];
+        return semanticOrPhysical;
+      };
+      const labels: string[] = [];
+      for (const gf of globalFilters) {
+        const userValue = filterValues[gf.id];
+        const isEmpty =
+          userValue === "" ||
+          userValue === null ||
+          userValue === undefined ||
+          (Array.isArray(userValue) && userValue.length === 0);
+        if (isEmpty) continue;
+        const scopeApplies =
+          (gf as AggregationFilter).applyTo !== "selected" ||
+          !Array.isArray((gf as AggregationFilter).applyToWidgetIds) ||
+          (gf as AggregationFilter).applyToWidgetIds!.length === 0 ||
+          (gf as AggregationFilter).applyToWidgetIds!.includes(widget.id);
+        if (!scopeApplies) continue;
+        const physicalField = resolvePhysicalField(gf.field);
+        const applies =
+          physicalField &&
+          sourceFieldsAll.some((c: string) => c === (physicalField || "").toLowerCase());
+        if (!applies) labels.push((gf as any).label || gf.field);
+      }
+      if (labels.length > 0) out[widget.id] = labels;
+    }
+    return out;
+  }, [etlData, widgets, globalFilters, filterValues]);
 
   const rootClassName = variant === "admin" ? "admin-dashboard-view gap-5" : "gap-0";
   const useClientTheme = !hideHeader && (variant === "default" && !backHref);
@@ -891,6 +786,16 @@ export function DashboardViewer({
                       })}
                     </div>
                   </div>
+                ) : (gf as any).operator === "YEAR_MONTH" ? (
+                  <input
+                    type="month"
+                    className="rounded-md border px-2 py-1 text-sm w-36"
+                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
+                    value={String(filterValues[gf.id] ?? "").slice(0, 7)}
+                    onChange={(e) =>
+                      setFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value || undefined }))
+                    }
+                  />
                 ) : (gf as any).inputType === "select" && hasOptions ? (
                   <select
                     className="rounded-md border px-2 py-1 text-sm min-w-[8rem]"
@@ -934,32 +839,49 @@ export function DashboardViewer({
               gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
             }}
           >
-            {placements.map(({ widget, row, col, span }) => (
-              <div
-                key={widget.id}
-                className={useClientTheme ? "client-view-widget" : undefined}
-                style={{
-                  gridColumn: `span ${span}`,
-                  gridRow: row + 1,
-                  display: "flex",
-                  flexDirection: "column",
-                  minHeight: 0,
-                }}
-              >
-                <DashboardWidgetRenderer
-                  widget={{
-                    ...widget,
-                    chartStyle: widget.chartStyle ?? buildChartStyleFromAgg(widget.aggregationConfig),
-                    chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
-                  } as DashboardWidgetRendererWidget}
-                  isLoading={widget.isLoading === true}
-                  filterValue={filterValues[widget.id]}
-                  onFilterChange={handleFilterChange}
-                  minHeight={widget.minHeight ?? 240}
-                  darkChartTheme={useClientTheme}
-                />
-              </div>
-            ))}
+            {placements.map(({ widget, row, col, span }) => {
+              const nonApplicableLabels = nonApplicableFilterLabelsByWidget[widget.id] ?? [];
+              const filterWarningTooltip =
+                nonApplicableLabels.length > 0
+                  ? `El filtro${nonApplicableLabels.length === 1 ? "" : "s"} "${nonApplicableLabels.join('", "')}" no afecta a este gráfico porque no utiliza ese campo.`
+                  : undefined;
+              return (
+                <div
+                  key={widget.id}
+                  className={useClientTheme ? "client-view-widget" : undefined}
+                  style={{
+                    gridColumn: `span ${span}`,
+                    gridRow: row + 1,
+                    display: "flex",
+                    flexDirection: "column",
+                    minHeight: 0,
+                    position: "relative",
+                  }}
+                >
+                  {filterWarningTooltip && (
+                    <div
+                      className="absolute right-2 top-2 z-10 flex shrink-0"
+                      title={filterWarningTooltip}
+                      style={{ color: "var(--platform-fg-muted)" }}
+                    >
+                      <AlertTriangle className="h-4 w-4" aria-hidden />
+                    </div>
+                  )}
+                  <DashboardWidgetRenderer
+                    widget={{
+                      ...widget,
+                      chartStyle: widget.chartStyle ?? buildChartStyleFromAgg(widget.aggregationConfig),
+                      chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
+                    } as DashboardWidgetRendererWidget}
+                    isLoading={widget.isLoading === true}
+                    filterValue={filterValues[widget.id]}
+                    onFilterChange={handleFilterChange}
+                    minHeight={widget.minHeight ?? 240}
+                    darkChartTheme={useClientTheme}
+                  />
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

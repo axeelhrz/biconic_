@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import postgres from "postgres";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 
 // --- Interfaces (Copied from internal route) ---
@@ -14,6 +15,7 @@ interface Filter {
   operator: string;
   value: any;
   cast?: "numeric";
+  id?: string;
 }
 
 interface OrderBy {
@@ -41,6 +43,31 @@ function toSqlLiteral(v: any): string {
 
 const normalizeStr = (str: string) =>
   str ? str.replace(/\s+/g, "").toUpperCase() : "";
+
+/** Obtiene nombres de columnas de la tabla desde information_schema. Devuelve null si falla o no hay SUPABASE_DB_URL. */
+async function fetchTableColumnNames(schemaName: string, tableName: string): Promise<string[] | null> {
+  const dbUrl = process.env.SUPABASE_DB_URL;
+  if (!dbUrl) return null;
+  const safeSchema = schemaName === "etl_output" ? "etl_output" : "public";
+  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
+  const sql = postgres(dbUrl);
+  try {
+    const rows = await sql.unsafe(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
+      [safeSchema, safeTable]
+    ) as Array<{ column_name?: string }>;
+    await sql.end();
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    return rows.map((r) => String(r?.column_name ?? "").toLowerCase());
+  } catch {
+    try {
+      await sql.end();
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+}
 
 export async function POST(
   req: NextRequest,
@@ -142,6 +169,28 @@ export async function POST(
 
     const [schema, table] = requested.split(".");
 
+    // Filtros inteligentes: validar que cada filtro tenga su columna en la tabla; omitir los que no y devolver filterWarnings
+    const tableColumnNames = await fetchTableColumnNames(schema, table);
+    const tableColumnsSet = tableColumnNames ? new Set(tableColumnNames) : null;
+    const filterWarnings: Array<{ filterId?: string; field: string; reason: string }> = [];
+    const validFilters: Filter[] = [];
+    if (body.filters && body.filters.length > 0) {
+      for (const f of body.filters) {
+        const fieldNorm = (f.field || "").replace(/"/g, "").trim().toLowerCase();
+        if (tableColumnsSet && fieldNorm && !tableColumnsSet.has(fieldNorm)) {
+          filterWarnings.push({
+            filterId: f.id,
+            field: f.field,
+            reason: "column_not_in_table",
+          });
+        } else {
+          validFilters.push(f);
+        }
+      }
+    } else {
+      validFilters.push(...(body.filters || []));
+    }
+
     // 1. Construcción de Métricas (Usamos metric_X internamente para seguridad SQL)
     const metricClauses = body.metrics
       .map((m, i) => {
@@ -184,14 +233,14 @@ export async function POST(
     let query = `SELECT ${selectClause} FROM "${schema}"."${table}"`;
 
     // 3. Filtros
-    if (body.filters && body.filters.length > 0) {
-      const whereClauses = body.filters
+    if (validFilters.length > 0) {
+      const whereClauses = validFilters
         .map((f) => {
           const safeField = f.field.replace(/"/g, '""');
           const op = (f.operator || "=").toUpperCase().trim();
 
           let fieldExpression;
-          if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "QUARTER" || op === "SEMESTER") {
+          if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "QUARTER" || op === "SEMESTER" || op === "YEAR_MONTH") {
             fieldExpression = `(
               CASE
                 WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, 'DD/MM/YYYY')
@@ -259,6 +308,15 @@ export async function POST(
             const s = Number(f.value);
             if (isNaN(s) || (s !== 1 && s !== 2)) return "TRUE";
             return `${semExpr} = ${s}`;
+          }
+          if (op === "YEAR_MONTH") {
+            const val = f.value == null ? "" : String(f.value).trim();
+            const match = /^(\d{4})-(\d{1,2})$/.exec(val);
+            if (!match) return "TRUE";
+            const y = parseInt(match[1]!, 10);
+            const m = parseInt(match[2]!, 10);
+            if (m < 1 || m > 12 || y < 1900 || y > 2100) return "TRUE";
+            return `EXTRACT(YEAR FROM ${fieldExpression}) = ${y} AND EXTRACT(MONTH FROM ${fieldExpression}) = ${m}`;
           }
           if (op === "IN") {
             const list = (Array.isArray(f.value) ? f.value : [])
@@ -341,6 +399,9 @@ export async function POST(
       return newRow;
     });
 
+    if (filterWarnings.length > 0) {
+      return NextResponse.json({ rows: mappedResults, filterWarnings });
+    }
     return NextResponse.json(mappedResults);
   } catch (err: any) {
     console.error("Error en API:", err);

@@ -147,6 +147,7 @@ type RunBody = {
   }>;
   inferTypes?: boolean;
   limit?: number;
+  unlimited?: boolean;
 };
 
 
@@ -176,10 +177,13 @@ export async function POST(req: NextRequest) {
     body = (await req.json()) as RunBody | null;
     if (!body) throw new Error("Cuerpo vacío");
 
-    const effectiveLimit = Math.min(
-      Number(body?.limit) || ETL_PREVIEW_DEFAULT_LIMIT,
-      ETL_MAX_ROWS_CEILING
-    );
+    const effectiveLimit =
+      body?.unlimited === true
+        ? ETL_MAX_ROWS_CEILING
+        : Math.min(
+            Number(body?.limit) || ETL_PREVIEW_DEFAULT_LIMIT,
+            ETL_MAX_ROWS_CEILING
+          );
 
     const supabaseAdmin = await createClient();
     const supabaseService = createServiceRoleClient();
@@ -552,9 +556,15 @@ export async function POST(req: NextRequest) {
           if (useInMemoryJoin) {
             // Vista previa JOIN en memoria: traer filas de cada conexión (Firebird o Postgres) y unir en Node
             const { leftTable, rightTable } = joinConf;
+            const joinPairs: Array<{ leftColumn: string; rightColumn: string }> = (joinConf.joinConditions?.length ?? 0) > 0
+              ? joinConf.joinConditions!.map((c: { leftColumn?: string; rightColumn?: string }) => ({
+                  leftColumn: (c.leftColumn ?? "").trim(),
+                  rightColumn: (c.rightColumn ?? "").trim(),
+                })).filter((p) => p.leftColumn || p.rightColumn)
+              : (joinConf as { leftColumn?: string; rightColumn?: string }).leftColumn != null && (joinConf as { leftColumn?: string; rightColumn?: string }).rightColumn != null
+                ? [{ leftColumn: String((joinConf as any).leftColumn ?? "").trim(), rightColumn: String((joinConf as any).rightColumn ?? "").trim() }]
+                : [];
             const jc = joinConf.joinConditions?.[0];
-            const leftCol = jc?.leftColumn ?? "";
-            const rightCol = jc?.rightColumn ?? "";
             const joinType = (jc?.joinType || "INNER").toUpperCase();
             const leftConditions = (sqlConditions as FilterCondition[])
               .filter((c: FilterCondition) => /^primary\./i.test(c.column || ""))
@@ -593,6 +603,9 @@ export async function POST(req: NextRequest) {
               const k = findKey(row, col);
               return k === undefined ? undefined : row[k];
             };
+            const COMPOSITE_KEY_SEP = "\u0001";
+            const compositeKey = (row: Record<string, any>, pairs: Array<{ leftColumn: string; rightColumn: string }>, useRight: boolean) =>
+              pairs.map((p) => String(getVal(row, useRight ? p.rightColumn : p.leftColumn) ?? "")).join(COMPOSITE_KEY_SEP);
 
             const fetchFromConn = async (
               conn: any,
@@ -666,15 +679,16 @@ export async function POST(req: NextRequest) {
 
             let leftRows: Record<string, any>[];
             let rightRows: Record<string, any>[];
-            if (dateFilterForRight) {
+            const canPushDownIn = dateFilterForRight && joinPairs.length === 1;
+            if (canPushDownIn) {
               rightRows = await fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions, dateFilterForRight);
-              const rightKeys = new Set(rightRows.map((r) => String(getVal(r, rightCol) ?? "")));
+              const rightKeys = new Set(rightRows.map((r) => compositeKey(r, joinPairs, true)));
               const leftConditionsWithIn =
                 rightKeys.size > 0
                   ? [
                       ...leftConditions,
                       {
-                        column: resolveLeftColCase(leftCol),
+                        column: resolveLeftColCase(joinPairs[0].leftColumn),
                         operator: "in" as const,
                         value: Array.from(rightKeys).slice(0, effectiveLimit).join(","),
                       },
@@ -688,9 +702,14 @@ export async function POST(req: NextRequest) {
               ]);
             }
 
+            if (joinPairs.length === 0) {
+              yield { rows: [], query: `JOIN (${leftTable} + ${rightTable}) en memoria — sin condiciones de enlace` };
+              return;
+            }
+
             const rightMap = new Map<string, Record<string, any>[]>();
             for (const r of rightRows) {
-              const key = String(getVal(r, rightCol) ?? "");
+              const key = compositeKey(r, joinPairs, true);
               if (!rightMap.has(key)) rightMap.set(key, []);
               rightMap.get(key)!.push(r);
             }
@@ -717,7 +736,7 @@ export async function POST(req: NextRequest) {
 
             const joined: Record<string, any>[] = [];
             for (const leftRow of leftRows) {
-              const leftKey = String(getVal(leftRow, leftCol) ?? "");
+              const leftKey = compositeKey(leftRow, joinPairs, false);
               const matches = rightMap.get(leftKey) ?? [];
               if (matches.length > 0) {
                 for (const rightRow of matches) joined.push({ ...prefixLeft(leftRow), ...prefixRight(rightRow) });
@@ -729,9 +748,9 @@ export async function POST(req: NextRequest) {
             }
             if (joinType === "RIGHT" || joinType === "FULL") {
               const matchedRightKeys = new Set<string>();
-              for (const leftRow of leftRows) matchedRightKeys.add(String(getVal(leftRow, leftCol) ?? ""));
+              for (const leftRow of leftRows) matchedRightKeys.add(compositeKey(leftRow, joinPairs, false));
               for (const rightRow of rightRows) {
-                const rightKey = String(getVal(rightRow, rightCol) ?? "");
+                const rightKey = compositeKey(rightRow, joinPairs, true);
                 if (matchedRightKeys.has(rightKey)) continue;
                 const leftNulls: Record<string, any> = {};
                 for (const col of leftCols) leftNulls["primary_" + col] = null;

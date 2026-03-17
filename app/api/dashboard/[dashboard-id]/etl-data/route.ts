@@ -235,6 +235,29 @@ export async function GET(
       );
     }
 
+    // Dataset del Dashboard: capa semántica que mapea dimensiones comunes a columnas físicas por fuente
+    type DatasetDimensions = Record<string, Record<string, string>>; // semantic_name -> data_source_id -> physical_column_name
+    const layoutObj = (dashboard?.layout as { datasetDimensions?: DatasetDimensions } | null) ?? null;
+    const savedDimensions = layoutObj?.datasetDimensions && typeof layoutObj.datasetDimensions === "object" ? layoutObj.datasetDimensions : undefined;
+
+    let datasetDimensions: DatasetDimensions = {};
+    if (dataSources.length >= 1) {
+      const computedDate: Record<string, string> = {};
+      for (const ds of dataSources) {
+        const firstDateCol = ds.fields.date?.[0];
+        if (firstDateCol) computedDate[ds.id] = firstDateCol;
+      }
+      if (Object.keys(computedDate).length > 0) {
+        datasetDimensions.date = { ...computedDate, ...(savedDimensions?.date ?? {}) };
+      }
+      if (savedDimensions) {
+        for (const [semanticName, bySource] of Object.entries(savedDimensions)) {
+          if (semanticName === "date" && datasetDimensions.date) continue;
+          datasetDimensions[semanticName] = bySource;
+        }
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       data: {
@@ -244,6 +267,7 @@ export async function GET(
         etl: firstEtl,
         etlData: firstEtlData ? { id: 0, name: firstEtlData.name, created_at: firstEtlData.created_at || new Date().toISOString(), dataArray: [], rowCount: firstEtlData.rowCount } : null,
         fields: firstFields ?? { all: [], numeric: [], string: [], date: [] },
+        datasetDimensions,
       },
     });
   } catch (error: any) {

@@ -44,6 +44,7 @@ type CountQueryBody = {
   limit?: number;
   offset?: number;
   count?: boolean;
+  unlimited?: boolean;
   /** exact: total exacto (más lento), fast: evita COUNT pesado en joins grandes */
   countMode?: "exact" | "fast";
   join?: {
@@ -266,6 +267,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       countMode,
       join,
       columns, // Importante: Usamos esto para resolver ambigüedades
+      unlimited,
     } = body;
 
     if (!attribute)
@@ -273,7 +275,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         { ok: false, error: "Se requiere la columna a contar" },
         { status: 400 }
       );
-    if (!limit || limit < 1 || limit > ETL_MAX_ROWS_CEILING) limit = 50;
+    limit =
+      unlimited === true || limit === ETL_MAX_ROWS_CEILING
+        ? ETL_MAX_ROWS_CEILING
+        : limit != null && limit >= 1 && limit <= ETL_MAX_ROWS_CEILING
+          ? limit
+          : 50;
     if (!offset || offset < 0) offset = 0;
 
     // Auth

@@ -955,7 +955,7 @@ async function executeEtlPipeline(
                   ...leftColumns.map((c) => `l.${safePart(c)} AS "primary_${c.replace(/"/g, '""')}"`),
                   ...rightColumns.map((c) => `r.${safePart(c)} AS "join_0_${c.replace(/"/g, '""')}"`),
                 ];
-                const onClause = `l.${safePart(leftCol)} = r.${safePart(rightCol)}`;
+                const onClause = leftColsFb.map((_, i) => `l.${safePart(leftColsFb[i])} = r.${safePart(rightColsFb[i])}`).join(" AND ");
                 const { clause: lClause, params: lParams } = aliasWhereFirebird(leftConditions, "l");
                 const { clause: rClause, params: rParams } = aliasWhereFirebird(rightConditions, "r");
                 const { clause: leftDf, params: leftDfParams } = buildDateFilterWhereFragmentFirebird(leftDateFilter);
@@ -1606,23 +1606,30 @@ async function executeEtlPipeline(
                      let fromJoin = `FROM ${pQ} AS p`;
                      (star.joins||[]).forEach((jn: any, idx: number) => {
                         const jt = (jn.joinType || "INNER").toUpperCase();
-                        const pc = (jn.primaryColumn || "").trim();
-                        let leftAlias = "p", leftCol = pc;
-                        if (pc.includes(".")) {
-                          if (/^primary\./i.test(pc)) {
-                            leftCol = pc.replace(/^primary\./i, "").trim();
-                          } else {
-                            const m = pc.match(/^join_(\d+)\.(.+)$/i);
-                            if (m) {
-                              const i = parseInt(m[1], 10);
-                              if (!Number.isNaN(i) && i >= 0 && i < idx) {
-                                leftAlias = `j${i}`;
-                                leftCol = m[2].trim();
+                        const pairs = (jn.conditions?.length > 0)
+                          ? jn.conditions
+                          : ((jn.primaryColumn ?? "").trim() || (jn.secondaryColumn ?? "").trim())
+                            ? [{ primaryColumn: (jn.primaryColumn || "").trim(), secondaryColumn: (jn.secondaryColumn || "").trim() }]
+                            : [];
+                        const onClauses = pairs.map(({ primaryColumn: pc, secondaryColumn: sc }: { primaryColumn?: string; secondaryColumn?: string }) => {
+                          let leftAlias = "p", leftCol = (pc || "").trim();
+                          if (leftCol.includes(".")) {
+                            if (/^primary\./i.test(leftCol)) {
+                              leftCol = leftCol.replace(/^primary\./i, "").trim();
+                            } else {
+                              const m = leftCol.match(/^join_(\d+)\.(.+)$/i);
+                              if (m) {
+                                const i = parseInt(m[1], 10);
+                                if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                                  leftAlias = `j${i}`;
+                                  leftCol = m[2].trim();
+                                }
                               }
                             }
                           }
-                        }
-                        const on = `${leftAlias}.${quoteIdent(leftCol)} = j${idx}.${quoteIdent(jn.secondaryColumn||"")}`;
+                          return `${leftAlias}.${quoteIdent(leftCol)} = j${idx}.${quoteIdent((sc || "").trim())}`;
+                        });
+                        const on = onClauses.length ? onClauses.join(" AND ") : `1=0`;
                         fromJoin += ` ${jt} JOIN ${jQs[idx]} AS j${idx} ON ${on}`;
                      });
                      
@@ -1670,23 +1677,30 @@ async function executeEtlPipeline(
                   let fromJoin = `FROM ${pQ} AS p`;
                   (star.joins||[]).forEach((jn: any, idx: number) => {
                       const jt = (jn.joinType || "INNER").toUpperCase();
-                      const pc = (jn.primaryColumn || "").trim();
-                      let leftAlias = "p", leftCol = pc;
-                      if (pc.includes(".")) {
-                        if (/^primary\./i.test(pc)) {
-                          leftCol = pc.replace(/^primary\./i, "").trim();
-                        } else {
-                          const m = pc.match(/^join_(\d+)\.(.+)$/i);
-                          if (m) {
-                            const i = parseInt(m[1], 10);
-                            if (!Number.isNaN(i) && i >= 0 && i < idx) {
-                              leftAlias = `j${i}`;
-                              leftCol = m[2].trim();
+                      const pairs = (jn.conditions?.length > 0)
+                        ? jn.conditions
+                        : ((jn.primaryColumn ?? "").trim() || (jn.secondaryColumn ?? "").trim())
+                          ? [{ primaryColumn: (jn.primaryColumn || "").trim(), secondaryColumn: (jn.secondaryColumn || "").trim() }]
+                          : [];
+                      const onClauses = pairs.map(({ primaryColumn: pc, secondaryColumn: sc }: { primaryColumn?: string; secondaryColumn?: string }) => {
+                        let leftAlias = "p", leftCol = (pc || "").trim();
+                        if (leftCol.includes(".")) {
+                          if (/^primary\./i.test(leftCol)) {
+                            leftCol = leftCol.replace(/^primary\./i, "").trim();
+                          } else {
+                            const m = leftCol.match(/^join_(\d+)\.(.+)$/i);
+                            if (m) {
+                              const i = parseInt(m[1], 10);
+                              if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                                leftAlias = `j${i}`;
+                                leftCol = m[2].trim();
+                              }
                             }
                           }
                         }
-                      }
-                      const on = `${leftAlias}.${quoteIdent(leftCol)} = j${idx}.${quoteIdent(jn.secondaryColumn||"")}`;
+                        return `${leftAlias}.${quoteIdent(leftCol)} = j${idx}.${quoteIdent((sc || "").trim())}`;
+                      });
+                      const on = onClauses.length ? onClauses.join(" AND ") : `1=0`;
                       fromJoin += ` ${jt} JOIN ${jQs[idx]} AS j${idx} ON ${on}`;
                   });
                    

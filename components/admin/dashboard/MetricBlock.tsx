@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { Loader2, Play, Trash2, MoreHorizontal } from "lucide-react";
 import { Bar, Line, Pie, Doughnut, Scatter } from "react-chartjs-2";
+import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "@/components/dashboard/DashboardWidgetRenderer";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -86,6 +87,12 @@ type MetricBlockProps = {
   gridSpan?: number;
   minHeight?: number;
   onSizeChange?: (patch: { gridSpan?: number; minHeight?: number }) => void;
+  /** Opciones de líneas de cuadrícula desde aggregationConfig */
+  chartGridXDisplay?: boolean;
+  chartGridYDisplay?: boolean;
+  chartGridColor?: string;
+  /** Widget completo para renderizar con el mismo componente que la vista final (editor = vista fiel) */
+  widgetForRenderer?: DashboardWidgetRendererWidget;
 };
 
 const STATE_LABELS: Record<MetricBlockState, string> = {
@@ -96,34 +103,42 @@ const STATE_LABELS: Record<MetricBlockState, string> = {
 
 const PREVIEW_AXIS_COLOR = "#64748b";
 const PREVIEW_GRID_COLOR = "#e2e8f0";
-const CHART_OPTIONS = {
-  responsive: true,
-  maintainAspectRatio: false,
-  layout: { padding: 8 },
-  plugins: {
-    legend: {
-      display: true,
-      position: "top" as const,
-      align: "center" as const,
-      labels: { color: PREVIEW_AXIS_COLOR, font: { size: 12 }, padding: 16, usePointStyle: true, pointStyle: "circle" },
+
+function getChartOptions(gridOpts?: { chartGridXDisplay?: boolean; chartGridYDisplay?: boolean; chartGridColor?: string }) {
+  const gridColor = gridOpts?.chartGridColor?.trim() || PREVIEW_GRID_COLOR;
+  const gridX = { display: gridOpts?.chartGridXDisplay !== false, color: gridColor };
+  const gridY = { display: gridOpts?.chartGridYDisplay !== false, color: gridColor };
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    layout: { padding: 8 },
+    plugins: {
+      legend: {
+        display: true,
+        position: "top" as const,
+        align: "center" as const,
+        labels: { color: PREVIEW_AXIS_COLOR, font: { size: 12 }, padding: 16, usePointStyle: true, pointStyle: "circle" },
+      },
+      tooltip: { enabled: true },
     },
-    tooltip: { enabled: true },
-  },
-  scales: {
-    x: {
-      display: true,
-      grid: { color: PREVIEW_GRID_COLOR },
-      ticks: { color: PREVIEW_AXIS_COLOR, maxTicksLimit: 8, font: { size: 11 } },
-      title: { display: false },
+    scales: {
+      x: {
+        display: true,
+        grid: gridX,
+        ticks: { color: PREVIEW_AXIS_COLOR, maxTicksLimit: 8, font: { size: 11 } },
+        title: { display: false },
+      },
+      y: {
+        display: true,
+        grid: gridY,
+        ticks: { color: PREVIEW_AXIS_COLOR, font: { size: 11 }, maxTicksLimit: 8 },
+        title: { display: false },
+      },
     },
-    y: {
-      display: true,
-      grid: { color: PREVIEW_GRID_COLOR },
-      ticks: { color: PREVIEW_AXIS_COLOR, font: { size: 11 }, maxTicksLimit: 8 },
-      title: { display: false },
-    },
-  },
-};
+  };
+}
+
+const CHART_OPTIONS = getChartOptions();
 
 const legendTextColor = "#334155";
 function buildPieDoughnutLegend(chartConfig: ChartConfig | null | undefined): Record<string, unknown> {
@@ -175,7 +190,18 @@ export function MetricBlock({
   gridSpan = 2,
   minHeight = 280,
   onSizeChange,
+  chartGridXDisplay,
+  chartGridYDisplay,
+  chartGridColor,
+  widgetForRenderer,
 }: MetricBlockProps) {
+  const chartOptionsWithGrid = useMemo(
+    () =>
+      chartGridXDisplay !== undefined || chartGridYDisplay !== undefined || (chartGridColor != null && chartGridColor !== "")
+        ? getChartOptions({ chartGridXDisplay, chartGridYDisplay, chartGridColor })
+        : CHART_OPTIONS,
+    [chartGridXDisplay, chartGridYDisplay, chartGridColor]
+  );
   const hasViz = useMemo(() => {
     if (chartType === "kpi") return kpiValue != null;
     if (chartType === "table") return Array.isArray(tableRows) && tableRows.length > 0;
@@ -316,48 +342,62 @@ export function MetricBlock({
         )}
         {hasViz && !isLoading && (
           <>
-            {chartType === "kpi" && (
-              <div className="flex flex-1 items-center justify-center">
-                <span className="text-[2.25rem] font-bold tabular-nums text-[var(--studio-fg)] tracking-tight" style={{ fontFamily: "var(--studio-font)" }}>
-                  {kpiValue}
-                </span>
+            {widgetForRenderer ? (
+              <div className="flex-1 min-h-0 w-full">
+                <DashboardWidgetRenderer
+                  widget={widgetForRenderer}
+                  isLoading={false}
+                  hideHeader
+                  minHeight={220}
+                  className="!border-0 !p-0 !shadow-none h-full"
+                />
               </div>
-            )}
-            {chartType === "table" && Array.isArray(tableRows) && tableRows.length > 0 && (
-              <div className="overflow-auto text-[12px]">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-[var(--studio-border)] text-left text-[var(--studio-muted)]">
-                      {Object.keys(tableRows[0] || {}).map((k) => (
-                        <th key={k} className="py-1.5 pr-2 font-medium">{k}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableRows.slice(0, 5).map((row, i) => (
-                      <tr key={i} className="border-b border-[var(--studio-border)]/60">
-                        {Object.values(row).map((v, j) => (
-                          <td key={j} className="py-1.5 pr-2 text-[var(--studio-fg)]">
-                            {String(v ?? "")}
-                          </td>
+            ) : (
+              <>
+                {chartType === "kpi" && (
+                  <div className="flex flex-1 items-center justify-center">
+                    <span className="text-[2.25rem] font-bold tabular-nums text-[var(--studio-fg)] tracking-tight" style={{ fontFamily: "var(--studio-font)" }}>
+                      {kpiValue}
+                    </span>
+                  </div>
+                )}
+                {chartType === "table" && Array.isArray(tableRows) && tableRows.length > 0 && (
+                  <div className="overflow-auto text-[12px]">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-[var(--studio-border)] text-left text-[var(--studio-muted)]">
+                          {Object.keys(tableRows[0] || {}).map((k) => (
+                            <th key={k} className="py-1.5 pr-2 font-medium">{k}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tableRows.slice(0, 5).map((row, i) => (
+                          <tr key={i} className="border-b border-[var(--studio-border)]/60">
+                            {Object.values(row).map((v, j) => (
+                              <td key={j} className="py-1.5 pr-2 text-[var(--studio-fg)]">
+                                {String(v ?? "")}
+                              </td>
+                            ))}
+                          </tr>
                         ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {chartType !== "kpi" && chartType !== "table" && chartConfig && (
-              <div className="h-[220px] w-full">
-                {chartType === "bar" && <Bar data={chartConfig as any} options={CHART_OPTIONS} />}
-                {chartType === "horizontalBar" && <Bar data={chartConfig as any} options={{ ...CHART_OPTIONS, indexAxis: "y" as const, scales: { ...CHART_OPTIONS.scales, y: { ...CHART_OPTIONS.scales.y, ticks: { ...CHART_OPTIONS.scales.y.ticks, maxTicksLimit: 12 } } } }} />}
-                {chartType === "line" && <Line data={chartConfig as any} options={CHART_OPTIONS} />}
-                {chartType === "area" && <Line data={{ ...chartConfig, datasets: chartConfig.datasets.map((ds) => ({ ...ds, fill: true })) } as any} options={CHART_OPTIONS} />}
-                {chartType === "pie" && <Pie data={chartConfig as any} options={{ ...CHART_OPTIONS, plugins: { ...CHART_OPTIONS.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
-                {chartType === "doughnut" && <Doughnut data={chartConfig as any} options={{ ...CHART_OPTIONS, plugins: { ...CHART_OPTIONS.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
-                {chartType === "combo" && <Bar data={chartConfig as any} options={CHART_OPTIONS} />}
-                {chartType === "scatter" && <Scatter data={chartConfig as any} options={CHART_OPTIONS} />}
-              </div>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {chartType !== "kpi" && chartType !== "table" && chartConfig && (
+                  <div className="h-[220px] w-full">
+                    {chartType === "bar" && <Bar data={chartConfig as any} options={chartOptionsWithGrid} />}
+                    {chartType === "horizontalBar" && <Bar data={chartConfig as any} options={{ ...chartOptionsWithGrid, indexAxis: "y" as const, scales: { ...chartOptionsWithGrid.scales, y: { ...chartOptionsWithGrid.scales.y, ticks: { ...chartOptionsWithGrid.scales.y.ticks, maxTicksLimit: 12 } } } }} />}
+                    {chartType === "line" && <Line data={chartConfig as any} options={chartOptionsWithGrid} />}
+                    {chartType === "area" && <Line data={{ ...chartConfig, datasets: chartConfig.datasets.map((ds) => ({ ...ds, fill: true })) } as any} options={chartOptionsWithGrid} />}
+                    {chartType === "pie" && <Pie data={chartConfig as any} options={{ ...chartOptionsWithGrid, plugins: { ...chartOptionsWithGrid.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
+                    {chartType === "doughnut" && <Doughnut data={chartConfig as any} options={{ ...chartOptionsWithGrid, plugins: { ...chartOptionsWithGrid.plugins, legend: buildPieDoughnutLegend(chartConfig) } } as any} />}
+                    {chartType === "combo" && <Bar data={chartConfig as any} options={chartOptionsWithGrid} />}
+                    {chartType === "scatter" && <Scatter data={chartConfig as any} options={chartOptionsWithGrid} />}
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

@@ -15,6 +15,9 @@ export interface DashboardDataSource {
   fields: { all: string[]; numeric: string[]; string: string[]; date: string[] };
 }
 
+/** semantic_name -> data_source_id -> physical_column_name (Dataset del Dashboard) */
+export type DatasetDimensions = Record<string, Record<string, string>>;
+
 export interface ETLDataResponse {
   dashboard: { id: string; etl_id?: string | null; etl?: { id: string; title: string; name: string } | null };
   dataSources?: DashboardDataSource[];
@@ -22,6 +25,7 @@ export interface ETLDataResponse {
   etl: { id: string; title: string; name: string } | null;
   etlData: { id: number; name: string; created_at: string; dataArray: any[]; rowCount: number } | null;
   fields: { all: string[]; numeric: string[]; string: string[]; date: string[] };
+  datasetDimensions?: DatasetDimensions;
 }
 
 export interface UseAdminDashboardEtlDataReturn {

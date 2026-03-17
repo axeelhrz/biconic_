@@ -271,6 +271,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewRowsProcessed, setPreviewRowsProcessed] = useState<number | null>(null);
   const [previewSortKey, setPreviewSortKey] = useState<string | null>(null);
   const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
+  const [previewUnlimited, setPreviewUnlimited] = useState(false);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewLoadedOnceRef = useRef<boolean>(false);
   const fetchPreviewRef = useRef<() => void>(() => {});
@@ -1075,7 +1076,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     setPreviewError(null);
     const previewBody = { ...body } as Record<string, unknown>;
     delete previewBody.end;
-    previewBody.limit = 1000;
+    if (previewUnlimited) {
+      previewBody.unlimited = true;
+    } else {
+      previewBody.limit = 1000;
+    }
     if (previewBody.union && typeof previewBody.union === "object" && Array.isArray((previewBody.union as { rights?: unknown[] }).rights)) {
       const u = previewBody.union as { left: unknown; rights: unknown[]; unionAll?: boolean };
       if (u.rights.length > 0) (previewBody.union as Record<string, unknown>).right = u.rights[0];
@@ -1134,7 +1139,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       .finally(() => {
         setPreviewLoading(false);
       });
-  }, [buildGuidedConfigBody, connectionId, selectedTable]);
+  }, [buildGuidedConfigBody, connectionId, selectedTable, previewUnlimited]);
 
   fetchPreviewRef.current = fetchPreview;
 
@@ -1848,7 +1853,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     />
                     <Label htmlFor="use-join-filtros" className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Combinar con otra tabla (JOIN)</Label>
                   </div>
-                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Unir por una columna en común. Elegí una o más tablas secundarias, columnas de enlace y qué columnas traer de cada una.</p>
+                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Unir por una o más columnas en común (clave compuesta). Ej.: TIPOCOMPROBANTE + NUMEROCOMPROBANTE para cabezas y cuerpos de comprobantes. Elegí una o más tablas secundarias, columnas de enlace y qué columnas traer de cada una.</p>
                   {useJoin && joinSecondaryConnectionId != null && connectionId != null && String(joinSecondaryConnectionId) !== String(connectionId) && (
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Al usar otra conexión (otra base de datos), el JOIN se ejecuta en memoria.</p>
                   )}
@@ -2969,13 +2974,22 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           <div className="rounded-xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
             <div className="px-4 py-3 border-b flex items-center justify-between gap-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
               <h3 className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>Vista previa de datos</h3>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 {previewLoading && (
                   <span className="text-xs flex items-center gap-1.5" style={{ color: "var(--platform-fg-muted)" }}>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Actualizando…
                   </span>
                 )}
+                <label className="flex items-center gap-1.5 text-xs cursor-pointer shrink-0" style={{ color: "var(--platform-fg-muted)" }}>
+                  <input
+                    type="checkbox"
+                    checked={previewUnlimited}
+                    onChange={(e) => setPreviewUnlimited(e.target.checked)}
+                    className="rounded border"
+                  />
+                  Sin límite de filas
+                </label>
                 <Button
                   type="button"
                   variant="outline"

@@ -50,6 +50,12 @@ export type ChartStyleConfig = {
   borderWidth?: number;
   /** Tamaño de fuente general (leyenda, ejes) */
   fontSize?: number;
+  /** Mostrar líneas de cuadrícula en eje X. Por defecto true. */
+  gridXDisplay?: boolean;
+  /** Mostrar líneas de cuadrícula en eje Y. Por defecto true. */
+  gridYDisplay?: boolean;
+  /** Color de las líneas de cuadrícula (ej. #e2e8f0). */
+  gridColor?: string;
 };
 
 const DEFAULT_LAYOUT_PADDING = 16;
@@ -156,23 +162,26 @@ export function buildChartOptions(
 
   if (type === "bar" || type === "horizontalBar" || type === "line") {
     const scales: Record<string, unknown> = {};
+    const gridColor = style?.gridColor ?? "#eee";
+    const gridX = { display: style?.gridXDisplay ?? false, color: gridColor };
+    const gridY = { display: style?.gridYDisplay ?? true, color: gridColor };
     const axisX = {
       display: style?.axisXVisible ?? true,
       reverse: style?.axisXReverse ?? false,
-      grid: { display: false },
+      grid: gridX,
       ticks: { font: { size: style?.fontSize ?? 11 } },
     };
     const axisY = {
       display: style?.axisYVisible ?? true,
       reverse: style?.axisYReverse ?? false,
-      grid: { color: "#eee" },
+      grid: gridY,
       ticks: { font: { size: style?.fontSize ?? 11 } },
     };
     if (type === "horizontalBar") {
       scales.x = axisX;
-      scales.y = { ...axisY, grid: { display: false } };
+      scales.y = { ...axisY, grid: gridY };
     } else {
-      scales.x = { ...axisX, grid: { display: false } };
+      scales.x = axisX;
       scales.y = axisY;
     }
     return {

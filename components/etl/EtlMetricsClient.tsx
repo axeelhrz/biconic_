@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { ComponentType } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles, AreaChart, ScatterChart, MapPin, TrendingUp, HelpCircle } from "lucide-react";
 import { Bar, Line, Pie, Doughnut, Scatter } from "react-chartjs-2";
 import {
@@ -38,7 +38,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import type { SavedMetricForm, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
+import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
 
 ChartJS.register(
   CategoryScale,
@@ -396,8 +396,9 @@ export type EtlMetricsClientProps = {
   connections?: ConnectionOption[];
 };
 
-export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connections: connectionsProp = [] }: EtlMetricsClientProps) {
+export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [] }: EtlMetricsClientProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<MetricsDataResponse["data"] | null>(null);
@@ -485,6 +486,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const [chartLabelOverrides, setChartLabelOverrides] = useState<Record<string, string>>({});
   const [chartMetricFormats, setChartMetricFormats] = useState<Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>>({});
   const [chartComboSyncAxes, setChartComboSyncAxes] = useState(false);
+  const [chartGridXDisplay, setChartGridXDisplay] = useState(true);
+  const [chartGridYDisplay, setChartGridYDisplay] = useState(true);
+  const [chartGridColor, setChartGridColor] = useState<string>("");
+  const [chartScalePerMetric, setChartScalePerMetric] = useState<Record<string, { min?: number; max?: number; step?: number }>>({});
   const [interCrossFilter, setInterCrossFilter] = useState(true);
   const [interCrossFilterFields, setInterCrossFilterFields] = useState<string[]>([]);
   const [interDrilldown, setInterDrilldown] = useState(false);
@@ -515,10 +520,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
 
   // Dashboard vinculado al ETL
   const [linkedDashboardId, setLinkedDashboardId] = useState<string | null>(null);
-  const [linkedDashboardName, setLinkedDashboardName] = useState("Dashboard principal");
   const [dashboardSyncing, setDashboardSyncing] = useState(false);
-  const [availableDashboards, setAvailableDashboards] = useState<{ id: string; title: string }[]>([]);
-  const [dashboardListLoading, setDashboardListLoading] = useState(false);
 
   // Filtros dinámicos del dashboard (8.1)
   type DynamicFilter = {
@@ -531,8 +533,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     applyToOtherDashboards: boolean;
   };
   const [dashboardFilters, setDashboardFilters] = useState<DynamicFilter[]>([]);
-  /** IDs de métricas que el usuario eligió incluir en el dashboard (no se crea/sincroniza hasta que pulse "Crear dashboard" / "Sincronizar"). */
-  const [selectedMetricIdsForDashboard, setSelectedMetricIdsForDashboard] = useState<string[]>([]);
 
   const [metricsDistinctColumn, setMetricsDistinctColumn] = useState<string | null>(null);
   const [metricsDistinctValues, setMetricsDistinctValues] = useState<string[]>([]);
@@ -623,6 +623,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Entrada directa por query param ?step=A|B|C|D (Dataset, Métrica, Análisis, Gráfico)
+  useEffect(() => {
+    const step = searchParams.get("step");
+    if (step === "A" || step === "B" || step === "C" || step === "D") {
+      setWizard(step);
+      setWizardStep(0);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (!showForm || !(data?.hasData ?? false) || rawTableData.length > 1) return;
@@ -834,18 +843,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   }, [dateDimsInForm.join(",")]);
 
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
-
-  // Cargar lista de dashboards del ETL para poder elegir destino
-  useEffect(() => {
-    if (!etlId || savedMetrics.length === 0) return;
-    setDashboardListLoading(true);
-    fetch(`/api/dashboard?etl_id=${encodeURIComponent(etlId)}`)
-      .then((r) => safeJsonResponse(r))
-      .then((json) => {
-        if (json?.ok && Array.isArray(json.dashboards)) setAvailableDashboards(json.dashboards);
-      })
-      .finally(() => setDashboardListLoading(false));
-  }, [etlId, savedMetrics.length]);
 
   const hasData = data?.hasData ?? false;
   const fields = data?.fields?.all ?? [];
@@ -1098,7 +1095,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
   const openEdit = (saved: SavedMetricForm) => {
     setEditingId(saved.id);
     setFormName(saved.name);
-    const cfg = saved.aggregationConfig;
+    const cfg = saved.aggregationConfig as SavedMetricAggregationConfig | undefined;
     setFormChartType((cfg as { chartType?: string })?.chartType ?? (saved as { chartType?: string }).chartType ?? "bar");
     if (cfg) {
       const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter((d): d is string => typeof d === "string" && d !== "");
@@ -1154,6 +1151,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       setChartLabelOverrides(cfg.chartLabelOverrides && typeof cfg.chartLabelOverrides === "object" ? cfg.chartLabelOverrides : {});
       setChartMetricFormats(cfg.chartMetricFormats && typeof cfg.chartMetricFormats === "object" ? cfg.chartMetricFormats : {});
       setChartComboSyncAxes(!!cfg.chartComboSyncAxes);
+      setChartGridXDisplay(cfg.chartGridXDisplay !== false);
+      setChartGridYDisplay(cfg.chartGridYDisplay !== false);
+      setChartGridColor(typeof cfg.chartGridColor === "string" ? cfg.chartGridColor : "");
+      setChartScalePerMetric(cfg.chartScalePerMetric && typeof cfg.chartScalePerMetric === "object" ? cfg.chartScalePerMetric : {});
       setShowDataLabels(!!cfg.showDataLabels);
       setInterCrossFilter(cfg.interCrossFilter !== false);
       setInterCrossFilterFields(Array.isArray(cfg.interCrossFilterFields) ? cfg.interCrossFilterFields : []);
@@ -1530,15 +1531,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       const formatted = formatPreviewDateValue(v, colKey);
       return formatted ?? String(v ?? "");
     };
+    const labelOverride = (v: string) => {
+      if (!chartLabelOverrides || Object.keys(chartLabelOverrides).length === 0) return v;
+      const s = String(v ?? "").trim();
+      if (s === "") return v;
+      if (s in chartLabelOverrides) return chartLabelOverrides[s];
+      for (const [k, val] of Object.entries(chartLabelOverrides)) {
+        if (String(k).trim() === s) return val;
+      }
+      return v;
+    };
 
     if (chartSeriesField && keys.includes(chartSeriesField) && xKey) {
       const seriesValues = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[chartSeriesField] ?? "")))];
       const xValuesRaw = [...new Set(rows.map((r) => (r as Record<string, unknown>)[xKey]))];
       const xValues = xValuesRaw.map((xv) => String(xv ?? ""));
-      const labels = xValues.map((xv) => formatLabel(xv, xKey));
+      const labels = xValues.map((xv) => labelOverride(formatLabel(xv, xKey)));
       const datasets = seriesValues.flatMap((sv, svIdx) =>
         yKeys.map((yKey, yIdx) => {
-          const label = `${sv} (${colLabel(yKey)})`;
+          const label = `${labelOverride(sv)} (${colLabel(yKey)})`;
           const color = getColor(label, svIdx * yKeys.length + yIdx);
           return {
             label,
@@ -1555,7 +1566,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       return { labels, datasets };
     }
 
-    const labels = xKey != null ? rows.map((r) => formatLabel((r as Record<string, unknown>)[xKey], xKey)) : rows.map((_, i) => (i === 0 ? "Total" : ""));
+    const labels = xKey != null ? rows.map((r) => labelOverride(formatLabel((r as Record<string, unknown>)[xKey], xKey))) : rows.map((_, i) => (i === 0 ? "Total" : ""));
     const datasets = yKeys.map((alias, idx) => {
       const label = colLabel(alias);
       const color = getColor(label, idx);
@@ -1610,7 +1621,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     }
 
     return { labels, datasets };
-  }, [previewData, formDimensions, effectiveFormMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue, dateFields]);
+  }, [previewData, formDimensions, effectiveFormMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue, dateFields, chartLabelOverrides]);
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
@@ -1732,156 +1743,32 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
     setAfterSaveInB(null);
   };
 
-  const syncMetricsToDashboard = useCallback(async (metrics: SavedMetricForm[], fullSavedMetrics?: SavedMetricForm[]) => {
-    if (!etlId || metrics.length === 0) return;
-    const metricsToPersist = fullSavedMetrics ?? metrics;
+  const saveDashboardFiltersOnly = useCallback(async () => {
+    if (!etlId) return;
     setDashboardSyncing(true);
     try {
-      let dbId = linkedDashboardId;
-
-      // 1. Crear dashboard si no existe
-      if (!dbId) {
-        const createRes = await fetch("/api/dashboard", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: linkedDashboardName || "Dashboard principal",
-            etl_id: etlId,
-            ...(etlClientId ? { client_id: etlClientId } : {}),
-          }),
-        });
-        const createJson = await safeJsonResponse(createRes);
-        if (!createRes.ok || !createJson.ok) {
-          toast.error("Error al crear el dashboard");
-          return;
-        }
-        dbId = createJson.id as string;
-        setLinkedDashboardId(dbId);
-      }
-
-      // 2. Convertir métricas a StudioWidget (formato real del AdminDashboardStudio)
-      const widgets = metrics.map((m, idx) => {
-        const cfg = (m.aggregationConfig ?? {}) as Record<string, unknown>;
-        const chartType = cfg.chartType ?? (m as { chartType?: string }).chartType ?? "bar";
-        const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter(Boolean);
-        const metricsArr = Array.isArray(cfg.metrics) ? cfg.metrics : [m.metric];
-
-        return {
-          id: `w-${m.id}`,
-          type: chartType,
-          title: m.name,
-          x: 0,
-          y: 0,
-          w: 400,
-          h: 280,
-          gridOrder: idx,
-          gridSpan: chartType === "kpi" ? 1 : 2,
-          pageId: "page-1",
-          metricId: m.id,
-          aggregationConfig: {
-            enabled: true,
-            dimension: dims[0] || undefined,
-            dimension2: dims[1] || undefined,
-            metrics: metricsArr.map((met: AggregationMetricEdit & { expression?: string }) => {
-              const base: Record<string, unknown> = {
-                id: met.id || `m-${idx}`,
-                field: met.field || "",
-                func: met.func || "SUM",
-                alias: met.alias || "",
-                condition: met.condition || undefined,
-                formula: met.formula || undefined,
-              };
-              if (met.expression && String(met.expression).trim()) base.expression = String(met.expression).trim();
-              return base;
-            }),
-            filters: Array.isArray(cfg.filters) ? cfg.filters : undefined,
-            orderBy: cfg.orderBy || undefined,
-            limit: cfg.limit ?? 100,
-            cumulative: cfg.cumulative || undefined,
-            comparePeriod: cfg.comparePeriod || undefined,
-            dateDimension: cfg.dateDimension || undefined,
-            chartType: cfg.chartType || undefined,
-            chartXAxis: (cfg.chartXAxis as string) || undefined,
-            chartYAxes: Array.isArray(cfg.chartYAxes) ? (cfg.chartYAxes as string[]) : undefined,
-            chartSeriesField: (cfg.chartSeriesField as string) || undefined,
-            chartValueType: cfg.chartValueType || undefined,
-            chartValueScale: cfg.chartValueScale || undefined,
-            chartNumberFormat: cfg.chartNumberFormat || undefined,
-            chartCurrencySymbol: cfg.chartCurrencySymbol || undefined,
-            chartSeriesColors: cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" && Object.keys(cfg.chartSeriesColors).length > 0 ? cfg.chartSeriesColors : undefined,
-            chartLabelOverrides: cfg.chartLabelOverrides && typeof cfg.chartLabelOverrides === "object" && Object.keys(cfg.chartLabelOverrides).length > 0 ? cfg.chartLabelOverrides : undefined,
-            chartMetricFormats: cfg.chartMetricFormats && typeof cfg.chartMetricFormats === "object" && Object.keys(cfg.chartMetricFormats).length > 0 ? cfg.chartMetricFormats : undefined,
-            chartComboSyncAxes: (cfg as { chartComboSyncAxes?: boolean }).chartComboSyncAxes ?? undefined,
-            chartRankingEnabled: (cfg.chartRankingEnabled as boolean) || undefined,
-            chartRankingTop: (cfg.chartRankingTop as number) ?? undefined,
-            chartRankingMetric: (cfg.chartRankingMetric as string) || undefined,
-          },
-          excludeGlobalFilters: false,
-          color: cfg.chartSeriesColors ? Object.values(cfg.chartSeriesColors)[0] as string : undefined,
-          labelDisplayMode: undefined,
-          kpiSecondaryLabel: undefined,
-          dataSourceId: null,
-        };
-      });
-
-      // 3. Convertir DynamicFilters a GlobalFilter (formato real del dashboard)
-      const globalFiltersToSave = dashboardFilters
-        .filter((f) => f.field)
-        .map((f) => ({
-          id: f.id,
-          field: f.field,
-          operator: f.filterType === "single" ? "=" : f.filterType === "multi" ? "IN" : "BETWEEN",
-          value: "",
-          filterType: f.filterType,
-          label: f.label,
-          scope: f.scope,
-          scopeMetricIds: f.scopeMetricIds,
-          applyToOtherDashboards: f.applyToOtherDashboards,
-          inputType: f.filterType === "single" || f.filterType === "multi" ? "select" : f.filterType === "dateRange" ? "date" : f.filterType === "numericRange" ? "number" : undefined,
-        }));
-
-      // 4. Construir layout compatible con AdminDashboardStudio
-      const dcArr = derivedColumns.length > 0 ? { derivedColumns } : undefined;
-      const layoutPayload = {
-        widgets,
-        theme: {},
-        pages: [{ id: "page-1", name: "Página 1" }],
-        activePageId: "page-1",
-        savedMetrics: metrics,
-        ...(dcArr && { datasetConfig: dcArr }),
-      };
-
-      // 5. Guardar via API
-      const res = await fetch(`/api/dashboard/${dbId}/layout`, {
+      const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          layout: layoutPayload,
-          global_filters_config: globalFiltersToSave,
-          title: linkedDashboardName || undefined,
+          savedMetrics: savedMetrics,
+          dashboardFilters,
+          ...(linkedDashboardId != null && { dashboardId: linkedDashboardId }),
         }),
       });
       const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
-        toast.error(json.error ?? "Error al sincronizar dashboard");
+        toast.error((json as { error?: string }).error ?? "Error al guardar filtros");
         return;
       }
-
-      // 6. Persistir el dashboardId en el ETL (guardamos todas las métricas del ETL, no solo las sincronizadas al dashboard)
-      await fetch(`/api/etl/${etlId}/metrics`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ savedMetrics: metricsToPersist, dashboardId: dbId, dashboardFilters }),
-      });
-
-      toast.success(linkedDashboardId ? "Dashboard sincronizado" : "Dashboard creado y sincronizado");
-    } catch (e) {
-      console.error("Error syncing dashboard", e);
-      toast.error("Error al sincronizar dashboard");
+      setData((prev) => (prev ? { ...prev, dashboardFilters } : null));
+      toast.success("Filtros guardados");
+    } catch {
+      toast.error("Error al guardar filtros");
     } finally {
       setDashboardSyncing(false);
     }
-  }, [etlId, etlClientId, linkedDashboardId, linkedDashboardName, dashboardFilters, derivedColumns, formChartType]);
+  }, [etlId, savedMetrics, dashboardFilters, linkedDashboardId]);
 
   const saveMetric = async () => {
     const name = formName.trim();
@@ -1945,6 +1832,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
             ? chartMetricFormats
             : undefined,
       chartComboSyncAxes: formChartType === "combo" && chartYAxes.length >= 2 ? chartComboSyncAxes : undefined,
+      chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
+      chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
+      chartGridColor: chartGridColor.trim() || undefined,
+      chartScalePerMetric: Object.keys(chartScalePerMetric).length > 0 ? chartScalePerMetric : undefined,
       showDataLabels: showDataLabels || undefined,
       interCrossFilter: interCrossFilter === false ? false : undefined,
       interCrossFilterFields: interCrossFilterFields.length > 0 ? interCrossFilterFields : undefined,
@@ -2163,6 +2054,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
             ? chartMetricFormats
             : undefined,
       chartComboSyncAxes: formChartType === "combo" && chartYAxes.length >= 2 ? chartComboSyncAxes : undefined,
+      chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
+      chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
+      chartGridColor: chartGridColor.trim() || undefined,
+      chartScalePerMetric: Object.keys(chartScalePerMetric).length > 0 ? chartScalePerMetric : undefined,
       showDataLabels: showDataLabels || undefined,
       interCrossFilter: interCrossFilter === false ? false : undefined,
       interCrossFilterFields: interCrossFilterFields.length > 0 ? interCrossFilterFields : undefined,
@@ -2254,6 +2149,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
       chartThousandSep,
       chartDecimals,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
+      chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
+      chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
+      chartGridColor: chartGridColor.trim() || undefined,
       chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
       chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
       chartRankingEnabled: chartRankingEnabled || undefined,
@@ -4417,6 +4315,61 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                         <Input type="number" value={chartAxisStep} onChange={(e) => setChartAxisStep(e.target.value)} placeholder="Automática (vacío)" className="h-8 w-28 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                         <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Dejar vacío para automático</span>
                       </div>
+
+                      {chartYAxes.length > 1 && (
+                        <>
+                          <Label className="text-sm font-medium mb-2 block mt-4" style={{ color: "var(--platform-fg)" }}>Escala por métrica</Label>
+                          <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Personalizá mín, máx y paso del eje para cada métrica (ej. eje izquierdo y derecho en combo).</p>
+                          <div className="space-y-3">
+                            {chartYAxes.map((key) => {
+                              const label = chartAvailableColumns.find((c) => c.key === key)?.label ?? key;
+                              const per = chartScalePerMetric[key] ?? {};
+                              const updatePer = (upd: { min?: number; max?: number; step?: number }) =>
+                                setChartScalePerMetric((prev) => ({ ...prev, [key]: { ...(prev[key] ?? {}), ...upd } }));
+                              return (
+                                <div key={key} className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                                  <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg)" }}>{label}</p>
+                                  <div className="flex flex-wrap items-center gap-3">
+                                    <div className="flex items-center gap-2">
+                                      <Label className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>Mín</Label>
+                                      <Input type="number" value={per.min ?? ""} onChange={(e) => updatePer({ min: e.target.value === "" ? undefined : Number(e.target.value) })} placeholder="—" className="h-7 w-20 rounded text-xs !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Label className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>Máx</Label>
+                                      <Input type="number" value={per.max ?? ""} onChange={(e) => updatePer({ max: e.target.value === "" ? undefined : Number(e.target.value) })} placeholder="—" className="h-7 w-20 rounded text-xs !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Label className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>Paso</Label>
+                                      <Input type="number" value={per.step ?? ""} onChange={(e) => updatePer({ step: e.target.value === "" ? undefined : Number(e.target.value) })} placeholder="—" className="h-7 w-16 rounded text-xs !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Líneas de cuadrícula (grid) */}
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Líneas de cuadrícula</Label>
+                      <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Mostrar u ocultar las líneas de escala en los ejes y opcionalmente cambiar su color.</p>
+                      <div className="flex flex-wrap items-center gap-4">
+                        <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                          <input type="checkbox" checked={chartGridXDisplay} onChange={(e) => setChartGridXDisplay(e.target.checked)} className="rounded" />
+                          Mostrar en eje X
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                          <input type="checkbox" checked={chartGridYDisplay} onChange={(e) => setChartGridYDisplay(e.target.checked)} className="rounded" />
+                          Mostrar en eje Y
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Color</Label>
+                          <input type="color" value={chartGridColor || "#e2e8f0"} onChange={(e) => setChartGridColor(e.target.value)} className="w-8 h-8 rounded cursor-pointer border p-0" style={{ borderColor: "var(--platform-border)" }} title="Color de líneas de cuadrícula" />
+                          <Input value={chartGridColor} onChange={(e) => setChartGridColor(e.target.value)} placeholder="#e2e8f0 (vacío = tema)" className="h-8 w-28 rounded-lg text-xs !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
+                        </div>
+                      </div>
                     </div>
 
                     {/* 6.3.3 Ranking */}
@@ -4645,24 +4598,36 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                           const yValues = previewChartConfig.datasets?.flatMap((d: { data?: number[] }) => d.data ?? []) ?? [];
                           const dataMin = yValues.length ? Math.min(...yValues) : 0;
                           const dataMax = yValues.length ? Math.max(...yValues) : 100;
-                          const yMin = chartScaleMode === "custom" && chartScaleMin !== "" && !isNaN(Number(chartScaleMin)) ? Number(chartScaleMin) : chartScaleMode === "dataset" ? dataMin : undefined;
-                          const yMax = chartScaleMode === "custom" && chartScaleMax !== "" && !isNaN(Number(chartScaleMax)) ? Number(chartScaleMax) : chartScaleMode === "dataset" ? dataMax : undefined;
-                          const stepSize = chartAxisStep !== "" && !isNaN(Number(chartAxisStep)) ? Number(chartAxisStep) : undefined;
+                          const yMinGlobal = chartScaleMode === "custom" && chartScaleMin !== "" && !isNaN(Number(chartScaleMin)) ? Number(chartScaleMin) : chartScaleMode === "dataset" ? dataMin : undefined;
+                          const yMaxGlobal = chartScaleMode === "custom" && chartScaleMax !== "" && !isNaN(Number(chartScaleMax)) ? Number(chartScaleMax) : chartScaleMode === "dataset" ? dataMax : undefined;
+                          const stepSizeGlobal = chartAxisStep !== "" && !isNaN(Number(chartAxisStep)) ? Number(chartAxisStep) : undefined;
+                          const scaleForMetric = (key: string) => {
+                            const per = key ? chartScalePerMetric[key] : undefined;
+                            return {
+                              min: per?.min ?? yMinGlobal,
+                              max: per?.max ?? yMaxGlobal,
+                              step: per?.step ?? stepSizeGlobal,
+                            };
+                          };
+                          const key0 = chartYAxes[0];
+                          const s0 = scaleForMetric(key0 ?? "");
                           const axisColor = "#64748b";
-                          const gridColor = "#e2e8f0";
+                          const gridColor = chartGridColor.trim() || "#e2e8f0";
+                          const gridX = { display: chartGridXDisplay, color: gridColor };
+                          const gridY = { display: chartGridYDisplay, color: gridColor };
                           const axisScales = {
                             x: {
                               display: true,
-                              grid: { color: gridColor },
+                              grid: gridX,
                               ticks: { color: axisColor, maxTicksLimit: 8, font: { size: 11 } },
                               title: { display: false },
                             },
                             y: {
                               display: true,
-                              grid: { color: gridColor },
-                              ticks: { color: axisColor, font: { size: 11 }, ...(stepSize != null ? { stepSize } : {}) },
-                              ...(yMin != null ? { min: yMin } : {}),
-                              ...(yMax != null ? { max: yMax } : {}),
+                              grid: gridY,
+                              ticks: { color: axisColor, font: { size: 11 }, ...(s0.step != null ? { stepSize: s0.step } : {}) },
+                              ...(s0.min != null ? { min: s0.min } : {}),
+                              ...(s0.max != null ? { max: s0.max } : {}),
                               title: { display: false },
                             },
                           };
@@ -4702,7 +4667,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                 y1: {
                                   display: true,
                                   position: "right",
-                                  grid: { drawOnChartArea: false, color: gridColor },
+                                  grid: { drawOnChartArea: false, display: chartGridYDisplay, color: gridColor },
                                   min: 0,
                                   max: 1,
                                   ticks: { color: axisColor, font: { size: 11 }, callback: (value: number) => formatWithConfig(value * range1 + min1, cfg1) },
@@ -4710,15 +4675,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                                 },
                               };
                             } else {
+                              const s1 = scaleForMetric(chartYAxes[1] ?? "");
                               comboScales = {
                                 ...axisScales,
+                                y: {
+                                  ...axisScales.y,
+                                  ticks: { color: axisColor, font: { size: 11 }, ...(s0.step != null ? { stepSize: s0.step } : {}) },
+                                  ...(s0.min != null ? { min: s0.min } : {}),
+                                  ...(s0.max != null ? { max: s0.max } : {}),
+                                  title: { display: false },
+                                },
                                 y1: {
                                   display: true,
                                   position: "right",
-                                  grid: { drawOnChartArea: false, color: gridColor },
-                                  ticks: { color: axisColor, font: { size: 11 }, ...(stepSize != null ? { stepSize } : {}) },
-                                  ...(yMin != null ? { min: yMin } : {}),
-                                  ...(yMax != null ? { max: yMax } : {}),
+                                  grid: { drawOnChartArea: false, display: chartGridYDisplay, color: gridColor },
+                                  ticks: { color: axisColor, font: { size: 11 }, ...(s1.step != null ? { stepSize: s1.step } : {}) },
+                                  ...(s1.min != null ? { min: s1.min } : {}),
+                                  ...(s1.max != null ? { max: s1.max } : {}),
                                   title: { display: false },
                                 },
                               };
@@ -5058,100 +5031,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>Dashboard</h2>
-                <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí qué métricas incluir y creá o sincronizá el dashboard cuando hayas terminado de configurar. El dashboard se crea solo al apretar Crear dashboard.</p>
+                <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                  Para añadir gráficos al dashboard, guardá un análisis en el paso Análisis o Gráfico y luego, en el Dashboard, usá «Añadir análisis».
+                </p>
               </div>
               {linkedDashboardId && (
-                <Link href={`/admin/dashboard/${linkedDashboardId}`} className="text-xs font-medium underline" style={{ color: "var(--platform-accent)" }}>
+                <Link href={`/admin/dashboard/${linkedDashboardId}`} className="text-xs font-medium underline shrink-0" style={{ color: "var(--platform-accent)" }}>
                   Abrir dashboard →
                 </Link>
               )}
-            </div>
-
-            {/* Selección de métricas a incluir en el dashboard */}
-            <div className="rounded-lg border p-3 mb-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-              <h3 className="text-sm font-medium mb-2" style={{ color: "var(--platform-fg)" }}>Métricas a incluir en el dashboard</h3>
-              <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Marcá las métricas que querés que aparezcan como widgets. Solo estas se subirán al crear o sincronizar.</p>
-              <div className="flex flex-wrap gap-2 mb-2">
-                {savedMetrics.map((m) => (
-                  <label key={m.id} className="inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 cursor-pointer text-sm" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)", background: selectedMetricIdsForDashboard.includes(m.id) ? "var(--platform-accent-muted, rgba(59, 130, 246, 0.15))" : "transparent" }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedMetricIdsForDashboard.includes(m.id)}
-                      onChange={(e) => {
-                        if (e.target.checked) setSelectedMetricIdsForDashboard((prev) => [...prev, m.id]);
-                        else setSelectedMetricIdsForDashboard((prev) => prev.filter((id) => id !== m.id));
-                      }}
-                      className="rounded border-gray-400"
-                    />
-                    <span>{m.name}</span>
-                  </label>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <Button type="button" variant="ghost" size="sm" className="rounded-lg text-xs h-7" style={{ color: "var(--platform-fg-muted)" }} onClick={() => setSelectedMetricIdsForDashboard(savedMetrics.map((m) => m.id))}>
-                  Seleccionar todas
-                </Button>
-                <Button type="button" variant="ghost" size="sm" className="rounded-lg text-xs h-7" style={{ color: "var(--platform-fg-muted)" }} onClick={() => setSelectedMetricIdsForDashboard([])}>
-                  Quitar todas
-                </Button>
-              </div>
-            </div>
-
-            <div className="rounded-lg border p-3 mb-4 flex flex-wrap items-center gap-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-              <div className="flex items-center gap-2 min-w-[200px]">
-                <Label className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Dashboard de destino</Label>
-                <select
-                  value={linkedDashboardId ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (!v) {
-                      setLinkedDashboardId(null);
-                      setLinkedDashboardName("Dashboard principal");
-                    } else {
-                      const d = availableDashboards.find((x) => x.id === v);
-                      setLinkedDashboardId(v);
-                      setLinkedDashboardName(d?.title ?? linkedDashboardName);
-                    }
-                  }}
-                  className="h-8 rounded-lg border px-2 text-sm min-w-[180px]"
-                  style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                  disabled={dashboardListLoading}
-                >
-                  <option value="">Crear nuevo...</option>
-                  {availableDashboards.map((d) => (
-                    <option key={d.id} value={d.id}>{d.title}</option>
-                  ))}
-                </select>
-                {dashboardListLoading && <Loader2 className="h-4 w-4 animate-spin shrink-0" style={{ color: "var(--platform-accent)" }} />}
-              </div>
-              {!linkedDashboardId && (
-                <div className="flex items-center gap-2 min-w-[180px]">
-                  <Label className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>Nombre del nuevo</Label>
-                  <Input value={linkedDashboardName} onChange={(e) => setLinkedDashboardName(e.target.value)} placeholder="Dashboard principal" className="h-8 rounded-lg text-sm !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{selectedMetricIdsForDashboard.length} de {savedMetrics.length} métrica{savedMetrics.length !== 1 ? "s" : ""} seleccionada{savedMetrics.length !== 1 ? "s" : ""}</span>
-                {dashboardSyncing && <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--platform-accent)" }} />}
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="rounded-lg text-xs"
-                style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
-                onClick={() => {
-                  const metricsToSync = savedMetrics.filter((m) => selectedMetricIdsForDashboard.includes(m.id));
-                  if (metricsToSync.length === 0) {
-                    toast.error("Seleccioná al menos una métrica para incluir en el dashboard.");
-                    return;
-                  }
-                  syncMetricsToDashboard(metricsToSync, savedMetrics);
-                }}
-                disabled={dashboardSyncing}
-              >
-                {linkedDashboardId ? "Sincronizar" : "Crear dashboard"}
-              </Button>
             </div>
 
             {/* 8.1 Filtros Dinámicos */}
@@ -5245,18 +5133,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId, connect
                     size="sm"
                     className="rounded-lg text-xs"
                     style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
-                    onClick={() => {
-                      const metricsToSync = savedMetrics.filter((m) => selectedMetricIdsForDashboard.includes(m.id));
-                      if (metricsToSync.length === 0) {
-                        toast.error("Seleccioná al menos una métrica para incluir en el dashboard.");
-                        return;
-                      }
-                      syncMetricsToDashboard(metricsToSync, savedMetrics);
-                    }}
+                    onClick={() => saveDashboardFiltersOnly()}
                     disabled={dashboardSyncing}
                   >
                     {dashboardSyncing && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
-                    Guardar filtros en dashboard
+                    Guardar filtros
                   </Button>
                 </div>
               )}

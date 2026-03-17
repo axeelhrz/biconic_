@@ -2,6 +2,7 @@
 
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import postgres from "postgres";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { Database } from "@/lib/supabase/database.types";
@@ -31,6 +32,8 @@ interface Filter {
   operator: string;
   value: any;
   cast?: "numeric";
+  /** Opcional: id del filtro global (ej. gf.id) para incluir en filterWarnings. */
+  id?: string;
 }
 
 interface OrderBy {
@@ -105,7 +108,33 @@ const ALLOWED_OPERATORS = new Set([
   "CONTAINS",
   "STARTS_WITH",
   "ENDS_WITH",
+  "YEAR_MONTH",
 ]);
+
+/** Obtiene nombres de columnas de la tabla desde information_schema. Devuelve null si falla o no hay SUPABASE_DB_URL. */
+async function fetchTableColumnNames(schemaName: string, tableName: string): Promise<string[] | null> {
+  const dbUrl = process.env.SUPABASE_DB_URL;
+  if (!dbUrl) return null;
+  const safeSchema = schemaName === "etl_output" ? "etl_output" : "public";
+  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
+  const sql = postgres(dbUrl);
+  try {
+    const rows = await sql.unsafe(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
+      [safeSchema, safeTable]
+    ) as Array<{ column_name?: string }>;
+    await sql.end();
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    return rows.map((r) => String(r?.column_name ?? "").toLowerCase());
+  } catch {
+    try {
+      await sql.end();
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+}
 
 function toSqlLiteral(v: any): string {
   if (v === null || typeof v === "undefined") return "NULL";
@@ -553,6 +582,18 @@ function buildCountIfSumIfAggregate(
     }
     return `SUM(CASE WHEN ${conditions.join(" AND ")} THEN ${sumRangeSql} ELSE 0 END)`;
   }
+  const averageIfMatch = trimmed.match(/^\s*AVERAGEIF\s*\(([\s\S]+)\)\s*$/i);
+  if (averageIfMatch) {
+    const args = splitArgs(averageIfMatch[1]!);
+    if (args.length < 2) return null;
+    const rangeSql = expressionToSql(args[0]!, derivedLookup);
+    const crit = parseCriterion(args[1]!);
+    const valSql = expressionToSql(args[1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
+    const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
+    const avgRangeSql = args.length >= 3 ? expressionToSql(args[2]!, derivedLookup) : rangeSql;
+    if (!rangeSql || !avgRangeSql) return null;
+    return `AVG(CASE WHEN ${whenClause} THEN ${avgRangeSql} END)`;
+  }
   return null;
 }
 
@@ -590,7 +631,7 @@ export async function POST(req: NextRequest) {
       if (m.formula) continue;
       const func = (m.func || "").toString().toUpperCase().trim();
       const expr = (m as Metric & { expression?: string }).expression?.trim() ?? "";
-      const exprIsCountIfSumIf = /^\s*(COUNTIF|SUMIF|COUNTIFS|SUMIFS)\s*\(/i.test(expr);
+      const exprIsCountIfSumIf = /^\s*(COUNTIF|SUMIF|COUNTIFS|SUMIFS|AVERAGEIF)\s*\(/i.test(expr);
       const allowed =
         allowedAggSet.has(func) ||
         func.startsWith("COUNT(DISTINCT") ||
@@ -599,7 +640,7 @@ export async function POST(req: NextRequest) {
         exprIsCountIfSumIf;
       if (!allowed) {
         return NextResponse.json(
-          { error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use: SUM, AVG, COUNT, COUNTA, MIN, MAX, COUNT(DISTINCT), o expresiones con COUNTIF/SUMIF/COUNTIFS/SUMIFS.` },
+          { error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use: SUM, AVG, COUNT, COUNTA, MIN, MAX, COUNT(DISTINCT), o expresiones con COUNTIF/SUMIF/COUNTIFS/SUMIFS/AVERAGEIF.` },
           { status: 400 }
         );
       }
@@ -650,6 +691,28 @@ export async function POST(req: NextRequest) {
         { error: "Formato de tabla inválido (debe ser esquema.nombre_tabla)" },
         { status: 400 }
       );
+    }
+
+    // Filtros inteligentes: validar que cada filtro tenga su columna en la tabla; omitir los que no y devolver filterWarnings
+    const tableColumnNames = await fetchTableColumnNames(schema, table);
+    const tableColumnsSet = tableColumnNames ? new Set(tableColumnNames) : null;
+    const filterWarnings: Array<{ filterId?: string; field: string; reason: string }> = [];
+    const validFilters: Filter[] = [];
+    if (body.filters && body.filters.length > 0) {
+      for (const f of body.filters) {
+        const fieldNorm = (f.field || "").replace(/"/g, "").trim().toLowerCase();
+        if (tableColumnsSet && fieldNorm && !tableColumnsSet.has(fieldNorm)) {
+          filterWarnings.push({
+            filterId: (f as Filter & { id?: string }).id,
+            field: f.field,
+            reason: "column_not_in_table",
+          });
+        } else {
+          validFilters.push(f);
+        }
+      }
+    } else {
+      validFilters.push(...(body.filters || []));
     }
 
     // Helper: condición WHEN para métrica (solo la parte "campo op valor")
@@ -1088,8 +1151,8 @@ export async function POST(req: NextRequest) {
       return `${drCol}::date >= (${maxDateSubquery} - INTERVAL '${n} ${unit}')`;
     })();
 
-    if (body.filters && body.filters.length > 0) {
-      const whereClauses = body.filters
+    if (validFilters.length > 0) {
+      const whereClauses = validFilters
         .map((f) => {
           const col = quotedColumn(f.field);
           const op = (f.operator || "=").toUpperCase().trim();
@@ -1104,6 +1167,7 @@ export async function POST(req: NextRequest) {
             op === "YEAR" ||
             op === "QUARTER" ||
             op === "SEMESTER" ||
+            op === "YEAR_MONTH" ||
             useDateExprForYearLike
           ) {
             fieldExpression = `(
@@ -1173,6 +1237,15 @@ export async function POST(req: NextRequest) {
             const s = Number(f.value);
             if (isNaN(s) || (s !== 1 && s !== 2)) return "TRUE";
             return `${semExpr} = ${s}`;
+          }
+          if (op === "YEAR_MONTH") {
+            const val = f.value == null ? "" : String(f.value).trim();
+            const match = /^(\d{4})-(\d{1,2})$/.exec(val);
+            if (!match) return "TRUE";
+            const y = parseInt(match[1]!, 10);
+            const m = parseInt(match[2]!, 10);
+            if (m < 1 || m > 12 || y < 1900 || y > 2100) return "TRUE";
+            return `EXTRACT(YEAR FROM ${fieldExpression}) = ${y} AND EXTRACT(MONTH FROM ${fieldExpression}) = ${m}`;
           }
           if (op === "=" && isYearLike(f.value)) {
             return `EXTRACT(YEAR FROM ${fieldExpression}) = ${Number(f.value)}`;
@@ -1451,6 +1524,9 @@ export async function POST(req: NextRequest) {
       return newRow;
     });
 
+    if (filterWarnings.length > 0) {
+      return NextResponse.json({ rows: mappedResults, filterWarnings });
+    }
     return NextResponse.json(mappedResults);
   } catch (err: any) {
     const message = err?.message ?? String(err);

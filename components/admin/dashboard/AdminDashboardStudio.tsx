@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
-import { Plus, Check, BarChart2 } from "lucide-react";
+import { Plus, Check, BarChart2, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +30,8 @@ import { StudioEmptyState } from "./StudioEmptyState";
 import { MetricBlock, type MetricBlockState } from "./MetricBlock";
 import type { ChartConfig } from "./MetricBlock";
 import type { SavedMetricForm } from "./AddMetricConfigForm";
+import { buildChartConfig } from "@/lib/dashboard/buildChartConfig";
+import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 
 type SavedMetric = SavedMetricForm;
 
@@ -151,7 +153,16 @@ type StudioWidget = {
 };
 
 type StudioPage = { id: string; name: string };
-type GlobalFilter = { id: string; field: string; operator: string; value: unknown };
+type GlobalFilter = {
+  id: string;
+  field: string;
+  operator: string;
+  value: unknown;
+  label?: string;
+  inputType?: "select" | "multi" | "search" | "number" | "date";
+  applyTo?: "all" | "selected";
+  applyToWidgetIds?: string[];
+};
 
 interface AdminDashboardStudioProps {
   dashboardId: string;
@@ -183,6 +194,8 @@ export function AdminDashboardStudio({
   const [addSourceLoading, setAddSourceLoading] = useState(false);
   const [addSourceSaving, setAddSourceSaving] = useState(false);
   const [addSourceSelected, setAddSourceSelected] = useState<string | null>(null);
+  const [editingFilterId, setEditingFilterId] = useState<string | null>(null);
+  const [editFilterForm, setEditFilterForm] = useState<GlobalFilter | null>(null);
   const [addMetricInitialIntent, setAddMetricInitialIntent] = useState<string | null>(null);
   const [pages, setPages] = useState<StudioPage[]>([{ id: "page-1", name: "Página 1" }]);
   const [activePageId, setActivePageId] = useState<string | null>("page-1");
@@ -203,6 +216,20 @@ export function AdminDashboardStudio({
   } | null>(null);
 
   const { data: etlData, loading: etlLoading, error: etlError, refetch: refetchEtlData } = useAdminDashboardEtlData(dashboardId);
+
+  const editingFilter = editingFilterId ? globalFilters.find((f) => f.id === editingFilterId) : null;
+  useEffect(() => {
+    if (!editingFilterId) {
+      setEditFilterForm(null);
+      return;
+    }
+    const f = globalFilters.find((x) => x.id === editingFilterId);
+    if (f)
+      setEditFilterForm({
+        ...f,
+        applyToWidgetIds: f.applyToWidgetIds ? [...f.applyToWidgetIds] : [],
+      });
+  }, [editingFilterId]); // eslint-disable-line react-hooks/exhaustive-deps -- only sync when opening dialog; globalFilters read at open time
 
   // Reset merge flag and auto-load when dashboard changes
   useEffect(() => {
@@ -349,6 +376,9 @@ export function AdminDashboardStudio({
         activePageId,
         savedMetrics,
         ...(datasetConfig && { datasetConfig }),
+        ...((etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions && {
+          datasetDimensions: (etlData as { datasetDimensions: Record<string, Record<string, string>> }).datasetDimensions,
+        }),
       };
       const res = await fetch(`/api/dashboard/${dashboardId}/layout`, {
         method: "PUT",
@@ -410,211 +440,6 @@ export function AdminDashboardStudio({
       return `${schema}.${(data as { destination_table_name: string }).destination_table_name}`;
     },
     [etlData?.etl?.id, etlData?.dataSources, etlData?.primarySourceId]
-  );
-
-  const buildChartConfigFromAgg = useCallback(
-    (agg: AggregationConfig, dataArray: Record<string, unknown>[], widgetType?: string): ChartConfig => {
-      const defaultPalette = [
-        "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899",
-        "#14b8a6", "#f97316", "#06b6d4", "#3b82f6", "#22c55e", "#a855f7",
-        "#eab308", "#64748b", "#db2777", "#0d9488", "#7c3aed", "#dc2626",
-        "#2563eb", "#059669", "#d97706", "#4f46e5", "#e11d48", "#0891b2",
-      ];
-      const seriesColors = agg.chartSeriesColors;
-      const colorKeys = seriesColors ? Object.keys(seriesColors) : [];
-      const aliasForYKey = (yKey: string): string => {
-        const match = yKey.match(/^metric_(\d+)$/);
-        if (match && agg.metrics[Number(match[1])]) {
-          return agg.metrics[Number(match[1])].alias || yKey;
-        }
-        return yKey;
-      };
-      const resolveColor = (key: string): string | undefined => {
-        if (!seriesColors) return undefined;
-        const k = (key ?? "").trim();
-        return seriesColors[key] ?? seriesColors[k] ?? (key.match(/^metric_\d+$/) ? seriesColors[aliasForYKey(key)] : undefined);
-      };
-      const getColor = (label: string, idx: number) => {
-        const c = resolveColor(label) ?? resolveColor(aliasForYKey(label)) ?? (colorKeys[idx] != null ? seriesColors?.[colorKeys[idx]!] : undefined);
-        return c ?? defaultPalette[idx % defaultPalette.length]!;
-      };
-      const getColorByLabelStable = (label: string) => {
-        const c = resolveColor(label) ?? resolveColor(aliasForYKey(label));
-        if (c) return c;
-        let hash = 0;
-        const s = String(label ?? "");
-        for (let i = 0; i < s.length; i++) hash = ((hash << 5) - hash) + s.charCodeAt(i);
-        return defaultPalette[Math.abs(hash) % defaultPalette.length]!;
-      };
-
-      const overrides = agg.chartLabelOverrides;
-      const labelOverride = (v: string) => {
-        if (!overrides) return v;
-        const s = String(v ?? "").trim();
-        if (s === "") return v;
-        if (s in overrides) return overrides[s]!;
-        for (const [k, val] of Object.entries(overrides)) {
-          if (String(k).trim() === s) return val;
-        }
-        return v;
-      };
-
-      const effectiveChartType = agg.chartType || widgetType || "bar";
-      const isPieOrDoughnut = effectiveChartType === "pie" || effectiveChartType === "doughnut";
-      const resultKeys = Object.keys(dataArray[0] || {});
-      const metricAliases = agg.metrics.map((m) => m.alias || (m.func === "FORMULA" ? "formula" : `${m.func}_${m.field}`));
-
-      const xKey = (agg.chartXAxis && resultKeys.includes(agg.chartXAxis))
-        ? agg.chartXAxis
-        : agg.dimension || resultKeys.find((k) => !metricAliases.includes(k)) || resultKeys[0];
-      const yKeys = (agg.chartYAxes && agg.chartYAxes.length > 0)
-        ? agg.chartYAxes.filter((k) => resultKeys.includes(k))
-        : metricAliases.filter((k) => resultKeys.includes(k));
-      if (yKeys.length === 0) {
-        const fallback = resultKeys.filter((k) => k !== xKey);
-        yKeys.push(...(fallback.length > 0 ? fallback : resultKeys));
-      }
-
-      let rows = [...dataArray];
-      if (agg.chartRankingEnabled && agg.chartRankingTop && agg.chartRankingTop > 0) {
-        const rKey = (agg.chartRankingMetric && resultKeys.includes(agg.chartRankingMetric))
-          ? agg.chartRankingMetric
-          : (yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0]);
-        if (rKey) {
-          rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
-        }
-        rows = rows.slice(0, agg.chartRankingTop);
-      } else if (agg.chartSortDirection && agg.chartSortDirection !== "none") {
-        const sortField = agg.chartSortBy === "dimension" ? xKey : (yKeys[0] || xKey);
-        const dir = agg.chartSortDirection === "asc" ? 1 : -1;
-        const axisOrder = (agg as { chartAxisOrder?: string }).chartAxisOrder;
-        rows.sort((a, b) => {
-          if (sortField === xKey && axisOrder && ["alpha", "date_asc", "date_desc"].includes(axisOrder)) {
-            const va = (a as Record<string, unknown>)[xKey!];
-            const vb = (b as Record<string, unknown>)[xKey!];
-            const sa = String(va ?? "");
-            const sb = String(vb ?? "");
-            if (axisOrder === "date_asc" || axisOrder === "date_desc") {
-              const ta = typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : 0;
-              const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : 0;
-              return axisOrder === "date_asc" ? ta - tb : tb - ta;
-            }
-            return axisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
-          }
-          const va = Number(a[sortField!] ?? 0);
-          const vb = Number(b[sortField!] ?? 0);
-          return isNaN(va) || isNaN(vb)
-            ? String(a[sortField!] ?? "").localeCompare(String(b[sortField!] ?? "")) * dir
-            : (va - vb) * dir;
-        });
-      }
-
-      const seriesField = agg.chartSeriesField;
-      let labels: string[];
-      let datasets: ChartConfig["datasets"];
-
-      if (seriesField && resultKeys.includes(seriesField) && !isPieOrDoughnut) {
-        const uniqueX = [...new Set(rows.map((r) => String(r[xKey!] ?? "")))];
-        labels = uniqueX.map(labelOverride);
-        const seriesValues = [...new Set(rows.map((r) => String(r[seriesField] ?? "")))];
-        datasets = seriesValues.map((sv, idx) => {
-          const color = getColor(sv, idx);
-          return {
-            label: labelOverride(sv),
-            data: uniqueX.map((xv) => {
-              const match = rows.find((r) => String(r[xKey!] ?? "") === xv && String(r[seriesField] ?? "") === sv);
-              return match ? Number(match[yKeys[0]!] ?? 0) : 0;
-            }),
-            backgroundColor: color + "99",
-            borderColor: color,
-            borderWidth: 1,
-          };
-        });
-      } else if (isPieOrDoughnut) {
-        labels = rows.map((r) => labelOverride(String(r[xKey!] ?? "")));
-        const firstYKey = yKeys[0] || metricAliases[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
-        const displayLabel = aliasForYKey(firstYKey!);
-        const sliceColors = labels.map((l) => getColorByLabelStable(l));
-        const hoverColors = sliceColors.map((c) => {
-          const hex = String(c).replace(/^#/, "");
-          if (hex.length >= 6) {
-            const r = Math.min(255, (parseInt(hex.slice(0, 2), 16) || 0) + 28);
-            const g = Math.min(255, (parseInt(hex.slice(2, 4), 16) || 0) + 28);
-            const b = Math.min(255, (parseInt(hex.slice(4, 6), 16) || 0) + 28);
-            return `rgb(${r},${g},${b})`;
-          }
-          return c;
-        });
-        datasets = [{
-          label: displayLabel,
-          data: rows.map((r) => Number(r[firstYKey!] ?? 0)),
-          backgroundColor: sliceColors,
-          hoverBackgroundColor: hoverColors,
-          borderColor: "#fff",
-          borderWidth: 2,
-        }];
-      } else if (effectiveChartType === "combo" && yKeys.length >= 2) {
-        labels = rows.map((r) => labelOverride(String(r[xKey!] ?? "")));
-        const label0 = aliasForYKey(yKeys[0]!);
-        const label1 = aliasForYKey(yKeys[1]!);
-        datasets = [
-          {
-            label: label0,
-            data: rows.map((r) => Number(r[yKeys[0]!] ?? 0)),
-            backgroundColor: getColor(label0, 0) + "80",
-            borderColor: getColor(label0, 0),
-            borderWidth: 2,
-            type: "bar" as const,
-            yAxisID: "y",
-          },
-          {
-            label: label1,
-            data: rows.map((r) => Number(r[yKeys[1]!] ?? 0)),
-            backgroundColor: getColor(label1, 1) + "20",
-            borderColor: getColor(label1, 1),
-            borderWidth: 2,
-            type: "line" as const,
-            fill: false,
-            yAxisID: "y1",
-          },
-        ];
-      } else {
-        labels = rows.map((r) => labelOverride(String(r[xKey!] ?? "")));
-        const isBarOrHorizontalBar = effectiveChartType === "bar" || effectiveChartType === "horizontalBar";
-        const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
-        if (oneMetricManyCategories) {
-          const yKey = yKeys[0]!;
-          const displayLabel = aliasForYKey(yKey);
-          const barColors = labels.map((l) => getColorByLabelStable(l));
-          datasets = [{
-            label: displayLabel,
-            data: rows.map((r) => Number(r[yKey] ?? 0)),
-            backgroundColor: barColors.map((c) => c + "99"),
-            borderColor: barColors,
-            borderWidth: 1,
-          }];
-        } else {
-          datasets = yKeys.map((yKey, idx) => {
-            const displayLabel = aliasForYKey(yKey);
-            const color = getColor(displayLabel, idx);
-            return {
-              label: displayLabel,
-              data: rows.map((r) => Number(r[yKey] ?? 0)),
-              backgroundColor: effectiveChartType === "area" ? color + "40" : color + "99",
-              borderColor: color,
-              borderWidth: effectiveChartType === "line" || effectiveChartType === "area" ? 2 : 1,
-              ...(effectiveChartType === "area" ? { fill: true } : {}),
-            };
-          });
-        }
-      }
-
-      return {
-        labels,
-        datasets: datasets.length > 0 ? datasets : [{ label: "valor", data: [], backgroundColor: defaultPalette[0], borderColor: "#fff", borderWidth: 1 }],
-      };
-    },
-    []
   );
 
   const loadMetricData = useCallback(
@@ -747,7 +572,7 @@ export function AdminDashboardStudio({
             );
             return;
           }
-          const config = buildChartConfigFromAgg(agg, dataArray, widget.type);
+          const config = buildChartConfig(dataArray, { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color }, "") ?? { labels: [], datasets: [] };
           setWidgets((prev) =>
             prev.map((w) => (w.id === widgetId ? { ...w, config, rows: dataArray, isLoading: false } : w))
           );
@@ -794,7 +619,7 @@ export function AdminDashboardStudio({
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout, savedMetrics, buildChartConfigFromAgg]
+    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout, savedMetrics]
   );
 
   useEffect(() => {
@@ -1204,6 +1029,355 @@ export function AdminDashboardStudio({
           </div>
         </div>
       )}
+      {etlData && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]/80">
+          <span className="text-xs font-medium text-[var(--studio-fg-muted)]">Filtros globales:</span>
+          {globalFilters.map((gf) => (
+            <span
+              key={gf.id}
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-[var(--studio-surface)] border border-[var(--studio-border)]"
+            >
+              <button
+                type="button"
+                onClick={() => setEditingFilterId(gf.id)}
+                className="flex items-center gap-1 rounded hover:bg-[var(--studio-bg-elevated)] px-0.5 -mx-0.5"
+                aria-label="Configurar filtro"
+              >
+                <Pencil className="h-3 w-3 text-[var(--studio-fg-muted)]" />
+                {(gf as GlobalFilter).label || gf.field}
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setGlobalFilters((prev) => prev.filter((f) => f.id !== gf.id));
+                  setIsDirty(true);
+                }}
+                className="ml-0.5 rounded p-0.5 hover:bg-red-500/20 hover:text-red-600"
+                aria-label="Quitar filtro"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          <select
+            className="rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1 text-xs text-[var(--studio-fg)]"
+            value=""
+            onChange={(e) => {
+              const value = e.target.value;
+              e.target.value = "";
+              if (!value) return;
+              const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
+              const hasSemantic = datasetDimensions && Object.keys(datasetDimensions).length > 0 && etlData?.dataSources && etlData.dataSources.length > 1;
+              const semanticLabels: Record<string, string> = { date: "Fecha", region: "Región" };
+              const label = hasSemantic && semanticLabels[value] ? semanticLabels[value] : value;
+              setGlobalFilters((prev) => [
+                ...prev,
+                {
+                  id: `gf-${Date.now()}`,
+                  field: value,
+                  operator: "=",
+                  value: "",
+                  label,
+                  inputType: "select",
+                  applyTo: "all",
+                },
+              ]);
+              setIsDirty(true);
+            }}
+          >
+            <option value="">+ Añadir filtro</option>
+            {((): React.ReactNode => {
+              const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
+              const hasSemantic = datasetDimensions && Object.keys(datasetDimensions).length > 0 && etlData?.dataSources && etlData.dataSources.length > 1;
+              const semanticLabels: Record<string, string> = { date: "Fecha", region: "Región" };
+              if (hasSemantic && datasetDimensions) {
+                return Object.keys(datasetDimensions).map((key) => (
+                  <option key={key} value={key}>
+                    {semanticLabels[key] || key}
+                  </option>
+                ));
+              }
+              return (etlData?.fields?.all ?? []).map((field) => (
+                <option key={field} value={field}>
+                  {field}
+                </option>
+              ));
+            })()}
+          </select>
+        </div>
+      )}
+      <Dialog
+        open={!!editingFilterId}
+        onOpenChange={(open) => {
+          if (!open) setEditingFilterId(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md border border-[var(--studio-border)]">
+          <DialogHeader>
+            <DialogTitle className="text-[var(--studio-fg)]">Configurar filtro</DialogTitle>
+            <DialogDescription className="text-[var(--studio-fg-muted)]">
+              Tipo de filtro, etiqueta y a qué gráficos se aplica.
+            </DialogDescription>
+          </DialogHeader>
+          {editFilterForm && etlData && (
+            <div className="py-4 space-y-4">
+              <div>
+                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Campo</label>
+                <select
+                  value={editFilterForm.field}
+                  onChange={(e) => {
+                    const newField = e.target.value;
+                    const willBeDate =
+                      newField === "date" ||
+                      (etlData?.fields?.date ?? []).includes(newField) ||
+                      (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(newField));
+                    const dateOps = ["YEAR", "MONTH", "DAY", "YEAR_MONTH", "SEMESTER", "QUARTER"];
+                    setEditFilterForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            field: newField,
+                            ...(willBeDate && prev.operator && !dateOps.includes(prev.operator)
+                              ? { operator: "YEAR" as const }
+                              : {}),
+                          }
+                        : null
+                    );
+                  }}
+                  className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
+                >
+                  {((): React.ReactNode => {
+                    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
+                    const hasSemantic = datasetDimensions && Object.keys(datasetDimensions).length > 0 && etlData?.dataSources && etlData.dataSources.length > 1;
+                    const semanticLabels: Record<string, string> = { date: "Fecha", region: "Región" };
+                    if (hasSemantic && datasetDimensions) {
+                      return Object.keys(datasetDimensions).map((key) => (
+                        <option key={key} value={key}>
+                          {semanticLabels[key] || key}
+                        </option>
+                      ));
+                    }
+                    return (etlData?.fields?.all ?? []).map((field) => (
+                      <option key={field} value={field}>
+                        {field}
+                      </option>
+                    ));
+                  })()}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Etiqueta (opcional)</label>
+                <Input
+                  value={editFilterForm.label ?? ""}
+                  onChange={(e) => setEditFilterForm((prev) => (prev ? { ...prev, label: e.target.value } : null))}
+                  placeholder={editFilterForm.field}
+                  className="border border-[var(--studio-border)] bg-[var(--studio-bg)]"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Tipo de filtro</label>
+                <select
+                  value={editFilterForm.inputType ?? "select"}
+                  onChange={(e) => {
+                    const v = e.target.value as GlobalFilter["inputType"];
+                    const isDate =
+                      editFilterForm.field === "date" ||
+                      (etlData?.fields?.date ?? []).includes(editFilterForm.field) ||
+                      (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(editFilterForm.field));
+                    setEditFilterForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            inputType: v,
+                            operator: v === "multi" && !isDate ? "IN" : prev.operator ?? (isDate ? "YEAR" : "="),
+                          }
+                        : null
+                    );
+                  }}
+                  className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
+                >
+                  <option value="select">Lista desplegable</option>
+                  <option value="multi">Selección múltiple</option>
+                  <option value="search">Campo de búsqueda (escribir valores)</option>
+                  <option value="number">Número</option>
+                  <option value="date">Fecha</option>
+                </select>
+              </div>
+              {(() => {
+                const isDateField =
+                  editFilterForm.field === "date" ||
+                  (etlData?.fields?.date ?? []).includes(editFilterForm.field) ||
+                  (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(editFilterForm.field));
+                return (
+                  <div>
+                    <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">
+                      {isDateField ? "Nivel de filtrado (fecha)" : "Condición"}
+                    </label>
+                    <select
+                      value={
+                        isDateField
+                          ? ["YEAR", "MONTH", "DAY", "YEAR_MONTH", "SEMESTER", "QUARTER"].includes(
+                              editFilterForm.operator ?? ""
+                            )
+                            ? editFilterForm.operator
+                            : "YEAR"
+                          : editFilterForm.operator ?? "="
+                      }
+                      onChange={(e) =>
+                        setEditFilterForm((prev) => (prev ? { ...prev, operator: e.target.value } : null))
+                      }
+                      className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
+                    >
+                      {isDateField ? (
+                        <>
+                          <option value="YEAR">AÑO</option>
+                          <option value="MONTH">MES</option>
+                          <option value="DAY">DÍA</option>
+                          <option value="YEAR_MONTH">AÑO/MES</option>
+                          <option value="DAY">AÑO/MES/DÍA</option>
+                          <option value="SEMESTER">SEMESTRE</option>
+                          <option value="QUARTER">TRIMESTRE</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="=">Igual</option>
+                          <option value="!=">Distinto</option>
+                          <option value="CONTAINS">Contiene</option>
+                          <option value="STARTS_WITH">Comienza por</option>
+                          <option value="ENDS_WITH">Termina en</option>
+                          <option value=">">Mayor que</option>
+                          <option value=">=">Mayor o igual</option>
+                          <option value="<">Menor que</option>
+                          <option value="<=">Menor o igual</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+                );
+              })()}
+              <div>
+                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Aplicar a</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="applyTo"
+                      checked={(editFilterForm.applyTo ?? "all") === "all"}
+                      onChange={() =>
+                        setEditFilterForm((prev) => (prev ? { ...prev, applyTo: "all" as const, applyToWidgetIds: undefined } : null))
+                      }
+                    />
+                    <span className="text-sm">Todos los gráficos</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="applyTo"
+                      checked={(editFilterForm.applyTo ?? "all") === "selected"}
+                      onChange={() =>
+                        setEditFilterForm((prev) => (prev ? { ...prev, applyTo: "selected" as const, applyToWidgetIds: [] } : null))
+                      }
+                    />
+                    <span className="text-sm">Solo gráficos seleccionados</span>
+                  </label>
+                </div>
+                {(editFilterForm.applyTo ?? "all") === "selected" && (
+                  <div className="mt-2 max-h-40 overflow-y-auto rounded border border-[var(--studio-border)] p-2 space-y-1">
+                    {widgets
+                      .filter((w) => w.type !== "filter")
+                      .map((w) => {
+                        const checked = (editFilterForm.applyToWidgetIds ?? []).includes(w.id);
+                        return (
+                          <label key={w.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setEditFilterForm((prev) => {
+                                  if (!prev) return null;
+                                  const ids = prev.applyToWidgetIds ?? [];
+                                  const next = checked ? ids.filter((id) => id !== w.id) : [...ids, w.id];
+                                  return { ...prev, applyToWidgetIds: next };
+                                });
+                              }}
+                            />
+                            <span className="truncate">{w.title || w.id || "Sin título"}</span>
+                          </label>
+                        );
+                      })}
+                    {widgets.filter((w) => w.type !== "filter").length === 0 && (
+                      <p className="text-xs text-[var(--studio-fg-muted)]">No hay gráficos en el dashboard.</p>
+                    )}
+                  </div>
+                )}
+                {(editFilterForm.applyTo ?? "all") === "selected" &&
+                  (() => {
+                    const dataSources = (etlData as { dataSources?: { id: string; fields?: { all?: string[] } }[] })?.dataSources;
+                    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>>; primarySourceId?: string })?.datasetDimensions;
+                    const primarySourceId = (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
+                    const selectedIds = editFilterForm.applyToWidgetIds ?? [];
+                    const incompatible: { id: string; title: string }[] = [];
+                    if (dataSources?.length && selectedIds.length > 0) {
+                      for (const widgetId of selectedIds) {
+                        const w = widgets.find((x) => x.id === widgetId);
+                        if (!w || w.type === "filter") continue;
+                        const widgetSourceId = w.dataSourceId ?? primarySourceId ?? dataSources[0]?.id;
+                        const source = dataSources.find((s) => s.id === widgetSourceId) ?? dataSources[0];
+                        const sourceFieldsAll = (source?.fields?.all ?? []).map((c: string) => (c || "").toLowerCase());
+                        const resolvePhysical = (sem: string) => {
+                          const bySource = datasetDimensions?.[sem];
+                          if (bySource && widgetSourceId && bySource[widgetSourceId]) return bySource[widgetSourceId];
+                          return sem;
+                        };
+                        const physical = resolvePhysical(editFilterForm.field);
+                        const hasField = physical && sourceFieldsAll.some((c: string) => c === (physical || "").toLowerCase());
+                        if (!hasField) incompatible.push({ id: w.id, title: w.title || w.id || "Sin título" });
+                      }
+                    }
+                    if (incompatible.length === 0) return null;
+                    return (
+                      <div className="mt-2 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-200">
+                        Los siguientes gráficos no contienen el campo &quot;{editFilterForm.field}&quot;:{" "}
+                        {incompatible.map((x) => x.title).join(", ")}. El filtro no tendrá efecto en ellos.
+                      </div>
+                    );
+                  })()}
+              </div>
+            </div>
+          )}
+          {editFilterForm && (
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setEditingFilterId(null)}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={() => {
+                  if (!editFilterForm) return;
+                  const isDate =
+                    editFilterForm.field === "date" ||
+                    (etlData?.fields?.date ?? []).includes(editFilterForm.field) ||
+                    (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(editFilterForm.field));
+                  const dateOps = ["YEAR", "MONTH", "DAY", "YEAR_MONTH", "SEMESTER", "QUARTER"];
+                  const operator =
+                    isDate && editFilterForm.operator && !dateOps.includes(editFilterForm.operator)
+                      ? "YEAR"
+                      : (editFilterForm.operator ?? "=");
+                  setGlobalFilters((prev) =>
+                    prev.map((f) =>
+                      f.id === editingFilterId ? { ...editFilterForm, id: f.id, operator } : f
+                    )
+                  );
+                  setEditingFilterId(null);
+                  setIsDirty(true);
+                }}
+              >
+                Guardar
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
       <Dialog open={addSourceOpen} onOpenChange={setAddSourceOpen}>
         <DialogContent className="sm:max-w-md border border-[var(--studio-border)]">
           <DialogHeader>
@@ -1368,6 +1542,21 @@ export function AdminDashboardStudio({
                       gridSpan={span}
                       minHeight={minH}
                       onSizeChange={(patch) => updateWidgetSize(w.id, patch)}
+                      chartGridXDisplay={(w.aggregationConfig as { chartGridXDisplay?: boolean })?.chartGridXDisplay}
+                      chartGridYDisplay={(w.aggregationConfig as { chartGridYDisplay?: boolean })?.chartGridYDisplay}
+                      chartGridColor={(w.aggregationConfig as { chartGridColor?: string })?.chartGridColor}
+                      widgetForRenderer={{
+                        id: w.id,
+                        type: chartType,
+                        title: w.title,
+                        config: w.config ?? undefined,
+                        rows: w.rows,
+                        aggregationConfig: w.aggregationConfig,
+                        chartStyle: w.chartStyle as Record<string, unknown> | undefined,
+                        labelDisplayMode: (w as { labelDisplayMode?: "percent" | "value" }).labelDisplayMode,
+                        chartMetricStyles: (w as { chartMetricStyles?: (ChartStyleConfig | undefined)[] }).chartMetricStyles,
+                        minHeight: minH,
+                      }}
                     />
                   </div>
                 );

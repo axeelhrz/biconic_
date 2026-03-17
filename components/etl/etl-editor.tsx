@@ -5946,7 +5946,7 @@ export function ETLEditor({
                                       </select>
                                     </div>
 
-                                    <div className="grid grid-cols-3 gap-3">
+                                    <div className="space-y-3">
                                       <div>
                                         <Label>Tipo de JOIN</Label>
                                         <select
@@ -5978,79 +5978,97 @@ export function ETLEditor({
                                           <option value="FULL">FULL</option>
                                         </select>
                                       </div>
-                                      <div>
-                                        <Label>Columna Principal</Label>
-                                        <select
-                                          className="w-full rounded-xl border px-3 py-2 text-sm bg-white"
-                                          value={
-                                            (jn.primaryColumn && /^(primary|join_\d+)\./i.test(jn.primaryColumn))
-                                              ? jn.primaryColumn
-                                              : (jn.primaryColumn ? `primary.${jn.primaryColumn}` : "")
-                                          }
-                                          onChange={(e) => {
-                                            const next = (
-                                              selected.join?.joins || []
-                                            ).map((j) =>
-                                              j.id === jn.id
-                                                ? {
-                                                    ...j,
-                                                    primaryColumn:
-                                                      e.target.value,
-                                                  }
-                                                : j
+                                      <div className="space-y-2">
+                                        <Label>Condiciones de enlace (clave compuesta)</Label>
+                                        {((jn.conditions?.length ?? 0) > 0
+                                          ? jn.conditions!
+                                          : (jn.primaryColumn != null || jn.secondaryColumn != null)
+                                            ? [{ primaryColumn: jn.primaryColumn ?? "", secondaryColumn: jn.secondaryColumn ?? "" }]
+                                            : [{ primaryColumn: "", secondaryColumn: "" }]
+                                        ).map((cond, condIdx) => (
+                                          <div key={condIdx} className="flex flex-wrap gap-2 items-center">
+                                            <select
+                                              className="rounded-xl border px-3 py-2 text-sm bg-white min-w-[140px]"
+                                              value={
+                                                (cond.primaryColumn && /^(primary|join_\d+)\./i.test(cond.primaryColumn))
+                                                  ? cond.primaryColumn
+                                                  : (cond.primaryColumn ? `primary.${cond.primaryColumn}` : "")
+                                              }
+                                              onChange={(e) => {
+                                                const val = e.target.value;
+                                                const nextConditions = (jn.conditions?.length ? [...jn.conditions] : (jn.primaryColumn != null || jn.secondaryColumn != null) ? [{ primaryColumn: jn.primaryColumn ?? "", secondaryColumn: jn.secondaryColumn ?? "" }] : [{ primaryColumn: "", secondaryColumn: "" }]).map((c, i) => i === condIdx ? { ...c, primaryColumn: val } : c);
+                                                const first = nextConditions[0];
+                                                const next = (selected.join?.joins || []).map((j) =>
+                                                  j.id === jn.id
+                                                    ? { ...j, conditions: nextConditions, primaryColumn: first?.primaryColumn, secondaryColumn: first?.secondaryColumn }
+                                                    : j
+                                                );
+                                                updateSelected({ join: { ...(selected.join || {}), joins: next } });
+                                              }}
+                                              disabled={!selected.join?.primaryTable}
+                                            >
+                                              <option value="">Col. principal…</option>
+                                              {getPrimaryColOptionsForJoinIndex(idx).map((opt) => (
+                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                              ))}
+                                            </select>
+                                            <span className="text-xs text-gray-500">=</span>
+                                            <select
+                                              className="rounded-xl border px-3 py-2 text-sm bg-white min-w-[140px]"
+                                              value={cond.secondaryColumn || ""}
+                                              onChange={(e) => {
+                                                const val = e.target.value;
+                                                const nextConditions = (jn.conditions?.length ? [...jn.conditions] : (jn.primaryColumn != null || jn.secondaryColumn != null) ? [{ primaryColumn: jn.primaryColumn ?? "", secondaryColumn: jn.secondaryColumn ?? "" }] : [{ primaryColumn: "", secondaryColumn: "" }]).map((c, i) => i === condIdx ? { ...c, secondaryColumn: val } : c);
+                                                const first = nextConditions[0];
+                                                const next = (selected.join?.joins || []).map((j) =>
+                                                  j.id === jn.id
+                                                    ? { ...j, conditions: nextConditions, primaryColumn: first?.primaryColumn, secondaryColumn: first?.secondaryColumn }
+                                                    : j
+                                                );
+                                                updateSelected({ join: { ...(selected.join || {}), joins: next } });
+                                              }}
+                                              disabled={!jn.secondaryTable}
+                                            >
+                                              <option value="">Col. secundaria…</option>
+                                              {secCols.map((c) => (
+                                                <option key={c} value={c}>{c}</option>
+                                              ))}
+                                            </select>
+                                            {(((jn.conditions?.length ?? 0) > 0 ? jn.conditions! : (jn.primaryColumn != null || jn.secondaryColumn != null) ? [{ primaryColumn: jn.primaryColumn ?? "", secondaryColumn: jn.secondaryColumn ?? "" }] : [{ primaryColumn: "", secondaryColumn: "" }]).length > 1) && (
+                                              <button
+                                                type="button"
+                                                className="text-xs rounded px-2 py-1 hover:opacity-80 text-gray-600 bg-gray-100"
+                                                onClick={() => {
+                                                  const prev = (jn.conditions?.length ? [...jn.conditions] : (jn.primaryColumn != null || jn.secondaryColumn != null) ? [{ primaryColumn: jn.primaryColumn ?? "", secondaryColumn: jn.secondaryColumn ?? "" }] : [{ primaryColumn: "", secondaryColumn: "" }]);
+                                                  const current = prev.filter((_, i) => i !== condIdx);
+                                                  const safeConditions = current.length ? current : [{ primaryColumn: "", secondaryColumn: "" }];
+                                                  const first = safeConditions[0];
+                                                  const next = (selected.join?.joins || []).map((j) =>
+                                                    j.id === jn.id
+                                                      ? { ...j, conditions: safeConditions, primaryColumn: first?.primaryColumn, secondaryColumn: first?.secondaryColumn }
+                                                      : j
+                                                  );
+                                                  updateSelected({ join: { ...(selected.join || {}), joins: next } });
+                                                }}
+                                              >
+                                                Quitar
+                                              </button>
+                                            )}
+                                          </div>
+                                        ))}
+                                        <button
+                                          type="button"
+                                          className="text-xs rounded-lg px-3 py-1.5 border border-gray-300 bg-white hover:bg-gray-50"
+                                          onClick={() => {
+                                            const current = (jn.conditions?.length ? [...jn.conditions] : (jn.primaryColumn != null || jn.secondaryColumn != null) ? [{ primaryColumn: jn.primaryColumn ?? "", secondaryColumn: jn.secondaryColumn ?? "" }] : [{ primaryColumn: "", secondaryColumn: "" }]);
+                                            const next = (selected.join?.joins || []).map((j) =>
+                                              j.id === jn.id ? { ...j, conditions: [...current, { primaryColumn: "", secondaryColumn: "" }] } : j
                                             );
-                                            updateSelected({
-                                              join: {
-                                                ...(selected.join || {}),
-                                                joins: next,
-                                              },
-                                            });
+                                            updateSelected({ join: { ...(selected.join || {}), joins: next } });
                                           }}
-                                          disabled={
-                                            !selected.join?.primaryTable
-                                          }
                                         >
-                                          <option value="">Columna…</option>
-                                          {getPrimaryColOptionsForJoinIndex(idx).map((opt) => (
-                                            <option key={opt.value} value={opt.value}>
-                                              {opt.label}
-                                            </option>
-                                          ))}
-                                        </select>
-                                      </div>
-                                      <div>
-                                        <Label>Columna Secundaria</Label>
-                                        <select
-                                          className="w-full rounded-xl border px-3 py-2 text-sm bg-white"
-                                          value={jn.secondaryColumn || ""}
-                                          onChange={(e) => {
-                                            const next = (
-                                              selected.join?.joins || []
-                                            ).map((j) =>
-                                              j.id === jn.id
-                                                ? {
-                                                    ...j,
-                                                    secondaryColumn:
-                                                      e.target.value,
-                                                  }
-                                                : j
-                                            );
-                                            updateSelected({
-                                              join: {
-                                                ...(selected.join || {}),
-                                                joins: next,
-                                              },
-                                            });
-                                          }}
-                                          disabled={!jn.secondaryTable}
-                                        >
-                                          <option value="">Columna…</option>
-                                          {secCols.map((c) => (
-                                            <option key={c} value={c}>
-                                              {c}
-                                            </option>
-                                          ))}
-                                        </select>
+                                          Agregar condición
+                                        </button>
                                       </div>
                                     </div>
 

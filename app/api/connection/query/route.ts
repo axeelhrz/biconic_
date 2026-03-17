@@ -39,6 +39,7 @@ type QueryBody = {
   limit?: number;
   offset?: number;
   count?: boolean;
+  unlimited?: boolean;
 };
 
 function buildWhereClausePg(conds: FilterCondition[]) {
@@ -197,13 +198,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       limit,
       offset,
       count,
+      unlimited,
     } = body;
     if (!table)
       return NextResponse.json(
         { ok: false, error: "Tabla requerida" },
         { status: 400 }
       );
-    if (!limit || limit < 1 || limit > ETL_MAX_ROWS_CEILING) limit = 50;
+    const effectiveLimit =
+      unlimited === true || limit === ETL_MAX_ROWS_CEILING
+        ? ETL_MAX_ROWS_CEILING
+        : limit != null && limit >= 1 && limit <= ETL_MAX_ROWS_CEILING
+          ? limit
+          : 50;
+    limit = effectiveLimit;
     if (!offset || offset < 0) offset = 0;
 
     // Auth

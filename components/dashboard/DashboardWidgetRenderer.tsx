@@ -202,6 +202,8 @@ interface DashboardWidgetRendererProps {
   className?: string;
   /** Tema oscuro: leyendas, ejes y etiquetas en color claro para fondo oscuro */
   darkChartTheme?: boolean;
+  /** Ocultar cabecera del card (p. ej. cuando se usa dentro del editor) */
+  hideHeader?: boolean;
 }
 
 export function DashboardWidgetRenderer({
@@ -212,6 +214,7 @@ export function DashboardWidgetRenderer({
   minHeight = 240,
   className = "",
   darkChartTheme = false,
+  hideHeader = false,
 }: DashboardWidgetRendererProps) {
   const effectiveMinHeight = widget.minHeight ?? minHeight;
   const chartType = (widget.type === "kpi" || widget.type === "table" ? widget.type : (widget.aggregationConfig as { chartType?: string } | undefined)?.chartType ?? widget.type) as WidgetChartType;
@@ -262,7 +265,15 @@ export function DashboardWidgetRenderer({
   }, [isCombo, comboSyncAxes, chartConfig]);
 
   const chartOptions = useMemo(() => {
-    const style = (widget.chartStyle as ChartStyleConfig | undefined) ?? undefined;
+    const agg = widget.aggregationConfig as { chartGridXDisplay?: boolean; chartGridYDisplay?: boolean; chartGridColor?: string } | undefined;
+    const style: ChartStyleConfig | undefined = {
+      ...(widget.chartStyle as ChartStyleConfig | undefined),
+      ...(agg && {
+        gridXDisplay: agg.chartGridXDisplay,
+        gridYDisplay: agg.chartGridYDisplay,
+        gridColor: agg.chartGridColor,
+      }),
+    };
     const labelMode = widget.labelDisplayMode ?? "percent";
     const type = chartType === "horizontalBar" ? "horizontalBar" : chartType === "area" ? "line" : chartType === "combo" ? "bar" : (chartType as "bar" | "line" | "pie" | "doughnut");
     const metricStyles = widget.chartMetricStyles as (ChartStyleConfig | undefined)[] | undefined;
@@ -329,7 +340,11 @@ export function DashboardWidgetRenderer({
           },
           y1: {
             position: "right" as const,
-            grid: { drawOnChartArea: false },
+            grid: {
+              drawOnChartArea: false,
+              display: style?.gridYDisplay ?? true,
+              color: style?.gridColor ?? (darkChartTheme ? GRID_COLOR_DARK : GRID_COLOR),
+            },
             ...(syncAxes && {
               min: 0,
               max: 1,
@@ -396,12 +411,14 @@ export function DashboardWidgetRenderer({
         borderRadius: "var(--platform-card-radius, 0.75rem)",
       }}
     >
-      <header className="flex flex-shrink-0 items-center justify-between gap-2 border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
-        <h3 className="truncate text-sm font-semibold" style={{ color: "var(--platform-fg, #0f172a)" }}>
-          {widget.title}
-        </h3>
-      </header>
-      <div className="relative flex flex-1 flex-col p-3" style={{ minHeight: effectiveMinHeight - 52 }}>
+      {!hideHeader && (
+        <header className="flex flex-shrink-0 items-center justify-between gap-2 border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
+          <h3 className="truncate text-sm font-semibold" style={{ color: "var(--platform-fg, #0f172a)" }}>
+            {widget.title}
+          </h3>
+        </header>
+      )}
+      <div className="relative flex flex-1 flex-col p-3" style={{ minHeight: hideHeader ? effectiveMinHeight - 12 : effectiveMinHeight - 52 }}>
         {isLoading && (
           <div
             className="absolute inset-0 z-10 flex items-center justify-center rounded-b-xl"

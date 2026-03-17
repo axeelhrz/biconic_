@@ -109,6 +109,7 @@ type ArithmeticQueryBody = {
   limit?: number;
   offset?: number;
   count?: boolean;
+  unlimited?: boolean;
   join?: JoinConfig;
 };
 
@@ -441,6 +442,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       rules, // upstream condition rules
       limit = 100,
       offset = 0,
+      unlimited,
     } = body;
 
 
@@ -459,7 +461,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     //   );
     const safeOperations = operations || [];
 
-    if (!limit || limit < 1 || limit > ETL_MAX_ROWS_CEILING) limit = 50;
+    limit =
+      unlimited === true || limit === ETL_MAX_ROWS_CEILING
+        ? ETL_MAX_ROWS_CEILING
+        : limit != null && limit >= 1 && limit <= ETL_MAX_ROWS_CEILING
+          ? limit
+          : 50;
     if (!offset || offset < 0) offset = 0;
 
     // Auth
