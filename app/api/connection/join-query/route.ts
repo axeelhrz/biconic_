@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { randomUUID } from "crypto";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
-import { buildDateFilterWhereFragmentPg, type DateFilterSpec } from "@/lib/sql/helpers";
+import { buildDateFilterWhereFragmentPg, buildDateFilterWhereFragmentFirebird, type DateFilterSpec } from "@/lib/sql/helpers";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 
 // --- TIPOS DE DATOS ---
@@ -636,7 +636,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           const fetchRowsFromConn = async (
             conn: any,
             table: string,
-            columns?: string[]
+            columns?: string[],
+            dateFilterForTable?: DateFilterSpec
           ): Promise<Record<string, any>[]> => {
             const cType = String(conn?.type || "").toLowerCase();
             const resolvedTable = await resolvePhysicalIfExcel(conn, table);
@@ -661,10 +662,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 ? (resolvedTable.split(".").pop() || resolvedTable).trim().toUpperCase()
                 : firebirdSafePart(resolvedTable);
               const cols = columns?.length ? columns.map((c) => firebirdSafePart(c)).join(", ") : "*";
+              const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterForTable);
+              const wherePart = dfClause ? ` WHERE ${dfClause}` : "";
+              const escapeFbLiteral = (v: any): string => {
+                if (v == null) return "NULL";
+                if (typeof v === "boolean") return v ? "1" : "0";
+                if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${String(v)}' AS DOUBLE PRECISION)`;
+                return `'${String(v).replace(/'/g, "''")}'`;
+              };
+              let sql = `SELECT FIRST ${sourceLimit} ${cols} FROM ${tablePart}${wherePart}`;
+              if (dfParams.length > 0) {
+                for (const p of dfParams) {
+                  const pos = sql.indexOf("?");
+                  if (pos === -1) break;
+                  sql = sql.slice(0, pos) + escapeFbLiteral(p) + sql.slice(pos + 1);
+                }
+              }
               return await new Promise<Record<string, any>[]>((resolve, reject) => {
                 Firebird.attach(opts, (err: Error | null, db: any) => {
                   if (err) return reject(err);
-                  const sql = `SELECT FIRST ${sourceLimit} ${cols} FROM ${tablePart}`;
                   db.query(sql, [], (qErr: Error | null, rows: any[]) => {
                     if (db?.detach) try { db.detach(() => {}); } catch (_) {}
                     if (qErr) return reject(qErr);
@@ -688,8 +704,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             await client.connect();
             try {
               const sel = columns?.length ? columns.map((c) => quoteIdent(c, "postgres")).join(", ") : "*";
-              const q = `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")} LIMIT ${sourceLimit}`;
-              const res = await client.query(q);
+              const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterForTable, 1, "");
+              const wherePart = dfClause ? ` WHERE ${dfClause}` : "";
+              const q = `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${wherePart} LIMIT ${sourceLimit}`;
+              const res = await client.query(q, dfParams || []);
               return (res.rows || []).map((r: any) => normalizeRow(r));
             } finally {
               await client.end().catch(() => {});
@@ -800,8 +818,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             return true;
           };
 
+          const dateFilterCol = (body.dateFilter?.column ?? "").trim();
+          const isDateOnPrimary = /^primary\./i.test(dateFilterCol) || (dateFilterCol && !/^join_\d+\./i.test(dateFilterCol));
+          const dateFilterForPrimary: DateFilterSpec | undefined =
+            body.dateFilter && dateFilterCol && isDateOnPrimary
+              ? {
+                  column: dateFilterCol.replace(/^primary\./i, "").trim(),
+                  years: body.dateFilter.years,
+                  months: body.dateFilter.months,
+                  exactDates: body.dateFilter.exactDates,
+                }
+              : undefined;
+          const getDateFilterForJoin = (idx: number): DateFilterSpec | undefined => {
+            if (!body.dateFilter?.column?.trim()) return undefined;
+            const col = body.dateFilter.column.trim();
+            if (!new RegExp(`^join_${idx}\\.`, "i").test(col)) return undefined;
+            return {
+              column: col.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim(),
+              years: body.dateFilter!.years,
+              months: body.dateFilter!.months,
+              exactDates: body.dateFilter!.exactDates,
+            };
+          };
+
           const primaryTableResolved = await resolvePhysicalIfExcel(primaryConn, primaryTable || "");
-          const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns);
+          const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary);
           const primaryCols =
             primaryColumns && primaryColumns.length > 0
               ? primaryColumns
@@ -825,7 +866,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
             if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
             const secTableResolved = await resolvePhysicalIfExcel(secConn, jn.secondaryTable || "");
-            const secRowsRaw = await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns);
+            const secRowsRaw = await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx));
             const secCols =
               jn.secondaryColumns && jn.secondaryColumns.length > 0
                 ? jn.secondaryColumns

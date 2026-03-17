@@ -24,7 +24,7 @@ import {
   getValue,
   CastTargetType
 } from "@/lib/etl/transformations";
-import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT } from "@/lib/etl/limits";
+import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT, ETL_PREVIEW_MAX_WHEN_UNLIMITED } from "@/lib/etl/limits";
 
 // Reuse types from run/route.ts (duplicated here for independence)
 type FilterCondition = {
@@ -179,7 +179,7 @@ export async function POST(req: NextRequest) {
 
     const effectiveLimit =
       body?.unlimited === true
-        ? ETL_MAX_ROWS_CEILING
+        ? Math.min(ETL_MAX_ROWS_CEILING, ETL_PREVIEW_MAX_WHEN_UNLIMITED)
         : Math.min(
             Number(body?.limit) || ETL_PREVIEW_DEFAULT_LIMIT,
             ETL_MAX_ROWS_CEILING
