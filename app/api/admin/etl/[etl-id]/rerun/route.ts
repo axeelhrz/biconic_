@@ -73,9 +73,10 @@ export async function POST(
     const connIdRaw = guidedConfig.connectionId ?? union?.left?.connectionId ?? join?.primaryConnectionId;
     const connectionId = toStr(connIdRaw) ?? undefined;
 
+    // Deep-clone join/union so we never mutate the stored layout and preserve full structure
     let normalizedJoin: Record<string, unknown> | undefined;
     if (guidedConfig.join && typeof guidedConfig.join === "object") {
-      const j = { ...guidedConfig.join } as Record<string, unknown>;
+      const j = JSON.parse(JSON.stringify(guidedConfig.join)) as Record<string, unknown>;
       if (j.primaryConnectionId != null) j.primaryConnectionId = toStr(j.primaryConnectionId);
       if (Array.isArray(j.joins)) {
         j.joins = j.joins.map((jn: Record<string, unknown>) => ({
@@ -88,7 +89,7 @@ export async function POST(
 
     let normalizedUnion: Record<string, unknown> | undefined;
     if (guidedConfig.union && typeof guidedConfig.union === "object") {
-      const u = { ...guidedConfig.union } as Record<string, unknown>;
+      const u = JSON.parse(JSON.stringify(guidedConfig.union)) as Record<string, unknown>;
       if (u.left && typeof u.left === "object") {
         const left = u.left as Record<string, unknown>;
         if (left.connectionId != null) left.connectionId = toStr(left.connectionId);
@@ -106,10 +107,15 @@ export async function POST(
       normalizedUnion = u;
     }
 
+    // Always send filter as an object so run API receives it (JSON.stringify drops undefined)
+    const filterPayload = guidedConfig.filter != null && typeof guidedConfig.filter === "object"
+      ? (JSON.parse(JSON.stringify(guidedConfig.filter)) as Record<string, unknown>)
+      : {};
+
     const body = {
       etlId: (etlRow as { id: string }).id,
       ...(connectionId ? { connectionId } : {}),
-      filter: guidedConfig.filter,
+      filter: filterPayload,
       ...(normalizedUnion ? { union: normalizedUnion } : {}),
       ...(normalizedJoin ? { join: normalizedJoin } : {}),
       clean: guidedConfig.clean,
