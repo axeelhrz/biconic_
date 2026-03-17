@@ -418,8 +418,8 @@ async function getPasswordFromSecret(
 /** Límite de ejecución para JOINs pesados (Vercel: 300s en Pro). Evita FUNCTION_INVOCATION_TIMEOUT. */
 export const maxDuration = 300;
 
-/** Timeout interno (ms) para devolver 504 JSON antes de que Vercel mate la función (300s). Configurable con ETL_JOIN_TIMEOUT_MS. */
-const JOIN_INTERNAL_TIMEOUT_MS = Number(process.env.ETL_JOIN_TIMEOUT_MS) || 270_000;
+/** Timeout interno (ms) para devolver 504 JSON antes de que Vercel mate la función (300s). Refuerzo: default 295s para maximizar margen. Configurable con ETL_JOIN_TIMEOUT_MS. */
+const JOIN_INTERNAL_TIMEOUT_MS = Number(process.env.ETL_JOIN_TIMEOUT_MS) || 295_000;
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const requestId = randomUUID();
@@ -593,14 +593,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (useInMemoryStarJoin) {
         log("Iniciando flujo de JOIN star en memoria (Firebird/cross-connection).");
         try {
+          const joinsCount = (joins || []).length;
+          // Límites por número de JOINs para evitar timeout: menos filas por tabla = menos trabajo en memoria.
+          const capByJoins = joinsCount >= 4 ? 150 : joinsCount >= 3 ? 300 : joinsCount >= 2 ? 600 : 2000;
           let sourceLimit = Math.min(
             ETL_MAX_ROWS_CEILING,
-            Math.max((offset ?? 0) + (limit ?? 50) * 8, 2000)
+            Math.max((offset ?? 0) + (limit ?? 50) * 8, 500),
+            capByJoins
           );
-          const joinsCount = (joins || []).length;
-          if (joinsCount >= 4) sourceLimit = Math.min(sourceLimit, 500);
-          else if (joinsCount >= 3) sourceLimit = Math.min(sourceLimit, 800);
-          else if (joinsCount >= 2) sourceLimit = Math.min(sourceLimit, 1200);
           const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);
           if (envSourceLimitMax > 0) sourceLimit = Math.min(sourceLimit, envSourceLimitMax);
           const normalizeKey = (k: string) =>
@@ -706,7 +706,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 ? process.env.SUPABASE_DB_URL
                 : `postgres://${conn.db_user}:${encodeURIComponent(String(password || ""))}@${conn.db_host}:${conn.db_port || 5432}/${conn.db_name}?sslmode=require`;
             if (!connectionString) throw new Error("No se pudo resolver la conexión para JOIN en memoria.");
-            const client = new PgClient({ connectionString, connectionTimeoutMillis: 12000, statement_timeout: 600000 });
+            const client = new PgClient({
+              connectionString,
+              connectionTimeoutMillis: 12000,
+              statement_timeout: Math.max(60000, JOIN_INTERNAL_TIMEOUT_MS - 5000),
+            });
             await client.connect();
             try {
               const sel = columns?.length ? columns.map((c) => quoteIdent(c, "postgres")).join(", ") : "*";
@@ -959,6 +963,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const client = new PgClient({
           connectionString: dbUrl,
           connectionTimeoutMillis: 8000,
+          statement_timeout: Math.max(60000, JOIN_INTERNAL_TIMEOUT_MS - 5000),
         });
         try {
           log(
@@ -1170,6 +1175,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           port: primaryConn.db_port || 5432,
           password: password,
           connectionTimeoutMillis: 8000,
+          statement_timeout: Math.max(60000, JOIN_INTERNAL_TIMEOUT_MS - 5000),
           ssl: ssl ? { rejectUnauthorized: false } : undefined,
         };
         log("Configuración de conexión PostgreSQL:", {

@@ -787,6 +787,11 @@ async function executeEtlPipeline(
             }));
             const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");
             const cookieHeader = req.headers.get("cookie");
+            const joinsCount = (joinObj.joins || []).length;
+            const starChunkSize =
+              joinsCount >= 4 ? Math.min(JOIN_CHUNK_SIZE, 5000)
+              : joinsCount >= 3 ? Math.min(JOIN_CHUNK_SIZE, 10000)
+              : Math.min(JOIN_CHUNK_SIZE, 20000);
             let starOffset = 0;
             while (true) {
               const joinQueryBody = {
@@ -796,7 +801,7 @@ async function executeEtlPipeline(
                 primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
                 conditions: body!.filter?.conditions || [],
                 dateFilter: body!.filter?.dateFilter ?? undefined,
-                limit: JOIN_CHUNK_SIZE,
+                limit: starChunkSize,
                 offset: starOffset,
                 count: false,
               };
@@ -818,7 +823,7 @@ async function executeEtlPipeline(
                   /timeout|FUNCTION_INVOCATION_TIMEOUT/i.test(text || "");
                 throw new Error(
                   isTimeout
-                    ? "La consulta JOIN superó el tiempo límite (5 min). Reduzca el volumen de datos, use filtros o ejecute de nuevo; el ETL obtiene los datos por lotes para evitar este error."
+                    ? "La consulta JOIN superó el tiempo permitido. Reduzca el volumen o use filtros; el ETL obtiene datos por lotes. En servidor propio puede aumentar ETL_JOIN_TIMEOUT_MS."
                     : `El servidor de JOIN devolvió una respuesta no válida (posible timeout o error del servidor). Detalle: ${(text || "").slice(0, 300)}`
                 );
               }
@@ -833,7 +838,7 @@ async function executeEtlPipeline(
               if (starData.rows.length === 0) break;
               yield starData.rows;
               starOffset += starData.rows.length;
-              if (starData.rows.length < JOIN_CHUNK_SIZE) break;
+              if (starData.rows.length < starChunkSize) break;
             }
             return;
           }
