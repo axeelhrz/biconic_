@@ -50,9 +50,15 @@ export async function POST(
       ? layout.guided_config
       : null;
 
+    if (!guidedConfig) {
+      return NextResponse.json(
+        { ok: false, error: "El ETL no tiene configuración de ejecución guardada (guided_config). Edítalo y ejecútalo al menos una vez." },
+        { status: 400 }
+      );
+    }
     const join = guidedConfig.join as { primaryConnectionId?: string } | undefined;
     const union = guidedConfig.union as { left?: { connectionId?: string } } | undefined;
-    if (!guidedConfig || (!guidedConfig.connectionId && !join?.primaryConnectionId && !union?.left?.connectionId)) {
+    if (!guidedConfig.connectionId && !join?.primaryConnectionId && !union?.left?.connectionId) {
       return NextResponse.json(
         { ok: false, error: "El ETL no tiene configuración de ejecución guardada (guided_config). Edítalo y ejecútalo al menos una vez." },
         { status: 400 }
