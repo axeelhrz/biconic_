@@ -21,7 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AlertCircle, CheckCircle2, CircleDashed, Trash2, X, XCircle, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, CircleDashed, Play, Trash2, X, XCircle, Loader2 } from "lucide-react";
 import { deleteMonitorRunsAdmin } from "@/app/admin/(main)/monitors/actions";
 import { toast } from "sonner";
 
@@ -54,6 +54,7 @@ export default function MonitorsTable({
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [markingFailedId, setMarkingFailedId] = useState<string | null>(null);
+  const [rerunningEtlId, setRerunningEtlId] = useState<string | null>(null);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -212,6 +213,25 @@ export default function MonitorsTable({
       toast.error(e?.message || "Error al marcar como fallido");
     } finally {
       setMarkingFailedId(null);
+    }
+  };
+
+  const handleRerun = async (log: LogEntry) => {
+    if (!log.etl_id) return;
+    setRerunningEtlId(log.etl_id);
+    try {
+      const res = await fetch(`/api/admin/etl/${log.etl_id}/rerun`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        loadLogs(false);
+        toast.success("Re-ejecución iniciada. Podés seguir el progreso en esta tabla.");
+      } else {
+        toast.error((data?.error as string) || "Error al re-ejecutar");
+      }
+    } catch (e: any) {
+      toast.error(e?.message || "Error al re-ejecutar");
+    } finally {
+      setRerunningEtlId(null);
     }
   };
 
@@ -408,6 +428,19 @@ export default function MonitorsTable({
                   </TableCell>
                   <TableCell style={{ borderColor: "var(--platform-border)" }}>
                     <div className="flex items-center gap-1">
+                    {log.etl_id && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 rounded-lg text-[var(--platform-fg-muted)] hover:text-[var(--platform-accent)]"
+                        onClick={() => handleRerun(log)}
+                        disabled={rerunningEtlId === log.etl_id}
+                        title="Re-ejecutar este ETL"
+                      >
+                        {rerunningEtlId === log.etl_id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                      </Button>
+                    )}
                     {(log.status === "started" || log.status === "running") && log.etl_id && (
                       <Button
                         type="button"

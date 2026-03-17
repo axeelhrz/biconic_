@@ -21,3 +21,9 @@ export const ETL_PREVIEW_MAX_WHEN_UNLIMITED = 50_000;
  * Reducir este valor (p. ej. vía ETL_JOIN_CHUNK_SIZE) si alguna petición sigue haciendo timeout.
  */
 export const ETL_JOIN_CHUNK_SIZE_DEFAULT = 50_000;
+
+/**
+ * Variables de entorno para join-query (API connection):
+ * - ETL_JOIN_TIMEOUT_MS: timeout en ms para la ruta join-query; pasado este tiempo se devuelve 504. Default 270000 (Vercel Pro: 300s techo).
+ * - ETL_JOIN_SOURCE_LIMIT_MAX: tope opcional de filas por tabla en JOIN in-memory (Firebird/cross-connection); si está definido, se aplica además del cap por número de joins (2+ joins reducen el sourceLimit para evitar timeout).
+ */

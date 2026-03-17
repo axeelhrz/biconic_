@@ -418,8 +418,8 @@ async function getPasswordFromSecret(
 /** Límite de ejecución para JOINs pesados (Vercel: 300s en Pro). Evita FUNCTION_INVOCATION_TIMEOUT. */
 export const maxDuration = 300;
 
-/** Timeout interno (ms) para devolver 504 JSON antes de que Vercel mate la función (300s). */
-const JOIN_INTERNAL_TIMEOUT_MS = 270_000;
+/** Timeout interno (ms) para devolver 504 JSON antes de que Vercel mate la función (300s). Configurable con ETL_JOIN_TIMEOUT_MS. */
+const JOIN_INTERNAL_TIMEOUT_MS = Number(process.env.ETL_JOIN_TIMEOUT_MS) || 270_000;
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const requestId = randomUUID();
@@ -593,10 +593,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (useInMemoryStarJoin) {
         log("Iniciando flujo de JOIN star en memoria (Firebird/cross-connection).");
         try {
-          const sourceLimit = Math.min(
+          let sourceLimit = Math.min(
             ETL_MAX_ROWS_CEILING,
             Math.max((offset ?? 0) + (limit ?? 50) * 8, 2000)
           );
+          const joinsCount = (joins || []).length;
+          if (joinsCount >= 4) sourceLimit = Math.min(sourceLimit, 500);
+          else if (joinsCount >= 3) sourceLimit = Math.min(sourceLimit, 800);
+          else if (joinsCount >= 2) sourceLimit = Math.min(sourceLimit, 1200);
+          const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);
+          if (envSourceLimitMax > 0) sourceLimit = Math.min(sourceLimit, envSourceLimitMax);
           const normalizeKey = (k: string) =>
             String(k || "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
           const normalizeRow = (row: Record<string, any>) => {
