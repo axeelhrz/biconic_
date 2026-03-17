@@ -3189,7 +3189,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               {!previewError && !previewLoading && (!previewRows || previewRows.length === 0) && connectionId && selectedTable && previewLoadedOnceRef.current && (
                 <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
                   {dateFilterColumn && (dateFilterYears.length > 0 || dateFilterMonths.length > 0 || dateFilterExactDatesText.trim().split(/[,\s]+/).some((s) => /^\d{4}-\d{2}-\d{2}$/.test(s.trim())))
-                    ? "La consulta no devolvió filas. Revisá el filtro por fecha (años/meses/días) o las condiciones. Podés tocar Actualizar para volver a cargar."
+                    ? "No hay filas que cumplan el filtro por fecha (p. ej. año o período elegido). Comprobá en la base que existan datos para esa columna y período. Podés tocar Actualizar para volver a cargar."
                     : "La consulta se ejecutó pero no devolvió filas. Revisá los filtros o probá otra tabla. Podés tocar Actualizar para volver a cargar."}
                 </p>
               )}

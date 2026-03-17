@@ -1068,6 +1068,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             normalizedConditions,
             joins.length
           );
+          if (body.dateFilter?.column?.trim()) {
+            const hasYears = Array.isArray(body.dateFilter.years) && body.dateFilter.years.length > 0;
+            const hasMonths = Array.isArray(body.dateFilter.months) && body.dateFilter.months.length > 0;
+            const hasExact = Array.isArray(body.dateFilter.exactDates) && body.dateFilter.exactDates.length > 0;
+            if (!hasYears && !hasMonths && !hasExact) {
+              log("Warning: Filtro por fecha sin años, meses ni fechas exactas. Columna:", body.dateFilter.column);
+            }
+          }
           const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(
             body.dateFilter,
             params.length + 1,
@@ -1090,6 +1098,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           log(
             `Consulta de Excel ejecutada, ${resDb.rowCount} filas obtenidas.`
           );
+          if ((resDb.rows?.length ?? 0) === 0 && body.dateFilter?.column) {
+            log("Diagnóstico: 0 filas con filtro por fecha activo.", {
+              column: body.dateFilter.column,
+              years: body.dateFilter.years,
+            });
+          }
 
           let totalOut: number | undefined = undefined;
           if (count) {
@@ -1245,6 +1259,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             normalizedConditions,
             joins.length
           );
+          if (body.dateFilter?.column?.trim()) {
+            const hasYears = Array.isArray(body.dateFilter.years) && body.dateFilter.years.length > 0;
+            const hasMonths = Array.isArray(body.dateFilter.months) && body.dateFilter.months.length > 0;
+            const hasExact = Array.isArray(body.dateFilter.exactDates) && body.dateFilter.exactDates.length > 0;
+            if (!hasYears && !hasMonths && !hasExact) {
+              log("Warning: Filtro por fecha sin años, meses ni fechas exactas. Columna:", body.dateFilter.column);
+            }
+          }
           const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(
             body.dateFilter,
             params.length + 1,
@@ -1267,6 +1289,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           log(
             `Consulta de datos ejecutada, ${resDb.rowCount} filas obtenidas.`
           );
+          if ((resDb.rows?.length ?? 0) === 0 && body.dateFilter?.column) {
+            log("Diagnóstico: 0 filas con filtro por fecha activo.", {
+              column: body.dateFilter.column,
+              years: body.dateFilter.years,
+            });
+          }
 
           let totalOut: number | undefined = undefined;
           if (count) {

@@ -163,6 +163,9 @@ export function buildDateFilterWhereFragmentPg(
   const months = Array.isArray(dateFilter.months) ? dateFilter.months.map((m) => Number(m)).filter((n) => !Number.isNaN(n)) : [];
   const exactDates = Array.isArray(dateFilter.exactDates) ? dateFilter.exactDates.filter((d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) : [];
 
+  // Cast column to date so comparison works for date, timestamp, or text (ISO) types
+  const colAsDate = `(${col})::date`;
+
   let idx = paramStartIndex;
 
   if (years.length && months.length) {
@@ -174,7 +177,7 @@ export function buildDateFilterWhereFragmentPg(
         const endYear = m === 12 ? y + 1 : y;
         const end = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
         params.push(start, end);
-        rangeParts.push(`(${col} >= $${idx++}::date AND ${col} < $${idx++}::date)`);
+        rangeParts.push(`(${colAsDate} >= $${idx++}::date AND ${colAsDate} < $${idx++}::date)`);
       }
     }
     parts.push(rangeParts.length === 1 ? rangeParts[0] : `(${rangeParts.join(" OR ")})`);
@@ -182,20 +185,20 @@ export function buildDateFilterWhereFragmentPg(
     const rangeParts: string[] = [];
     for (const y of years) {
       params.push(`${y}-01-01`, `${y + 1}-01-01`);
-      rangeParts.push(`(${col} >= $${idx++}::date AND ${col} < $${idx++}::date)`);
+      rangeParts.push(`(${colAsDate} >= $${idx++}::date AND ${colAsDate} < $${idx++}::date)`);
     }
     parts.push(rangeParts.length === 1 ? rangeParts[0] : `(${rangeParts.join(" OR ")})`);
   } else if (months.length) {
     const placeholders = months.map(() => `$${idx++}`);
     months.forEach((m) => params.push(m));
-    parts.push(`EXTRACT(MONTH FROM ${col}) IN (${placeholders.join(", ")})`);
+    parts.push(`EXTRACT(MONTH FROM ${colAsDate}) IN (${placeholders.join(", ")})`);
   }
 
   if (exactDates.length) {
     const rangeParts: string[] = [];
     for (const d of exactDates) {
       params.push(d, d);
-      rangeParts.push(`(${col} >= $${idx++}::date AND ${col} < $${idx++}::date + interval '1 day')`);
+      rangeParts.push(`(${colAsDate} >= $${idx++}::date AND ${colAsDate} < $${idx++}::date + interval '1 day')`);
     }
     parts.push(rangeParts.length === 1 ? rangeParts[0] : `(${rangeParts.join(" OR ")})`);
   }
