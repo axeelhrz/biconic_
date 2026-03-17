@@ -192,32 +192,6 @@ export async function POST(req: NextRequest) {
     } = await supabaseAdmin.auth.getUser();
     if (!user) throw new Error("No autorizado");
 
-    // Normalize guided JOIN format to legacy shape only when a single join (so existing binary join path is used)
-    const guidedJoin = body?.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[] }> } | undefined;
-    if (guidedJoin?.primaryConnectionId && Array.isArray(guidedJoin.joins) && guidedJoin.joins.length === 1) {
-      const first = guidedJoin.joins[0];
-      const filterCols = (body!.filter?.columns as string[] | undefined) || [];
-      const leftCols = filterCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, ""));
-      const rightCols = filterCols.filter((c: string) => /^join_\d+\./i.test(c)).map((c: string) => c.replace(/^join_\d+\./i, ""));
-      (body as any).join = {
-        connectionId: String(guidedJoin.primaryConnectionId),
-        secondaryConnectionId: first.secondaryConnectionId != null ? String(first.secondaryConnectionId) : undefined,
-        leftTable: guidedJoin.primaryTable ?? "",
-        rightTable: first.secondaryTable ?? "",
-        leftColumns: leftCols.length > 0 ? leftCols : undefined,
-        rightColumns: rightCols.length > 0 ? rightCols : (first.secondaryColumns?.length ? first.secondaryColumns : undefined),
-        joinConditions: [
-          {
-            leftTable: guidedJoin.primaryTable ?? "l",
-            leftColumn: first.primaryColumn ?? "",
-            rightTable: first.secondaryTable ?? "r",
-            rightColumn: first.secondaryColumn ?? "",
-            joinType: (first.joinType || "INNER").toUpperCase() as "INNER" | "LEFT" | "RIGHT" | "FULL",
-          },
-        ],
-      };
-    }
-
     const allConditions = body?.filter?.conditions ?? [];
     const sqlConditions = allConditions.filter((c: FilterCondition) => c.operator !== "not in");
     const excludeRowsRules: { column: string; excluded: string[] }[] = allConditions
