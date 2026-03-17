@@ -418,13 +418,17 @@ export default function MonitorsTable({
                       minute: "2-digit",
                     })}
                   </TableCell>
-                  <TableCell className="text-right font-mono" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}>
+                  <TableCell
+                    className="text-right font-mono"
+                    style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                    title={log.status === "completed" && log.rows_processed === 0 ? "0 registros. Revisá filtros (ej. filtro por fecha) si esperabas datos." : undefined}
+                  >
                     {log.rows_processed !== null
                       ? log.rows_processed.toLocaleString()
                       : "-"}
                   </TableCell>
-                  <TableCell className="text-sm truncate max-w-[200px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }} title={log.error_message || ""}>
-                    {log.error_message || "-"}
+                  <TableCell className="text-sm truncate max-w-[200px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }} title={log.error_message || (log.status === "completed" && log.rows_processed === 0 ? "0 registros. Revisá filtros (ej. filtro por fecha) si esperabas datos." : "") || ""}>
+                    {log.error_message || (log.status === "completed" && log.rows_processed === 0 ? "0 registros. Revisá filtros (ej. fecha) si esperabas datos." : "-")}
                   </TableCell>
                   <TableCell style={{ borderColor: "var(--platform-border)" }}>
                     <div className="flex items-center gap-1">

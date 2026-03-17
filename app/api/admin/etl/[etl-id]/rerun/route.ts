@@ -56,8 +56,12 @@ export async function POST(
         { status: 400 }
       );
     }
-    const join = guidedConfig.join as { primaryConnectionId?: string } | undefined;
-    const union = guidedConfig.union as { left?: { connectionId?: string } } | undefined;
+    const join = guidedConfig.join as { primaryConnectionId?: unknown; joins?: Array<{ secondaryConnectionId?: unknown }> } | undefined;
+    const union = guidedConfig.union as {
+      left?: { connectionId?: unknown };
+      right?: { connectionId?: unknown };
+      rights?: Array<{ connectionId?: unknown }>;
+    } | undefined;
     if (!guidedConfig.connectionId && !join?.primaryConnectionId && !union?.left?.connectionId) {
       return NextResponse.json(
         { ok: false, error: "El ETL no tiene configuración de ejecución guardada (guided_config). Edítalo y ejecútalo al menos una vez." },
@@ -65,12 +69,49 @@ export async function POST(
       );
     }
 
+    const toStr = (x: unknown): string | undefined => (x == null ? undefined : String(x));
+    const connIdRaw = guidedConfig.connectionId ?? union?.left?.connectionId ?? join?.primaryConnectionId;
+    const connectionId = toStr(connIdRaw) ?? undefined;
+
+    let normalizedJoin: Record<string, unknown> | undefined;
+    if (guidedConfig.join && typeof guidedConfig.join === "object") {
+      const j = { ...guidedConfig.join } as Record<string, unknown>;
+      if (j.primaryConnectionId != null) j.primaryConnectionId = toStr(j.primaryConnectionId);
+      if (Array.isArray(j.joins)) {
+        j.joins = j.joins.map((jn: Record<string, unknown>) => ({
+          ...jn,
+          secondaryConnectionId: jn.secondaryConnectionId != null ? toStr(jn.secondaryConnectionId) : jn.secondaryConnectionId,
+        }));
+      }
+      normalizedJoin = j;
+    }
+
+    let normalizedUnion: Record<string, unknown> | undefined;
+    if (guidedConfig.union && typeof guidedConfig.union === "object") {
+      const u = { ...guidedConfig.union } as Record<string, unknown>;
+      if (u.left && typeof u.left === "object") {
+        const left = u.left as Record<string, unknown>;
+        if (left.connectionId != null) left.connectionId = toStr(left.connectionId);
+      }
+      if (u.right && typeof u.right === "object") {
+        const right = u.right as Record<string, unknown>;
+        if (right.connectionId != null) right.connectionId = toStr(right.connectionId);
+      }
+      if (Array.isArray(u.rights)) {
+        u.rights = u.rights.map((r: Record<string, unknown>) => ({
+          ...r,
+          connectionId: r.connectionId != null ? toStr(r.connectionId) : r.connectionId,
+        }));
+      }
+      normalizedUnion = u;
+    }
+
     const body = {
       etlId: (etlRow as { id: string }).id,
-      connectionId: guidedConfig.connectionId ?? union?.left?.connectionId ?? join?.primaryConnectionId,
+      ...(connectionId ? { connectionId } : {}),
       filter: guidedConfig.filter,
-      union: guidedConfig.union,
-      join: guidedConfig.join,
+      ...(normalizedUnion ? { union: normalizedUnion } : {}),
+      ...(normalizedJoin ? { join: normalizedJoin } : {}),
       clean: guidedConfig.clean,
       end: guidedConfig.end,
       waitForCompletion: false,

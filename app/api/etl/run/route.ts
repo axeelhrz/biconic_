@@ -753,7 +753,7 @@ async function executeEtlPipeline(
       const { data: conn } = await supabaseAdmin
         .from("connections")
         .select("*")
-        .eq("id", primaryConnId)
+        .eq("id", String(primaryConnId))
         .single();
       if (!conn) throw new Error(`Conexión ${primaryConnId} no encontrada.`);
 
