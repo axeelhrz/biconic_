@@ -1073,7 +1073,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             const hasMonths = Array.isArray(body.dateFilter.months) && body.dateFilter.months.length > 0;
             const hasExact = Array.isArray(body.dateFilter.exactDates) && body.dateFilter.exactDates.length > 0;
             if (!hasYears && !hasMonths && !hasExact) {
-              log("Warning: Filtro por fecha sin años, meses ni fechas exactas. Columna:", body.dateFilter.column);
+              log("Warning: Filtro por fecha sin años, meses ni fechas exactas.", { column: body.dateFilter.column });
             }
           }
           const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(
@@ -1264,7 +1264,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             const hasMonths = Array.isArray(body.dateFilter.months) && body.dateFilter.months.length > 0;
             const hasExact = Array.isArray(body.dateFilter.exactDates) && body.dateFilter.exactDates.length > 0;
             if (!hasYears && !hasMonths && !hasExact) {
-              log("Warning: Filtro por fecha sin años, meses ni fechas exactas. Columna:", body.dateFilter.column);
+              log("Warning: Filtro por fecha sin años, meses ni fechas exactas.", { column: body.dateFilter.column });
             }
           }
           const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(
