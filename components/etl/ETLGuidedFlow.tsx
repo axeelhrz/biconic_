@@ -263,7 +263,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     /** Condiciones de enlace: varios pares (leftColumn, rightColumn) para clave compuesta. */
     conditions: Array<{ leftColumn: string; rightColumn: string }>;
     rightColumns: string[];
-    availableColumns?: { name: string }[];
+    availableColumns?: { name: string; inferredType?: string; dataType?: string }[];
   }>>([]);
 
   const [previewRows, setPreviewRows] = useState<Record<string, unknown>[] | null>(null);
@@ -308,6 +308,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       return sa.localeCompare(sb, undefined, { numeric: true }) * dir;
     });
   }, [previewRowsFilteredByExcluded, previewSortKey, previewSortDir]);
+
+  /** Tipos inferidos desde la vista previa (para columnas join que la BD devuelve como texto). */
+  const inferredTypesFromPreview = useMemo(() => {
+    if (!previewRows?.length) return {} as Record<string, "Fecha" | "Número" | "Texto">;
+    const derived = deriveColumnTypesFromSample(previewRows as Record<string, unknown>[]);
+    const byNormalized: Record<string, "Fecha" | "Número" | "Texto"> = {};
+    for (const [key, type] of Object.entries(derived)) {
+      byNormalized[key.toLowerCase()] = type as "Fecha" | "Número" | "Texto";
+    }
+    return byNormalized;
+  }, [previewRows]);
 
   const handlePreviewSort = useCallback((key: string) => {
     setPreviewSortKey((prev) => {
@@ -487,9 +498,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const getColumnType = useCallback((key: string): "Fecha" | "Número" | "Texto" => {
     const disp = columnDisplay[key];
     if (disp?.type) return disp.type;
-    const col = selectedTableInfo?.columns?.find((c: { name: string }) => c.name.toLowerCase() === key.toLowerCase());
+    const keyLower = key.toLowerCase();
+    const displayKeyByNorm = Object.keys(columnDisplay).find((k) => k.replace(/\./g, "_").toLowerCase() === keyLower);
+    if (displayKeyByNorm && (columnDisplay[displayKeyByNorm] as { type?: string })?.type)
+      return (columnDisplay[displayKeyByNorm] as { type: "Fecha" | "Número" | "Texto" }).type;
+    if (/^primary_/i.test(key) || /^join_\d+_/i.test(key)) {
+      const fromPreview = inferredTypesFromPreview[keyLower];
+      if (fromPreview) return fromPreview;
+    }
+    const col = selectedTableInfo?.columns?.find((c: { name: string }) => c.name.toLowerCase() === keyLower);
     return dataTypeToLabel((col as { inferredType?: string; dataType?: string })?.inferredType ?? (col as { dataType?: string })?.dataType);
-  }, [columnDisplay, selectedTableInfo?.columns]);
+  }, [columnDisplay, selectedTableInfo?.columns, inferredTypesFromPreview]);
 
   /** Para fechas ISO en UTC (ej. 2025-10-01T00:00:00.000Z) usa componentes UTC para mostrar la fecha de calendario correcta (1/10, no 30/09 en UTC-3). */
   const dateComponentsForPreview = (date: Date, val: unknown): { d: number; m: number; y: number; monthIndex: number } => {
@@ -704,14 +723,34 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   }, [unionRightItems]);
 
   useEffect(() => {
-    const loadJoinItemColumns = async (item: { id: string; connectionId: string | number; table: string; rightColumns: string[]; availableColumns?: { name: string }[] }, index: number) => {
+    const loadJoinItemColumns = async (item: { id: string; connectionId: string | number; table: string; rightColumns: string[]; availableColumns?: { name: string; inferredType?: string; dataType?: string }[] }, index: number) => {
       if (item.availableColumns?.length) return;
       try {
         const res = await fetchMetadata(item.connectionId, item.table);
         const data = await safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { columns?: { name: string }[] }[] }; error?: string }>(res);
         const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
+        let availableColumns: { name: string; inferredType?: string; dataType?: string }[] = colNames.map((n: string) => ({ name: n }));
+        try {
+          const inferRes = await fetch("/api/connection/infer-column-types", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ connectionId: item.connectionId, tableName: item.table }),
+          });
+          const inferData = await safeJsonResponse<{ ok?: boolean; columnTypes?: Record<string, string>; error?: string }>(inferRes);
+          if (inferData?.ok && inferData?.columnTypes && typeof inferData.columnTypes === "object") {
+            const ct = inferData.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
+            const getInferred = (colName: string) =>
+              ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
+            availableColumns = colNames.map((n: string) => ({
+              name: n,
+              inferredType: getInferred(n) ?? undefined,
+            }));
+          }
+        } catch {
+          // keep availableColumns with names only
+        }
         setJoinItems((prev) =>
-          prev.map((it, i) => (i === index ? { ...it, availableColumns: colNames.map((n: string) => ({ name: n })) } : it))
+          prev.map((it, i) => (i === index ? { ...it, availableColumns } : it))
         );
       } catch {
         // ignore
@@ -850,17 +889,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     joinType,
     joinRightTableInfo?.columns,
   ]);
-
-  /** Tipos inferidos desde la vista previa (para columnas join que la BD devuelve como texto). */
-  const inferredTypesFromPreview = useMemo(() => {
-    if (!previewRows?.length) return {} as Record<string, "Fecha" | "Número" | "Texto">;
-    const derived = deriveColumnTypesFromSample(previewRows as Record<string, unknown>[]);
-    const byNormalized: Record<string, "Fecha" | "Número" | "Texto"> = {};
-    for (const [key, type] of Object.entries(derived)) {
-      byNormalized[key.toLowerCase()] = type as "Fecha" | "Número" | "Texto";
-    }
-    return byNormalized;
-  }, [previewRows]);
 
   useEffect(() => {
     if (!joinSecondaryTable || !joinSecondaryConnectionId) {
@@ -2183,31 +2211,38 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   Estructura final del dataset: todas las columnas resultantes del paso anterior (incluidas las de JOIN). Definí tipo (Fecha, Número, Texto), nombre para mostrar y formato para que sea más legible.
                 </p>
               </div>
-              {finalColumnsForTypes.length > 0 && finalColumnsForTypes.every((c) => !c.name.startsWith("join_")) && !loadingColumns && !inferringTypes && connectionId && selectedTable && (
+              {finalColumnsForTypes.length > 0 && !loadingColumns && !inferringTypes && connectionId && selectedTable && (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   className="rounded-lg"
                   style={{ borderColor: "var(--platform-border)" }}
-                  onClick={() => {
+                  onClick={async () => {
                     didInferOnColumnasTiposRef.current = null;
                     setInferringTypes(true);
-                    fetch("/api/connection/infer-column-types", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ connectionId, tableName: selectedTable }),
-                    })
-                      .then((res) => safeJsonResponse<{ ok?: boolean; columnTypes?: Record<string, string>; error?: string }>(res))
-                      .then((inferJson) => {
-                        if (!inferJson.ok || !inferJson.columnTypes || typeof inferJson.columnTypes !== "object") {
-                          toast.error(inferJson?.error ?? "No se pudieron inferir los tipos");
-                          return;
-                        }
-                        const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
+                    try {
+                      const primaryPromise =
+                        fetch("/api/connection/infer-column-types", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ connectionId, tableName: selectedTable }),
+                        }).then((res) => safeJsonResponse<{ ok?: boolean; columnTypes?: Record<string, string>; error?: string }>(res));
+                      const joinPromises = (joinItems.length > 0 ? joinItems : []).map((item, idx) =>
+                        fetch("/api/connection/infer-column-types", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ connectionId: item.connectionId, tableName: item.table }),
+                        })
+                          .then((res) => safeJsonResponse<{ ok?: boolean; columnTypes?: Record<string, string>; error?: string }>(res))
+                          .then((inferJson) => ({ index: idx, inferJson }))
+                      );
+                      const [primaryResult, ...joinResults] = await Promise.all([primaryPromise, ...joinPromises]);
+                      if (primaryResult?.ok && primaryResult?.columnTypes && typeof primaryResult.columnTypes === "object" && selectedTableInfo?.columns) {
+                        const ct = primaryResult.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
                         const getInferred = (colName: string) =>
                           ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
-                        const tableColumns = selectedTableInfo!.columns as { name: string; dataType?: string; inferredType?: string }[];
+                        const tableColumns = selectedTableInfo.columns as { name: string; dataType?: string; inferredType?: string }[];
                         const columnsWithInferred = tableColumns.map((c) => ({
                           ...c,
                           inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
@@ -2217,13 +2252,30 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             `${t.schema}.${t.name}` === selectedTable ? { ...t, columns: columnsWithInferred } : t
                           )
                         );
-                        toast.success("Tipos actualizados desde los datos");
-                      })
-                      .catch((err) => {
-                        console.warn("[ETL] Refrescar tipos:", err);
-                        toast.error("Error al inferir tipos. Revisá la consola.");
-                      })
-                      .finally(() => setInferringTypes(false));
+                      } else if (!primaryResult?.ok && joinItems.length === 0) {
+                        toast.error(primaryResult?.error ?? "No se pudieron inferir los tipos");
+                        return;
+                      }
+                      if (joinResults.length > 0) {
+                        setJoinItems((prev) =>
+                          prev.map((it, i) => {
+                            const r = joinResults.find((x: { index: number }) => x.index === i) as { index: number; inferJson?: { ok?: boolean; columnTypes?: Record<string, string> } } | undefined;
+                            if (!r?.inferJson?.ok || typeof r.inferJson.columnTypes !== "object") return it;
+                            const ct = r.inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
+                            const getInferred = (colName: string) =>
+                              ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
+                            const cols = (it.availableColumns ?? []).map((ac) => ({ ...ac, inferredType: getInferred(ac.name) ?? ac.inferredType }));
+                            return { ...it, availableColumns: cols.length ? cols : it.availableColumns };
+                          })
+                        );
+                      }
+                      toast.success("Tipos actualizados desde los datos");
+                    } catch (err) {
+                      console.warn("[ETL] Refrescar tipos:", err);
+                      toast.error("Error al inferir tipos. Revisá la consola.");
+                    } finally {
+                      setInferringTypes(false);
+                    }
                   }}
                 >
                   <RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Refrescar tipos
@@ -2254,7 +2306,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       {finalColumnsForTypes.map((c: { name: string; dataType?: string; inferredType?: string }) => {
                         const disp = columnDisplay[c.name] ?? { label: "", format: "" };
                         const rowKeyNorm = c.name.replace(/\./g, "_").toLowerCase();
-                        const fromPreview = /^join_\d+\./i.test(c.name) ? inferredTypesFromPreview[rowKeyNorm] : undefined;
+                        const fromPreview = inferredTypesFromPreview[rowKeyNorm];
                         const tipoInferido = dataTypeToLabel(fromPreview ?? (c as { inferredType?: string }).inferredType ?? c.dataType);
                         const tipo = (disp.type as "Fecha" | "Número" | "Texto") ?? tipoInferido;
                         const isDate = tipo === "Fecha";
