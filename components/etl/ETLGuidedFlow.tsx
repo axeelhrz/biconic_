@@ -29,6 +29,7 @@ import { Connection as ServerConnection } from "@/components/connections/Connect
 import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { deriveColumnTypesFromSample } from "@/lib/derive-column-types";
 
 const STEPS = [
   { id: "conexion", label: "Conexión", icon: Link2 },
@@ -849,6 +850,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     joinType,
     joinRightTableInfo?.columns,
   ]);
+
+  /** Tipos inferidos desde la vista previa (para columnas join que la BD devuelve como texto). */
+  const inferredTypesFromPreview = useMemo(() => {
+    if (!previewRows?.length) return {} as Record<string, "Fecha" | "Número" | "Texto">;
+    const derived = deriveColumnTypesFromSample(previewRows as Record<string, unknown>[]);
+    const byNormalized: Record<string, "Fecha" | "Número" | "Texto"> = {};
+    for (const [key, type] of Object.entries(derived)) {
+      byNormalized[key.toLowerCase()] = type as "Fecha" | "Número" | "Texto";
+    }
+    return byNormalized;
+  }, [previewRows]);
 
   useEffect(() => {
     if (!joinSecondaryTable || !joinSecondaryConnectionId) {
@@ -2241,7 +2253,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <tbody>
                       {finalColumnsForTypes.map((c: { name: string; dataType?: string; inferredType?: string }) => {
                         const disp = columnDisplay[c.name] ?? { label: "", format: "" };
-                        const tipoInferido = dataTypeToLabel((c as { inferredType?: string }).inferredType ?? c.dataType);
+                        const rowKeyNorm = c.name.replace(/\./g, "_").toLowerCase();
+                        const fromPreview = /^join_\d+\./i.test(c.name) ? inferredTypesFromPreview[rowKeyNorm] : undefined;
+                        const tipoInferido = dataTypeToLabel(fromPreview ?? (c as { inferredType?: string }).inferredType ?? c.dataType);
                         const tipo = (disp.type as "Fecha" | "Número" | "Texto") ?? tipoInferido;
                         const isDate = tipo === "Fecha";
                         const isNumber = tipo === "Número";
