@@ -1215,10 +1215,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         .map((s) => {
           const cfg = s.aggregationConfig;
           const list = cfg?.metrics?.length ? cfg.metrics : (s.metric ? [s.metric] : []);
-          const primary = list[0];
-          if (!primary) return null;
-          const savedName = (s.name || "").trim() || (primary as { alias?: string }).alias || (primary as { field?: string }).field;
-          return { ...primary, id: (primary as { id?: string }).id || s.id, alias: savedName } as AggregationMetricEdit;
+          if (list.length === 0) return null;
+          const savedName = (s.name || "").trim();
+          const norm = (a: string) => (a || "").trim().toLowerCase();
+          const byName = list.find((m) => norm((m as { alias?: string }).alias) === norm(savedName));
+          const primary = byName ?? list[list.length - 1];
+          const displayAlias = savedName || (primary as { alias?: string }).alias || (primary as { field?: string }).field;
+          return { ...primary, id: (primary as { id?: string }).id || s.id, alias: displayAlias } as AggregationMetricEdit;
         })
         .filter((m): m is AggregationMetricEdit => m != null);
     }
