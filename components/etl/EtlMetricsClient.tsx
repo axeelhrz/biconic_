@@ -1206,24 +1206,37 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
   const tableNameForPreview = data?.schema && data?.tableName ? `${data.schema}.${data.tableName}` : null;
 
-  /** En Análisis (C) o Gráfico (D) con métricas seleccionadas: una métrica por tarjeta elegida (alias = nombre de la métrica guardada para que la tabla muestre lo seleccionado). */
+  /** En Análisis (C) o Gráfico (D): envía todas las métricas de cada tarjeta (bases + fórmula) para que las fórmulas tengan metric_0, metric_1, etc. disponibles. Fórmulas se reescriben con índices globales. */
   const effectiveFormMetrics = useMemo((): AggregationMetricEdit[] => {
     if ((wizard === "C" || wizard === "D") && analysisSelectedMetricIds.length > 0) {
-      return analysisSelectedMetricIds
+      const selected = analysisSelectedMetricIds
         .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
-        .filter((s): s is SavedMetricForm => s != null)
-        .map((s) => {
-          const cfg = s.aggregationConfig;
-          const list = cfg?.metrics?.length ? cfg.metrics : (s.metric ? [s.metric] : []);
-          if (list.length === 0) return null;
-          const savedName = (s.name || "").trim();
-          const norm = (a: string) => (a || "").trim().toLowerCase();
-          const byName = list.find((m) => norm((m as { alias?: string }).alias ?? "") === norm(savedName));
-          const primary = byName ?? list[list.length - 1];
-          const displayAlias = savedName || (primary as { alias?: string }).alias || (primary as { field?: string }).field;
-          return { ...primary, id: (primary as { id?: string }).id || s.id, alias: displayAlias } as AggregationMetricEdit;
-        })
-        .filter((m): m is AggregationMetricEdit => m != null);
+        .filter((s): s is SavedMetricForm => s != null);
+      const out: AggregationMetricEdit[] = [];
+      const norm = (a: string) => (a || "").trim().toLowerCase();
+      let globalIndex = 0;
+      for (const s of selected) {
+        const cfg = s.aggregationConfig;
+        const list = cfg?.metrics?.length ? cfg.metrics : (s.metric ? [s.metric] : []);
+        const start = globalIndex;
+        const savedName = (s.name || "").trim();
+        const resultIdx = list.findIndex((m) => norm((m as { alias?: string }).alias ?? "") === norm(savedName));
+        const displayIdx = resultIdx >= 0 ? resultIdx : list.length - 1;
+        for (let i = 0; i < list.length; i++) {
+          const m = { ...list[i], id: (list[i] as { id?: string }).id ?? `${s.id}-${i}` } as AggregationMetricEdit;
+          if (i === displayIdx && savedName) m.alias = savedName;
+          const formula = (m as { formula?: string }).formula?.trim();
+          if (formula) {
+            let rewritten = formula;
+            for (let k = list.length - 1; k >= 0; k--)
+              rewritten = rewritten.replace(new RegExp(`metric_${k}\\b`, "gi"), `metric_${start + k}`);
+            (m as { formula?: string }).formula = rewritten;
+          }
+          out.push(m);
+          globalIndex++;
+        }
+      }
+      return out;
     }
     if (wizard === "B" && formulaFromSavedMetricIds.length >= 2) {
       const ordered = formulaFromSavedMetricIds
@@ -1240,6 +1253,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     }
     return formMetrics;
   }, [wizard, analysisSelectedMetricIds, savedMetrics, formMetrics, formulaFromSavedMetricIds, formulaFromReuseExpr, formName]);
+
+  /** En wizard C/D: un alias de columna a mostrar por cada métrica guardada seleccionada (nombre de la tarjeta o alias del resultado). */
+  const analysisDisplayMetricAliases = useMemo((): string[] => {
+    if ((wizard !== "C" && wizard !== "D") || analysisSelectedMetricIds.length === 0) return [];
+    const norm = (a: string) => (a || "").trim().toLowerCase();
+    return analysisSelectedMetricIds
+      .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
+      .filter((s): s is SavedMetricForm => s != null)
+      .map((s) => {
+        const list = s.aggregationConfig?.metrics?.length ? s.aggregationConfig.metrics : (s.metric ? [s.metric] : []);
+        const savedName = (s.name || "").trim();
+        const byName = list.find((m) => norm((m as { alias?: string }).alias ?? "") === norm(savedName));
+        const resultMetric = byName ?? list[list.length - 1];
+        return savedName || (resultMetric as { alias?: string })?.alias ?? (resultMetric as { field?: string })?.field ?? "";
+      })
+      .filter(Boolean);
+  }, [wizard, analysisSelectedMetricIds, savedMetrics]);
 
   const fetchPreview = useCallback(async () => {
     if (effectiveFormMetrics.length === 0) return;
@@ -1650,7 +1680,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     return undefined;
   }, [previewData, effectiveFormMetrics.length]);
 
-  /** Solo columnas solicitadas: dimensiones + métricas elegidas (+ columnas de comparación si aplica). No se muestran columnas extra devueltas por el API. */
+  /** Solo columnas solicitadas: dimensiones + métricas elegidas (+ columnas de comparación si aplica). En C/D usamos un alias por tarjeta (analysisDisplayMetricAliases). */
   const previewVisibleKeys = useMemo(() => {
     if (!previewData?.[0]) return [];
     const row = previewData[0] as Record<string, unknown>;
@@ -1659,7 +1689,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     for (const d of formDimensions) {
       if (d && rowKeysSet.has(d)) requested.push(d);
     }
-    const metricAliases = effectiveFormMetrics.map((m) => (m.alias || m.field || "valor").trim()).filter(Boolean);
+    const metricAliases =
+      (wizard === "C" || wizard === "D") && analysisDisplayMetricAliases.length > 0
+        ? analysisDisplayMetricAliases
+        : effectiveFormMetrics.map((m) => (m.alias || m.field || "valor").trim()).filter(Boolean);
     for (const alias of metricAliases) {
       if (rowKeysSet.has(alias)) requested.push(alias);
     }
@@ -1678,7 +1711,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       }
     }
     return requested;
-  }, [previewData, formDimensions, effectiveFormMetrics, transformCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum]);
+  }, [previewData, formDimensions, wizard, analysisDisplayMetricAliases, effectiveFormMetrics, transformCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum]);
 
   const chartAvailableColumns = useMemo(() => {
     if (!previewData?.[0]) return [];
