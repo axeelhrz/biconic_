@@ -443,7 +443,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const [analysisTimeRange, setAnalysisTimeRange] = useState("12");
   const [analysisDateFrom, setAnalysisDateFrom] = useState("");
   const [analysisDateTo, setAnalysisDateTo] = useState("");
-  const [analysisGranularity, setAnalysisGranularity] = useState("month");
+  const [analysisGranularity, setAnalysisGranularity] = useState("");
   /** Formato de visualización de fechas en la vista previa (dimensiones temporales). */
   const [analysisDateFormat, setAnalysisDateFormat] = useState<"short" | "monthYear" | "year" | "datetime">("short");
   /** IDs de métricas guardadas seleccionadas para este análisis (wizard C). Si tiene elementos, el payload usa estas en lugar de formMetrics. */
@@ -1643,17 +1643,35 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     return undefined;
   }, [previewData, effectiveFormMetrics.length]);
 
+  /** Solo columnas solicitadas: dimensiones + métricas elegidas (+ columnas de comparación si aplica). No se muestran columnas extra devueltas por el API. */
   const previewVisibleKeys = useMemo(() => {
     if (!previewData?.[0]) return [];
-    const allKeys = Object.keys(previewData[0] as Record<string, unknown>);
-    if (transformCompare !== "mom" && transformCompare !== "yoy") return allKeys;
-    return allKeys.filter((k) => {
-      if (k.endsWith("_delta_pct") && !transformShowDeltaPct) return false;
-      if (k.endsWith("_delta") && !k.endsWith("_delta_pct") && !transformShowDelta) return false;
-      if (k.endsWith("_acumulado") && !transformShowAccum) return false;
-      return true;
-    });
-  }, [previewData, transformCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum]);
+    const row = previewData[0] as Record<string, unknown>;
+    const rowKeysSet = new Set(Object.keys(row));
+    const requested: string[] = [];
+    for (const d of formDimensions) {
+      if (d && rowKeysSet.has(d)) requested.push(d);
+    }
+    const metricAliases = effectiveFormMetrics.map((m) => (m.alias || m.field || "valor").trim()).filter(Boolean);
+    for (const alias of metricAliases) {
+      if (rowKeysSet.has(alias)) requested.push(alias);
+    }
+    if (transformCompare === "mom" || transformCompare === "yoy") {
+      for (const alias of metricAliases) {
+        if (transformShowDeltaPct && rowKeysSet.has(`${alias}_delta_pct`)) requested.push(`${alias}_delta_pct`);
+        if (transformShowDelta && rowKeysSet.has(`${alias}_delta`)) requested.push(`${alias}_delta`);
+        if (transformShowAccum && rowKeysSet.has(`${alias}_acumulado`)) requested.push(`${alias}_acumulado`);
+        if (rowKeysSet.has(`${alias}_prev`)) requested.push(`${alias}_prev`);
+      }
+    }
+    if (transformCompare === "fixed") {
+      for (const alias of metricAliases) {
+        if (rowKeysSet.has(`${alias}_vs_fijo`)) requested.push(`${alias}_vs_fijo`);
+        if (rowKeysSet.has(`${alias}_var_pct_fijo`)) requested.push(`${alias}_var_pct_fijo`);
+      }
+    }
+    return requested;
+  }, [previewData, formDimensions, effectiveFormMetrics, transformCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum]);
 
   const chartAvailableColumns = useMemo(() => {
     if (!previewData?.[0]) return [];
@@ -3708,6 +3726,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                                   value={analysisGranularity}
                                   onChange={(v: string) => setAnalysisGranularity(v)}
                                   options={[
+                                    { value: "", label: "No agrupar por tiempo" },
                                     { value: "day", label: "Día" },
                                     { value: "week", label: "Semana" },
                                     { value: "month", label: "Mes" },
