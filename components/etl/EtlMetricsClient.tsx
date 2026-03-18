@@ -1206,17 +1206,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
   const tableNameForPreview = data?.schema && data?.tableName ? `${data.schema}.${data.tableName}` : null;
 
-  /** En Análisis (C) o Gráfico (D) con métricas seleccionadas, usa esas; en B con "ratio entre métricas guardadas", usa esas + fórmula; si no, usa formMetrics. */
+  /** En Análisis (C) o Gráfico (D) con métricas seleccionadas: una métrica por tarjeta elegida (alias = nombre de la métrica guardada para que la tabla muestre lo seleccionado). */
   const effectiveFormMetrics = useMemo((): AggregationMetricEdit[] => {
     if ((wizard === "C" || wizard === "D") && analysisSelectedMetricIds.length > 0) {
       return analysisSelectedMetricIds
         .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
         .filter((s): s is SavedMetricForm => s != null)
-        .flatMap((s) => {
+        .map((s) => {
           const cfg = s.aggregationConfig;
           const list = cfg?.metrics?.length ? cfg.metrics : (s.metric ? [s.metric] : []);
-          return list.map((m, i) => ({ ...m, id: (m as { id?: string }).id || `${s.id}-${i}` })) as AggregationMetricEdit[];
-        });
+          const primary = list[0];
+          if (!primary) return null;
+          const savedName = (s.name || "").trim() || (primary as { alias?: string }).alias || (primary as { field?: string }).field;
+          return { ...primary, id: (primary as { id?: string }).id || s.id, alias: savedName } as AggregationMetricEdit;
+        })
+        .filter((m): m is AggregationMetricEdit => m != null);
     }
     if (wizard === "B" && formulaFromSavedMetricIds.length >= 2) {
       const ordered = formulaFromSavedMetricIds
