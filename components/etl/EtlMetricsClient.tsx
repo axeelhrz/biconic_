@@ -440,7 +440,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const [columnRoles, setColumnRoles] = useState<Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>>({});
   const [, setCalcType] = useState<"simple" | "count" | "ratio" | "formula">("formula");
   const [metricAdditivity, setMetricAdditivity] = useState<"additive" | "semi" | "non">("additive");
-  const [analysisTimeRange, setAnalysisTimeRange] = useState("12");
+  const [analysisTimeRange, setAnalysisTimeRange] = useState("0");
   const [analysisDateFrom, setAnalysisDateFrom] = useState("");
   const [analysisDateTo, setAnalysisDateTo] = useState("");
   const [analysisGranularity, setAnalysisGranularity] = useState("");
