@@ -1266,7 +1266,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         const savedName = (s.name || "").trim();
         const byName = list.find((m) => norm((m as { alias?: string }).alias ?? "") === norm(savedName));
         const resultMetric = byName ?? list[list.length - 1];
-        return savedName || (resultMetric as { alias?: string })?.alias ?? (resultMetric as { field?: string })?.field ?? "";
+        return savedName || ((resultMetric as { alias?: string })?.alias ?? (resultMetric as { field?: string })?.field ?? "");
       })
       .filter(Boolean);
   }, [wizard, analysisSelectedMetricIds, savedMetrics]);
