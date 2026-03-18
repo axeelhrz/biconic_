@@ -55,6 +55,7 @@ export type SavedAnalysis = {
   chartSeriesColors?: Record<string, string>;
   chartSortDirection?: string;
   chartSortBy?: string;
+  chartSortByMetric?: string;
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
@@ -107,6 +108,7 @@ type AggregationConfig = {
   chartDecimals?: number;
   chartSortDirection?: string;
   chartSortBy?: string;
+  chartSortByMetric?: string;
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
@@ -749,6 +751,7 @@ export function AdminDashboardStudio({
           chartDecimals: cfg.chartDecimals != null ? (cfg.chartDecimals as number) : undefined,
           chartSortDirection: (cfg.chartSortDirection as string) || undefined,
           chartSortBy: (cfg.chartSortBy as string) || undefined,
+          chartSortByMetric: (cfg.chartSortByMetric as string) || undefined,
           chartRankingEnabled: (cfg.chartRankingEnabled as boolean) || undefined,
           chartRankingTop: (cfg.chartRankingTop as number) || undefined,
           chartRankingMetric: (cfg.chartRankingMetric as string) || undefined,
@@ -830,6 +833,7 @@ export function AdminDashboardStudio({
           chartSeriesColors: analysis.chartSeriesColors,
           chartSortDirection: analysis.chartSortDirection,
           chartSortBy: analysis.chartSortBy,
+          chartSortByMetric: analysis.chartSortByMetric,
           chartRankingEnabled: analysis.chartRankingEnabled,
           chartRankingTop: analysis.chartRankingTop,
           chartRankingMetric: analysis.chartRankingMetric,

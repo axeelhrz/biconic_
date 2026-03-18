@@ -59,6 +59,7 @@ export type AggregationConfigEdit = {
   chartDecimals?: number;
   chartSortDirection?: string;
   chartSortBy?: string;
+  chartSortByMetric?: string;
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;

@@ -38,6 +38,7 @@ export type BuildChartConfigWidget = {
     chartRankingMetric?: string;
     chartSortDirection?: string;
     chartSortBy?: string;
+    chartSortByMetric?: string;
     chartAxisOrder?: string;
     [key: string]: unknown;
   };
@@ -141,8 +142,11 @@ export function buildChartConfig(
       rows = rows.slice(0, agg.chartRankingTop as number);
     }
   } else if (agg?.chartSortDirection && agg.chartSortDirection !== "none") {
-    // Ordenación explícita (chartSortBy, chartSortDirection, chartAxisOrder)
-    const sortField = (agg.chartSortBy as string) === "dimension" ? xKey : (yKeys[0] || xKey);
+    // Ordenación explícita (chartSortBy, chartSortByMetric, chartSortDirection, chartAxisOrder)
+    const sortByDimension = (agg.chartSortBy as string) === "dimension" || (agg.chartSortBy as string) === "axis";
+    const sortField = sortByDimension
+      ? xKey
+      : (agg.chartSortByMetric && resultKeys.includes(agg.chartSortByMetric) ? agg.chartSortByMetric : (yKeys[0] || xKey));
     const dir = (agg.chartSortDirection as string) === "asc" ? 1 : -1;
     const axisOrder = agg.chartAxisOrder as string | undefined;
     rows.sort((a, b) => {

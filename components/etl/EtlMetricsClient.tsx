@@ -481,6 +481,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const [chartRankingEnabled, setChartRankingEnabled] = useState(false);
   const [chartRankingTop, setChartRankingTop] = useState(5);
   const [chartRankingMetric, setChartRankingMetric] = useState("");
+  const [chartSortByMetric, setChartSortByMetric] = useState("");
   const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
   const [chartSeriesColors, setChartSeriesColors] = useState<Record<string, string>>({});
   const [chartLabelOverrides, setChartLabelOverrides] = useState<Record<string, string>>({});
@@ -1137,6 +1138,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           : "none"
       );
       setChartSortBy((["series", "axis"] as const).includes(cfg.chartSortBy as "series" | "axis") ? (cfg.chartSortBy as "series" | "axis") : "series");
+      setChartSortByMetric(typeof (cfg as Record<string, unknown>).chartSortByMetric === "string" ? (cfg as Record<string, unknown>).chartSortByMetric as string : "");
       setChartAxisOrder((["alpha", "date_asc", "date_desc"] as const).includes(cfg.chartAxisOrder as "alpha" | "date_asc" | "date_desc") ? (cfg.chartAxisOrder as "alpha" | "date_asc" | "date_desc") : "alpha");
       setChartScaleMode((["auto", "dataset", "custom"] as const).includes(cfg.chartScaleMode as "auto" | "dataset" | "custom") ? (cfg.chartScaleMode as "auto" | "dataset" | "custom") : "auto");
       setChartScaleMin(typeof cfg.chartScaleMin === "string" || typeof cfg.chartScaleMin === "number" ? String(cfg.chartScaleMin) : "");
@@ -1181,9 +1183,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       setChartThousandSep(true);
       setChartDecimals(2);
       setChartSortDirection("none");
+      setChartSortBy("series");
       setChartRankingEnabled(false);
       setChartRankingTop(5);
       setChartRankingMetric("");
+      setChartSortByMetric("");
       setChartPinnedDimensions([]);
       setChartColorScheme("auto");
       setChartSeriesColors({});
@@ -1549,7 +1553,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         return chartAxisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
       });
     } else if (chartSortDirection !== "none" && xKey && chartSortBy === "series") {
-      const sortKey = yKeys[0]!;
+      const sortKey = (chartSortByMetric && keys.includes(chartSortByMetric)) ? chartSortByMetric : yKeys[0]!;
       rows.sort((a, b) => {
         const va = Number((a as Record<string, unknown>)[sortKey] ?? 0);
         const vb = Number((b as Record<string, unknown>)[sortKey] ?? 0);
@@ -1658,7 +1662,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     }
 
     return { labels, datasets };
-  }, [previewData, formDimensions, effectiveFormMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue, dateFields, chartLabelOverrides]);
+  }, [previewData, formDimensions, effectiveFormMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartSortByMetric, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue, dateFields, chartLabelOverrides]);
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
@@ -1860,6 +1864,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       chartDecimals,
       chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
       chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
+      chartSortByMetric: chartSortByMetric || undefined,
       chartAxisOrder: chartAxisOrder !== "alpha" ? chartAxisOrder : undefined,
       chartScaleMode: chartScaleMode !== "auto" ? chartScaleMode : undefined,
       chartScaleMin: chartScaleMode === "custom" && chartScaleMin !== "" ? chartScaleMin : undefined,
@@ -2082,6 +2087,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       chartDecimals,
       chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
       chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
+      chartSortByMetric: chartSortByMetric || undefined,
       chartAxisOrder: chartAxisOrder !== "alpha" ? chartAxisOrder : undefined,
       chartScaleMode: chartScaleMode !== "auto" ? chartScaleMode : undefined,
       chartScaleMin: chartScaleMode === "custom" && chartScaleMin !== "" ? chartScaleMin : undefined,
@@ -2212,6 +2218,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       chartGridColor: chartGridColor.trim() || undefined,
       chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
       chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
+      chartSortByMetric: chartSortByMetric || undefined,
       chartRankingEnabled: chartRankingEnabled || undefined,
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
@@ -4327,11 +4334,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         ))}
                       </div>
                       {chartSortBy === "series" && (
-                        <div className="flex gap-2">
-                          {([["none", "Sin orden"], ["asc", "Ascendente ↑"], ["desc", "Descendente ↓"]] as [string, string][]).map(([val, lbl]) => (
-                            <button key={val} type="button" onClick={() => setChartSortDirection(val as "none" | "asc" | "desc")} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartSortDirection === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartSortDirection === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartSortDirection === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
-                          ))}
-                        </div>
+                        <>
+                          <div className="flex gap-2">
+                            {([["none", "Sin orden"], ["asc", "Ascendente ↑"], ["desc", "Descendente ↓"]] as [string, string][]).map(([val, lbl]) => (
+                              <button key={val} type="button" onClick={() => setChartSortDirection(val as "none" | "asc" | "desc")} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartSortDirection === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartSortDirection === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartSortDirection === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                            ))}
+                          </div>
+                          {effectiveFormMetrics.length > 1 && (
+                            <div className="mt-2">
+                              <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Métrica para ordenar</Label>
+                              <select value={chartSortByMetric} onChange={(e) => setChartSortByMetric(e.target.value)} className="h-8 rounded-lg border px-2 text-xs max-w-xs" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
+                                <option value="">Primera métrica</option>
+                                {effectiveFormMetrics.map((m, i) => {
+                                  const key = `metric_${i}`;
+                                  const label = m.alias || m.field || `Métrica ${i + 1}`;
+                                  return <option key={key} value={key}>{label}</option>;
+                                })}
+                              </select>
+                            </div>
+                          )}
+                        </>
                       )}
                       {chartSortBy === "axis" && (
                         <div className="flex gap-2">

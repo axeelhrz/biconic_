@@ -57,6 +57,7 @@ export type AggregationConfigEdit = {
   chartDecimals?: number;
   chartSortDirection?: string;
   chartSortBy?: string;
+  chartSortByMetric?: string;
   chartAxisOrder?: string;
   chartScaleMode?: string;
   chartScaleMin?: string | number;
@@ -116,6 +117,7 @@ export type SavedMetricAggregationConfig = {
   chartDecimals?: number;
   chartSortDirection?: string;
   chartSortBy?: string;
+  chartSortByMetric?: string;
   chartAxisOrder?: string;
   chartScaleMode?: string;
   chartScaleMin?: string | number;
@@ -263,6 +265,7 @@ export function AddMetricConfigForm({
         chartDecimals: cfg.chartDecimals,
         chartSortDirection: cfg.chartSortDirection,
         chartSortBy: cfg.chartSortBy,
+        chartSortByMetric: cfg.chartSortByMetric,
         chartAxisOrder: cfg.chartAxisOrder,
         chartScaleMode: cfg.chartScaleMode,
         chartScaleMin: cfg.chartScaleMin,

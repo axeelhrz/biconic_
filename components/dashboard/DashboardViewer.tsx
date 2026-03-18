@@ -61,6 +61,7 @@ type AggregationConfig = {
   chartRankingMetric?: string;
   chartSortDirection?: string;
   chartSortBy?: string;
+  chartSortByMetric?: string;
   chartAxisOrder?: string;
   chartNumberFormat?: string;
   chartValueType?: string;
