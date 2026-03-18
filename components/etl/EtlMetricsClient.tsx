@@ -1218,7 +1218,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           if (list.length === 0) return null;
           const savedName = (s.name || "").trim();
           const norm = (a: string) => (a || "").trim().toLowerCase();
-          const byName = list.find((m) => norm((m as { alias?: string }).alias) === norm(savedName));
+          const byName = list.find((m) => norm((m as { alias?: string }).alias ?? "") === norm(savedName));
           const primary = byName ?? list[list.length - 1];
           const displayAlias = savedName || (primary as { alias?: string }).alias || (primary as { field?: string }).field;
           return { ...primary, id: (primary as { id?: string }).id || s.id, alias: displayAlias } as AggregationMetricEdit;
