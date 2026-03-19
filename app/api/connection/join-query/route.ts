@@ -802,9 +802,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             let key: string;
             if (/^primary\./i.test(raw)) key = `primary_${raw.replace(/^primary\./i, "").trim()}`;
             else {
-              const jm = raw.match(/^join_(\d+)\.(.+)$/i);
-              if (jm) key = `join_${Number(jm[1])}_${jm[2].trim()}`;
-              else key = `primary_${raw}`;
+              const jmDot = raw.match(/^join_(\d+)\.(.+)$/i);
+              if (jmDot) {
+                const colPart = jmDot[2].trim().replace(/^\./, "");
+                key = `join_${Number(jmDot[1])}_${colPart}`;
+              } else {
+                const jmUnderscore = raw.match(/^join_(\d+)_(.+)$/i);
+                if (jmUnderscore) key = `join_${Number(jmUnderscore[1])}_${jmUnderscore[2].trim()}`;
+                else key = `primary_${raw}`;
+              }
             }
             return getRowValueByKey(row, key);
           };
