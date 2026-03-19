@@ -662,12 +662,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         (joins || []).every(
           (jn) => String(jn.secondaryConnectionId ?? "") === String(primaryConnectionId ?? "")
         );
-      const useInMemoryStarJoin = hasFirebirdInChain || !sameConnectionChain;
+      const isPostgresLike = (t: string) => t === "postgres" || t === "postgresql";
+      const primaryType = String(primaryConn?.type || "").toLowerCase();
+      const allSameType = [primaryConn, ...joinsConnections].every(
+        (c: any) => String(c?.type || "").toLowerCase() === primaryType
+      );
+      const equivalentPostgresChain =
+        isPostgresLike(primaryType) &&
+        allSameType &&
+        [primaryConn, ...joinsConnections].every(
+          (c: any) =>
+            String(c?.db_host || "") === String(primaryConn?.db_host || "") &&
+            String(c?.db_port || 5432) === String(primaryConn?.db_port || 5432) &&
+            String(c?.db_name || "") === String(primaryConn?.db_name || "") &&
+            String(c?.db_user || "") === String(primaryConn?.db_user || "")
+        );
+      const useInMemoryStarJoin = hasFirebirdInChain || (!sameConnectionChain && !equivalentPostgresChain);
 
       log("Decisión de estrategia de JOIN star.", {
         dbType,
         hasFirebirdInChain,
         sameConnectionChain,
+        equivalentPostgresChain,
         useInMemoryStarJoin,
       });
 
@@ -678,12 +694,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           validateStarJoinPayloadInMemory(joins || [], joinsCount);
 
           const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);
+          const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
+          const capByJoinsPreview = joinsCount >= 4 ? 800 : joinsCount >= 3 ? 1200 : joinsCount >= 2 ? 2000 : 2000;
+          const capByJoinsRun = joinsCount >= 4 ? 8000 : joinsCount >= 3 ? 12000 : joinsCount >= 2 ? 20000 : 20000;
           const capByJoins =
             envSourceLimitMax > 0
               ? Math.min(ETL_MAX_ROWS_CEILING, envSourceLimitMax)
-              : joinsCount >= 4 ? 800 : joinsCount >= 3 ? 1200 : joinsCount >= 2 ? 2000 : 2000;
+              : fromEtlRun ? capByJoinsRun : capByJoinsPreview;
           const effectiveCap =
-            (body as { fromEtlRun?: boolean }).fromEtlRun === true && (limit ?? 0) > capByJoins
+            fromEtlRun && (limit ?? 0) > capByJoins
               ? Math.min(limit ?? capByJoins, ETL_MAX_ROWS_CEILING)
               : capByJoins;
           let sourceLimit = Math.min(
@@ -1047,7 +1066,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             sourceLimit,
           });
 
-          const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
           let filteredRows: Record<string, any>[] = [];
           let lastSourceExhausted = false;
           let lastNextSourceOffset = sourceOffset;
