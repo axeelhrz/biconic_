@@ -65,7 +65,7 @@ export default function AdminDatasetsPage() {
       setCreateOpen(false);
       setSelectedEtlId(null);
       setEtlQuery("");
-      router.push(`/admin/etl/${selectedEtlId}/metrics?step=A`);
+      router.push(`/admin/etl/${selectedEtlId}/dataset`);
     }
   };
 
@@ -332,7 +332,7 @@ export default function AdminDatasetsPage() {
                   </div>
                   <div className="sm:col-span-3 flex items-center justify-end gap-2">
                     <Link
-                      href={`/admin/etl/${ds.etl_id}/metrics?step=A`}
+                      href={`/admin/etl/${ds.etl_id}/dataset`}
                       className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
                       style={{ color: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}
                     >

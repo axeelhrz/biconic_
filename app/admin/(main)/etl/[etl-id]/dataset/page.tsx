@@ -10,7 +10,7 @@ type PageProps = {
   params: Promise<{ [key: string]: string }>;
 };
 
-export default async function AdminEtlMetricsPage({ params }: PageProps) {
+export default async function AdminEtlDatasetPage({ params }: PageProps) {
   const awaitedParams = await params;
   const etlId = awaitedParams["etl-id"];
 
@@ -42,12 +42,17 @@ export default async function AdminEtlMetricsPage({ params }: PageProps) {
   try {
     connections = await getConnections(etlClientId ? { clientId: etlClientId } : undefined);
   } catch (e) {
-    console.error("Error loading connections for metrics:", e);
+    console.error("Error loading connections for dataset:", e);
   }
 
   return (
     <div className="flex flex-col min-h-[calc(100vh-4rem)] w-full">
-      <EtlMetricsClient etlId={etlId} etlTitle={etlTitle} connections={connections} hideDatasetTab />
+      <EtlMetricsClient
+        etlId={etlId}
+        etlTitle={etlTitle}
+        connections={connections}
+        datasetOnly
+      />
     </div>
   );
 }

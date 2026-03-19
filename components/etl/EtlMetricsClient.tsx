@@ -394,9 +394,13 @@ export type EtlMetricsClientProps = {
   /** client_id del ETL; necesario para crear el dashboard (tabla dashboard requiere client_id) */
   etlClientId?: string | null;
   connections?: ConnectionOption[];
+  /** Si true, solo se muestra el wizard de Dataset (Profiling → Publicar) y al guardar se redirige a /admin/datasets */
+  datasetOnly?: boolean;
+  /** Si true, no se muestra la pestaña Dataset; el wizard por defecto es Métrica (B) */
+  hideDatasetTab?: boolean;
 };
 
-export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [] }: EtlMetricsClientProps) {
+export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false }: EtlMetricsClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
@@ -426,7 +430,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   });
   const [previewData, setPreviewData] = useState<Record<string, unknown>[] | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [wizard, setWizard] = useState<"A" | "B" | "C" | "D">("A");
+  const [wizard, setWizard] = useState<"A" | "B" | "C" | "D">(hideDatasetTab ? "B" : "A");
   const [wizardStep, setWizardStep] = useState(0);
   const [rawTableData, setRawTableData] = useState<Record<string, unknown>[]>([]);
   const [datasetHasTime, setDatasetHasTime] = useState(true);
@@ -589,7 +593,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   };
   const goPrev = () => {
     if (wizardStep > 0) setWizardStep((s) => s - 1);
-    else if (wizard === "B") { setWizard("A"); setWizardStep(WIZARD_STEPS.A.length - 1); }
+    else if (wizard === "B") { if (hideDatasetTab) return; setWizard("A"); setWizardStep(WIZARD_STEPS.A.length - 1); }
     else if (wizard === "C") { setWizard("B"); setWizardStep(WIZARD_STEPS.B.length - 1); }
     else if (wizard === "D") { setWizard("C"); setWizardStep(WIZARD_STEPS.C.length - 1); }
   };
@@ -626,14 +630,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     fetchData();
   }, [fetchData]);
 
-  // Entrada directa por query param ?step=A|B|C|D (Dataset, Métrica, Análisis, Gráfico)
+  // En modo datasetOnly, abrir el wizard cuando haya datos
+  useEffect(() => {
+    if (datasetOnly && data?.hasData) setShowForm(true);
+  }, [datasetOnly, data?.hasData]);
+
+  // Entrada directa por query param ?step=A|B|C|D (Dataset, Métrica, Análisis, Gráfico) — ignorar si hideDatasetTab y step A
   useEffect(() => {
     const step = searchParams.get("step");
     if (step === "A" || step === "B" || step === "C" || step === "D") {
+      if (hideDatasetTab && step === "A") return;
       setWizard(step);
       setWizardStep(0);
     }
-  }, [searchParams]);
+  }, [searchParams, hideDatasetTab]);
 
   useEffect(() => {
     if (!showForm || !(data?.hasData ?? false) || rawTableData.length > 1) return;
@@ -687,7 +697,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     };
   }, [grainOption, grainCustomColumns, datasetHasTime, timeColumn, periodicity, periodicityOverrides, columnRoles, datasetRelations, derivedColumns]);
 
-  /** Guarda la configuración del dataset en el servidor y luego pasa al wizard de Métrica (usado en paso Publicar). */
+  /** Guarda la configuración del dataset en el servidor y luego pasa al wizard de Métrica o redirige a Datasets (según datasetOnly). */
   const saveDatasetConfigAndGoToMetric = useCallback(async () => {
     setSavingDatasetConfig(true);
     try {
@@ -704,14 +714,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       }
       toast.success("Configuración del dataset guardada. Podés crear métricas sin volver a configurar.");
       setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfig as Record<string, unknown> } : null));
-      setWizard("B");
-      setWizardStep(0);
+      if (datasetOnly) {
+        router.push("/admin/datasets");
+      } else {
+        setWizard("B");
+        setWizardStep(0);
+      }
     } catch {
       toast.error("Error al guardar la configuración del dataset");
     } finally {
       setSavingDatasetConfig(false);
     }
-  }, [etlId, buildFullDatasetConfig]);
+  }, [etlId, buildFullDatasetConfig, datasetOnly, router]);
 
   const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
 
@@ -2470,18 +2484,27 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
           <Link
-            href={`/admin/etl/${etlId}`}
+            href={datasetOnly ? "/admin/datasets" : `/admin/etl/${etlId}`}
             className="flex items-center gap-2 text-sm font-medium rounded-lg transition-colors"
             style={{ color: "var(--platform-fg-muted)" }}
           >
             <ChevronLeft className="h-4 w-4" />
-            Volver al ETL
+            {datasetOnly ? "Volver a Datasets" : "Volver al ETL"}
           </Link>
           <h1 className="text-xl font-semibold" style={{ color: "var(--platform-fg)" }}>
-            Métricas reutilizables – {etlTitle}
+            {datasetOnly ? `Configurar dataset – ${etlTitle}` : `Métricas reutilizables – ${etlTitle}`}
           </h1>
         </div>
         <div className="flex items-center gap-2">
+          {!datasetOnly && (
+            <Link
+              href={`/admin/etl/${etlId}/dataset`}
+              className="inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium transition-colors"
+              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+            >
+              Configurar dataset
+            </Link>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -2492,7 +2515,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
             <LayoutDashboard className="h-4 w-4 mr-2" />
             Ir al Dashboard
           </Button>
-          {hasData && (
+          {!datasetOnly && hasData && (
             <Button
               type="button"
               className="rounded-xl"
@@ -2545,27 +2568,29 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
       {showForm && hasData && (
         <div className="flex flex-col rounded-2xl border overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", minHeight: "480px" }}>
-          {/* Tabs: Dataset, Métrica, Análisis, Gráfico */}
-          <div className="flex border-b flex-shrink-0" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-            {(["A", "B", "C", "D"] as const).map((w) => (
-              <button
-                key={w}
-                type="button"
-                onClick={() => { setWizard(w); setWizardStep(0); }}
-                className="flex-1 min-w-0 py-3 px-4 text-sm font-medium transition-colors relative"
-                style={{
-                  color: wizard === w ? "var(--platform-accent)" : "var(--platform-fg-muted)",
-                  background: wizard === w ? "var(--platform-surface)" : "transparent",
-                }}
-              >
-                {w === "A" ? "Dataset" : w === "B" ? "Métrica" : w === "C" ? "Análisis" : "Gráfico"}
-                <span className="ml-1.5 text-xs font-normal opacity-80" style={{ color: "inherit" }}>({WIZARD_STEPS[w].length})</span>
-                {wizard === w && (
-                  <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full" style={{ background: "var(--platform-accent)" }} />
-                )}
-              </button>
-            ))}
-          </div>
+          {/* Tabs: Dataset, Métrica, Análisis, Gráfico (ocultar Dataset si hideDatasetTab; ocultar todos si datasetOnly) */}
+          {!datasetOnly && (
+            <div className="flex border-b flex-shrink-0" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+              {(["A", "B", "C", "D"] as const).filter((w) => !hideDatasetTab || w !== "A").map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => { setWizard(w); setWizardStep(0); }}
+                  className="flex-1 min-w-0 py-3 px-4 text-sm font-medium transition-colors relative"
+                  style={{
+                    color: wizard === w ? "var(--platform-accent)" : "var(--platform-fg-muted)",
+                    background: wizard === w ? "var(--platform-surface)" : "transparent",
+                  }}
+                >
+                  {w === "A" ? "Dataset" : w === "B" ? "Métrica" : w === "C" ? "Análisis" : "Gráfico"}
+                  <span className="ml-1.5 text-xs font-normal opacity-80" style={{ color: "inherit" }}>({WIZARD_STEPS[w].length})</span>
+                  {wizard === w && (
+                    <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full" style={{ background: "var(--platform-accent)" }} />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="flex flex-col min-w-0 flex-1">
             {/* Top bar: step title + actions */}
@@ -2575,7 +2600,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                 <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>{WIZARD_STEPS[wizard][wizardStep]}</h2>
               </div>
               <div className="flex items-center gap-2">
-                <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={closeForm}>Cancelar</Button>
+                <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={datasetOnly ? () => router.push("/admin/datasets") : closeForm}>{datasetOnly ? "Volver" : "Cancelar"}</Button>
                 {canPrev && <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>}
                 {(wizard === "D" && wizardStep === WIZARD_STEPS.D.length - 1) ? (
                   <Button type="button" size="sm" className="rounded-lg" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? "Guardar análisis" : "Crear métrica"}</Button>
@@ -3197,7 +3222,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveDatasetConfigAndGoToMetric} disabled={savingDatasetConfig}>
                       {savingDatasetConfig ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                      {savingDatasetConfig ? " Guardando…" : " Siguiente: Métrica"}
+                      {savingDatasetConfig ? " Guardando…" : datasetOnly ? " Guardar y volver a Datasets" : " Siguiente: Métrica"}
                     </Button>
                   </div>
                 </section>
