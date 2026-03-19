@@ -765,7 +765,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterForTable);
               const baseWhereFb = dfClause ? ` WHERE ${dfClause}` : "";
               const escapeFbLiteral = (v: any): string => {
-                if (v == null) return "NULL";
+                if (v == null || v === "") return "NULL";
                 if (typeof v === "boolean") return v ? "1" : "0";
                 if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${String(v)}' AS DOUBLE PRECISION)`;
                 return `'${String(v).replace(/'/g, "''")}'`;
