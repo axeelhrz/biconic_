@@ -8140,6 +8140,17 @@ function EndPreviewButton({
         mode: widget.end?.mode || "append",
       };
 
+      const dateFilterPayload = (df: { column?: string; years?: number[]; months?: number[]; exactDates?: string[] } | undefined) =>
+        df?.column
+          ? {
+              dateFilter: {
+                column: df.column,
+                ...(df.years?.length ? { years: df.years } : {}),
+                ...(df.months?.length ? { months: df.months } : {}),
+                ...(df.exactDates?.length ? { exactDates: df.exactDates } : {}),
+              },
+            }
+          : {};
       if (upstreamNode.type === "union" && flow.leftBranch && flow.rightBranch) {
         payload = {
           etlId,
@@ -8150,6 +8161,7 @@ function EndPreviewButton({
                 table: flow.leftBranch.filterNode!.filter!.table,
                 columns: flow.leftBranch.filterNode!.filter!.columns || [],
                 conditions: flow.leftBranch.filterNode!.filter!.conditions || [],
+                ...dateFilterPayload(flow.leftBranch.filterNode!.filter!.dateFilter),
               },
             },
             right: {
@@ -8158,6 +8170,7 @@ function EndPreviewButton({
                 table: flow.rightBranch.filterNode!.filter!.table,
                 columns: flow.rightBranch.filterNode!.filter!.columns || [],
                 conditions: flow.rightBranch.filterNode!.filter!.conditions || [],
+                ...dateFilterPayload(flow.rightBranch.filterNode!.filter!.dateFilter),
               },
             },
             unionAll: (upstreamNode as any).union?.unionAll !== false,
@@ -8173,6 +8186,7 @@ function EndPreviewButton({
             table: filterNode!.filter!.table!,
             columns: filterNode!.filter!.columns || [],
             conditions: filterNode!.filter!.conditions || [],
+            ...dateFilterPayload(filterNode!.filter!.dateFilter),
           },
           end: commonEnd,
           preview: true,
@@ -8257,6 +8271,7 @@ function EndPreviewButton({
               filter: {
                 columns: allSelected,
                 conditions: filterNode!.filter?.conditions || [],
+                ...dateFilterPayload(filterNode!.filter?.dateFilter),
               },
               end: commonEnd,
               preview: true,
@@ -8287,6 +8302,7 @@ function EndPreviewButton({
                 filter: {
                   columns: allSelected,
                   conditions: filterNode!.filter?.conditions || [],
+                  ...dateFilterPayload(filterNode!.filter?.dateFilter),
                 },
                 end: commonEnd,
                 preview: true,

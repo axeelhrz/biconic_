@@ -1002,10 +1002,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (keyColumns.length > 0) {
       (filterPayload as Record<string, unknown>).keyColumns = keyColumns;
     }
+    /** Normaliza referencia de columna a dot-notation (primary.col, join_0.col) para que el backend aplique bien el filtro de fecha. */
+    const normalizeDateFilterColumn = (col: string): string => {
+      const r = (col || "").trim();
+      if (!r || /^(primary\.|join_\d+\.)/i.test(r)) return r;
+      if (/^primary_/i.test(r)) return `primary.${r.replace(/^primary_/i, "").trim()}`;
+      const m = r.match(/^join_(\d+)_\.?(.*)$/i);
+      if (m) return `join_${m[1]}.${(m[2] || "").trim()}`;
+      return r;
+    };
     const parsedExactDates = dateFilterExactDatesText.trim().split(/[,\s]+/).map((s) => s.trim()).filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s));
     if (dateFilterColumn && (dateFilterYears.length > 0 || dateFilterMonths.length > 0 || parsedExactDates.length > 0)) {
       (filterPayload as Record<string, unknown>).dateFilter = {
-        column: dateFilterColumn,
+        column: normalizeDateFilterColumn(dateFilterColumn),
         ...(dateFilterYears.length > 0 ? { years: dateFilterYears } : {}),
         ...(dateFilterMonths.length > 0 ? { months: dateFilterMonths } : {}),
         ...(parsedExactDates.length > 0 ? { exactDates: parsedExactDates } : {}),

@@ -94,6 +94,17 @@ type StarJoin = {
   fromEtlRun?: boolean;
 };
 
+/** Convierte referencias legacy (join_0_col, join_0_.col, primary_col) a dot-notation (join_0.col, primary.col). */
+function normalizeFilterColumnRef(ref: string): string {
+  const r = (ref || "").trim();
+  if (!r) return r;
+  if (/^(primary\.|join_\d+\.)/i.test(r)) return r;
+  if (/^primary_/i.test(r)) return "primary." + r.replace(/^primary_/i, "").trim();
+  const m = r.match(/^join_(\d+)_\.?(.*)$/i);
+  if (m) return `join_${m[1]}.${(m[2] || "").trim()}`;
+  return r;
+}
+
 /** Devuelve los pares (leftColumn, rightColumn) para un join: conditions si existe, si no el par único primaryColumn/secondaryColumn. */
 function getJoinConditionPairs(jn: { conditions?: StarJoinConditionPair[]; primaryColumn?: string; secondaryColumn?: string }): Array<{ leftColumn: string; rightColumn: string }> {
   if (jn.conditions && jn.conditions.length > 0) {
@@ -143,7 +154,11 @@ function validateStarJoinPayloadInMemory(
 /** Normaliza un valor para usarlo como clave en el matching de joins (evita falsos negativos por espacios/tipos). */
 function normalizeJoinKeyValue(value: unknown): string {
   if (value == null) return "";
-  if (typeof value === "string") return value.trim().replace(/\s+/g, " ");
+  if (typeof value === "string") {
+    const s = value.trim().replace(/\s+/g, " ");
+    if (/^\d{4}-\d{2}-\d{2}(T|\s|$)/.test(s)) return s.slice(0, 10);
+    return s;
+  }
   if (typeof value === "number" && !Number.isNaN(value)) return Number.isInteger(value) ? String(value) : String(value);
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
   return String(value).trim();
@@ -519,6 +534,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           ? limit
           : 50;
     if (!offset || offset < 0) offset = 0;
+    if (body.dateFilter?.column) {
+      body.dateFilter = { ...body.dateFilter, column: normalizeFilterColumnRef(body.dateFilter.column) };
+    }
+    if (Array.isArray(body.conditions)) {
+      body.conditions = body.conditions.map((c) => ({ ...c, column: c.column ? normalizeFilterColumnRef(c.column) : c.column }));
+    }
     const countMode = body.countMode || "fast";
 
     log("Autenticando usuario...");
@@ -855,13 +876,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 return true;
             }
           };
-          /** Parsea valor de celda (Date, ISO string, DD.MM.YYYY, DD/MM/YYYY) a Date para filtro por fecha. */
+          /** Parsea valor de celda (Date, ISO string con/sin Z, DD.MM.YYYY, DD/MM/YYYY) a Date para filtro por fecha. */
           const parseDateFlexible = (raw: unknown): Date | null => {
             if (raw == null) return null;
             if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw;
+            const s = typeof raw === "string" ? raw.trim() : "";
+            if (s && /^\d{4}-\d{2}-\d{2}T\d/.test(s)) {
+              const d = new Date(s);
+              return !Number.isNaN(d.getTime()) ? d : null;
+            }
             const d = new Date(raw as string | number);
             if (!Number.isNaN(d.getTime())) return d;
-            const s = typeof raw === "string" ? raw.trim() : "";
             if (!s) return null;
             const iso = /^\d{4}-\d{2}-\d{2}(T|\s|$)/.exec(s);
             if (iso) {
@@ -949,20 +974,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             sourceLimit,
           });
 
+          const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
           let filteredRows: Record<string, any>[] = [];
-          for (let attempt = 0; attempt < 2; attempt++) {
-            if (attempt === 1) {
-              sourceLimit = Math.min(sourceLimit * 2, ETL_MAX_ROWS_CEILING);
-              log("JOIN star en memoria - reintento con sourceLimit mayor.", { sourceLimit });
-            }
-            const primaryTableResolved = await resolvePhysicalIfExcel(primaryConn, primaryTable || "");
-            const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary, sourceOffset);
-            if (attempt === 0) {
-              log("JOIN star en memoria - filas obtenidas de tabla principal.", {
-                primaryTable: primaryTableResolved,
-                primaryRowsCount: primaryRowsRaw.length,
-              });
-            }
+          let lastSourceExhausted = false;
+          let lastNextSourceOffset = sourceOffset;
+
+          const primaryTableResolved = await resolvePhysicalIfExcel(primaryConn, primaryTable || "");
+          const COMPOSITE_KEY_SEP = "\u0001";
+          const buildCompositeKey = (row: Record<string, any>, pairs: Array<{ leftColumn: string; rightColumn: string }>, useRight: boolean) =>
+            pairs.map((p) => normalizeJoinKeyValue(useRight ? getByColumnName(row, p.rightColumn) : mapPrefixedValue(row, p.leftColumn))).join(COMPOSITE_KEY_SEP);
+
+          let secRowsCache: Record<number, Record<string, any>[]> | null = null;
+          const runOneBlock = async (primaryRowsRaw: Record<string, any>[], useSecCache: boolean): Promise<Record<string, any>[]> => {
             const primaryCols =
               primaryColumns && primaryColumns.length > 0
                 ? primaryColumns
@@ -974,11 +997,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               for (const c of primaryCols) out[`primary_${c}`] = getByColumnName(r, c);
               return out;
             });
-
-            const COMPOSITE_KEY_SEP = "\u0001";
-            const buildCompositeKey = (row: Record<string, any>, pairs: Array<{ leftColumn: string; rightColumn: string }>, useRight: boolean) =>
-              pairs.map((p) => normalizeJoinKeyValue(useRight ? getByColumnName(row, p.rightColumn) : mapPrefixedValue(row, p.leftColumn))).join(COMPOSITE_KEY_SEP);
-
             for (let idx = 0; idx < (joins || []).length; idx++) {
               const jn = joins[idx];
               const pairs = getJoinConditionPairs(jn);
@@ -986,7 +1004,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
               if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
               const secTableResolved = await resolvePhysicalIfExcel(secConn, jn.secondaryTable || "");
-              const secRowsRaw = await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx));
+              const secRowsRaw = (useSecCache && secRowsCache?.[idx]) ?? await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx));
+              if (useSecCache && !secRowsCache) secRowsCache = {};
+              if (useSecCache && secRowsCache && !secRowsCache[idx]) (secRowsCache as Record<number, Record<string, any>[]>)[idx] = secRowsRaw;
               const secCols =
                 jn.secondaryColumns && jn.secondaryColumns.length > 0
                   ? jn.secondaryColumns
@@ -996,13 +1016,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const joinType = String(jn.joinType || "INNER").toUpperCase();
               const rightMap = new Map<string, Record<string, any>[]>();
               const rightUsed = new Set<number>();
-              secRowsRaw.forEach((rr, rrIdx) => {
+              secRowsRaw.forEach((rr: Record<string, any>, rrIdx: number) => {
                 const key = buildCompositeKey(rr, pairs, true);
                 const withIdx = { ...rr, __rrIdx__: rrIdx };
                 if (!rightMap.has(key)) rightMap.set(key, []);
                 rightMap.get(key)!.push(withIdx);
               });
-
               const previousKeys = joinedRows[0] ? Object.keys(joinedRows[0]) : [];
               const nextRows: Record<string, any>[] = [];
               for (const lr of joinedRows) {
@@ -1021,7 +1040,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                   nextRows.push({ ...lr, ...nulls });
                 }
               }
-
               if (joinType === "RIGHT" || joinType === "FULL") {
                 for (let rrIdx = 0; rrIdx < secRowsRaw.length; rrIdx++) {
                   if (rightUsed.has(rrIdx)) continue;
@@ -1035,11 +1053,60 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               }
               joinedRows = nextRows;
             }
-
-            filteredRows = joinedRows
+            return joinedRows
               .filter((r) => normalizedConditions.every((c) => passesCondition(r, c)))
               .filter((r) => passesDateFilter(r, body.dateFilter));
-            if ((offset ?? 0) === 0 && filteredRows.length === 0 && attempt === 0 && sourceLimit < ETL_MAX_ROWS_CEILING) {
+          };
+
+          for (let attempt = 0; attempt < 2; attempt++) {
+            if (attempt === 1) {
+              sourceLimit = Math.min(sourceLimit * 2, ETL_MAX_ROWS_CEILING);
+              log("JOIN star en memoria - reintento con sourceLimit mayor.", { sourceLimit });
+            }
+            if (fromEtlRun) {
+              secRowsCache = {};
+              let currentSourceOffset = sourceOffset;
+              const accumulated: Record<string, any>[] = [];
+              const targetLimit = Math.min(limit ?? 50, ETL_MAX_ROWS_CEILING);
+              while (accumulated.length < targetLimit) {
+                const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary, currentSourceOffset);
+                lastNextSourceOffset = currentSourceOffset + primaryRowsRaw.length;
+                lastSourceExhausted = primaryRowsRaw.length < sourceLimit;
+                if (attempt === 0 && currentSourceOffset === sourceOffset) {
+                  log("JOIN star en memoria - filas obtenidas de tabla principal.", {
+                    primaryTable: primaryTableResolved,
+                    primaryRowsCount: primaryRowsRaw.length,
+                    sourceExhausted: lastSourceExhausted,
+                    nextSourceOffset: lastNextSourceOffset,
+                  });
+                }
+                if (primaryRowsRaw.length === 0) break;
+                const blockFiltered = await runOneBlock(primaryRowsRaw, true);
+                accumulated.push(...blockFiltered);
+                if (lastSourceExhausted) break;
+                currentSourceOffset = lastNextSourceOffset;
+              }
+              filteredRows = accumulated.slice(0, limit ?? 50);
+              log("JOIN star en memoria - paginación interna terminada.", {
+                totalPrimaryRead: lastNextSourceOffset - sourceOffset,
+                totalFiltered: accumulated.length,
+                dateFilterColumn: body.dateFilter?.column ?? null,
+              });
+            } else {
+              const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary, sourceOffset);
+              lastNextSourceOffset = sourceOffset + primaryRowsRaw.length;
+              lastSourceExhausted = primaryRowsRaw.length < sourceLimit;
+              if (attempt === 0) {
+                log("JOIN star en memoria - filas obtenidas de tabla principal.", {
+                  primaryTable: primaryTableResolved,
+                  primaryRowsCount: primaryRowsRaw.length,
+                  sourceExhausted: lastSourceExhausted,
+                  nextSourceOffset: lastNextSourceOffset,
+                });
+              }
+              filteredRows = await runOneBlock(primaryRowsRaw, false);
+            }
+            if ((offset ?? 0) === 0 && filteredRows.length === 0 && attempt === 0 && sourceLimit < ETL_MAX_ROWS_CEILING && !fromEtlRun) {
               continue;
             }
             break;
@@ -1057,8 +1124,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             offset,
             limit,
             totalOut,
+            sourceExhausted: lastSourceExhausted,
+            nextSourceOffset: lastNextSourceOffset,
+            dateFilterColumn: body.dateFilter?.column ?? null,
           });
-          return NextResponse.json({ ok: true, rows: rowsPage, total: totalOut });
+          const jsonPayload: Record<string, unknown> = { ok: true, rows: rowsPage, total: totalOut };
+          if (fromEtlRun) {
+            jsonPayload.sourceExhausted = lastSourceExhausted;
+            jsonPayload.nextSourceOffset = lastNextSourceOffset;
+          }
+          return NextResponse.json(jsonPayload);
         } catch (e: any) {
           log("Error en JOIN star en memoria.", {
             message: e?.message,

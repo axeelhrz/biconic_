@@ -408,6 +408,22 @@ async function executeEtlPipeline(
     const globalCountMap = new Map<string, number>();
     const globalCountOriginalValues = new Map<string, any>();
 
+    /** Normaliza referencias de columna de filtro a dot-notation (primary.col, join_0.col) para compatibilidad con legacy. */
+    const normalizeFilterColumnRef = (ref: string) => {
+      const r = (ref || "").trim();
+      if (!r || /^(primary\.|join_\d+\.)/i.test(r)) return r;
+      if (/^primary_/i.test(r)) return "primary." + r.replace(/^primary_/i, "").trim();
+      const m = r.match(/^join_(\d+)_\.?(.*)$/i);
+      if (m) return `join_${m[1]}.${(m[2] || "").trim()}`;
+      return r;
+    };
+    if (body?.filter?.dateFilter?.column) {
+      body.filter!.dateFilter = { ...body.filter!.dateFilter!, column: normalizeFilterColumnRef(body.filter!.dateFilter!.column) };
+    }
+    if (body?.filter?.conditions?.length) {
+      body.filter!.conditions = body.filter!.conditions!.map((c) => ({ ...c, column: c.column ? normalizeFilterColumnRef(c.column) : c.column }));
+    }
+
     // Excluir filas: aplicar en memoria después de UNION/JOIN (no en WHERE)
     const allConditions = body?.filter?.conditions ?? [];
     const sqlConditions = allConditions.filter((c: FilterCondition) => c.operator !== "not in");
@@ -836,9 +852,14 @@ async function executeEtlPipeline(
               if (!Array.isArray(starData.rows)) {
                 throw new Error("JOIN múltiple devolvió una respuesta inválida.");
               }
-              if (starData.rows.length === 0) break;
-              yield starData.rows;
-              starOffset += starData.rows.length;
+              const sourceExhausted = (starData as { sourceExhausted?: boolean }).sourceExhausted === true;
+              const nextSourceOffset = typeof (starData as { nextSourceOffset?: number }).nextSourceOffset === "number"
+                ? (starData as { nextSourceOffset: number }).nextSourceOffset
+                : starOffset + starData.rows.length;
+              console.log(`[ETL Run ${runId}] join-query chunk: sourceOffset=${starOffset} rows=${starData.rows.length} sourceExhausted=${sourceExhausted} nextSourceOffset=${nextSourceOffset}`);
+              if (starData.rows.length > 0) yield starData.rows;
+              starOffset = nextSourceOffset;
+              if (sourceExhausted) break;
             }
             return;
           }
