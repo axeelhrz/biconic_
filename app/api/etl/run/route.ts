@@ -804,6 +804,7 @@ async function executeEtlPipeline(
                 limit: starChunkSize,
                 offset: starOffset,
                 count: false,
+                fromEtlRun: true,
               };
               const starRes = await fetch(`${origin}/api/connection/join-query`, {
                 method: "POST",
@@ -838,7 +839,6 @@ async function executeEtlPipeline(
               if (starData.rows.length === 0) break;
               yield starData.rows;
               starOffset += starData.rows.length;
-              if (starData.rows.length < starChunkSize) break;
             }
             return;
           }
@@ -1004,7 +1004,6 @@ async function executeEtlPipeline(
                 const normalized = rows.map(normalizeRow);
                 if (normalized.length === 0) break;
                 yield normalized;
-                if (normalized.length < pageSize) break;
                 offset += pageSize;
               }
             } finally {

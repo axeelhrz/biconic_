@@ -90,6 +90,8 @@ type StarJoin = {
   limit?: number;
   offset?: number;
   count?: boolean;
+  /** Si true, la petición viene del ETL run; se respeta un limit mayor para reducir round-trips. */
+  fromEtlRun?: boolean;
 };
 
 /** Devuelve los pares (leftColumn, rightColumn) para un join: conditions si existe, si no el par único primaryColumn/secondaryColumn. */
@@ -657,10 +659,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             envSourceLimitMax > 0
               ? Math.min(ETL_MAX_ROWS_CEILING, envSourceLimitMax)
               : joinsCount >= 4 ? 1000 : joinsCount >= 3 ? 1500 : joinsCount >= 2 ? 2000 : 2000;
+          const effectiveCap =
+            (body as { fromEtlRun?: boolean }).fromEtlRun === true && (limit ?? 0) > capByJoins
+              ? Math.min(limit ?? capByJoins, ETL_MAX_ROWS_CEILING)
+              : capByJoins;
           let sourceLimit = Math.min(
             ETL_MAX_ROWS_CEILING,
             Math.max((offset ?? 0) + (limit ?? 50) * 8, 500),
-            capByJoins
+            effectiveCap
           );
           if (envSourceLimitMax > 0) sourceLimit = Math.min(sourceLimit, envSourceLimitMax);
           const sourceOffset = (body.offset ?? 0) || 0;
