@@ -18,9 +18,9 @@ export const ETL_PREVIEW_MAX_WHEN_UNLIMITED = 50_000;
 
 /**
  * Tamaño de cada lote al paginar llamadas a join-query desde el ETL run.
- * Reducir (vía ETL_JOIN_CHUNK_SIZE) si hay timeout. Con múltiples JOINs el run usa un chunk menor (4+ → 5k, 3 → 10k, 2 → 20k).
+ * Reducir (vía ETL_JOIN_CHUNK_SIZE) si hay timeout. Con múltiples JOINs el run usa un tope por número de joins (4+ → 80k, 3 → 100k, 2 → 200k).
  */
-export const ETL_JOIN_CHUNK_SIZE_DEFAULT = 50_000;
+export const ETL_JOIN_CHUNK_SIZE_DEFAULT = 80_000;
 
 /**
  * Variables de entorno para join-query (API connection):
