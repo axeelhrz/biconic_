@@ -1139,6 +1139,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 }
               }
               joinedRows = nextRows;
+              if (useSecCache) {
+                log("JOIN star fanout por etapa.", {
+                  joinIndex: idx,
+                  joinType,
+                  rowsRight: secRowsRaw.length,
+                  rowsAfterJoinStage: joinedRows.length,
+                });
+              }
             }
             const rowsAfterJoin = joinedRows.length;
             const afterConditions = joinedRows.filter((r) => normalizedConditions.every((c) => passesCondition(r, c)));
@@ -1414,9 +1422,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           );
           const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
           const mergedParams = [...params, ...dfParams];
+          const stableOrderBy = primaryCols.length > 0
+            ? `ORDER BY ${primaryCols.map((c) => `p.${quoteIdent(c, "postgres")}`).join(", ")}`
+            : "ORDER BY 1";
           const sql = `SELECT ${selectParts.join(
             ", "
-          )} ${fromJoin} ${mergedClause} LIMIT $${mergedParams.length + 1} OFFSET $${
+          )} ${fromJoin} ${mergedClause} ${stableOrderBy} LIMIT $${mergedParams.length + 1} OFFSET $${
             mergedParams.length + 2
           }`;
           log("Ejecutando consulta JOIN de Excel:", {
@@ -1612,9 +1623,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           );
           const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
           const mergedParams = [...params, ...dfParams];
+          const stableOrderBy = primaryCols.length > 0
+            ? `ORDER BY ${primaryCols.map((c) => `p.${quoteIdent(c, "postgres")}`).join(", ")}`
+            : "ORDER BY 1";
           const sql = `SELECT ${selectParts.join(
             ", "
-          )} ${fromJoin} ${mergedClause} LIMIT $${mergedParams.length + 1} OFFSET $${
+          )} ${fromJoin} ${mergedClause} ${stableOrderBy} LIMIT $${mergedParams.length + 1} OFFSET $${
             mergedParams.length + 2
           }`;
           log("Ejecutando consulta de datos en PostgreSQL:", {
