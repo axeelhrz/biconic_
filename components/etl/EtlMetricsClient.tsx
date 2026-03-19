@@ -4707,11 +4707,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         {formChartType === "table" && (
                           <div className="overflow-auto max-h-[280px] text-sm">
                             <table className="w-full">
-                              <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewProcessedRows[0] && Object.keys(previewProcessedRows[0]).map((k) => (<th key={k} className="text-left py-2 px-3 font-medium">{k}</th>))}</tr></thead>
+                              <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewVisibleKeys.map((k, i) => (<th key={k} className="text-left py-2 px-3 font-medium">{previewDisplayHeaders[i] ?? k}</th>))}</tr></thead>
                               <tbody style={{ color: "var(--platform-fg)" }}>{previewProcessedRows.slice(0, 50).map((row, idx) => {
                                 const raw = row as Record<string, unknown>;
-                                const keys = Object.keys(raw);
-                                return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{keys.map((k, i) => {
+                                return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{previewVisibleKeys.map((k, i) => {
                                   const v = raw[k];
                                   const dateDisplay = formatPreviewDateValue(v, k);
                                   const num = typeof v === "number" ? v : (v != null && v !== "" ? Number(v) : NaN);
