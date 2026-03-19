@@ -469,7 +469,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   /** Nombre al guardar una nueva métrica desde el paso B (Preview). */
   const [metricNameToSave, setMetricNameToSave] = useState("");
   /** Lista de datasets (solo cuando hideDatasetTab) para mostrar "Dataset a utilizar" y habilitar/deshabilitar Nueva métrica. */
-  const [datasetsList, setDatasetsList] = useState<{ id: string; etl_id: string; name: string | null; etl_title: string | null }[]>([]);
+  const [datasetsList, setDatasetsList] = useState<{ id: string; etl_id: string; name: string | null; etl_title: string | null; config?: unknown }[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [datasetsListLoading, setDatasetsListLoading] = useState(false);
   /** Tras guardar métrica o columna en B, mostrar acciones «Crear otra» / «Ir a Análisis». */
   const [afterSaveInB, setAfterSaveInB] = useState<null | "metric" | "column">(null);
@@ -663,11 +664,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       .then((json) => {
         if (json?.ok && Array.isArray(json.data?.datasets)) {
           setDatasetsList(
-            json.data.datasets.map((d: { id: string; etl_id: string; name: string | null; etl_title: string | null }) => ({
+            json.data.datasets.map((d: { id: string; etl_id: string; name: string | null; etl_title: string | null; config?: unknown }) => ({
               id: d.id,
               etl_id: d.etl_id,
               name: d.name,
               etl_title: d.etl_title,
+              config: d.config,
             }))
           );
         } else {
@@ -677,6 +679,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       .catch(() => setDatasetsList([]))
       .finally(() => setDatasetsListLoading(false));
   }, [hideDatasetTab]);
+
+  // Si hay datasets para el ETL, default a uno (el más reciente según el ORDER BY updated_at).
+  useEffect(() => {
+    if (!hideDatasetTab) return;
+    const forEtl = datasetsList.filter((d) => d.etl_id === etlId);
+    if (forEtl.length === 0) {
+      setSelectedDatasetId(null);
+      return;
+    }
+    setSelectedDatasetId((prev) => (prev && forEtl.some((d) => d.id === prev) ? prev : forEtl[0]?.id ?? null));
+  }, [hideDatasetTab, datasetsList, etlId]);
 
   useEffect(() => {
     if (!showForm || !(data?.hasData ?? false) || rawTableData.length > 1) return;
@@ -699,6 +712,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
   const datasetConfigHydratedRef = useRef(false);
   useEffect(() => {
+    if (hideDatasetTab) return;
     const cfg = data?.datasetConfig;
     if (!cfg || typeof cfg !== "object") return;
     if (!datasetConfigHydratedRef.current) {
@@ -713,7 +727,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
     }
     if (Array.isArray((cfg as { derivedColumns?: DerivedColumn[] }).derivedColumns)) setDerivedColumns((cfg as { derivedColumns: DerivedColumn[] }).derivedColumns);
-  }, [data?.datasetConfig]);
+  }, [data?.datasetConfig, hideDatasetTab]);
 
   /** Construye el objeto completo de configuración del dataset desde el estado actual (para persistir y reutilizar). */
   const buildFullDatasetConfig = useCallback((): Record<string, unknown> => {
@@ -948,7 +962,58 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
   const hasData = data?.hasData ?? false;
   /** Dataset del ETL actual (solo cuando hideDatasetTab); si no existe, deshabilitar "Nueva métrica" y mostrar CTA a Datasets. */
-  const currentDataset = hideDatasetTab ? datasetsList.find((d) => d.etl_id === etlId) : null;
+  const currentDataset = hideDatasetTab
+    ? (selectedDatasetId ? datasetsList.find((d) => d.id === selectedDatasetId) : datasetsList.find((d) => d.etl_id === etlId)) ?? null
+    : null;
+
+  const datasetConfigHydratedDatasetIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!hideDatasetTab) return;
+    const dsId = currentDataset?.id ?? null;
+    if (!dsId) return;
+    if (datasetConfigHydratedDatasetIdRef.current === dsId) return;
+
+    const cfg = currentDataset?.config;
+    if (!cfg || typeof cfg !== "object") return;
+
+    datasetConfigHydratedDatasetIdRef.current = dsId;
+
+    const cfgObj = cfg as Record<string, unknown>;
+    if (typeof cfgObj.grainOption === "string") setGrainOption(cfgObj.grainOption as string);
+    if (Array.isArray(cfgObj.grainCustomColumns)) setGrainCustomColumns(cfgObj.grainCustomColumns as string[]);
+    if (typeof cfgObj.datasetHasTime === "boolean") setDatasetHasTime(cfgObj.datasetHasTime);
+    if (typeof cfgObj.timeColumn === "string") setTimeColumn(cfgObj.timeColumn);
+    if (typeof cfgObj.periodicity === "string") setPeriodicity(cfgObj.periodicity);
+    if (cfgObj.periodicityOverrides != null && typeof cfgObj.periodicityOverrides === "object") {
+      setPeriodicityOverrides(cfgObj.periodicityOverrides as Record<string, string>);
+    }
+    if (cfgObj.columnRoles && typeof cfgObj.columnRoles === "object") {
+      setColumnRoles(cfgObj.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>);
+    }
+    if (Array.isArray(cfgObj.datasetRelations)) setDatasetRelations(cfgObj.datasetRelations as DatasetRelation[]);
+
+    const derivedRaw = cfgObj.derivedColumns ?? cfgObj.derived_columns;
+    if (Array.isArray(derivedRaw)) {
+      const nextDerived: DerivedColumn[] = derivedRaw
+        .filter((d) => d && typeof d === "object")
+        .map((d) => {
+          const obj = d as Record<string, unknown>;
+          const name = typeof obj.name === "string" ? obj.name : "";
+          const expression = typeof obj.expression === "string" ? obj.expression : "";
+          const defaultAggregation =
+            typeof obj.defaultAggregation === "string"
+              ? obj.defaultAggregation
+              : typeof obj.default_aggregation === "string"
+                ? obj.default_aggregation
+                : "SUM";
+          return { name, expression, defaultAggregation };
+        })
+        .filter((d) => d.name && d.expression);
+
+      setDerivedColumns(nextDerived);
+    }
+  }, [hideDatasetTab, currentDataset?.id, currentDataset?.config]);
+
   const fields = data?.fields?.all ?? [];
   /** Columnas marcadas como measure en Rol BI; usadas para fórmulas y cálculos. */
   const baseMeasureColumns = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "measure");
@@ -1189,10 +1254,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     setFormMetric({ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado" });
     setCalcType("formula");
     setPreviewData(null);
-    setGrainOption("");
-    setGrainCustomColumns([]);
-    setWizard("A");
-    setWizardStep(0);
+    if (!hideDatasetTab) {
+      setGrainOption("");
+      setGrainCustomColumns([]);
+      setWizard("A");
+      setWizardStep(0);
+    } else {
+      // En /admin/etl/[etl-id]/metrics el dataset ya está configurado; arrancar directo en cálculo.
+      setWizard("B");
+      setWizardStep(0);
+    }
     setShowForm(true);
   };
 
@@ -2592,9 +2663,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               Cargando...
             </p>
           ) : currentDataset ? (
-            <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
-              {currentDataset.name || currentDataset.etl_title || etlTitle}
-            </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex-1">
+                <Select
+                  value={currentDataset.id}
+                  onChange={(v: string) => setSelectedDatasetId(v)}
+                  options={datasetsList
+                    .filter((d) => d.etl_id === etlId)
+                    .map((d) => ({
+                      value: d.id,
+                      label: d.name || d.etl_title || etlTitle,
+                    }))}
+                  placeholder="Elegir dataset"
+                  className="w-full sm:w-[320px]"
+                  buttonClassName="h-10"
+                  disablePortal
+                  disabled={showForm}
+                />
+              </div>
+            </div>
           ) : (
             <p className="text-sm mb-2" style={{ color: "var(--platform-fg-muted)" }}>
               Este ETL aún no tiene dataset configurado. Configuralo en Datasets para usar grain, tiempo y roles al crear métricas.
@@ -2683,29 +2770,67 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                 <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{wizard === "A" ? "Dataset" : wizard === "B" ? "Métrica" : wizard === "C" ? "Análisis" : "Gráfico"} — {WIZARD_STEPS[wizard][wizardStep]}</p>
                 <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>{WIZARD_STEPS[wizard][wizardStep]}</h2>
               </div>
-              <div className="flex items-center gap-2">
-                <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={datasetOnly ? (embeddedInDatasetsModal && onDatasetSaved ? () => onDatasetSaved() : () => router.push("/admin/datasets")) : closeForm}>{datasetOnly ? "Volver" : "Cancelar"}</Button>
-                {canPrev && <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>}
-                {(wizard === "D" && wizardStep === WIZARD_STEPS.D.length - 1) ? (
-                  <Button type="button" size="sm" className="rounded-lg" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? "Guardar análisis" : "Crear métrica"}</Button>
-                ) : (
-                  canNext && (
+              {/* En el modal de datasets no queremos mostrar los controles "Volver/Anterior/Siguiente" duplicados;
+                  la navegación se hace desde el stepper y/o los CTAs del wizard. */}
+              {!(datasetOnly && embeddedInDatasetsModal) ? (
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    onClick={datasetOnly ? (embeddedInDatasetsModal && onDatasetSaved ? () => onDatasetSaved() : () => router.push("/admin/datasets")) : closeForm}
+                  >
+                    {datasetOnly ? "Volver" : "Cancelar"}
+                  </Button>
+                  {canPrev && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg"
+                      style={{ borderColor: "var(--platform-border)" }}
+                      onClick={goPrev}
+                    >
+                      ← Anterior
+                    </Button>
+                  )}
+                  {(wizard === "D" && wizardStep === WIZARD_STEPS.D.length - 1) ? (
                     <Button
                       type="button"
                       size="sm"
                       className="rounded-lg"
                       style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                      disabled={isGrainStep && !hasValidGrain}
-                      onClick={() => {
-                        if (isGrainStep && !hasValidGrain) toast.error("Elegí una columna o varias (Personalizado) como clave única para avanzar.");
-                        else goNext();
-                      }}
+                      onClick={saveMetric}
+                      disabled={saving}
                     >
-                      Siguiente
+                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{" "}
+                      {editingId
+                        ? "Guardar cambios"
+                        : analysisSelectedMetricIds.length > 0
+                          ? "Guardar análisis"
+                          : "Crear métrica"}
                     </Button>
-                  )
-                )}
-              </div>
+                  ) : (
+                    canNext && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="rounded-lg"
+                        style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                        disabled={isGrainStep && !hasValidGrain}
+                        onClick={() => {
+                          if (isGrainStep && !hasValidGrain) toast.error("Elegí una columna o varias (Personalizado) como clave única para avanzar.");
+                          else goNext();
+                        }}
+                      >
+                        Siguiente
+                      </Button>
+                    )
+                  )}
+                </div>
+              ) : null}
             </div>
 
             {/* Stepper (steps within current wizard) */}
