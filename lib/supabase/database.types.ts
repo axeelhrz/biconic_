@@ -2463,6 +2463,41 @@ export type Database = {
         }
         Relationships: []
       }
+      dataset: {
+        Row: {
+          id: string
+          etl_id: string
+          name: string | null
+          config: Json
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          etl_id: string
+          name?: string | null
+          config: Json
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          etl_id?: string
+          name?: string | null
+          config?: Json
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dataset_etl_id_fkey"
+            columns: ["etl_id"]
+            isOneToOne: true
+            referencedRelation: "etl"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dashboard: {
         Row: {
           client_id: string
