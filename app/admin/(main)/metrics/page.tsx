@@ -15,20 +15,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { searchEtls } from "@/app/admin/(main)/dashboard/actions";
 
 type SavedMetric = { id: string; name: string; metric: { func?: string; field?: string; alias?: string } };
 type EtlWithMetrics = { id: string; title: string; name: string; savedMetrics: SavedMetric[] };
+type DatasetOption = { id: string; etl_id: string; name: string | null; etl_title: string | null };
 
 export default function AdminMetricsPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [etls, setEtls] = useState<EtlWithMetrics[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
-  const [etlQuery, setEtlQuery] = useState("");
-  const [etlOptions, setEtlOptions] = useState<{ id: string; title: string }[]>([]);
-  const [etlOptionsLoading, setEtlOptionsLoading] = useState(false);
-  const [selectedEtlId, setSelectedEtlId] = useState<string | null>(null);
+  const [datasetsList, setDatasetsList] = useState<DatasetOption[]>([]);
+  const [datasetsLoading, setDatasetsLoading] = useState(false);
+  const [datasetQuery, setDatasetQuery] = useState("");
+  const [selectedDataset, setSelectedDataset] = useState<DatasetOption | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ etlId: string; metricId: string; metricName: string } | null>(null);
 
@@ -54,22 +54,42 @@ export default function AdminMetricsPage() {
   }, [fetchMetrics]);
 
   useEffect(() => {
-    const t = setTimeout(() => {
-      setEtlOptionsLoading(true);
-      searchEtls(etlQuery)
-        .then(setEtlOptions)
-        .catch(() => setEtlOptions([]))
-        .finally(() => setEtlOptionsLoading(false));
-    }, 300);
-    return () => clearTimeout(t);
-  }, [etlQuery, createOpen]);
+    if (!createOpen) return;
+    setDatasetsLoading(true);
+    fetch("/api/admin/datasets")
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.ok && Array.isArray(json.data?.datasets)) {
+          setDatasetsList(
+            json.data.datasets.map((d: { id: string; etl_id: string; name: string | null; etl_title: string | null }) => ({
+              id: d.id,
+              etl_id: d.etl_id,
+              name: d.name ?? null,
+              etl_title: d.etl_title ?? null,
+            }))
+          );
+        } else {
+          setDatasetsList([]);
+        }
+      })
+      .catch(() => setDatasetsList([]))
+      .finally(() => setDatasetsLoading(false));
+  }, [createOpen]);
 
-  const goToCreateForEtl = () => {
-    if (selectedEtlId) {
+  const datasetFiltered = datasetQuery.trim()
+    ? datasetsList.filter(
+        (d) =>
+          (d.name?.toLowerCase().includes(datasetQuery.trim().toLowerCase()) ?? false) ||
+          (d.etl_title?.toLowerCase().includes(datasetQuery.trim().toLowerCase()) ?? false)
+      )
+    : datasetsList;
+
+  const goToCreateForDataset = () => {
+    if (selectedDataset) {
       setCreateOpen(false);
-      setSelectedEtlId(null);
-      setEtlQuery("");
-      router.push(`/admin/etl/${selectedEtlId}/metrics`);
+      setSelectedDataset(null);
+      setDatasetQuery("");
+      router.push(`/admin/etl/${selectedDataset.etl_id}/metrics?datasetId=${selectedDataset.id}`);
     }
   };
 
@@ -180,7 +200,7 @@ export default function AdminMetricsPage() {
                     Crear métricas
                   </h2>
                   <p className="text-sm mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>
-                    Elegí un ETL para definir métricas reutilizables
+                    Elegí un dataset para definir métricas reutilizables
                   </p>
                 </div>
               </div>
@@ -194,9 +214,9 @@ export default function AdminMetricsPage() {
                   style={{ color: "var(--platform-fg-muted)" }}
                 />
                 <Input
-                  placeholder="Buscar por nombre o título del ETL..."
-                  value={etlQuery}
-                  onChange={(e) => setEtlQuery(e.target.value)}
+                  placeholder="Buscar por nombre de dataset o ETL..."
+                  value={datasetQuery}
+                  onChange={(e) => setDatasetQuery(e.target.value)}
                   className="pl-11 pr-4 h-12 rounded-xl border-0 text-base placeholder:text-[var(--platform-fg-muted)] focus-visible:ring-2 focus-visible:ring-[var(--platform-accent)]"
                   style={{
                     background: "var(--platform-bg)",
@@ -212,14 +232,14 @@ export default function AdminMetricsPage() {
               className="flex-1 min-h-[200px] max-h-[320px] overflow-y-auto px-4 pb-4"
               style={{ background: "var(--platform-bg-elevated)" }}
             >
-              {etlOptionsLoading ? (
+              {datasetsLoading ? (
                 <div className="flex flex-col items-center justify-center py-12 gap-3">
                   <Loader2 className="h-8 w-8 animate-spin" style={{ color: "var(--platform-accent)" }} />
                   <p className="text-sm font-medium" style={{ color: "var(--platform-fg-muted)" }}>
-                    Buscando ETLs...
+                    Cargando datasets...
                   </p>
                 </div>
-              ) : etlOptions.length === 0 ? (
+              ) : datasetFiltered.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
                   <div
                     className="flex h-14 w-14 items-center justify-center rounded-2xl mb-4"
@@ -228,39 +248,48 @@ export default function AdminMetricsPage() {
                     <Database className="h-7 w-7" />
                   </div>
                   <p className="text-sm font-medium mb-1" style={{ color: "var(--platform-fg)" }}>
-                    {etlQuery ? "Sin resultados" : "Escribí para buscar"}
+                    {datasetQuery ? "Sin resultados" : datasetsList.length === 0 ? "Aún no hay datasets" : "Escribí para filtrar"}
                   </p>
                   <p className="text-xs max-w-[240px]" style={{ color: "var(--platform-fg-muted)" }}>
-                    {etlQuery
-                      ? "No hay ETLs que coincidan con tu búsqueda. Probá con otro término."
-                      : "Ingresá el nombre o título del ETL para ver opciones."}
+                    {datasetQuery
+                      ? "No hay datasets que coincidan con tu búsqueda."
+                      : datasetsList.length === 0
+                        ? "Configurá datasets en la sección Datasets para poder crear métricas."
+                        : "Ingresá el nombre de dataset o ETL para filtrar."}
                   </p>
                 </div>
               ) : (
                 <ul className="space-y-1.5 py-1">
-                  {etlOptions.map((etl) => (
-                    <li key={etl.id}>
+                  {datasetFiltered.map((ds) => (
+                    <li key={ds.id}>
                       <button
                         type="button"
-                        onClick={() => setSelectedEtlId(etl.id)}
+                        onClick={() => setSelectedDataset(ds)}
                         className="w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all duration-150 group hover:border-[var(--platform-border)] hover:bg-[var(--platform-surface)]"
                         style={{
-                          background: selectedEtlId === etl.id ? "var(--platform-accent-dim)" : "transparent",
-                          color: selectedEtlId === etl.id ? "var(--platform-accent)" : "var(--platform-fg)",
-                          borderColor: selectedEtlId === etl.id ? "var(--platform-accent)" : "transparent",
+                          background: selectedDataset?.id === ds.id ? "var(--platform-accent-dim)" : "transparent",
+                          color: selectedDataset?.id === ds.id ? "var(--platform-accent)" : "var(--platform-fg)",
+                          borderColor: selectedDataset?.id === ds.id ? "var(--platform-accent)" : "transparent",
                         }}
                       >
                         <div
                           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
                           style={{
-                            background: selectedEtlId === etl.id ? "var(--platform-accent)" : "var(--platform-bg)",
-                            color: selectedEtlId === etl.id ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                            background: selectedDataset?.id === ds.id ? "var(--platform-accent)" : "var(--platform-bg)",
+                            color: selectedDataset?.id === ds.id ? "var(--platform-bg)" : "var(--platform-fg-muted)",
                           }}
                         >
                           <Database className="h-4 w-4" />
                         </div>
-                        <span className="flex-1 font-medium text-sm truncate">{etl.title}</span>
-                        {selectedEtlId === etl.id ? (
+                        <span className="flex-1 font-medium text-sm truncate">
+                          {ds.name || ds.etl_title || "Dataset"}
+                        </span>
+                        {ds.etl_title && ds.name ? (
+                          <span className="text-xs truncate max-w-[120px]" style={{ color: "var(--platform-fg-muted)" }}>
+                            {ds.etl_title}
+                          </span>
+                        ) : null}
+                        {selectedDataset?.id === ds.id ? (
                           <span
                             className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
                             style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
@@ -291,15 +320,15 @@ export default function AdminMetricsPage() {
                 Cancelar
               </Button>
               <Button
-                onClick={goToCreateForEtl}
-                disabled={!selectedEtlId}
+                onClick={goToCreateForDataset}
+                disabled={!selectedDataset}
                 className="rounded-xl h-10 px-5 font-medium gap-2"
                 style={{
-                  background: selectedEtlId ? "var(--platform-accent)" : "var(--platform-bg-elevated)",
-                  color: selectedEtlId ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                  background: selectedDataset ? "var(--platform-accent)" : "var(--platform-bg-elevated)",
+                  color: selectedDataset ? "var(--platform-bg)" : "var(--platform-fg-muted)",
                 }}
               >
-                Continuar al ETL
+                Continuar
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
@@ -361,7 +390,7 @@ export default function AdminMetricsPage() {
             Aún no hay métricas creadas
           </p>
           <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
-            Creá métricas desde un ETL (Ejecutar → Creación de métricas) o elegí un ETL arriba para empezar.
+            Creá métricas eligiendo un dataset arriba (los datasets se configuran en la sección Datasets).
           </p>
           <Button
             onClick={() => setCreateOpen(true)}

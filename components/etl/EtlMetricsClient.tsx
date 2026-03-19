@@ -680,7 +680,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       .finally(() => setDatasetsListLoading(false));
   }, [hideDatasetTab]);
 
-  // Si hay datasets para el ETL, default a uno (el más reciente según el ORDER BY updated_at).
+  // Si hay datasets para el ETL, default a uno: priorizar datasetId de la URL (desde /admin/metrics), sino el primero de la lista.
   useEffect(() => {
     if (!hideDatasetTab) return;
     const forEtl = datasetsList.filter((d) => d.etl_id === etlId);
@@ -688,8 +688,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       setSelectedDatasetId(null);
       return;
     }
+    const urlDatasetId = searchParams.get("datasetId");
+    if (urlDatasetId && forEtl.some((d) => d.id === urlDatasetId)) {
+      setSelectedDatasetId(urlDatasetId);
+      return;
+    }
     setSelectedDatasetId((prev) => (prev && forEtl.some((d) => d.id === prev) ? prev : forEtl[0]?.id ?? null));
-  }, [hideDatasetTab, datasetsList, etlId]);
+  }, [hideDatasetTab, datasetsList, etlId, searchParams]);
 
   useEffect(() => {
     if (!showForm || !(data?.hasData ?? false) || rawTableData.length > 1) return;
