@@ -159,7 +159,7 @@ export async function PUT(
       await propagateMetricsToDashboards(adminClient, etlId, savedMetrics);
     }
 
-    // Persistir también en la tabla dataset para que la lista en /admin/datasets muestre el dataset
+    let datasetListUpdated = true;
     if (datasetConfig !== undefined) {
       try {
         const { error: datasetError } = await adminClient
@@ -175,13 +175,15 @@ export async function PUT(
           );
         if (datasetError) {
           console.error("[metrics] Error al guardar en tabla dataset:", datasetError.message);
+          datasetListUpdated = false;
         }
       } catch (datasetErr) {
         console.error("[metrics] Error al upsert dataset:", datasetErr);
+        datasetListUpdated = false;
       }
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, datasetListUpdated });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Error al guardar métricas";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

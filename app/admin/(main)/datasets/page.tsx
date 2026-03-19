@@ -42,6 +42,9 @@ export default function AdminDatasetsPage() {
       const json = await res.json();
       if (res.ok && json.ok && Array.isArray(json.data?.datasets)) {
         setDatasets(json.data.datasets);
+        if (json.warning) {
+          toast.warning(json.warning);
+        }
       } else {
         setDatasets([]);
       }

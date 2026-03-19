@@ -719,7 +719,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         toast.error(json?.error ?? "Error al guardar la configuración del dataset");
         return;
       }
-      toast.success("Configuración del dataset guardada. Podés crear métricas sin volver a configurar.");
+      if (json.datasetListUpdated === false) {
+        toast.warning("Configuración guardada; la lista de Datasets no se pudo actualizar (revisar tabla en Supabase).");
+      } else {
+        toast.success("Configuración del dataset guardada. Podés crear métricas sin volver a configurar.");
+      }
       setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfig as Record<string, unknown> } : null));
       if (datasetOnly) {
         if (onDatasetSaved) {
