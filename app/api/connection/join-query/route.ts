@@ -496,7 +496,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const isStar = !!body.primaryTable || Array.isArray(body.joins);
 
     if (isStar) {
-      log("Iniciando flujo de JOIN 'star-schema'.");
       const {
         primaryConnectionId,
         primaryTable,
@@ -506,6 +505,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         count,
         ssl,
       } = body;
+
+      log("Iniciando flujo de JOIN 'star-schema'.", {
+        primaryConnectionId,
+        primaryTable,
+        joinsCount: Array.isArray(joins) ? joins.length : 0,
+        hasDateFilter: !!body.dateFilter,
+        dateFilter: body.dateFilter ?? null,
+        conditionsCount: Array.isArray(conditions) ? conditions.length : 0,
+      });
 
       if (!primaryTable || !joins || joins.length === 0) {
         log("Error de validación: Falta tabla principal o joins.");
@@ -589,6 +597,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           (jn) => String(jn.secondaryConnectionId ?? "") === String(primaryConnectionId ?? "")
         );
       const useInMemoryStarJoin = hasFirebirdInChain || !sameConnectionChain;
+
+      log("Decisión de estrategia de JOIN star.", {
+        dbType,
+        hasFirebirdInChain,
+        sameConnectionChain,
+        useInMemoryStarJoin,
+      });
 
       if (useInMemoryStarJoin) {
         log("Iniciando flujo de JOIN star en memoria (Firebird/cross-connection).");
@@ -851,8 +866,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             };
           };
 
+          log("JOIN star en memoria - configuración de filtros.", {
+            dateFilterRawColumn: body.dateFilter?.column ?? null,
+            dateFilterForPrimary,
+            joinsCount,
+            sourceLimit,
+          });
+
           const primaryTableResolved = await resolvePhysicalIfExcel(primaryConn, primaryTable || "");
           const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary);
+          log("JOIN star en memoria - filas obtenidas de tabla principal.", {
+            primaryTable: primaryTableResolved,
+            primaryRowsCount: primaryRowsRaw.length,
+          });
           const primaryCols =
             primaryColumns && primaryColumns.length > 0
               ? primaryColumns
@@ -929,8 +955,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           const filteredRows = joinedRows
             .filter((r) => (conditions || []).every((c) => passesCondition(r, c)))
             .filter((r) => passesDateFilter(r, body.dateFilter));
+          if ((filteredRows.length === 0 || joinedRows.length === 0) && body.dateFilter?.column) {
+            log("Diagnóstico: 0 filas tras aplicar filtro de fecha en JOIN star en memoria.", {
+              totalBeforeFilter: joinedRows.length,
+              totalAfterFilter: filteredRows.length,
+              dateFilter: body.dateFilter,
+            });
+          }
           const totalOut = count ? filteredRows.length : undefined;
           const rowsPage = filteredRows.slice(offset ?? 0, (offset ?? 0) + (limit ?? 50));
+          log("JOIN star en memoria - página de resultados construida.", {
+            rowsPageCount: rowsPage.length,
+            offset,
+            limit,
+            totalOut,
+          });
           return NextResponse.json({ ok: true, rows: rowsPage, total: totalOut });
         } catch (e: any) {
           log("Error en JOIN star en memoria.", {
