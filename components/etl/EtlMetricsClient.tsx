@@ -398,9 +398,11 @@ export type EtlMetricsClientProps = {
   datasetOnly?: boolean;
   /** Si true, no se muestra la pestaña Dataset; el wizard por defecto es Métrica (B) */
   hideDatasetTab?: boolean;
+  /** Si se pasa y datasetOnly, al guardar con "Guardar y volver a Datasets" se llama esto en lugar de navegar (ej. cerrar modal y refrescar lista). */
+  onDatasetSaved?: () => void;
 };
 
-export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false }: EtlMetricsClientProps) {
+export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false, onDatasetSaved }: EtlMetricsClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
@@ -720,7 +722,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       toast.success("Configuración del dataset guardada. Podés crear métricas sin volver a configurar.");
       setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfig as Record<string, unknown> } : null));
       if (datasetOnly) {
-        router.push("/admin/datasets");
+        if (onDatasetSaved) {
+          onDatasetSaved();
+        } else {
+          router.push("/admin/datasets");
+        }
       } else {
         setWizard("B");
         setWizardStep(0);
@@ -730,7 +736,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     } finally {
       setSavingDatasetConfig(false);
     }
-  }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName]);
+  }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName, onDatasetSaved]);
 
   const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
 

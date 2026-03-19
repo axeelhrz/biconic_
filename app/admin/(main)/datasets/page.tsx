@@ -2,11 +2,14 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Plus, Search, Database, Loader2, ChevronRight, Pencil, BarChart3 } from "lucide-react";
+import { Plus, Search, Database, Loader2, ChevronRight, Pencil, BarChart3, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { searchEtls } from "@/app/admin/(main)/dashboard/actions";
+import { getDatasetWizardData } from "@/app/admin/(main)/datasets/actions";
+import EtlMetricsClient from "@/components/etl/EtlMetricsClient";
+import type { Connection } from "@/components/connections/ConnectionsCard";
+import { toast } from "sonner";
 
 type DatasetRow = {
   id: string;
@@ -19,7 +22,6 @@ type DatasetRow = {
 };
 
 export default function AdminDatasetsPage() {
-  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [datasets, setDatasets] = useState<DatasetRow[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -27,6 +29,11 @@ export default function AdminDatasetsPage() {
   const [etlOptions, setEtlOptions] = useState<{ id: string; title: string }[]>([]);
   const [etlOptionsLoading, setEtlOptionsLoading] = useState(false);
   const [selectedEtlId, setSelectedEtlId] = useState<string | null>(null);
+  /** Wizard completo en modal: al elegir ETL y "Configurar dataset" se cargan estos y se muestra el wizard al 100%. */
+  const [wizardEtlId, setWizardEtlId] = useState<string | null>(null);
+  const [wizardEtlTitle, setWizardEtlTitle] = useState("");
+  const [wizardConnections, setWizardConnections] = useState<Connection[]>([]);
+  const [wizardLoading, setWizardLoading] = useState(false);
 
   const fetchDatasets = useCallback(async () => {
     setLoading(true);
@@ -60,14 +67,38 @@ export default function AdminDatasetsPage() {
     return () => clearTimeout(t);
   }, [etlQuery, createOpen]);
 
-  const goToCreateDataset = () => {
-    if (selectedEtlId) {
+  const goToCreateDataset = async () => {
+    if (!selectedEtlId) return;
+    setWizardLoading(true);
+    try {
+      const data = await getDatasetWizardData(selectedEtlId);
+      if (!data.ok || !data.etlTitle) {
+        toast.error(data.error ?? "No se pudo cargar el wizard");
+        return;
+      }
       setCreateOpen(false);
       setSelectedEtlId(null);
       setEtlQuery("");
-      router.push(`/admin/etl/${selectedEtlId}/dataset`);
+      setWizardEtlId(selectedEtlId);
+      setWizardEtlTitle(data.etlTitle);
+      setWizardConnections(data.connections ?? []);
+    } catch {
+      toast.error("Error al cargar el wizard del dataset");
+    } finally {
+      setWizardLoading(false);
     }
   };
+
+  const closeWizardModal = useCallback(() => {
+    setWizardEtlId(null);
+    setWizardEtlTitle("");
+    setWizardConnections([]);
+  }, []);
+
+  const handleDatasetSaved = useCallback(() => {
+    closeWizardModal();
+    fetchDatasets();
+  }, [closeWizardModal, fetchDatasets]);
 
   const formatDate = (iso: string) => {
     try {
@@ -256,17 +287,48 @@ export default function AdminDatasetsPage() {
               </Button>
               <Button
                 onClick={goToCreateDataset}
-                disabled={!selectedEtlId}
+                disabled={!selectedEtlId || wizardLoading}
                 className="rounded-xl h-10 px-5 font-medium gap-2"
                 style={{
-                  background: selectedEtlId ? "var(--platform-accent)" : "var(--platform-bg-elevated)",
-                  color: selectedEtlId ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                  background: selectedEtlId && !wizardLoading ? "var(--platform-accent)" : "var(--platform-bg-elevated)",
+                  color: selectedEtlId && !wizardLoading ? "var(--platform-bg)" : "var(--platform-fg-muted)",
                 }}
               >
+                {wizardLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Configurar dataset
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal a pantalla completa: wizard de creación de dataset al 100% */}
+      {wizardEtlId && (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col bg-[var(--platform-bg)]"
+          style={{ top: 0, left: 0, right: 0, bottom: 0 }}
+        >
+          <div className="flex items-center justify-end shrink-0 px-4 py-2 border-b" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="rounded-full h-10 w-10"
+              onClick={closeWizardModal}
+              aria-label="Cerrar wizard"
+            >
+              <X className="h-5 w-5" style={{ color: "var(--platform-fg-muted)" }} />
+            </Button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto">
+            <EtlMetricsClient
+              etlId={wizardEtlId}
+              etlTitle={wizardEtlTitle}
+              connections={wizardConnections}
+              datasetOnly
+              onDatasetSaved={handleDatasetSaved}
+            />
           </div>
         </div>
       )}
