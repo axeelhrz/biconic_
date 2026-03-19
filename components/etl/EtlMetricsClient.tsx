@@ -1166,6 +1166,24 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       setInterDrillThroughTarget(cfg.interDrillThroughTarget ?? "");
       setInterTooltipFields(Array.isArray(cfg.interTooltipFields) ? cfg.interTooltipFields : ["value", "delta_pct"]);
       setInterHighlight(cfg.interHighlight !== false);
+      const dateRange = (cfg as { dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string } }).dateRangeFilter;
+      const dateCol = (cfg as { dateDimension?: string; timeColumn?: string }).dateDimension ?? (cfg as { timeColumn?: string }).timeColumn;
+      if (typeof dateCol === "string" && dateCol) setTimeColumn(dateCol);
+      const gran = (cfg as { dateGroupByGranularity?: string }).dateGroupByGranularity;
+      if (gran && ["day", "week", "month", "quarter", "semester", "year"].includes(gran)) setAnalysisGranularity(gran);
+      if (dateRange?.from != null && dateRange?.to != null) {
+        setAnalysisTimeRange("custom");
+        setAnalysisDateFrom(String(dateRange.from));
+        setAnalysisDateTo(String(dateRange.to));
+      } else if (dateRange?.last != null && dateRange?.unit) {
+        setAnalysisTimeRange(String(dateRange.last));
+        setAnalysisDateFrom("");
+        setAnalysisDateTo("");
+      } else {
+        setAnalysisTimeRange("0");
+        setAnalysisDateFrom("");
+        setAnalysisDateTo("");
+      }
       const first = (cfg.metrics ?? [saved.metric])[0];
       setFormMetric(first ? { ...first, id: first.id || `m-${Date.now()}` } : { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" });
     } else {
@@ -1924,6 +1942,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
+      dateDimension: timeColumn || undefined,
+      dateGroupByGranularity:
+        analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
+          ? (analysisGranularity as "day" | "week" | "month" | "quarter" | "semester" | "year")
+          : undefined,
+      dateRangeFilter:
+        timeColumn && analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo
+          ? { field: timeColumn, from: analysisDateFrom, to: analysisDateTo }
+          : timeColumn && analysisTimeRange && analysisTimeRange !== "0" && Number(analysisTimeRange) > 0
+            ? {
+                field: timeColumn,
+                last: Number(analysisTimeRange),
+                unit: analysisTimeRange === "7" || analysisTimeRange === "30" ? "days" : "months",
+              }
+            : undefined,
       chartMetricFormats:
         chartYAxes.length > 1
           ? Object.fromEntries(
@@ -2273,6 +2306,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
       dateDimension: timeColumn || undefined,
+      dateGroupByGranularity:
+        analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
+          ? (analysisGranularity as "day" | "week" | "month" | "quarter" | "semester" | "year")
+          : undefined,
+      dateRangeFilter:
+        timeColumn && analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo
+          ? { field: timeColumn, from: analysisDateFrom, to: analysisDateTo }
+          : timeColumn && analysisTimeRange && analysisTimeRange !== "0" && Number(analysisTimeRange) > 0
+            ? {
+                field: timeColumn,
+                last: Number(analysisTimeRange),
+                unit: analysisTimeRange === "7" || analysisTimeRange === "30" ? "days" : "months",
+              }
+            : undefined,
     };
     const nextAnalyses = [...(data?.savedAnalyses ?? []), newAnalysis];
     setSavingAnalysis(true);

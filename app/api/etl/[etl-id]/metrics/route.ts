@@ -254,6 +254,8 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
     chartRankingEnabled: cfg.chartRankingEnabled,
     chartRankingTop: cfg.chartRankingTop,
     chartRankingMetric: cfg.chartRankingMetric,
+    dateGroupByGranularity: cfg.dateGroupByGranularity,
+    dateRangeFilter: cfg.dateRangeFilter,
   };
 }
 

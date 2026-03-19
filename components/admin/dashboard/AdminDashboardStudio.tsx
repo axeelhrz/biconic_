@@ -63,6 +63,8 @@ export type SavedAnalysis = {
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
   dateDimension?: string;
+  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string };
   [key: string]: unknown;
 };
 
@@ -126,6 +128,8 @@ type AggregationConfig = {
   chartComboSyncAxes?: boolean;
   /** Si la dimensión es fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  /** Filtro de rango de fechas (últimos N días/meses o rango custom) para alinear con la vista previa del ETL. */
+  dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string };
 };
 type StudioWidget = {
   id: string;
@@ -557,6 +561,9 @@ export function AdminDashboardStudio({
               comparePeriod: agg.comparePeriod || undefined,
               dateDimension: agg.dateDimension || undefined,
               ...(isDateDimension && dateGroupByGranularity && primaryDimension && { dateGroupBy: { field: primaryDimension, granularity: dateGroupByGranularity } }),
+              ...((agg as { dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string } }).dateRangeFilter && {
+                dateRangeFilter: (agg as { dateRangeFilter: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter,
+              }),
               ...(derivedColumnsFromLayout.length > 0 && { derivedColumns: derivedColumnsFromLayout }),
               ...(savedMetricsForBody.length > 0 && { savedMetrics: savedMetricsForBody }),
             }),
@@ -839,6 +846,8 @@ export function AdminDashboardStudio({
           chartRankingEnabled: analysis.chartRankingEnabled,
           chartRankingTop: analysis.chartRankingTop,
           chartRankingMetric: analysis.chartRankingMetric,
+          dateGroupByGranularity: analysis.dateGroupByGranularity,
+          dateRangeFilter: analysis.dateRangeFilter,
         },
         excludeGlobalFilters: false,
         dataSourceId: primaryId,

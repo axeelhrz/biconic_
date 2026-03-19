@@ -490,6 +490,8 @@ export function DashboardViewer({
           const isDateDim = primaryDim && dateFields.some((d: string) => (d || "").toLowerCase() === (primaryDim || "").toLowerCase());
           const dateGroupByGranularity = (aggConfig as { dateGroupByGranularity?: string }).dateGroupByGranularity;
           if (isDateDim && dateGroupByGranularity && primaryDim) bodyPayload.dateGroupBy = { field: primaryDim, granularity: dateGroupByGranularity };
+          const dateRangeFilter = (aggConfig as { dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter;
+          if (dateRangeFilter?.field) bodyPayload.dateRangeFilter = dateRangeFilter;
 
           const url = apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data";
           const res = await fetch(url, {
