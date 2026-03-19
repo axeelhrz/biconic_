@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Plus, Search, Database, Loader2, ChevronRight, Pencil, BarChart3, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,7 @@ type DatasetRow = {
 };
 
 export default function AdminDatasetsPage() {
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [datasets, setDatasets] = useState<DatasetRow[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -29,11 +31,13 @@ export default function AdminDatasetsPage() {
   const [etlOptions, setEtlOptions] = useState<{ id: string; title: string }[]>([]);
   const [etlOptionsLoading, setEtlOptionsLoading] = useState(false);
   const [selectedEtlId, setSelectedEtlId] = useState<string | null>(null);
-  /** Wizard completo en modal: al elegir ETL y "Configurar dataset" se cargan estos y se muestra el wizard al 100%. */
+  /** Wizard completo en modal: al elegir ETL y "Configurar dataset" o al hacer Editar se cargan estos y se muestra el wizard al 100%. */
   const [wizardEtlId, setWizardEtlId] = useState<string | null>(null);
   const [wizardEtlTitle, setWizardEtlTitle] = useState("");
   const [wizardConnections, setWizardConnections] = useState<Connection[]>([]);
   const [wizardLoading, setWizardLoading] = useState(false);
+  /** Para autoabrir modal con ?etlId=: evitar reabrir en bucle; se resetea al cerrar el modal. */
+  const autoOpenedEtlIdRef = useRef<string | null>(null);
 
   const fetchDatasets = useCallback(async () => {
     setLoading(true);
@@ -96,7 +100,35 @@ export default function AdminDatasetsPage() {
     setWizardEtlId(null);
     setWizardEtlTitle("");
     setWizardConnections([]);
+    autoOpenedEtlIdRef.current = null;
   }, []);
+
+  /** Abre el modal de edición para un dataset existente (mismo flujo que Crear). */
+  const openEditDataset = useCallback(async (etlId: string) => {
+    setWizardLoading(true);
+    try {
+      const data = await getDatasetWizardData(etlId);
+      if (!data.ok || !data.etlTitle) {
+        toast.error(data.error ?? "No se pudo cargar el wizard");
+        return;
+      }
+      setWizardEtlId(etlId);
+      setWizardEtlTitle(data.etlTitle);
+      setWizardConnections(data.connections ?? []);
+    } catch {
+      toast.error("Error al cargar el wizard del dataset");
+    } finally {
+      setWizardLoading(false);
+    }
+  }, []);
+
+  /** Autoabrir modal cuando se llega con ?etlId=... (ej. desde Métricas "Configurar dataset"). Solo una vez por etlId. */
+  useEffect(() => {
+    const etlIdFromUrl = searchParams.get("etlId");
+    if (!etlIdFromUrl || wizardEtlId || autoOpenedEtlIdRef.current === etlIdFromUrl) return;
+    autoOpenedEtlIdRef.current = etlIdFromUrl;
+    openEditDataset(etlIdFromUrl);
+  }, [searchParams, openEditDataset, wizardEtlId]);
 
   const handleDatasetSaved = useCallback(() => {
     closeWizardModal();
@@ -330,6 +362,7 @@ export default function AdminDatasetsPage() {
               etlTitle={wizardEtlTitle}
               connections={wizardConnections}
               datasetOnly
+              embeddedInDatasetsModal
               onDatasetSaved={handleDatasetSaved}
             />
           </div>
@@ -396,14 +429,18 @@ export default function AdminDatasetsPage() {
                     {formatDate(ds.updated_at)}
                   </div>
                   <div className="sm:col-span-3 flex items-center justify-end gap-2">
-                    <Link
-                      href={`/admin/etl/${ds.etl_id}/dataset`}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
                       className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
                       style={{ color: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}
+                      onClick={() => openEditDataset(ds.etl_id)}
+                      disabled={wizardLoading}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                       Editar
-                    </Link>
+                    </Button>
                     <Link
                       href={`/admin/etl/${ds.etl_id}/metrics`}
                       className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"

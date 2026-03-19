@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { ComponentType } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles, AreaChart, ScatterChart, MapPin, TrendingUp, HelpCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles, AreaChart, ScatterChart, MapPin, TrendingUp, HelpCircle } from "lucide-react";
 import { Bar, Line, Pie, Doughnut, Scatter } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -400,9 +400,11 @@ export type EtlMetricsClientProps = {
   hideDatasetTab?: boolean;
   /** Si se pasa y datasetOnly, al guardar con "Guardar y volver a Datasets" se llama esto en lugar de navegar (ej. cerrar modal y refrescar lista). */
   onDatasetSaved?: () => void;
+  /** Si true y datasetOnly, el wizard está dentro del modal de /admin/datasets: se oculta el link "Volver a Datasets" (el cierre es con la X del modal). */
+  embeddedInDatasetsModal?: boolean;
 };
 
-export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false, onDatasetSaved }: EtlMetricsClientProps) {
+export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false, onDatasetSaved, embeddedInDatasetsModal = false }: EtlMetricsClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
@@ -466,6 +468,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const [datasetName, setDatasetName] = useState("");
   /** Nombre al guardar una nueva métrica desde el paso B (Preview). */
   const [metricNameToSave, setMetricNameToSave] = useState("");
+  /** Lista de datasets (solo cuando hideDatasetTab) para mostrar "Dataset a utilizar" y habilitar/deshabilitar Nueva métrica. */
+  const [datasetsList, setDatasetsList] = useState<{ id: string; etl_id: string; name: string | null; etl_title: string | null }[]>([]);
+  const [datasetsListLoading, setDatasetsListLoading] = useState(false);
   /** Tras guardar métrica o columna en B, mostrar acciones «Crear otra» / «Ir a Análisis». */
   const [afterSaveInB, setAfterSaveInB] = useState<null | "metric" | "column">(null);
   const [transformCompare, setTransformCompare] = useState<"none" | "mom" | "yoy" | "fixed">("none");
@@ -648,6 +653,30 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       setWizardStep(0);
     }
   }, [searchParams, hideDatasetTab]);
+
+  // En página de métricas (hideDatasetTab), cargar lista de datasets para "Dataset a utilizar" y habilitar/deshabilitar Nueva métrica
+  useEffect(() => {
+    if (!hideDatasetTab) return;
+    setDatasetsListLoading(true);
+    fetch("/api/admin/datasets")
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.ok && Array.isArray(json.data?.datasets)) {
+          setDatasetsList(
+            json.data.datasets.map((d: { id: string; etl_id: string; name: string | null; etl_title: string | null }) => ({
+              id: d.id,
+              etl_id: d.etl_id,
+              name: d.name,
+              etl_title: d.etl_title,
+            }))
+          );
+        } else {
+          setDatasetsList([]);
+        }
+      })
+      .catch(() => setDatasetsList([]))
+      .finally(() => setDatasetsListLoading(false));
+  }, [hideDatasetTab]);
 
   useEffect(() => {
     if (!showForm || !(data?.hasData ?? false) || rawTableData.length > 1) return;
@@ -918,6 +947,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const savedMetrics = (data?.savedMetrics ?? []) as SavedMetricForm[];
 
   const hasData = data?.hasData ?? false;
+  /** Dataset del ETL actual (solo cuando hideDatasetTab); si no existe, deshabilitar "Nueva métrica" y mostrar CTA a Datasets. */
+  const currentDataset = hideDatasetTab ? datasetsList.find((d) => d.etl_id === etlId) : null;
   const fields = data?.fields?.all ?? [];
   /** Columnas marcadas como measure en Rol BI; usadas para fórmulas y cálculos. */
   const baseMeasureColumns = fields.filter((c) => (columnRoles[c]?.role ?? "dimension") === "measure");
@@ -2498,14 +2529,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     <div className="flex flex-col flex-1 max-w-4xl mx-auto w-full p-6 gap-6">
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Link
-            href={datasetOnly ? "/admin/datasets" : `/admin/etl/${etlId}`}
-            className="flex items-center gap-2 text-sm font-medium rounded-lg transition-colors"
-            style={{ color: "var(--platform-fg-muted)" }}
-          >
-            <ChevronLeft className="h-4 w-4" />
-            {datasetOnly ? "Volver a Datasets" : "Volver al ETL"}
-          </Link>
+          {!(datasetOnly && embeddedInDatasetsModal) && (
+            <Link
+              href={datasetOnly ? "/admin/datasets" : `/admin/etl/${etlId}`}
+              className="flex items-center gap-2 text-sm font-medium rounded-lg transition-colors"
+              style={{ color: "var(--platform-fg-muted)" }}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              {datasetOnly ? "Volver a Datasets" : "Volver al ETL"}
+            </Link>
+          )}
           <h1 className="text-xl font-semibold" style={{ color: "var(--platform-fg)" }}>
             {datasetOnly ? `Configurar dataset – ${etlTitle}` : `Métricas reutilizables – ${etlTitle}`}
           </h1>
@@ -2513,7 +2546,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         <div className="flex items-center gap-2">
           {!datasetOnly && (
             <Link
-              href={`/admin/etl/${etlId}/dataset`}
+              href={`/admin/datasets?etlId=${etlId}`}
               className="inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium transition-colors"
               style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
             >
@@ -2536,6 +2569,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
               className="rounded-xl"
               style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
               onClick={openNew}
+              disabled={hideDatasetTab && !currentDataset}
             >
               <Plus className="h-4 w-4 mr-2" />
               Nueva métrica
@@ -2543,6 +2577,41 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           )}
         </div>
       </header>
+
+      {hideDatasetTab && hasData && (
+        <div
+          className="rounded-xl border p-4"
+          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+        >
+          <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>
+            Dataset a utilizar
+          </p>
+          {datasetsListLoading ? (
+            <p className="text-sm flex items-center gap-2" style={{ color: "var(--platform-fg-muted)" }}>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Cargando...
+            </p>
+          ) : currentDataset ? (
+            <p className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
+              {currentDataset.name || currentDataset.etl_title || etlTitle}
+            </p>
+          ) : (
+            <p className="text-sm mb-2" style={{ color: "var(--platform-fg-muted)" }}>
+              Este ETL aún no tiene dataset configurado. Configuralo en Datasets para usar grain, tiempo y roles al crear métricas.
+            </p>
+          )}
+          {hideDatasetTab && !currentDataset && !datasetsListLoading && (
+            <Link
+              href={`/admin/datasets?etlId=${etlId}`}
+              className="inline-flex items-center gap-2 text-sm font-medium mt-2"
+              style={{ color: "var(--platform-accent)" }}
+            >
+              Ir a configurar dataset
+              <ChevronRight className="h-4 w-4" />
+            </Link>
+          )}
+        </div>
+      )}
 
       {!hasData && (
         <div
@@ -2615,7 +2684,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                 <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>{WIZARD_STEPS[wizard][wizardStep]}</h2>
               </div>
               <div className="flex items-center gap-2">
-                <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={datasetOnly ? () => router.push("/admin/datasets") : closeForm}>{datasetOnly ? "Volver" : "Cancelar"}</Button>
+                <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={datasetOnly ? (embeddedInDatasetsModal && onDatasetSaved ? () => onDatasetSaved() : () => router.push("/admin/datasets")) : closeForm}>{datasetOnly ? "Volver" : "Cancelar"}</Button>
                 {canPrev && <Button type="button" variant="outline" size="sm" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>}
                 {(wizard === "D" && wizardStep === WIZARD_STEPS.D.length - 1) ? (
                   <Button type="button" size="sm" className="rounded-lg" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? "Guardar análisis" : "Crear métrica"}</Button>
