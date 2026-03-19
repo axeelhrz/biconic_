@@ -1002,7 +1002,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (keyColumns.length > 0) {
       (filterPayload as Record<string, unknown>).keyColumns = keyColumns;
     }
-    /** Normaliza referencia de columna a dot-notation (primary.col, join_0.col) para que el backend aplique bien el filtro de fecha. */
+    /** Normaliza y valida referencia de columna a dot-notation (primary.col, join_0.col) para contrato coherente preview/run. */
     const normalizeDateFilterColumn = (col: string): string => {
       const r = (col || "").trim();
       if (!r || /^(primary\.|join_\d+\.)/i.test(r)) return r;
@@ -1013,8 +1013,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     };
     const parsedExactDates = dateFilterExactDatesText.trim().split(/[,\s]+/).map((s) => s.trim()).filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s));
     if (dateFilterColumn && (dateFilterYears.length > 0 || dateFilterMonths.length > 0 || parsedExactDates.length > 0)) {
+      let normalizedCol = normalizeDateFilterColumn(dateFilterColumn);
+      if (!/^(primary\.|join_\d+\.)/i.test(normalizedCol)) normalizedCol = `primary.${normalizedCol}`;
       (filterPayload as Record<string, unknown>).dateFilter = {
-        column: normalizeDateFilterColumn(dateFilterColumn),
+        column: normalizedCol,
         ...(dateFilterYears.length > 0 ? { years: dateFilterYears } : {}),
         ...(dateFilterMonths.length > 0 ? { months: dateFilterMonths } : {}),
         ...(parsedExactDates.length > 0 ? { exactDates: parsedExactDates } : {}),
@@ -1110,6 +1112,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     dateFilterExactDatesText,
   ]);
 
+  /** Preview y run comparten el mismo contrato base (buildGuidedConfigBody: filter con dateFilter, conditions, join). Diferencias: preview usa limit 1000 o unlimited y no envía end; run envía end y waitForCompletion. */
   const fetchPreview = useCallback(() => {
     const body = buildGuidedConfigBody();
     if (!body || !connectionId || !selectedTable) {

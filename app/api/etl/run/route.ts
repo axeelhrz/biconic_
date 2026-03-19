@@ -805,8 +805,8 @@ async function executeEtlPipeline(
             const cookieHeader = req.headers.get("cookie");
             const joinsCount = (joinObj.joins || []).length;
             const starChunkSize =
-              joinsCount >= 4 ? Math.min(JOIN_CHUNK_SIZE, 80_000)
-              : joinsCount >= 3 ? Math.min(JOIN_CHUNK_SIZE, 100_000)
+              joinsCount >= 4 ? Math.min(JOIN_CHUNK_SIZE, 50_000)
+              : joinsCount >= 3 ? Math.min(JOIN_CHUNK_SIZE, 65_000)
               : Math.min(JOIN_CHUNK_SIZE, 200_000);
             let starOffset = 0;
             while (true) {
@@ -856,7 +856,14 @@ async function executeEtlPipeline(
               const nextSourceOffset = typeof (starData as { nextSourceOffset?: number }).nextSourceOffset === "number"
                 ? (starData as { nextSourceOffset: number }).nextSourceOffset
                 : starOffset + starData.rows.length;
-              console.log(`[ETL Run ${runId}] join-query chunk: sourceOffset=${starOffset} rows=${starData.rows.length} sourceExhausted=${sourceExhausted} nextSourceOffset=${nextSourceOffset}`);
+              console.log("[ETL Run join-query iteración]", {
+                runId,
+                sourceOffset: starOffset,
+                rows: starData.rows.length,
+                sourceExhausted,
+                nextSourceOffset,
+                dateFilterColumn: body!.filter?.dateFilter?.column ?? null,
+              });
               if (starData.rows.length > 0) yield starData.rows;
               starOffset = nextSourceOffset;
               if (sourceExhausted) break;

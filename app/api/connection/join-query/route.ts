@@ -484,8 +484,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const log = (message: string, data?: object) =>
     console.log(`[ReqID: ${requestId}] ${message}`, data || "");
 
+  const timeoutRef = { current: false };
   const timeoutResponse: Promise<NextResponse> = new Promise((resolve) => {
     setTimeout(() => {
+      timeoutRef.current = true;
       resolve(
         NextResponse.json(
           {
@@ -679,7 +681,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           const capByJoins =
             envSourceLimitMax > 0
               ? Math.min(ETL_MAX_ROWS_CEILING, envSourceLimitMax)
-              : joinsCount >= 4 ? 1000 : joinsCount >= 3 ? 1500 : joinsCount >= 2 ? 2000 : 2000;
+              : joinsCount >= 4 ? 800 : joinsCount >= 3 ? 1200 : joinsCount >= 2 ? 2000 : 2000;
           const effectiveCap =
             (body as { fromEtlRun?: boolean }).fromEtlRun === true && (limit ?? 0) > capByJoins
               ? Math.min(limit ?? capByJoins, ETL_MAX_ROWS_CEILING)
@@ -727,15 +729,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             }
             return `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
           };
+          const IN_KEYS_BATCH = 500;
           const fetchRowsFromConn = async (
             conn: any,
             table: string,
             columns?: string[],
             dateFilterForTable?: DateFilterSpec,
-            rowOffset: number = 0
+            rowOffset: number = 0,
+            options?: { filterByKeys?: { columns: string[]; valueTuples: string[][] } }
           ): Promise<Record<string, any>[]> => {
             const cType = String(conn?.type || "").toLowerCase();
             const resolvedTable = await resolvePhysicalIfExcel(conn, table);
+            const filterByKeys = options?.filterByKeys;
             if (cType === "firebird") {
               const Firebird = require("node-firebird");
               let pwd =
@@ -758,17 +763,52 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 : firebirdSafePart(resolvedTable);
               const cols = columns?.length ? columns.map((c) => firebirdSafePart(c)).join(", ") : "*";
               const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterForTable);
-              const wherePart = dfClause ? ` WHERE ${dfClause}` : "";
+              const baseWhereFb = dfClause ? ` WHERE ${dfClause}` : "";
               const escapeFbLiteral = (v: any): string => {
                 if (v == null) return "NULL";
                 if (typeof v === "boolean") return v ? "1" : "0";
                 if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${String(v)}' AS DOUBLE PRECISION)`;
                 return `'${String(v).replace(/'/g, "''")}'`;
               };
+              if (filterByKeys?.columns?.length && filterByKeys?.valueTuples?.length) {
+                const fbCols = filterByKeys.columns.map((c) => firebirdSafePart(c));
+                const allRows: Record<string, any>[] = [];
+                for (let b = 0; b < filterByKeys.valueTuples.length; b += IN_KEYS_BATCH) {
+                  const batch = filterByKeys.valueTuples.slice(b, b + IN_KEYS_BATCH);
+                  if (batch.length === 0) continue;
+                  const inTuples = batch.map((t) => `(${t.map((v) => escapeFbLiteral(v)).join(", ")})`).join(", ");
+                  const keysAnd = ` AND (${fbCols.join(", ")}) IN (${inTuples})`;
+                  let sqlFb = `SELECT ${cols} FROM ${tablePart}${baseWhereFb}${keysAnd}`;
+                  if (dfParams.length > 0) {
+                    for (const p of dfParams) {
+                      const pos = sqlFb.indexOf("?");
+                      if (pos === -1) break;
+                      sqlFb = sqlFb.slice(0, pos) + escapeFbLiteral(p) + sqlFb.slice(pos + 1);
+                    }
+                  }
+                  const batchRows = await new Promise<Record<string, any>[]>((resolve, reject) => {
+                    Firebird.attach(opts, (err: Error | null, db: any) => {
+                      if (err) return reject(err);
+                      db.query(sqlFb, [], (qErr: Error | null, rows: any[]) => {
+                        if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                        if (qErr) return reject(qErr);
+                        resolve((rows || []).map(normalizeRow));
+                      });
+                    });
+                  });
+                  allRows.push(...batchRows);
+                }
+                return allRows;
+              }
+              const wherePart = baseWhereFb;
               const skip = rowOffset > 0 ? rowOffset : 0;
+              const orderByFb =
+                columns?.length
+                  ? columns.map((c) => firebirdSafePart(c)).join(", ")
+                  : "1";
               let sql = skip > 0
-                ? `SELECT FIRST ${sourceLimit} SKIP ${skip} ${cols} FROM ${tablePart}${wherePart}`
-                : `SELECT FIRST ${sourceLimit} ${cols} FROM ${tablePart}${wherePart}`;
+                ? `SELECT FIRST ${sourceLimit} SKIP ${skip} ${cols} FROM ${tablePart}${wherePart} ORDER BY ${orderByFb}`
+                : `SELECT FIRST ${sourceLimit} ${cols} FROM ${tablePart}${wherePart} ORDER BY ${orderByFb}`;
               if (dfParams.length > 0) {
                 for (const p of dfParams) {
                   const pos = sql.indexOf("?");
@@ -807,11 +847,41 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             try {
               const sel = columns?.length ? columns.map((c) => quoteIdent(c, "postgres")).join(", ") : "*";
               const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterForTable, 1, "");
-              const wherePart = dfClause ? ` WHERE ${dfClause}` : "";
+              const baseWhere = dfClause ? ` WHERE ${dfClause}` : "";
+              const paramStart = (dfParams?.length || 0) + 1;
+
+              if (filterByKeys?.columns?.length && filterByKeys?.valueTuples?.length) {
+                const allRows: Record<string, any>[] = [];
+                const cols = filterByKeys.columns;
+                const quotedCols = cols.map((c) => quoteIdent(c, "postgres"));
+                const aliasNames = cols.length <= 3 ? ["x", "y", "z"].slice(0, cols.length) : cols.map((_, i) => `c${i + 1}`);
+                for (let b = 0; b < filterByKeys.valueTuples.length; b += IN_KEYS_BATCH) {
+                  const batch = filterByKeys.valueTuples.slice(b, b + IN_KEYS_BATCH);
+                  if (batch.length === 0) continue;
+                  const keysWhere =
+                    cols.length === 1
+                      ? ` AND ${quotedCols[0]} = ANY($${paramStart}::text[])`
+                      : ` AND (${quotedCols.join(", ")}) IN (SELECT ${aliasNames.join(", ")} FROM unnest(${cols.map((_, i) => `$${paramStart + i}::text[]`).join(", ")}) AS t(${aliasNames.join(", ")}) )`;
+                  const batchParams =
+                    cols.length === 1
+                      ? [...(dfParams || []), batch.map((t) => t[0])]
+                      : [...(dfParams || []), ...cols.map((_, i) => batch.map((t) => t[i]))];
+                  const q = `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${baseWhere}${keysWhere}`;
+                  const res = await client.query(q, batchParams);
+                  allRows.push(...(res.rows || []).map((r: any) => normalizeRow(r)));
+                }
+                return allRows;
+              }
+
+              const wherePart = baseWhere;
               const off = rowOffset > 0 ? rowOffset : 0;
+              const orderByStable =
+                columns?.length
+                  ? columns.map((c) => quoteIdent(c, "postgres")).join(", ")
+                  : "1";
               const q = off > 0
-                ? `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${wherePart} LIMIT ${sourceLimit} OFFSET ${off}`
-                : `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${wherePart} LIMIT ${sourceLimit}`;
+                ? `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${wherePart} ORDER BY ${orderByStable} LIMIT ${sourceLimit} OFFSET ${off}`
+                : `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${wherePart} ORDER BY ${orderByStable} LIMIT ${sourceLimit}`;
               const res = await client.query(q, dfParams || []);
               return (res.rows || []).map((r: any) => normalizeRow(r));
             } finally {
@@ -998,15 +1068,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               return out;
             });
             for (let idx = 0; idx < (joins || []).length; idx++) {
+              if (timeoutRef.current) throw new Error("TIMEOUT_JOIN");
               const jn = joins[idx];
               const pairs = getJoinConditionPairs(jn);
               if (pairs.length === 0) throw new Error(`Join ${idx}: se requiere al menos una condición de enlace (columnas principal y secundaria).`);
               const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
               if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
               const secTableResolved = await resolvePhysicalIfExcel(secConn, jn.secondaryTable || "");
-              const cached = useSecCache && secRowsCache ? secRowsCache[idx] : undefined;
-              const secRowsRaw: Record<string, any>[] = Array.isArray(cached) ? cached : await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx));
-              if (useSecCache && secRowsCache && !secRowsCache[idx]) (secRowsCache as Record<number, Record<string, any>[]>)[idx] = secRowsRaw;
+              let secRowsRaw: Record<string, any>[];
+              if (useSecCache) {
+                const leftKeys = new Set<string>(joinedRows.map((lr) => buildCompositeKey(lr, pairs, false)));
+                const valueTuples = Array.from(leftKeys).map((k) => k.split(COMPOSITE_KEY_SEP));
+                if (valueTuples.length === 0) {
+                  secRowsRaw = [];
+                } else {
+                  secRowsRaw = await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx), 0, {
+                    filterByKeys: { columns: pairs.map((p) => p.rightColumn), valueTuples },
+                  });
+                }
+              } else {
+                const cached = secRowsCache ? secRowsCache[idx] : undefined;
+                secRowsRaw = Array.isArray(cached) ? cached : await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx));
+                if (secRowsCache && !secRowsCache[idx]) (secRowsCache as Record<number, Record<string, any>[]>)[idx] = secRowsRaw;
+              }
               const secCols =
                 jn.secondaryColumns && jn.secondaryColumns.length > 0
                   ? jn.secondaryColumns
@@ -1053,9 +1137,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               }
               joinedRows = nextRows;
             }
-            return joinedRows
-              .filter((r) => normalizedConditions.every((c) => passesCondition(r, c)))
-              .filter((r) => passesDateFilter(r, body.dateFilter));
+            const rowsAfterJoin = joinedRows.length;
+            const afterConditions = joinedRows.filter((r) => normalizedConditions.every((c) => passesCondition(r, c)));
+            const rowsAfterDateFilter = afterConditions.filter((r) => passesDateFilter(r, body.dateFilter));
+            if (useSecCache) {
+              log("JOIN star iteración bloque.", {
+                rowsAfterJoin,
+                rowsAfterConditions: afterConditions.length,
+                rowsAfterDateFilter: rowsAfterDateFilter.length,
+                dateFilterColumn: body.dateFilter?.column ?? null,
+              });
+            }
+            return rowsAfterDateFilter;
           };
 
           for (let attempt = 0; attempt < 2; attempt++) {
@@ -1069,6 +1162,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const accumulated: Record<string, any>[] = [];
               const targetLimit = Math.min(limit ?? 50, ETL_MAX_ROWS_CEILING);
               while (accumulated.length < targetLimit) {
+                if (timeoutRef.current) break;
                 const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary, currentSourceOffset);
                 lastNextSourceOffset = currentSourceOffset + primaryRowsRaw.length;
                 lastSourceExhausted = primaryRowsRaw.length < sourceLimit;
@@ -1083,8 +1177,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 if (primaryRowsRaw.length === 0) break;
                 const blockFiltered = await runOneBlock(primaryRowsRaw, true);
                 accumulated.push(...blockFiltered);
+                log("JOIN star iteración fuente (fromEtlRun).", {
+                  sourceOffset: currentSourceOffset,
+                  rowsPrimary: primaryRowsRaw.length,
+                  rowsAfterJoinAndFilter: blockFiltered.length,
+                  sourceExhausted: lastSourceExhausted,
+                  nextSourceOffset: lastNextSourceOffset,
+                  dateFilterColumn: body.dateFilter?.column ?? null,
+                });
                 if (lastSourceExhausted) break;
                 currentSourceOffset = lastNextSourceOffset;
+              }
+              if (timeoutRef.current) {
+                return NextResponse.json(
+                  { ok: false, error: "Timeout: la consulta JOIN superó el tiempo permitido. Reduzca el volumen o use filtros." },
+                  { status: 504 }
+                );
               }
               filteredRows = accumulated.slice(0, limit ?? 50);
               log("JOIN star en memoria - paginación interna terminada.", {
@@ -1135,6 +1243,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           }
           return NextResponse.json(jsonPayload);
         } catch (e: any) {
+          if (e?.message === "TIMEOUT_JOIN") {
+            return NextResponse.json(
+              { ok: false, error: "Timeout: la consulta JOIN superó el tiempo permitido. Reduzca el volumen o use filtros." },
+              { status: 504 }
+            );
+          }
           log("Error en JOIN star en memoria.", {
             message: e?.message,
             stack: e?.stack,
