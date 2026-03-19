@@ -929,7 +929,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             sourceLimit,
           });
 
-          let filteredRows: Record<string, any>[];
+          let filteredRows: Record<string, any>[] = [];
           for (let attempt = 0; attempt < 2; attempt++) {
             if (attempt === 1) {
               sourceLimit = Math.min(sourceLimit * 2, ETL_MAX_ROWS_CEILING);
