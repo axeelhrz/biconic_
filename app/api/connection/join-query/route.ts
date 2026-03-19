@@ -1004,8 +1004,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
               if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
               const secTableResolved = await resolvePhysicalIfExcel(secConn, jn.secondaryTable || "");
-              const secRowsRaw = (useSecCache && secRowsCache?.[idx]) ?? await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx));
-              if (useSecCache && !secRowsCache) secRowsCache = {};
+              const cached = useSecCache && secRowsCache ? secRowsCache[idx] : undefined;
+              const secRowsRaw: Record<string, any>[] = Array.isArray(cached) ? cached : await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx));
               if (useSecCache && secRowsCache && !secRowsCache[idx]) (secRowsCache as Record<number, Record<string, any>[]>)[idx] = secRowsRaw;
               const secCols =
                 jn.secondaryColumns && jn.secondaryColumns.length > 0
