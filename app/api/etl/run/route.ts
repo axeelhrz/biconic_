@@ -865,6 +865,7 @@ async function executeEtlPipeline(
                 dateFilterColumn: body!.filter?.dateFilter?.column ?? null,
               });
               if (starData.rows.length > 0) yield starData.rows;
+              if (starData.rows.length === 0) break;
               starOffset = nextSourceOffset;
               if (sourceExhausted) break;
             }

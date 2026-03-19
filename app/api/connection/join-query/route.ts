@@ -1451,11 +1451,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               totalOut = rowsLen < (limit ?? 0) ? (offset ?? 0) + rowsLen : undefined;
             }
           }
-          return NextResponse.json({
+          const rowsOut = resDb.rows || [];
+          const jsonPayload: Record<string, unknown> = {
             ok: true,
-            rows: resDb.rows,
+            rows: rowsOut,
             total: totalOut,
-          });
+          };
+          if ((body as { fromEtlRun?: boolean }).fromEtlRun === true) {
+            jsonPayload.sourceExhausted = rowsOut.length < (limit ?? 50);
+            jsonPayload.nextSourceOffset = (offset ?? 0) + rowsOut.length;
+          }
+          return NextResponse.json(jsonPayload);
         } catch (e: any) {
           log("Error durante la operación con JOIN de Excel.", {
             message: e.message,
@@ -1643,11 +1649,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               totalOut = rowsLen < (limit ?? 0) ? (offset ?? 0) + rowsLen : undefined;
             }
           }
-          return NextResponse.json({
+          const rowsOut = resDb.rows || [];
+          const jsonPayload: Record<string, unknown> = {
             ok: true,
-            rows: resDb.rows,
+            rows: rowsOut,
             total: totalOut,
-          });
+          };
+          if ((body as { fromEtlRun?: boolean }).fromEtlRun === true) {
+            jsonPayload.sourceExhausted = rowsOut.length < (limit ?? 50);
+            jsonPayload.nextSourceOffset = (offset ?? 0) + rowsOut.length;
+          }
+          return NextResponse.json(jsonPayload);
         } catch (e: any) {
           log("Error durante la operación con PostgreSQL externo.", {
             message: e.message,
