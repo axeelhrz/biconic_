@@ -109,7 +109,7 @@ export async function PUT(
     }
 
     const body = await request.json().catch(() => ({}));
-    const savedMetrics = Array.isArray(body.savedMetrics) ? body.savedMetrics : [];
+    const savedMetrics = body.savedMetrics !== undefined && Array.isArray(body.savedMetrics) ? body.savedMetrics : undefined;
     const dateColumnPeriodicityOverrides =
       body.dateColumnPeriodicityOverrides != null && typeof body.dateColumnPeriodicityOverrides === "object"
         ? (body.dateColumnPeriodicityOverrides as Record<string, string>)
@@ -119,8 +119,8 @@ export async function PUT(
         ? (body.datasetConfig as Record<string, unknown>)
         : undefined;
     const linkedDashboardId = typeof body.dashboardId === "string" ? body.dashboardId : undefined;
-    const dashboardFilters = Array.isArray(body.dashboardFilters) ? body.dashboardFilters : undefined;
-    const savedAnalyses = Array.isArray(body.savedAnalyses) ? body.savedAnalyses : undefined;
+    const dashboardFilters = body.dashboardFilters !== undefined && Array.isArray(body.dashboardFilters) ? body.dashboardFilters : undefined;
+    const savedAnalyses = body.savedAnalyses !== undefined && Array.isArray(body.savedAnalyses) ? body.savedAnalyses : undefined;
 
     const adminClient = createServiceRoleClient();
     const { data: etlRow, error: fetchError } = await adminClient
@@ -136,7 +136,7 @@ export async function PUT(
     const currentLayout = (etlRow as { layout?: Record<string, unknown> })?.layout ?? {};
     const updatedLayout = {
       ...currentLayout,
-      saved_metrics: JSON.parse(JSON.stringify(savedMetrics)),
+      ...(savedMetrics !== undefined && { saved_metrics: JSON.parse(JSON.stringify(savedMetrics)) }),
       ...(savedAnalyses !== undefined && { saved_analyses: JSON.parse(JSON.stringify(savedAnalyses)) }),
       ...(dateColumnPeriodicityOverrides !== undefined && { date_column_periodicity_overrides: dateColumnPeriodicityOverrides }),
       ...(datasetConfig !== undefined && { dataset_config: JSON.parse(JSON.stringify(datasetConfig)) }),
@@ -153,8 +153,8 @@ export async function PUT(
       return NextResponse.json({ ok: false, error: updateError.message }, { status: 500 });
     }
 
-    // Propagar métricas actualizadas a dashboards que usan este ETL
-    if (savedMetrics.length > 0) {
+    // Propagar métricas actualizadas a dashboards que usan este ETL (solo si se enviaron savedMetrics)
+    if (savedMetrics != null && savedMetrics.length > 0) {
       await propagateMetricsToDashboards(adminClient, etlId, savedMetrics);
     }
 

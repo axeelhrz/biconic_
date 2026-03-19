@@ -455,6 +455,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   /** Nombre al guardar un análisis (paso C/D) para el dashboard. */
   const [analysisNameToSave, setAnalysisNameToSave] = useState("");
   const [savingAnalysis, setSavingAnalysis] = useState(false);
+  const [savingDatasetConfig, setSavingDatasetConfig] = useState(false);
   /** Nombre al guardar una nueva métrica desde el paso B (Preview). */
   const [metricNameToSave, setMetricNameToSave] = useState("");
   /** Tras guardar métrica o columna en B, mostrar acciones «Crear otra» / «Ir a Análisis». */
@@ -664,11 +665,53 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       if (typeof cfg.datasetHasTime === "boolean") setDatasetHasTime(cfg.datasetHasTime);
       if (typeof cfg.timeColumn === "string" && cfg.timeColumn) setTimeColumn(cfg.timeColumn);
       if (typeof cfg.periodicity === "string" && cfg.periodicity) setPeriodicity(cfg.periodicity);
+      if (cfg.periodicityOverrides != null && typeof cfg.periodicityOverrides === "object") setPeriodicityOverrides(cfg.periodicityOverrides as Record<string, string>);
       if (cfg.columnRoles && typeof cfg.columnRoles === "object") setColumnRoles(cfg.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>);
       if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
     }
     if (Array.isArray((cfg as { derivedColumns?: DerivedColumn[] }).derivedColumns)) setDerivedColumns((cfg as { derivedColumns: DerivedColumn[] }).derivedColumns);
   }, [data?.datasetConfig]);
+
+  /** Construye el objeto completo de configuración del dataset desde el estado actual (para persistir y reutilizar). */
+  const buildFullDatasetConfig = useCallback((): Record<string, unknown> => {
+    return {
+      grainOption,
+      grainCustomColumns,
+      datasetHasTime,
+      timeColumn,
+      periodicity,
+      periodicityOverrides: Object.keys(periodicityOverrides).length ? periodicityOverrides : undefined,
+      columnRoles: Object.keys(columnRoles).length ? columnRoles : undefined,
+      datasetRelations: datasetRelations.length ? datasetRelations : undefined,
+      derivedColumns: derivedColumns.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" })),
+    };
+  }, [grainOption, grainCustomColumns, datasetHasTime, timeColumn, periodicity, periodicityOverrides, columnRoles, datasetRelations, derivedColumns]);
+
+  /** Guarda la configuración del dataset en el servidor y luego pasa al wizard de Métrica (usado en paso Publicar). */
+  const saveDatasetConfigAndGoToMetric = useCallback(async () => {
+    setSavingDatasetConfig(true);
+    try {
+      const datasetConfig = buildFullDatasetConfig();
+      const res = await fetch(`/api/etl/${etlId}/metrics`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ datasetConfig }),
+      });
+      const json = await safeJsonResponse(res);
+      if (!res.ok || !json.ok) {
+        toast.error(json?.error ?? "Error al guardar la configuración del dataset");
+        return;
+      }
+      toast.success("Configuración del dataset guardada. Podés crear métricas sin volver a configurar.");
+      setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfig as Record<string, unknown> } : null));
+      setWizard("B");
+      setWizardStep(0);
+    } catch {
+      toast.error("Error al guardar la configuración del dataset");
+    } finally {
+      setSavingDatasetConfig(false);
+    }
+  }, [etlId, buildFullDatasetConfig]);
 
   const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
 
@@ -2000,9 +2043,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       if (aggMatch) { derivedAgg = aggMatch[1]!.toUpperCase(); expr = aggMatch[2]!.trim(); }
       nextDerivedColumns = [...derivedColumns.filter((d) => d.name !== alias), { name: alias, expression: expr, defaultAggregation: derivedAgg }];
     }
-    const datasetConfigToSave = createDerivedColumn
-      ? { ...(data?.datasetConfig && typeof data.datasetConfig === "object" ? (data.datasetConfig as Record<string, unknown>) : {}), derivedColumns: nextDerivedColumns }
-      : undefined;
+    const datasetConfigToSave: Record<string, unknown> = {
+      ...buildFullDatasetConfig(),
+      ...(createDerivedColumn && { derivedColumns: nextDerivedColumns }),
+    };
 
     setSaving(true);
     try {
@@ -2023,7 +2067,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           savedMetrics: next,
-          ...(datasetConfigToSave != null && { datasetConfig: datasetConfigToSave }),
+          datasetConfig: datasetConfigToSave,
         }),
       });
       const json = await safeJsonResponse(res);
@@ -2034,7 +2078,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       toast.success(editingId ? "Métrica actualizada" : "Métrica creada");
       if (editingId) toast.success("También se actualizó en los dashboards que la utilizan.", { duration: 4000 });
       if (createDerivedColumn) toast.success(`Se creó la columna «${alias}» en el dataset; la podés usar en «Insertar columna» en otras métricas.`, { duration: 6000 });
-      setData((prev) => (prev ? { ...prev, savedMetrics: next, datasetConfig: datasetConfigToSave ?? prev.datasetConfig } : null));
+      setData((prev) => (prev ? { ...prev, savedMetrics: next, datasetConfig: datasetConfigToSave } : null));
       if (createDerivedColumn) setDerivedColumns(nextDerivedColumns);
       closeForm();
     } catch {
@@ -2083,7 +2127,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     setCreatingColumn(true);
     try {
       const nextDerived = [...derivedColumns.filter((d) => d.name !== colName), { name: colName, expression: expr, defaultAggregation: derivedAgg }];
-      const datasetConfigToSave = { ...(data?.datasetConfig && typeof data.datasetConfig === "object" ? (data.datasetConfig as Record<string, unknown>) : {}), derivedColumns: nextDerived };
+      const datasetConfigToSave = { ...buildFullDatasetConfig(), derivedColumns: nextDerived };
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2347,7 +2391,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const deleteDerivedColumn = async (name: string) => {
     const nextDerived = derivedColumns.filter((d) => d.name !== name);
     const datasetConfigToSave = {
-      ...(data?.datasetConfig && typeof data.datasetConfig === "object" ? (data.datasetConfig as Record<string, unknown>) : {}),
+      ...buildFullDatasetConfig(),
       derivedColumns: nextDerived.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" })),
     };
     setSaving(true);
@@ -3151,7 +3195,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                   </div>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Métrica</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveDatasetConfigAndGoToMetric} disabled={savingDatasetConfig}>
+                      {savingDatasetConfig ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      {savingDatasetConfig ? " Guardando…" : " Siguiente: Métrica"}
+                    </Button>
                   </div>
                 </section>
               )}
