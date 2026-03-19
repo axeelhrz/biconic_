@@ -465,12 +465,13 @@ export async function POST(req: NextRequest) {
           }));
           const joinQueryBody = {
             primaryConnectionId: starJoin.primaryConnectionId,
-            primaryTable: starJoin.primaryTable,
+            primaryTable: starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "",
             joins: joinsWithCols,
             conditions: body.filter?.conditions || [],
             dateFilter: body.filter?.dateFilter ?? undefined,
             primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
             limit: effectiveLimit,
+            offset: 0,
           };
           try {
             const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");

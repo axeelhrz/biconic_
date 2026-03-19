@@ -106,6 +106,47 @@ function getJoinConditionPairs(jn: { conditions?: StarJoinConditionPair[]; prima
   return [];
 }
 
+/** Valida que los joins del payload star tengan condiciones bien formadas para in-memory (prefijos y pares completos). */
+function validateStarJoinPayloadInMemory(
+  joins: Array<{ conditions?: StarJoinConditionPair[]; primaryColumn?: string; secondaryColumn?: string }>,
+  joinsCount: number
+): void {
+  for (let idx = 0; idx < joinsCount; idx++) {
+    const jn = joins[idx];
+    const pairs = getJoinConditionPairs(jn);
+    if (pairs.length === 0) {
+      throw new Error(`Join ${idx}: se requiere al menos una condición de enlace (columnas principal y secundaria).`);
+    }
+    for (const p of pairs) {
+      if (!p.leftColumn || !p.rightColumn) {
+        throw new Error(`Join ${idx}: cada condición debe tener columna izquierda y derecha no vacías.`);
+      }
+      const left = p.leftColumn;
+      if (idx > 0) {
+        const hasPrimary = /^primary\./i.test(left);
+        const joinMatch = left.match(/^join_(\d+)\.(.+)$/i);
+        if (joinMatch) {
+          const k = Number(joinMatch[1]);
+          if (Number.isNaN(k) || k < 0 || k >= idx) {
+            throw new Error(`Join ${idx}: la columna izquierda '${left}' debe referir a primary o a un join anterior (join_0 a join_${idx - 1}).`);
+          }
+        } else if (!hasPrimary) {
+          throw new Error(`Join ${idx}: en multi-join la columna izquierda debe tener prefijo (primary.<col> o join_n.<col>). Recibido: '${left}'.`);
+        }
+      }
+    }
+  }
+}
+
+/** Normaliza un valor para usarlo como clave en el matching de joins (evita falsos negativos por espacios/tipos). */
+function normalizeJoinKeyValue(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim().replace(/\s+/g, " ");
+  if (typeof value === "number" && !Number.isNaN(value)) return Number.isInteger(value) ? String(value) : String(value);
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  return String(value).trim();
+}
+
 // --- FUNCIONES HELPER ---
 
 function quoteIdent(name: string, dbType: "postgres" | "mysql"): string {
@@ -609,14 +650,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         log("Iniciando flujo de JOIN star en memoria (Firebird/cross-connection).");
         try {
           const joinsCount = (joins || []).length;
-          // Límites por número de JOINs para evitar timeout: menos filas por tabla = menos trabajo en memoria.
-          const capByJoins = joinsCount >= 4 ? 150 : joinsCount >= 3 ? 300 : joinsCount >= 2 ? 600 : 2000;
+          validateStarJoinPayloadInMemory(joins || [], joinsCount);
+
+          const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);
+          const capByJoins =
+            envSourceLimitMax > 0
+              ? Math.min(ETL_MAX_ROWS_CEILING, envSourceLimitMax)
+              : joinsCount >= 4 ? 1000 : joinsCount >= 3 ? 1500 : joinsCount >= 2 ? 2000 : 2000;
           let sourceLimit = Math.min(
             ETL_MAX_ROWS_CEILING,
             Math.max((offset ?? 0) + (limit ?? 50) * 8, 500),
             capByJoins
           );
-          const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);
           if (envSourceLimitMax > 0) sourceLimit = Math.min(sourceLimit, envSourceLimitMax);
           const normalizeKey = (k: string) =>
             String(k || "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
@@ -866,6 +911,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             };
           };
 
+          let normalizedConditions: FilterCondition[];
+          try {
+            normalizedConditions = normalizeStarConditions(conditions || [], joinsCount);
+          } catch (normErr: any) {
+            log("Filtros inválidos en JOIN star en memoria.", { error: normErr?.message });
+            return NextResponse.json(
+              { ok: false, error: normErr?.message ?? "Filtros inválidos. En JOIN use prefijos primary.<col> o join_n.<col>." },
+              { status: 400 }
+            );
+          }
+
           log("JOIN star en memoria - configuración de filtros.", {
             dateFilterRawColumn: body.dateFilter?.column ?? null,
             dateFilterForPrimary,
@@ -873,91 +929,103 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             sourceLimit,
           });
 
-          const primaryTableResolved = await resolvePhysicalIfExcel(primaryConn, primaryTable || "");
-          const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary);
-          log("JOIN star en memoria - filas obtenidas de tabla principal.", {
-            primaryTable: primaryTableResolved,
-            primaryRowsCount: primaryRowsRaw.length,
-          });
-          const primaryCols =
-            primaryColumns && primaryColumns.length > 0
-              ? primaryColumns
-              : primaryRowsRaw[0]
-              ? Object.keys(primaryRowsRaw[0])
-              : [];
-          let joinedRows: Record<string, any>[] = primaryRowsRaw.map((r) => {
-            const out: Record<string, any> = {};
-            for (const c of primaryCols) out[`primary_${c}`] = getByColumnName(r, c);
-            return out;
-          });
-
-          const COMPOSITE_KEY_SEP = "\u0001";
-          const buildCompositeKey = (row: Record<string, any>, pairs: Array<{ leftColumn: string; rightColumn: string }>, useRight: boolean) =>
-            pairs.map((p) => String((useRight ? getByColumnName(row, p.rightColumn) : mapPrefixedValue(row, p.leftColumn)) ?? "")).join(COMPOSITE_KEY_SEP);
-
-          for (let idx = 0; idx < (joins || []).length; idx++) {
-            const jn = joins[idx];
-            const pairs = getJoinConditionPairs(jn);
-            if (pairs.length === 0) throw new Error(`Join ${idx}: se requiere al menos una condición de enlace (columnas principal y secundaria).`);
-            const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
-            if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
-            const secTableResolved = await resolvePhysicalIfExcel(secConn, jn.secondaryTable || "");
-            const secRowsRaw = await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx));
-            const secCols =
-              jn.secondaryColumns && jn.secondaryColumns.length > 0
-                ? jn.secondaryColumns
-                : secRowsRaw[0]
-                ? Object.keys(secRowsRaw[0])
+          let filteredRows: Record<string, any>[];
+          for (let attempt = 0; attempt < 2; attempt++) {
+            if (attempt === 1) {
+              sourceLimit = Math.min(sourceLimit * 2, ETL_MAX_ROWS_CEILING);
+              log("JOIN star en memoria - reintento con sourceLimit mayor.", { sourceLimit });
+            }
+            const primaryTableResolved = await resolvePhysicalIfExcel(primaryConn, primaryTable || "");
+            const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary);
+            if (attempt === 0) {
+              log("JOIN star en memoria - filas obtenidas de tabla principal.", {
+                primaryTable: primaryTableResolved,
+                primaryRowsCount: primaryRowsRaw.length,
+              });
+            }
+            const primaryCols =
+              primaryColumns && primaryColumns.length > 0
+                ? primaryColumns
+                : primaryRowsRaw[0]
+                ? Object.keys(primaryRowsRaw[0])
                 : [];
-            const joinType = String(jn.joinType || "INNER").toUpperCase();
-            const rightMap = new Map<string, Record<string, any>[]>();
-            const rightUsed = new Set<number>();
-            secRowsRaw.forEach((rr, rrIdx) => {
-              const key = buildCompositeKey(rr, pairs, true);
-              const withIdx = { ...rr, __rrIdx__: rrIdx };
-              if (!rightMap.has(key)) rightMap.set(key, []);
-              rightMap.get(key)!.push(withIdx);
+            let joinedRows: Record<string, any>[] = primaryRowsRaw.map((r) => {
+              const out: Record<string, any> = {};
+              for (const c of primaryCols) out[`primary_${c}`] = getByColumnName(r, c);
+              return out;
             });
 
-            const previousKeys = joinedRows[0] ? Object.keys(joinedRows[0]) : [];
-            const nextRows: Record<string, any>[] = [];
-            for (const lr of joinedRows) {
-              const lk = buildCompositeKey(lr, pairs, false);
-              const matches = rightMap.get(lk) ?? [];
-              if (matches.length > 0) {
-                for (const rr of matches) {
-                  if (rr.__rrIdx__ != null) rightUsed.add(Number(rr.__rrIdx__));
+            const COMPOSITE_KEY_SEP = "\u0001";
+            const buildCompositeKey = (row: Record<string, any>, pairs: Array<{ leftColumn: string; rightColumn: string }>, useRight: boolean) =>
+              pairs.map((p) => normalizeJoinKeyValue(useRight ? getByColumnName(row, p.rightColumn) : mapPrefixedValue(row, p.leftColumn))).join(COMPOSITE_KEY_SEP);
+
+            for (let idx = 0; idx < (joins || []).length; idx++) {
+              const jn = joins[idx];
+              const pairs = getJoinConditionPairs(jn);
+              if (pairs.length === 0) throw new Error(`Join ${idx}: se requiere al menos una condición de enlace (columnas principal y secundaria).`);
+              const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
+              if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
+              const secTableResolved = await resolvePhysicalIfExcel(secConn, jn.secondaryTable || "");
+              const secRowsRaw = await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx));
+              const secCols =
+                jn.secondaryColumns && jn.secondaryColumns.length > 0
+                  ? jn.secondaryColumns
+                  : secRowsRaw[0]
+                  ? Object.keys(secRowsRaw[0])
+                  : [];
+              const joinType = String(jn.joinType || "INNER").toUpperCase();
+              const rightMap = new Map<string, Record<string, any>[]>();
+              const rightUsed = new Set<number>();
+              secRowsRaw.forEach((rr, rrIdx) => {
+                const key = buildCompositeKey(rr, pairs, true);
+                const withIdx = { ...rr, __rrIdx__: rrIdx };
+                if (!rightMap.has(key)) rightMap.set(key, []);
+                rightMap.get(key)!.push(withIdx);
+              });
+
+              const previousKeys = joinedRows[0] ? Object.keys(joinedRows[0]) : [];
+              const nextRows: Record<string, any>[] = [];
+              for (const lr of joinedRows) {
+                const lk = buildCompositeKey(lr, pairs, false);
+                const matches = rightMap.get(lk) ?? [];
+                if (matches.length > 0) {
+                  for (const rr of matches) {
+                    if (rr.__rrIdx__ != null) rightUsed.add(Number(rr.__rrIdx__));
+                    const prefRight: Record<string, any> = {};
+                    for (const c of secCols) prefRight[`join_${idx}_${c}`] = getByColumnName(rr, c);
+                    nextRows.push({ ...lr, ...prefRight });
+                  }
+                } else if (joinType === "LEFT" || joinType === "FULL") {
+                  const nulls: Record<string, any> = {};
+                  for (const c of secCols) nulls[`join_${idx}_${c}`] = null;
+                  nextRows.push({ ...lr, ...nulls });
+                }
+              }
+
+              if (joinType === "RIGHT" || joinType === "FULL") {
+                for (let rrIdx = 0; rrIdx < secRowsRaw.length; rrIdx++) {
+                  if (rightUsed.has(rrIdx)) continue;
+                  const rr = secRowsRaw[rrIdx];
+                  const leftNulls: Record<string, any> = {};
+                  previousKeys.forEach((k) => (leftNulls[k] = null));
                   const prefRight: Record<string, any> = {};
                   for (const c of secCols) prefRight[`join_${idx}_${c}`] = getByColumnName(rr, c);
-                  nextRows.push({ ...lr, ...prefRight });
+                  nextRows.push({ ...leftNulls, ...prefRight });
                 }
-              } else if (joinType === "LEFT" || joinType === "FULL") {
-                const nulls: Record<string, any> = {};
-                for (const c of secCols) nulls[`join_${idx}_${c}`] = null;
-                nextRows.push({ ...lr, ...nulls });
               }
+              joinedRows = nextRows;
             }
 
-            if (joinType === "RIGHT" || joinType === "FULL") {
-              for (let rrIdx = 0; rrIdx < secRowsRaw.length; rrIdx++) {
-                if (rightUsed.has(rrIdx)) continue;
-                const rr = secRowsRaw[rrIdx];
-                const leftNulls: Record<string, any> = {};
-                previousKeys.forEach((k) => (leftNulls[k] = null));
-                const prefRight: Record<string, any> = {};
-                for (const c of secCols) prefRight[`join_${idx}_${c}`] = getByColumnName(rr, c);
-                nextRows.push({ ...leftNulls, ...prefRight });
-              }
+            filteredRows = joinedRows
+              .filter((r) => normalizedConditions.every((c) => passesCondition(r, c)))
+              .filter((r) => passesDateFilter(r, body.dateFilter));
+            if ((offset ?? 0) === 0 && filteredRows.length === 0 && attempt === 0 && sourceLimit < ETL_MAX_ROWS_CEILING) {
+              continue;
             }
-            joinedRows = nextRows;
+            break;
           }
-
-          const filteredRows = joinedRows
-            .filter((r) => (conditions || []).every((c) => passesCondition(r, c)))
-            .filter((r) => passesDateFilter(r, body.dateFilter));
-          if ((filteredRows.length === 0 || joinedRows.length === 0) && body.dateFilter?.column) {
+          if (filteredRows.length === 0 && body.dateFilter?.column) {
             log("Diagnóstico: 0 filas tras aplicar filtro de fecha en JOIN star en memoria.", {
-              totalBeforeFilter: joinedRows.length,
               totalAfterFilter: filteredRows.length,
               dateFilter: body.dateFilter,
             });
