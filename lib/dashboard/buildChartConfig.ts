@@ -131,12 +131,21 @@ export function buildChartConfig(
   let rows = [...dataArray];
   const resolvedType = (agg?.chartType as string) || widget.type;
 
-  // Ranking: top N por métrica
+  // Ranking: top N por métrica (resolver metric_N a yKeys[N] cuando la API devuelve alias)
   if (agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0) {
-    const rKey =
-      agg.chartRankingMetric && resultKeys.includes(agg.chartRankingMetric as string)
-        ? (agg.chartRankingMetric as string)
-        : yKeys[0] || resultKeys[0];
+    let rKey = yKeys[0] || resultKeys[0];
+    if (agg?.chartRankingMetric) {
+      if (resultKeys.includes(agg.chartRankingMetric as string)) {
+        rKey = agg.chartRankingMetric as string;
+      } else {
+        const metricMatch = (agg.chartRankingMetric as string).match(/^metric_(\d+)$/);
+        if (metricMatch) {
+          const idx = parseInt(metricMatch[1]!, 10);
+          const resolved = yKeys[idx];
+          if (resolved != null && resultKeys.includes(resolved)) rKey = resolved;
+        }
+      }
+    }
     if (rKey) {
       rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
       rows = rows.slice(0, agg.chartRankingTop as number);
@@ -144,9 +153,21 @@ export function buildChartConfig(
   } else if (agg?.chartSortDirection && agg.chartSortDirection !== "none") {
     // Ordenación explícita (chartSortBy, chartSortByMetric, chartSortDirection, chartAxisOrder)
     const sortByDimension = (agg.chartSortBy as string) === "dimension" || (agg.chartSortBy as string) === "axis";
-    const sortField = sortByDimension
-      ? xKey
-      : (agg.chartSortByMetric && resultKeys.includes(agg.chartSortByMetric) ? agg.chartSortByMetric : (yKeys[0] || xKey));
+    let sortField = yKeys[0] || xKey;
+    if (!sortByDimension && agg?.chartSortByMetric) {
+      if (resultKeys.includes(agg.chartSortByMetric as string)) {
+        sortField = agg.chartSortByMetric as string;
+      } else {
+        const metricMatch = (agg.chartSortByMetric as string).match(/^metric_(\d+)$/);
+        if (metricMatch) {
+          const idx = parseInt(metricMatch[1]!, 10);
+          const resolved = yKeys[idx];
+          if (resolved != null && resultKeys.includes(resolved)) sortField = resolved;
+        }
+      }
+    } else if (sortByDimension) {
+      sortField = xKey;
+    }
     const dir = (agg.chartSortDirection as string) === "asc" ? 1 : -1;
     const axisOrder = agg.chartAxisOrder as string | undefined;
     rows.sort((a, b) => {

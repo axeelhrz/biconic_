@@ -1553,7 +1553,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         return chartAxisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
       });
     } else if (chartSortDirection !== "none" && xKey && chartSortBy === "series") {
-      const sortKey = (chartSortByMetric && keys.includes(chartSortByMetric)) ? chartSortByMetric : yKeys[0]!;
+      // La API de agregación devuelve columnas con alias (ej. "Ventas", "Costos"), no metric_0/metric_1.
+      // Resolver chartSortByMetric "metric_N" a yKeys[N] cuando exista en keys.
+      let sortKey = yKeys[0]!;
+      if (chartSortByMetric) {
+        if (keys.includes(chartSortByMetric)) {
+          sortKey = chartSortByMetric;
+        } else {
+          const metricMatch = chartSortByMetric.match(/^metric_(\d+)$/);
+          if (metricMatch) {
+            const idx = parseInt(metricMatch[1]!, 10);
+            const resolved = yKeys[idx];
+            if (resolved != null && keys.includes(resolved)) sortKey = resolved;
+          }
+        }
+      }
       rows.sort((a, b) => {
         const va = Number((a as Record<string, unknown>)[sortKey] ?? 0);
         const vb = Number((b as Record<string, unknown>)[sortKey] ?? 0);
@@ -1563,7 +1577,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
     const isTimeSeriesX = !!xKey && (xKey === timeColumn || timeColumn?.trim().toLowerCase() === xKey.trim().toLowerCase() || dateFields.some((f) => f.trim().toLowerCase() === (xKey || "").trim().toLowerCase()));
     if (chartRankingEnabled && chartRankingTop > 0 && !isTimeSeriesX) {
-      const rKey = chartRankingMetric && keys.includes(chartRankingMetric) ? chartRankingMetric : yKeys[0]!;
+      let rKey = yKeys[0]!;
+      if (chartRankingMetric) {
+        if (keys.includes(chartRankingMetric)) rKey = chartRankingMetric;
+        else {
+          const metricMatch = chartRankingMetric.match(/^metric_(\d+)$/);
+          if (metricMatch) {
+            const idx = parseInt(metricMatch[1]!, 10);
+            const resolved = yKeys[idx];
+            if (resolved != null && keys.includes(resolved)) rKey = resolved;
+          }
+        }
+      }
       rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
       rows = rows.slice(0, chartRankingTop);
     }
