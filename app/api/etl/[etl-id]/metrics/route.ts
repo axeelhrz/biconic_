@@ -118,6 +118,7 @@ export async function PUT(
       body.datasetConfig != null && typeof body.datasetConfig === "object"
         ? (body.datasetConfig as Record<string, unknown>)
         : undefined;
+    const datasetName = typeof body.datasetName === "string" ? body.datasetName.trim() || null : undefined;
     const linkedDashboardId = typeof body.dashboardId === "string" ? body.dashboardId : undefined;
     const dashboardFilters = body.dashboardFilters !== undefined && Array.isArray(body.dashboardFilters) ? body.dashboardFilters : undefined;
     const savedAnalyses = body.savedAnalyses !== undefined && Array.isArray(body.savedAnalyses) ? body.savedAnalyses : undefined;
@@ -156,6 +157,28 @@ export async function PUT(
     // Propagar métricas actualizadas a dashboards que usan este ETL (solo si se enviaron savedMetrics)
     if (savedMetrics != null && savedMetrics.length > 0) {
       await propagateMetricsToDashboards(adminClient, etlId, savedMetrics);
+    }
+
+    // Persistir también en la tabla dataset para que la lista en /admin/datasets muestre el dataset
+    if (datasetConfig !== undefined) {
+      try {
+        const { error: datasetError } = await adminClient
+          .from("dataset")
+          .upsert(
+            {
+              etl_id: etlId,
+              config: JSON.parse(JSON.stringify(datasetConfig)) as Json,
+              updated_at: new Date().toISOString(),
+              ...(datasetName !== undefined && { name: datasetName }),
+            },
+            { onConflict: "etl_id" }
+          );
+        if (datasetError) {
+          console.error("[metrics] Error al guardar en tabla dataset:", datasetError.message);
+        }
+      } catch (datasetErr) {
+        console.error("[metrics] Error al upsert dataset:", datasetErr);
+      }
     }
 
     return NextResponse.json({ ok: true });

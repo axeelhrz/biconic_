@@ -460,6 +460,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const [analysisNameToSave, setAnalysisNameToSave] = useState("");
   const [savingAnalysis, setSavingAnalysis] = useState(false);
   const [savingDatasetConfig, setSavingDatasetConfig] = useState(false);
+  /** Nombre opcional del dataset (paso Publicar); se persiste en la tabla dataset. */
+  const [datasetName, setDatasetName] = useState("");
   /** Nombre al guardar una nueva métrica desde el paso B (Preview). */
   const [metricNameToSave, setMetricNameToSave] = useState("");
   /** Tras guardar métrica o columna en B, mostrar acciones «Crear otra» / «Ir a Análisis». */
@@ -705,7 +707,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ datasetConfig }),
+        body: JSON.stringify({
+          datasetConfig,
+          ...(datasetName.trim() && { datasetName: datasetName.trim() }),
+        }),
       });
       const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
@@ -725,7 +730,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     } finally {
       setSavingDatasetConfig(false);
     }
-  }, [etlId, buildFullDatasetConfig, datasetOnly, router]);
+  }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName]);
 
   const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
 
@@ -3142,6 +3147,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Validación final</h3>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Resumen de la configuración del dataset. Esta metadata quedará guardada para usar en métricas.</p>
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--platform-fg)" }}>Nombre del dataset (opcional)</label>
+                    <input
+                      type="text"
+                      value={datasetName}
+                      onChange={(e) => setDatasetName(e.target.value)}
+                      placeholder={etlTitle || "Ej. Ventas por región"}
+                      className="w-full rounded-lg border px-3 py-2 text-sm"
+                      style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                    />
+                  </div>
                   <div className="space-y-4 mb-6">
                     <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                       <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Origen (Profiling)</p>
