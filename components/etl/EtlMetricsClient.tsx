@@ -1481,9 +1481,85 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     if (formChartType === "map" && !hasGeo) setFormChartType(suggestedChartType);
   }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType]);
 
-  const previewChartConfig = useMemo(() => {
-    if (!previewData || previewData.length === 0) return null;
+  /** Filas de vista previa con orden y Top N aplicados (misma lógica que el gráfico). Usar en tabla y en previewChartConfig. */
+  const previewProcessedRows = useMemo(() => {
+    if (!previewData || previewData.length === 0) return [];
     const first = previewData[0] as Record<string, unknown>;
+    const keys = Object.keys(first);
+    const xKey = chartXAxis && keys.includes(chartXAxis) ? chartXAxis : (() => {
+      const firstDim = formDimensions[0];
+      if (firstDim && keys.includes(firstDim)) return firstDim;
+      if (timeColumn && keys.includes(timeColumn)) return timeColumn;
+      const dimByNorm = (k: string) => timeColumn && k.trim().toLowerCase() === timeColumn.trim().toLowerCase();
+      const timeMatch = keys.find(dimByNorm);
+      if (timeMatch) return timeMatch;
+      const metricKeys = keys.filter((k) => /^metric_\d+$/.test(k));
+      return metricKeys.length === keys.length ? undefined : keys[0];
+    })();
+    let yKeys = chartYAxes.filter((k) => keys.includes(k));
+    if (yKeys.length === 0) {
+      yKeys = effectiveFormMetrics.map((m) => m.alias || m.field || "").filter(Boolean).filter((k) => keys.includes(k));
+    }
+    if (yKeys.length === 0) {
+      yKeys = xKey != null ? keys.filter((k) => k !== xKey) : keys.filter((k) => /^metric_\d+$/.test(k));
+    }
+    if (yKeys.length === 0) return [...previewData];
+    let rows = [...previewData];
+    if (chartSortBy === "axis" && xKey) {
+      rows.sort((a, b) => {
+        const va = (a as Record<string, unknown>)[xKey];
+        const vb = (b as Record<string, unknown>)[xKey];
+        const sa = String(va ?? "");
+        const sb = String(vb ?? "");
+        if (chartAxisOrder === "date_asc" || chartAxisOrder === "date_desc") {
+          const ta = typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : 0;
+          const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : 0;
+          return chartAxisOrder === "date_asc" ? ta - tb : tb - ta;
+        }
+        return chartAxisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
+      });
+    } else if (chartSortDirection !== "none" && xKey && chartSortBy === "series") {
+      let sortKey = yKeys[0]!;
+      if (chartSortByMetric) {
+        if (keys.includes(chartSortByMetric)) sortKey = chartSortByMetric;
+        else {
+          const metricMatch = chartSortByMetric.match(/^metric_(\d+)$/);
+          if (metricMatch) {
+            const idx = parseInt(metricMatch[1]!, 10);
+            const resolved = yKeys[idx];
+            if (resolved != null && keys.includes(resolved)) sortKey = resolved;
+          }
+        }
+      }
+      rows.sort((a, b) => {
+        const va = Number((a as Record<string, unknown>)[sortKey] ?? 0);
+        const vb = Number((b as Record<string, unknown>)[sortKey] ?? 0);
+        return chartSortDirection === "asc" ? va - vb : vb - va;
+      });
+    }
+    const isTimeSeriesX = !!xKey && (xKey === timeColumn || timeColumn?.trim().toLowerCase() === xKey.trim().toLowerCase() || dateFields.some((f) => f.trim().toLowerCase() === (xKey || "").trim().toLowerCase()));
+    if (chartRankingEnabled && chartRankingTop > 0 && !isTimeSeriesX) {
+      let rKey = yKeys[0]!;
+      if (chartRankingMetric) {
+        if (keys.includes(chartRankingMetric)) rKey = chartRankingMetric;
+        else {
+          const metricMatch = chartRankingMetric.match(/^metric_(\d+)$/);
+          if (metricMatch) {
+            const idx = parseInt(metricMatch[1]!, 10);
+            const resolved = yKeys[idx];
+            if (resolved != null && keys.includes(resolved)) rKey = resolved;
+          }
+        }
+      }
+      rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
+      rows = rows.slice(0, chartRankingTop);
+    }
+    return rows;
+  }, [previewData, formDimensions, effectiveFormMetrics, chartXAxis, chartYAxes, chartSortDirection, chartSortBy, chartSortByMetric, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, timeColumn, dateFields]);
+
+  const previewChartConfig = useMemo(() => {
+    if (!previewProcessedRows || previewProcessedRows.length === 0) return null;
+    const first = previewProcessedRows[0] as Record<string, unknown>;
     const keys = Object.keys(first);
 
     const xKey = chartXAxis && keys.includes(chartXAxis) ? chartXAxis : (() => {
@@ -1537,61 +1613,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       return defaultPalette[idx]!;
     };
 
-    let rows = [...previewData];
-
-    if (chartSortBy === "axis" && xKey) {
-      rows.sort((a, b) => {
-        const va = (a as Record<string, unknown>)[xKey];
-        const vb = (b as Record<string, unknown>)[xKey];
-        const sa = String(va ?? "");
-        const sb = String(vb ?? "");
-        if (chartAxisOrder === "date_asc" || chartAxisOrder === "date_desc") {
-          const ta = typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : 0;
-          const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : 0;
-          return chartAxisOrder === "date_asc" ? ta - tb : tb - ta;
-        }
-        return chartAxisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
-      });
-    } else if (chartSortDirection !== "none" && xKey && chartSortBy === "series") {
-      // La API de agregación devuelve columnas con alias (ej. "Ventas", "Costos"), no metric_0/metric_1.
-      // Resolver chartSortByMetric "metric_N" a yKeys[N] cuando exista en keys.
-      let sortKey = yKeys[0]!;
-      if (chartSortByMetric) {
-        if (keys.includes(chartSortByMetric)) {
-          sortKey = chartSortByMetric;
-        } else {
-          const metricMatch = chartSortByMetric.match(/^metric_(\d+)$/);
-          if (metricMatch) {
-            const idx = parseInt(metricMatch[1]!, 10);
-            const resolved = yKeys[idx];
-            if (resolved != null && keys.includes(resolved)) sortKey = resolved;
-          }
-        }
-      }
-      rows.sort((a, b) => {
-        const va = Number((a as Record<string, unknown>)[sortKey] ?? 0);
-        const vb = Number((b as Record<string, unknown>)[sortKey] ?? 0);
-        return chartSortDirection === "asc" ? va - vb : vb - va;
-      });
-    }
-
-    const isTimeSeriesX = !!xKey && (xKey === timeColumn || timeColumn?.trim().toLowerCase() === xKey.trim().toLowerCase() || dateFields.some((f) => f.trim().toLowerCase() === (xKey || "").trim().toLowerCase()));
-    if (chartRankingEnabled && chartRankingTop > 0 && !isTimeSeriesX) {
-      let rKey = yKeys[0]!;
-      if (chartRankingMetric) {
-        if (keys.includes(chartRankingMetric)) rKey = chartRankingMetric;
-        else {
-          const metricMatch = chartRankingMetric.match(/^metric_(\d+)$/);
-          if (metricMatch) {
-            const idx = parseInt(metricMatch[1]!, 10);
-            const resolved = yKeys[idx];
-            if (resolved != null && keys.includes(resolved)) rKey = resolved;
-          }
-        }
-      }
-      rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
-      rows = rows.slice(0, chartRankingTop);
-    }
+    const rows = previewProcessedRows;
 
     const formatLabel = (v: unknown, colKey: string) => {
       const formatted = formatPreviewDateValue(v, colKey);
@@ -1687,7 +1709,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     }
 
     return { labels, datasets };
-  }, [previewData, formDimensions, effectiveFormMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSortDirection, chartSortBy, chartSortByMetric, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue, dateFields, chartLabelOverrides]);
+  }, [previewProcessedRows, formDimensions, effectiveFormMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue, dateFields, chartLabelOverrides]);
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
@@ -4685,8 +4707,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                         {formChartType === "table" && (
                           <div className="overflow-auto max-h-[280px] text-sm">
                             <table className="w-full">
-                              <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left py-2 px-3 font-medium">{k}</th>))}</tr></thead>
-                              <tbody style={{ color: "var(--platform-fg)" }}>{previewData.slice(0, 5).map((row, idx) => {
+                              <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewProcessedRows[0] && Object.keys(previewProcessedRows[0]).map((k) => (<th key={k} className="text-left py-2 px-3 font-medium">{k}</th>))}</tr></thead>
+                              <tbody style={{ color: "var(--platform-fg)" }}>{previewProcessedRows.slice(0, 50).map((row, idx) => {
                                 const raw = row as Record<string, unknown>;
                                 const keys = Object.keys(raw);
                                 return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{keys.map((k, i) => {

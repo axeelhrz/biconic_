@@ -10,7 +10,7 @@ import {
 } from "@/types/dashboard";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget, type ChartConfig } from "./DashboardWidgetRenderer";
 import type { ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
-import { buildChartConfig } from "@/lib/dashboard/buildChartConfig";
+import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -539,6 +539,7 @@ export function DashboardViewer({
         };
         const columnsDetected = Object.keys(sample).map((k) => ({ name: k, type: inferType((sample as any)[k]) }));
         const config = buildChartConfig(dataArray, widget, accentColor);
+        const rowsForWidget = widget.type === "table" ? getProcessedRowsForChart(dataArray, widget) : dataArray;
 
         setWidgets((prev) =>
           prev.map((w) =>
@@ -546,7 +547,7 @@ export function DashboardViewer({
               ? {
                   ...w,
                   config: config ?? { labels: [], datasets: [] },
-                  rows: dataArray,
+                  rows: rowsForWidget,
                   columns: columnsDetected,
                   isLoading: false,
                 }

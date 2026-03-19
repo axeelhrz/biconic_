@@ -30,7 +30,7 @@ import { StudioEmptyState } from "./StudioEmptyState";
 import { MetricBlock, type MetricBlockState } from "./MetricBlock";
 import type { ChartConfig } from "./MetricBlock";
 import type { SavedMetricForm } from "./AddMetricConfigForm";
-import { buildChartConfig } from "@/lib/dashboard/buildChartConfig";
+import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 
 type SavedMetric = SavedMetricForm;
@@ -574,9 +574,11 @@ export function AdminDashboardStudio({
             );
             return;
           }
-          const config = buildChartConfig(dataArray, { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color }, "") ?? { labels: [], datasets: [] };
+          const widgetForBuild = { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color };
+          const config = buildChartConfig(dataArray, widgetForBuild, "") ?? { labels: [], datasets: [] };
+          const rowsForWidget = widget.type === "table" ? getProcessedRowsForChart(dataArray, widgetForBuild) : dataArray;
           setWidgets((prev) =>
-            prev.map((w) => (w.id === widgetId ? { ...w, config, rows: dataArray, isLoading: false } : w))
+            prev.map((w) => (w.id === widgetId ? { ...w, config, rows: rowsForWidget, isLoading: false } : w))
           );
         } else {
           const res = await fetch("/api/dashboard/raw-data", {

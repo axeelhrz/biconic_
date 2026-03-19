@@ -46,6 +46,104 @@ export type BuildChartConfigWidget = {
   color?: string;
 };
 
+/**
+ * Aplica el mismo orden y ranking que buildChartConfig y devuelve las filas procesadas.
+ * Usar para widgets tipo "table" para que la tabla muestre el mismo orden y Top N que los gráficos.
+ */
+export function getProcessedRowsForChart(
+  dataArray: Record<string, unknown>[],
+  widget: BuildChartConfigWidget
+): Record<string, unknown>[] {
+  if (!Array.isArray(dataArray) || dataArray.length === 0) return [];
+  const sample = dataArray[0] || {};
+  const resultKeys = Object.keys(sample);
+  const agg = widget.aggregationConfig;
+  const metricAliases =
+    agg?.enabled && agg.metrics?.length
+      ? agg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
+      : [];
+  const xKey =
+    agg?.chartXAxis && resultKeys.includes(agg.chartXAxis)
+      ? agg.chartXAxis
+      : (agg?.dimension ||
+          widget.source?.labelField ||
+          resultKeys.find((k) => !metricAliases.includes(k) && typeof (sample as Record<string, unknown>)[k] === "string") ||
+          resultKeys[0]);
+  let yKeys: string[] = [];
+  if (Array.isArray(agg?.chartYAxes) && agg.chartYAxes.length > 0) {
+    yKeys = agg.chartYAxes.filter((k) => resultKeys.includes(k));
+  }
+  if (yKeys.length === 0 && metricAliases.length > 0) {
+    yKeys = metricAliases.filter((k) => resultKeys.includes(k));
+  }
+  if (yKeys.length === 0) {
+    const numKeys = resultKeys.filter((k) => typeof (sample as Record<string, unknown>)[k] === "number");
+    yKeys = numKeys.length > 0 ? numKeys : resultKeys.filter((k) => k !== xKey).slice(0, 1);
+  }
+  if (!xKey || yKeys.length === 0) return [...dataArray];
+
+  let rows = [...dataArray];
+
+  if (agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0) {
+    let rKey = yKeys[0] || resultKeys[0];
+    if (agg?.chartRankingMetric) {
+      if (resultKeys.includes(agg.chartRankingMetric as string)) {
+        rKey = agg.chartRankingMetric as string;
+      } else {
+        const metricMatch = (agg.chartRankingMetric as string).match(/^metric_(\d+)$/);
+        if (metricMatch) {
+          const idx = parseInt(metricMatch[1]!, 10);
+          const resolved = yKeys[idx];
+          if (resolved != null && resultKeys.includes(resolved)) rKey = resolved;
+        }
+      }
+    }
+    if (rKey) {
+      rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
+      rows = rows.slice(0, agg.chartRankingTop as number);
+    }
+  } else if (agg?.chartSortDirection && agg.chartSortDirection !== "none") {
+    const sortByDimension = (agg.chartSortBy as string) === "dimension" || (agg.chartSortBy as string) === "axis";
+    let sortField = yKeys[0] || xKey;
+    if (!sortByDimension && agg?.chartSortByMetric) {
+      if (resultKeys.includes(agg.chartSortByMetric as string)) {
+        sortField = agg.chartSortByMetric as string;
+      } else {
+        const metricMatch = (agg.chartSortByMetric as string).match(/^metric_(\d+)$/);
+        if (metricMatch) {
+          const idx = parseInt(metricMatch[1]!, 10);
+          const resolved = yKeys[idx];
+          if (resolved != null && resultKeys.includes(resolved)) sortField = resolved;
+        }
+      }
+    } else if (sortByDimension) {
+      sortField = xKey;
+    }
+    const dir = (agg.chartSortDirection as string) === "asc" ? 1 : -1;
+    const axisOrder = agg.chartAxisOrder as string | undefined;
+    rows.sort((a, b) => {
+      if (sortField === xKey && axisOrder && ["alpha", "date_asc", "date_desc"].includes(axisOrder)) {
+        const va = (a as Record<string, unknown>)[xKey];
+        const vb = (b as Record<string, unknown>)[xKey];
+        if (axisOrder === "date_asc" || axisOrder === "date_desc") {
+          const ta = typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : 0;
+          const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : 0;
+          return axisOrder === "date_asc" ? ta - tb : tb - ta;
+        }
+        const sa = String(va ?? "");
+        const sb = String(vb ?? "");
+        return axisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
+      }
+      const va = Number((a as Record<string, unknown>)[sortField] ?? 0);
+      const vb = Number((b as Record<string, unknown>)[sortField] ?? 0);
+      return isNaN(va) || isNaN(vb)
+        ? String((a as Record<string, unknown>)[sortField] ?? "").localeCompare(String((b as Record<string, unknown>)[sortField] ?? "")) * dir
+        : (va - vb) * dir;
+    });
+  }
+  return rows;
+}
+
 const DEFAULT_PALETTE = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
 
 /**
