@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Plus, Search, Database, Loader2, ChevronRight, Pencil, BarChart3, X } from "lucide-react";
@@ -23,7 +23,6 @@ type DatasetRow = {
 };
 
 export default function AdminDatasetsPage() {
-  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [datasets, setDatasets] = useState<DatasetRow[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -122,14 +121,6 @@ export default function AdminDatasetsPage() {
     }
   }, []);
 
-  /** Autoabrir modal cuando se llega con ?etlId=... (ej. desde Métricas "Configurar dataset"). Solo una vez por etlId. */
-  useEffect(() => {
-    const etlIdFromUrl = searchParams.get("etlId");
-    if (!etlIdFromUrl || wizardEtlId || autoOpenedEtlIdRef.current === etlIdFromUrl) return;
-    autoOpenedEtlIdRef.current = etlIdFromUrl;
-    openEditDataset(etlIdFromUrl);
-  }, [searchParams, openEditDataset, wizardEtlId]);
-
   const handleDatasetSaved = useCallback(() => {
     closeWizardModal();
     fetchDatasets();
@@ -144,8 +135,27 @@ export default function AdminDatasetsPage() {
     }
   };
 
+  /** Autoabrir modal cuando se llega con ?etlId=... (ej. desde Métricas "Configurar dataset"). */
+  function AutoOpenWizardBySearchParams() {
+    const searchParams = useSearchParams();
+
+    useEffect(() => {
+      const etlIdFromUrl = searchParams.get("etlId");
+      if (!etlIdFromUrl || wizardEtlId || autoOpenedEtlIdRef.current === etlIdFromUrl) return;
+      autoOpenedEtlIdRef.current = etlIdFromUrl;
+      openEditDataset(etlIdFromUrl);
+    }, [searchParams, openEditDataset, wizardEtlId]);
+
+    return null;
+  }
+
   return (
     <div className="flex w-full flex-col min-h-0">
+      {/* Suspense boundary requerido por Next.js cuando se usa useSearchParams con CSR bailout */}
+      <Suspense fallback={null}>
+        <AutoOpenWizardBySearchParams />
+      </Suspense>
+
       <section
         className="rounded-3xl border px-6 py-8 sm:px-8 sm:py-10 mb-8"
         style={{
