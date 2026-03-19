@@ -776,8 +776,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 for (let b = 0; b < filterByKeys.valueTuples.length; b += IN_KEYS_BATCH) {
                   const batch = filterByKeys.valueTuples.slice(b, b + IN_KEYS_BATCH);
                   if (batch.length === 0) continue;
-                  const inTuples = batch.map((t) => `(${t.map((v) => escapeFbLiteral(v)).join(", ")})`).join(", ");
-                  const keysAnd = ` AND (${fbCols.join(", ")}) IN (${inTuples})`;
+                  const keysAnd =
+                    fbCols.length === 1
+                      ? ` AND ${fbCols[0]} IN (${batch.map((t) => escapeFbLiteral(t[0])).join(", ")})`
+                      : ` AND (${batch.map((t) => fbCols.map((fc, i) => `${fc} = ${escapeFbLiteral(t[i])}`).join(" AND ")).join(" OR ")})`;
                   let sqlFb = `SELECT ${cols} FROM ${tablePart}${baseWhereFb}${keysAnd}`;
                   if (dfParams.length > 0) {
                     for (const p of dfParams) {
