@@ -663,6 +663,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             capByJoins
           );
           if (envSourceLimitMax > 0) sourceLimit = Math.min(sourceLimit, envSourceLimitMax);
+          const sourceOffset = (body.offset ?? 0) || 0;
           const normalizeKey = (k: string) =>
             String(k || "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
           const normalizeRow = (row: Record<string, any>) => {
@@ -703,7 +704,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             conn: any,
             table: string,
             columns?: string[],
-            dateFilterForTable?: DateFilterSpec
+            dateFilterForTable?: DateFilterSpec,
+            rowOffset: number = 0
           ): Promise<Record<string, any>[]> => {
             const cType = String(conn?.type || "").toLowerCase();
             const resolvedTable = await resolvePhysicalIfExcel(conn, table);
@@ -736,7 +738,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${String(v)}' AS DOUBLE PRECISION)`;
                 return `'${String(v).replace(/'/g, "''")}'`;
               };
-              let sql = `SELECT FIRST ${sourceLimit} ${cols} FROM ${tablePart}${wherePart}`;
+              const skip = rowOffset > 0 ? rowOffset : 0;
+              let sql = skip > 0
+                ? `SELECT FIRST ${sourceLimit} SKIP ${skip} ${cols} FROM ${tablePart}${wherePart}`
+                : `SELECT FIRST ${sourceLimit} ${cols} FROM ${tablePart}${wherePart}`;
               if (dfParams.length > 0) {
                 for (const p of dfParams) {
                   const pos = sql.indexOf("?");
@@ -776,7 +781,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const sel = columns?.length ? columns.map((c) => quoteIdent(c, "postgres")).join(", ") : "*";
               const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterForTable, 1, "");
               const wherePart = dfClause ? ` WHERE ${dfClause}` : "";
-              const q = `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${wherePart} LIMIT ${sourceLimit}`;
+              const off = rowOffset > 0 ? rowOffset : 0;
+              const q = off > 0
+                ? `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${wherePart} LIMIT ${sourceLimit} OFFSET ${off}`
+                : `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${wherePart} LIMIT ${sourceLimit}`;
               const res = await client.query(q, dfParams || []);
               return (res.rows || []).map((r: any) => normalizeRow(r));
             } finally {
@@ -936,7 +944,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               log("JOIN star en memoria - reintento con sourceLimit mayor.", { sourceLimit });
             }
             const primaryTableResolved = await resolvePhysicalIfExcel(primaryConn, primaryTable || "");
-            const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary);
+            const primaryRowsRaw = await fetchRowsFromConn(primaryConn, primaryTableResolved, primaryColumns, dateFilterForPrimary, sourceOffset);
             if (attempt === 0) {
               log("JOIN star en memoria - filas obtenidas de tabla principal.", {
                 primaryTable: primaryTableResolved,
@@ -1031,7 +1039,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             });
           }
           const totalOut = count ? filteredRows.length : undefined;
-          const rowsPage = filteredRows.slice(offset ?? 0, (offset ?? 0) + (limit ?? 50));
+          const rowsPage = filteredRows.slice(0, limit ?? 50);
           log("JOIN star en memoria - página de resultados construida.", {
             rowsPageCount: rowsPage.length,
             offset,
