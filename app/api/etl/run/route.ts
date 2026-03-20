@@ -805,9 +805,9 @@ async function executeEtlPipeline(
             const cookieHeader = req.headers.get("cookie");
             const joinsCount = (joinObj.joins || []).length;
             const starChunkSize =
-              joinsCount >= 4 ? Math.min(JOIN_CHUNK_SIZE, 50_000)
-              : joinsCount >= 3 ? Math.min(JOIN_CHUNK_SIZE, 65_000)
-              : Math.min(JOIN_CHUNK_SIZE, 200_000);
+              joinsCount >= 4 ? Math.min(JOIN_CHUNK_SIZE, 80_000)
+              : joinsCount >= 3 ? Math.min(JOIN_CHUNK_SIZE, 110_000)
+              : Math.min(JOIN_CHUNK_SIZE, 250_000);
             let starOffset = 0;
             while (true) {
               const joinQueryBody = {

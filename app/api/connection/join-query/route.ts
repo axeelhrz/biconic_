@@ -696,7 +696,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);
           const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
           const capByJoinsPreview = joinsCount >= 4 ? 800 : joinsCount >= 3 ? 1200 : joinsCount >= 2 ? 2000 : 2000;
-          const capByJoinsRun = joinsCount >= 4 ? 8000 : joinsCount >= 3 ? 12000 : joinsCount >= 2 ? 20000 : 20000;
+          const capByJoinsRun = joinsCount >= 4 ? 18_000 : joinsCount >= 3 ? 28_000 : joinsCount >= 2 ? 40_000 : 40_000;
           const capByJoins =
             envSourceLimitMax > 0
               ? Math.min(ETL_MAX_ROWS_CEILING, envSourceLimitMax)
@@ -748,7 +748,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             }
             return `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
           };
-          const IN_KEYS_BATCH = 500;
+          const IN_KEYS_BATCH = Math.min(
+            2500,
+            Math.max(500, Number(process.env.ETL_JOIN_KEYSET_BATCH) || 1500)
+          );
           const fetchRowsFromConn = async (
             conn: any,
             table: string,

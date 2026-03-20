@@ -207,6 +207,14 @@ export function buildDateFilterWhereFragmentPg(
   return { clause: parts.join(" AND "), params };
 }
 
+/**
+ * Día calendario (DATE) comparable en Firebird aunque la columna sea DATE, TIMESTAMP o VARCHAR con ISO (`YYYY-MM-DD...`).
+ * Evita fallos de CAST cuando el valor es texto con `T`/`Z` y alinea con el filtro del ETL guiado (exactDates `YYYY-MM-DD`).
+ */
+function firebirdDateDayExpr(quotedCol: string): string {
+  return `CAST(SUBSTRING(CAST(${quotedCol} AS VARCHAR(64)) FROM 1 FOR 10) AS DATE)`;
+}
+
 /** Date filter for ETL on Firebird: returns WHERE fragment with ? placeholders and params (EXTRACT(YEAR/MONTH) or exact dates). */
 export function buildDateFilterWhereFragmentFirebird(
   dateFilter: DateFilterSpec | undefined | null
@@ -214,23 +222,25 @@ export function buildDateFilterWhereFragmentFirebird(
   const params: any[] = [];
   const parts: string[] = [];
   if (!dateFilter) return { clause: "", params };
-  const rawColumn = (dateFilter.column ?? "").trim().replace(/^primary\./i, "").trim();
+  let rawColumn = (dateFilter.column ?? "").trim().replace(/^primary\./i, "").trim();
+  rawColumn = rawColumn.replace(/^join_\d+\./i, "").trim();
   if (!rawColumn) return { clause: "", params };
   const col = firebirdQuotedIdent(rawColumn);
+  const dayExpr = firebirdDateDayExpr(col);
   const years = Array.isArray(dateFilter.years) ? dateFilter.years.map((y) => Number(y)).filter((n) => !Number.isNaN(n)) : [];
   const months = Array.isArray(dateFilter.months) ? dateFilter.months.map((m) => Number(m)).filter((n) => !Number.isNaN(n)) : [];
   const exactDates = Array.isArray(dateFilter.exactDates) ? dateFilter.exactDates.filter((d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) : [];
   if (years.length) {
-    parts.push(`EXTRACT(YEAR FROM ${col}) IN (${years.map(() => "?").join(", ")})`);
+    parts.push(`EXTRACT(YEAR FROM ${dayExpr}) IN (${years.map(() => "?").join(", ")})`);
     years.forEach((y) => params.push(y));
   }
   if (months.length) {
-    parts.push(`EXTRACT(MONTH FROM ${col}) IN (${months.map(() => "?").join(", ")})`);
+    parts.push(`EXTRACT(MONTH FROM ${dayExpr}) IN (${months.map(() => "?").join(", ")})`);
     months.forEach((m) => params.push(m));
   }
   if (exactDates.length) {
-    parts.push(`CAST(${col} AS DATE) IN (${exactDates.map(() => "?").join(", ")})`);
-    exactDates.forEach((d) => params.push(d));
+    parts.push(`${dayExpr} IN (${exactDates.map(() => "?").join(", ")})`);
+    exactDates.forEach((d) => params.push(d.trim()));
   }
   if (parts.length === 0) return { clause: "", params };
   return { clause: parts.join(" AND "), params };
