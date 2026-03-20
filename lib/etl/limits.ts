@@ -17,8 +17,8 @@ export const ETL_PREVIEW_DEFAULT_LIMIT = 1000;
 export const ETL_PREVIEW_MAX_WHEN_UNLIMITED = 50_000;
 
 /**
- * Tamaño de cada lote al paginar llamadas a join-query desde el ETL run.
- * Reducir (vía ETL_JOIN_CHUNK_SIZE) si hay timeout. Con múltiples JOINs el run aplica tope por número de joins.
+ * Tamaño máximo de lote (techo) al paginar join-query desde el ETL run.
+ * Con 3+ JOINs el run usa lotes pequeños por petición para no superar el timeout de la ruta (~295s); subir ETL_JOIN_CHUNK_SIZE solo sube el techo en 1–2 JOINs.
  */
 export const ETL_JOIN_CHUNK_SIZE_DEFAULT = 100_000;
 

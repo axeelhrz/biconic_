@@ -804,10 +804,15 @@ async function executeEtlPipeline(
             const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");
             const cookieHeader = req.headers.get("cookie");
             const joinsCount = (joinObj.joins || []).length;
-            const starChunkSize =
-              joinsCount >= 4 ? Math.min(JOIN_CHUNK_SIZE, 80_000)
-              : joinsCount >= 3 ? Math.min(JOIN_CHUNK_SIZE, 110_000)
-              : Math.min(JOIN_CHUNK_SIZE, 250_000);
+            // Lotes por petición: con muchos JOINs el costo crece fuerte; lotes chicos evitan timeout (~295s) y el run encadena más vueltas.
+            const starChunkCap =
+              joinsCount >= 10 ? 1_800
+              : joinsCount >= 8 ? 2_500
+              : joinsCount >= 6 ? 4_500
+              : joinsCount >= 4 ? 10_000
+              : joinsCount >= 3 ? 14_000
+              : 250_000;
+            const starChunkSize = Math.min(JOIN_CHUNK_SIZE, starChunkCap);
             let starOffset = 0;
             while (true) {
               const joinQueryBody = {

@@ -695,8 +695,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
           const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);
           const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
-          const capByJoinsPreview = joinsCount >= 4 ? 800 : joinsCount >= 3 ? 1200 : joinsCount >= 2 ? 2000 : 2000;
-          const capByJoinsRun = joinsCount >= 4 ? 18_000 : joinsCount >= 3 ? 28_000 : joinsCount >= 2 ? 40_000 : 40_000;
+          const capByJoinsPreview =
+            joinsCount >= 10 ? 250
+            : joinsCount >= 8 ? 350
+            : joinsCount >= 6 ? 500
+            : joinsCount >= 4 ? 800
+            : joinsCount >= 3 ? 1200
+            : joinsCount >= 2 ? 2000
+            : 2000;
+          const capByJoinsRun =
+            joinsCount >= 10 ? 1_200
+            : joinsCount >= 8 ? 1_800
+            : joinsCount >= 6 ? 3_000
+            : joinsCount >= 4 ? 6_000
+            : joinsCount >= 3 ? 8_000
+            : joinsCount >= 2 ? 35_000
+            : 35_000;
           const capByJoins =
             envSourceLimitMax > 0
               ? Math.min(ETL_MAX_ROWS_CEILING, envSourceLimitMax)
