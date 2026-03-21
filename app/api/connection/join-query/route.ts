@@ -696,19 +696,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);
           const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
           const capByJoinsPreview =
-            joinsCount >= 10 ? 250
-            : joinsCount >= 8 ? 350
-            : joinsCount >= 6 ? 500
-            : joinsCount >= 4 ? 800
-            : joinsCount >= 3 ? 1200
-            : joinsCount >= 2 ? 2000
-            : 2000;
+            joinsCount >= 10 ? 3_500
+            : joinsCount >= 8 ? 5_000
+            : joinsCount >= 6 ? 7_500
+            : joinsCount >= 4 ? 10_000
+            : joinsCount >= 3 ? 12_000
+            : joinsCount >= 2 ? 20_000
+            : 20_000;
           const capByJoinsRun =
-            joinsCount >= 10 ? 1_200
-            : joinsCount >= 8 ? 1_800
-            : joinsCount >= 6 ? 3_000
-            : joinsCount >= 4 ? 6_000
-            : joinsCount >= 3 ? 8_000
+            joinsCount >= 10 ? 8_000
+            : joinsCount >= 8 ? 12_000
+            : joinsCount >= 6 ? 18_000
+            : joinsCount >= 4 ? 24_000
+            : joinsCount >= 3 ? 28_000
             : joinsCount >= 2 ? 35_000
             : 35_000;
           const capByJoins =
@@ -724,7 +724,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             Math.max((offset ?? 0) + (limit ?? 50) * 8, 500),
             effectiveCap
           );
+          if (!fromEtlRun && envSourceLimitMax <= 0) {
+            const previewFloor =
+              joinsCount >= 10 ? 3_500
+              : joinsCount >= 8 ? 4_000
+              : joinsCount >= 6 ? 5_000
+              : joinsCount >= 4 ? 4_000
+              : joinsCount >= 3 ? 3_000
+              : 0;
+            if (previewFloor > 0) sourceLimit = Math.max(sourceLimit, Math.min(previewFloor, effectiveCap));
+          }
           if (envSourceLimitMax > 0) sourceLimit = Math.min(sourceLimit, envSourceLimitMax);
+          log("JOIN star en memoria - límites de lectura.", {
+            joinsCount,
+            fromEtlRun,
+            requestedLimit: limit ?? 50,
+            requestedOffset: offset ?? 0,
+            capByJoinsPreview,
+            capByJoinsRun,
+            capByJoins,
+            effectiveCap,
+            sourceLimit,
+            envSourceLimitMax: Number.isFinite(envSourceLimitMax) ? envSourceLimitMax : null,
+          });
           const sourceOffset = (body.offset ?? 0) || 0;
           const normalizeKey = (k: string) =>
             String(k || "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();

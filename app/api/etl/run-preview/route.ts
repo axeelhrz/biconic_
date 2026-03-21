@@ -454,7 +454,7 @@ export async function POST(req: NextRequest) {
         return;
       }
 
-        // Star join (multiple JOINs): call join-query API to get preview rows
+        // Star join (multiple JOINs): call join-query API with iterative pagination
         const starJoin = body.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[]; conditions?: Array<{ primaryColumn: string; secondaryColumn: string }> }> } | undefined;
         if (starJoin?.primaryConnectionId && Array.isArray(starJoin.joins) && starJoin.joins.length > 0) {
           const filterCols = (body.filter?.columns as string[] | undefined) || [];
@@ -463,41 +463,54 @@ export async function POST(req: NextRequest) {
             ...jn,
             secondaryColumns: filterCols.filter((c: string) => new RegExp(`^join_${idx}\\.`, "i").test(c)).map((c: string) => c.replace(new RegExp(`^join_${idx}\\.`, "i"), "")),
           }));
-          const joinQueryBody = {
-            primaryConnectionId: starJoin.primaryConnectionId,
-            primaryTable: starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "",
-            joins: joinsWithCols,
-            conditions: body.filter?.conditions || [],
-            dateFilter: body.filter?.dateFilter ?? undefined,
-            primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
-            limit: effectiveLimit,
-            offset: 0,
-          };
           try {
             const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");
             const cookieHeader = req.headers.get("cookie");
-            const res = await fetch(`${origin}/api/connection/join-query`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
-              body: JSON.stringify(joinQueryBody),
-            });
-            const text = await res.text();
-            let data: { ok?: boolean; error?: string; rows?: unknown[] };
-            try {
-              data = text ? JSON.parse(text) : {};
-            } catch {
-              throw new Error(
-                `El servidor de JOIN devolvió una respuesta no JSON. Detalle: ${(text || "").slice(0, 300)}`
-              );
+            const accumulatedRows: unknown[] = [];
+            let starOffset = 0;
+            while (accumulatedRows.length < effectiveLimit) {
+              const chunkSize = Math.min(effectiveLimit - accumulatedRows.length, effectiveLimit);
+              const joinQueryBody = {
+                primaryConnectionId: starJoin.primaryConnectionId,
+                primaryTable: starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "",
+                joins: joinsWithCols,
+                conditions: body.filter?.conditions || [],
+                dateFilter: body.filter?.dateFilter ?? undefined,
+                primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
+                limit: chunkSize,
+                offset: starOffset,
+                fromEtlRun: true,
+              };
+              const res = await fetch(`${origin}/api/connection/join-query`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
+                body: JSON.stringify(joinQueryBody),
+              });
+              const text = await res.text();
+              let data: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number };
+              try {
+                data = text ? JSON.parse(text) : {};
+              } catch {
+                throw new Error(
+                  `El servidor de JOIN devolvió una respuesta no JSON. Detalle: ${(text || "").slice(0, 300)}`
+                );
+              }
+              if (!res.ok || !data?.ok) {
+                const detail = (data?.error && String(data.error).trim()) || `Error del servidor (${res.status})`;
+                throw new Error(`Error en JOIN múltiple: ${detail}`);
+              }
+              if (!Array.isArray(data.rows)) {
+                throw new Error("Error en JOIN múltiple: la respuesta no incluyó filas válidas.");
+              }
+              if (data.rows.length > 0) accumulatedRows.push(...data.rows);
+              const sourceExhausted = data.sourceExhausted === true;
+              const nextSourceOffset = typeof data.nextSourceOffset === "number"
+                ? data.nextSourceOffset
+                : starOffset + data.rows.length;
+              if (data.rows.length === 0 || sourceExhausted || nextSourceOffset <= starOffset) break;
+              starOffset = nextSourceOffset;
             }
-            if (!res.ok || !data?.ok) {
-              const detail = (data?.error && String(data.error).trim()) || `Error del servidor (${res.status})`;
-              throw new Error(`Error en JOIN múltiple: ${detail}`);
-            }
-            if (!Array.isArray(data.rows)) {
-              throw new Error("Error en JOIN múltiple: la respuesta no incluyó filas válidas.");
-            }
-            yield { rows: data.rows.slice(0, effectiveLimit), query: "Star JOIN (múltiples tablas)" };
+            yield { rows: accumulatedRows.slice(0, effectiveLimit), query: "Star JOIN (múltiples tablas)" };
           } catch (e) {
             console.error("[Preview] Star join fetch error:", e);
             throw e instanceof Error ? e : new Error("No se pudo ejecutar el JOIN múltiple.");

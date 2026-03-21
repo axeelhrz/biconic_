@@ -870,7 +870,16 @@ async function executeEtlPipeline(
                 dateFilterColumn: body!.filter?.dateFilter?.column ?? null,
               });
               if (starData.rows.length > 0) yield starData.rows;
-              if (starData.rows.length === 0) break;
+              if (starData.rows.length === 0 && sourceExhausted) break;
+              if (nextSourceOffset <= starOffset) {
+                console.log("[ETL Run join-query iteración] Corte defensivo por nextSourceOffset no creciente.", {
+                  runId,
+                  sourceOffset: starOffset,
+                  nextSourceOffset,
+                  sourceExhausted,
+                });
+                break;
+              }
               starOffset = nextSourceOffset;
               if (sourceExhausted) break;
             }

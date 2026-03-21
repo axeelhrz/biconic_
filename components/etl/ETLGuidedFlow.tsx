@@ -3186,9 +3186,32 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               {!previewError && previewRows && previewRows.length > 0 && (() => {
                 const rowKeys = Object.keys(previewRows[0] as Record<string, unknown>);
                 const keyByLower: Record<string, string> = Object.fromEntries(rowKeys.map((k: string) => [k.toLowerCase(), k]));
-                const mapped = columns.length > 0 ? columns.map((c: string) => (keyByLower[c.toLowerCase()] != null ? keyByLower[c.toLowerCase()] : c)) : [];
+                /** Alinea refs del guiado (primary.col, join_0.col) con claves de fila (primary_col, join_0_col). */
+                const configColToRowKeyGuess = (c: string) =>
+                  (c || "")
+                    .trim()
+                    .replace(/^primary\./i, "primary_")
+                    .replace(/^join_(\d+)\./i, (_, d) => `join_${parseInt(d, 10)}_`);
+                const mapped =
+                  columns.length > 0
+                    ? columns.map((c: string) => {
+                        if (keyByLower[c.toLowerCase()] != null) return keyByLower[c.toLowerCase()];
+                        const guess = configColToRowKeyGuess(c);
+                        if (keyByLower[guess.toLowerCase()] != null) return keyByLower[guess.toLowerCase()];
+                        return c;
+                      })
+                    : [];
                 const displayKeys = mapped.filter((k: string) => rowKeys.includes(k) || rowKeys.some((r: string) => r.toLowerCase() === k.toLowerCase()));
                 const keysToShow = columns.length > 0 ? (displayKeys.length > 0 ? displayKeys : rowKeys) : [];
+                /** Clave real en el objeto fila (evita celdas vacías si displayKeys quedó con primary.col pero el JSON trae primary_col). */
+                const resolveRowDataKey = (k: string): string => {
+                  if (rowKeys.includes(k)) return k;
+                  const byCi = rowKeys.find((r) => r.toLowerCase() === k.toLowerCase());
+                  if (byCi) return byCi;
+                  const g = configColToRowKeyGuess(k);
+                  const byGuess = rowKeys.find((r) => r.toLowerCase() === g.toLowerCase());
+                  return byGuess ?? k;
+                };
                 const showNoColumnsMessage = columns.length === 0;
                 return (
                   <div className="space-y-2">
@@ -3203,18 +3226,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           <thead>
                             <tr style={{ background: "var(--platform-bg-elevated)", borderBottom: "1px solid var(--platform-border)" }}>
                               {keysToShow.map((key: string) => {
-                                const displayKey = getColumnDisplayKey(key);
+                                const dataKey = resolveRowDataKey(key);
+                                const displayKey = getColumnDisplayKey(dataKey);
                                 return (
                                 <th
-                                  key={key}
+                                  key={dataKey}
                                   role="columnheader"
                                   className="text-left font-medium py-2 px-3 whitespace-nowrap sticky top-0 z-10 cursor-pointer select-none hover:bg-[var(--platform-surface-hover)] transition-colors"
                                   style={{ background: "var(--platform-bg-elevated)", color: "var(--platform-fg-muted)" }}
-                                  onClick={() => handlePreviewSort(key)}
+                                  onClick={() => handlePreviewSort(dataKey)}
                                 >
                                   <span className="inline-flex items-center gap-1">
                                     {(columnDisplay[displayKey]?.label?.trim() || key)}
-                                    {previewSortKey === key ? (
+                                    {previewSortKey === dataKey ? (
                                       previewSortDir === "asc" ? (
                                         <ArrowUp className="h-3.5 w-3.5 opacity-80" />
                                       ) : (
@@ -3232,11 +3256,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             {previewDisplayRows.map((row, idx) => (
                               <tr key={idx} className="border-b border-b-[var(--platform-border)] hover:bg-[var(--platform-surface-hover)]">
                                 {keysToShow.map((key: string) => {
-                                  const raw = (row as Record<string, unknown>)[key];
-                                  const displayKey = getColumnDisplayKey(key);
+                                  const dataKey = resolveRowDataKey(key);
+                                  const raw = (row as Record<string, unknown>)[dataKey];
+                                  const displayKey = getColumnDisplayKey(dataKey);
                                   const formatted = formatPreviewCell(displayKey, raw);
                                   return (
-                                    <td key={key} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={formatted}>
+                                    <td key={dataKey} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={formatted}>
                                       {formatted}
                                     </td>
                                   );
