@@ -737,30 +737,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                   return { column: col.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim(), years: body.dateFilter!.years, months: body.dateFilter!.months, exactDates: body.dateFilter!.exactDates };
                 };
 
-                const materializeOne = (conn: any, table: string, cols: string[] | undefined, df: DateFilterSpec | undefined, tblName: string) => {
+                await matClient.query(`CREATE SCHEMA IF NOT EXISTS etl_temp`).catch(() => {});
+
+                const materializeOne = async (conn: any, table: string, cols: string[] | undefined, df: DateFilterSpec | undefined, tblName: string) => {
                   const connType = String(conn?.type || "").toLowerCase();
                   if (connType === "firebird") {
-                    return materializeFirebirdTable(conn, table, cols, df, pgUrl, "etl_temp", tblName);
+                    return materializeFirebirdTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, undefined, matClient!);
                   }
-                  return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName);
+                  return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, matClient!);
                 };
 
-                const materializePromises: Promise<{ qualifiedTable: string; rowCount: number }>[] = [];
-                const primaryTblName = `${reqSuffix}_primary`;
-                materializePromises.push(
-                  materializeOne(primaryConn, primaryTable || "", primaryColumns, dateFilterForPrimary, primaryTblName)
-                );
+                const matResults: { qualifiedTable: string; rowCount: number }[] = [];
+                log("Materializando tabla primary...");
+                matResults.push(await materializeOne(primaryConn, primaryTable || "", primaryColumns, dateFilterForPrimary, `${reqSuffix}_primary`));
                 for (let idx = 0; idx < joins.length; idx++) {
                   const jn = joins[idx];
                   const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
                   if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
-                  const tblName = `${reqSuffix}_join_${idx}`;
-                  materializePromises.push(
-                    materializeOne(secConn, jn.secondaryTable || "", jn.secondaryColumns, getDateFilterForJoinMat(idx), tblName)
-                  );
+                  log(`Materializando tabla join_${idx}...`);
+                  matResults.push(await materializeOne(secConn, jn.secondaryTable || "", jn.secondaryColumns, getDateFilterForJoinMat(idx), `${reqSuffix}_join_${idx}`));
                 }
 
-                const matResults = await Promise.all(materializePromises);
                 for (const mr of matResults) tempTables.push(mr.qualifiedTable);
                 log("Materialización completada.", matResults.map((r) => ({ table: r.qualifiedTable, rows: r.rowCount })));
               } else {

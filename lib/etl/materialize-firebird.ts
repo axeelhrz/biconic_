@@ -105,7 +105,8 @@ export async function materializeFirebirdTable(
   pgUrl: string,
   targetSchema: string,
   targetTable: string,
-  signal?: { aborted: boolean }
+  signal?: { aborted: boolean },
+  sharedPgClient?: PgClient
 ): Promise<MaterializeResult> {
   const qualifiedTable = `${targetSchema}."${targetTable}"`;
   const opts = fbOpts(conn);
@@ -126,9 +127,12 @@ export async function materializeFirebirdTable(
     }
   }
 
-  const pgClient = new PgClient({ connectionString: pgUrl, connectionTimeoutMillis: 15000 });
-  await pgClient.connect();
-  await pgClient.query(`CREATE SCHEMA IF NOT EXISTS ${targetSchema}`).catch(() => {});
+  const ownsClient = !sharedPgClient;
+  const pgClient = sharedPgClient ?? new PgClient({ connectionString: pgUrl, connectionTimeoutMillis: 15000 });
+  if (ownsClient) {
+    await pgClient.connect();
+    await pgClient.query(`CREATE SCHEMA IF NOT EXISTS ${targetSchema}`).catch(() => {});
+  }
 
   let tableCreated = false;
   let totalRows = 0;
@@ -188,7 +192,7 @@ export async function materializeFirebirdTable(
     await pgClient.query(`DROP TABLE IF EXISTS ${qualifiedTable}`).catch(() => {});
     throw e;
   } finally {
-    await pgClient.end().catch(() => {});
+    if (ownsClient) await pgClient.end().catch(() => {});
   }
 }
 
@@ -203,7 +207,8 @@ export async function materializePostgresTable(
   dateFilter: DateFilterSpec | undefined,
   pgUrl: string,
   targetSchema: string,
-  targetTable: string
+  targetTable: string,
+  sharedPgClient?: PgClient
 ): Promise<MaterializeResult> {
   const qualifiedTable = `${targetSchema}."${targetTable}"`;
   const { buildDateFilterWhereFragmentPg } = await import("@/lib/sql/helpers");
@@ -219,10 +224,14 @@ export async function materializePostgresTable(
     : `postgres://${conn.db_user}:${encodeURIComponent(String(srcPassword))}@${conn.db_host}:${conn.db_port || 5432}/${conn.db_name}?sslmode=require`;
 
   const srcClient = new PgClient({ connectionString: srcConnStr, connectionTimeoutMillis: 15000 });
-  const destClient = new PgClient({ connectionString: pgUrl, connectionTimeoutMillis: 15000 });
+  const ownsDestClient = !sharedPgClient;
+  const destClient = sharedPgClient ?? new PgClient({ connectionString: pgUrl, connectionTimeoutMillis: 15000 });
 
-  await Promise.all([srcClient.connect(), destClient.connect()]);
-  await destClient.query(`CREATE SCHEMA IF NOT EXISTS ${targetSchema}`).catch(() => {});
+  await srcClient.connect();
+  if (ownsDestClient) {
+    await destClient.connect();
+    await destClient.query(`CREATE SCHEMA IF NOT EXISTS ${targetSchema}`).catch(() => {});
+  }
 
   try {
     const cols = columns?.length ? columns.map((c) => `"${c}"`).join(", ") : "*";
@@ -265,7 +274,7 @@ export async function materializePostgresTable(
     throw e;
   } finally {
     await srcClient.end().catch(() => {});
-    await destClient.end().catch(() => {});
+    if (ownsDestClient) await destClient.end().catch(() => {});
   }
 }
 
