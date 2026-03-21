@@ -829,9 +829,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 fromJoin += ` ${jt} JOIN ${jQualified[idx]} AS j${idx} ON ${onClauses.join(" AND ")}`;
               });
 
-              const normalizedConditions = normalizeStarConditions(conditions || [], joins.length);
+              const normalizeColRefForMat = (col: string): string => {
+                const m = col.match(/^(primary\.|join_\d+\.)?(.+)$/i);
+                if (!m) return col.toLowerCase();
+                return (m[1] || "") + m[2].replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+              };
+              const matDateFilter = body.dateFilter
+                ? { ...body.dateFilter, column: normalizeColRefForMat(body.dateFilter.column) }
+                : undefined;
+              const matConditions = (conditions || []).map(c => ({
+                ...c,
+                column: c.column ? normalizeColRefForMat(c.column) : c.column,
+              }));
+
+              const normalizedConditions = normalizeStarConditions(matConditions, joins.length);
               const { clause: condClause, params: condParams } = buildWhereClausePgStar(normalizedConditions, joins.length);
-              const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(body.dateFilter, condParams.length + 1, "p.", joins.length);
+              const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(matDateFilter, condParams.length + 1, "p.", joins.length);
               const mergedClause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
               const mergedParams = [...condParams, ...dfParams];
 
@@ -867,7 +880,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
               return NextResponse.json(jsonPayload);
             } catch (matErr: any) {
-              log("Materialización falló, cayendo a in-memory.", { error: matErr?.message, stack: matErr?.stack?.slice(0, 300) });
+              log("Materialización falló, cayendo a in-memory.", { error: matErr?.message, stack: matErr?.stack?.slice(0, 600), code: matErr?.code, detail: matErr?.detail });
               if (matClient) await matClient.end().catch(() => {});
               if (tempTables.length > 0 && pgUrl) {
                 import("@/lib/etl/materialize-firebird").then(({ cleanupTempTables }) => cleanupTempTables(pgUrl, tempTables).catch(() => {})).catch(() => {});

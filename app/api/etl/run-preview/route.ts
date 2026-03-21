@@ -170,7 +170,7 @@ type RunBody = {
 
 // Helpers imported from @/lib/etl/transformations
 
-export const maxDuration = 90;
+export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {
   let body: RunBody | null = null;

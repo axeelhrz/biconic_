@@ -341,15 +341,19 @@ async function executeEtlPipeline(
   const joinObjForTimeout = (body as any)?.join;
   const joinsCountForTimeout = Array.isArray(joinObjForTimeout?.joins) ? joinObjForTimeout.joins.length : 0;
   const hasAnyJoin = !!joinObjForTimeout;
-  const adaptiveTimeoutDefault =
+  const MAX_DURATION_MS = 800 * 1000;
+  const VERCEL_MARGIN_MS = 60_000;
+  const maxPipelineMs = MAX_DURATION_MS - VERCEL_MARGIN_MS;
+  const rawAdaptiveTimeout =
     joinsCountForTimeout >= 10 ? 2_400_000
     : joinsCountForTimeout >= 8 ? 1_800_000
     : joinsCountForTimeout >= 5 ? 1_200_000
     : joinsCountForTimeout >= 2 ? 900_000
     : hasAnyJoin ? 900_000
     : 750_000;
-  const PIPELINE_TIMEOUT_MS = asPositiveInt(process.env.ETL_PIPELINE_TIMEOUT_MS, adaptiveTimeoutDefault);
-  console.log("[ETL Run] Timeout config:", { joinsCountForTimeout, hasAnyJoin, adaptiveTimeoutDefault, PIPELINE_TIMEOUT_MS });
+  const adaptiveTimeoutDefault = Math.min(rawAdaptiveTimeout, maxPipelineMs);
+  const PIPELINE_TIMEOUT_MS = Math.min(asPositiveInt(process.env.ETL_PIPELINE_TIMEOUT_MS, adaptiveTimeoutDefault), maxPipelineMs);
+  console.log("[ETL Run] Timeout config:", { joinsCountForTimeout, hasAnyJoin, rawAdaptiveTimeout, adaptiveTimeoutDefault, PIPELINE_TIMEOUT_MS, maxPipelineMs });
   const PAGE_SIZE = asPositiveInt(process.env.ETL_PAGE_SIZE, 60000);
   const JOIN_KEYSET_SIZE = asPositiveInt(process.env.ETL_JOIN_KEYSET_SIZE, 3000);
   const JOIN_CHUNK_SIZE = asPositiveInt(process.env.ETL_JOIN_CHUNK_SIZE, ETL_JOIN_CHUNK_SIZE_DEFAULT);
