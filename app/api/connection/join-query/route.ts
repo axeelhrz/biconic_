@@ -694,9 +694,172 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       });
 
       if (useInMemoryStarJoin) {
+        const joinsCount = (joins || []).length;
+        // ---------- MATERIALIZATION PATH: Firebird + 2+ joins ----------
+        if (hasFirebirdInChain && joinsCount >= 2) {
+          const pgUrl = process.env.SUPABASE_DB_URL;
+          if (pgUrl) {
+            log("Intentando flujo de materialización (Firebird → PG temporal + JOIN nativo).", { joinsCount });
+            const tempTables: string[] = [];
+            let matClient: PgClient | null = null;
+            try {
+              const { materializeFirebirdTable, materializePostgresTable, cleanupTempTables } = await import("@/lib/etl/materialize-firebird");
+              const reqSuffix = randomUUID().replace(/-/g, "").slice(0, 12);
+              const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
+
+              const dateFilterCol = (body.dateFilter?.column ?? "").trim();
+              const isDateOnPrimary = /^primary\./i.test(dateFilterCol) || (dateFilterCol && !/^join_\d+\./i.test(dateFilterCol));
+              const dateFilterForPrimary: DateFilterSpec | undefined =
+                body.dateFilter && dateFilterCol && isDateOnPrimary
+                  ? { column: dateFilterCol.replace(/^primary\./i, "").trim(), years: body.dateFilter.years, months: body.dateFilter.months, exactDates: body.dateFilter.exactDates }
+                  : undefined;
+              const getDateFilterForJoinMat = (idx: number): DateFilterSpec | undefined => {
+                if (!body.dateFilter?.column?.trim()) return undefined;
+                const col = body.dateFilter.column.trim();
+                if (!new RegExp(`^join_${idx}\\.`, "i").test(col)) return undefined;
+                return { column: col.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim(), years: body.dateFilter!.years, months: body.dateFilter!.months, exactDates: body.dateFilter!.exactDates };
+              };
+
+              const materializeOne = (conn: any, table: string, cols: string[] | undefined, df: DateFilterSpec | undefined, tblName: string) => {
+                const connType = String(conn?.type || "").toLowerCase();
+                if (connType === "firebird") {
+                  return materializeFirebirdTable(conn, table, cols, df, pgUrl, "etl_temp", tblName);
+                }
+                return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName);
+              };
+
+              const materializePromises: Promise<{ qualifiedTable: string; rowCount: number }>[] = [];
+              const primaryTblName = `${reqSuffix}_primary`;
+              materializePromises.push(
+                materializeOne(primaryConn, primaryTable || "", primaryColumns, dateFilterForPrimary, primaryTblName)
+              );
+              for (let idx = 0; idx < joins.length; idx++) {
+                const jn = joins[idx];
+                const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
+                if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
+                const tblName = `${reqSuffix}_join_${idx}`;
+                materializePromises.push(
+                  materializeOne(secConn, jn.secondaryTable || "", jn.secondaryColumns, getDateFilterForJoinMat(idx), tblName)
+                );
+              }
+
+              const matResults = await Promise.all(materializePromises);
+              for (const mr of matResults) tempTables.push(mr.qualifiedTable);
+              log("Materialización completada.", matResults.map((r, i) => ({ table: r.qualifiedTable, rows: r.rowCount })));
+
+              matClient = new PgClient({ connectionString: pgUrl, connectionTimeoutMillis: 15000, statement_timeout: Math.max(120000, JOIN_INTERNAL_TIMEOUT_MS) });
+              await matClient.connect();
+
+              const pQualified = matResults[0].qualifiedTable;
+              const jQualified = matResults.slice(1).map((r) => r.qualifiedTable);
+
+              let resolvedPrimaryCols = primaryColumns && primaryColumns.length > 0 ? primaryColumns : [];
+              if (resolvedPrimaryCols.length === 0) {
+                try { resolvedPrimaryCols = await getTableColumnsPg(matClient, `${reqSuffix}_primary`, "etl_temp"); } catch (_) {}
+              }
+              const selectParts: string[] = [];
+              const normalizeKey = (k: string) => String(k || "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+              if (resolvedPrimaryCols.length > 0) {
+                resolvedPrimaryCols.forEach((col) => {
+                  const nk = normalizeKey(col);
+                  selectParts.push(`p."${nk}" AS "primary_${nk}"`);
+                });
+              } else {
+                selectParts.push("p.*");
+              }
+              for (let idx = 0; idx < joins.length; idx++) {
+                const jn = joins[idx];
+                let secCols = jn.secondaryColumns && jn.secondaryColumns.length > 0 ? jn.secondaryColumns : [];
+                if (secCols.length === 0) {
+                  try { secCols = await getTableColumnsPg(matClient, `${reqSuffix}_join_${idx}`, "etl_temp"); } catch (_) {}
+                }
+                if (secCols.length > 0) {
+                  secCols.forEach((col) => {
+                    const nk = normalizeKey(col);
+                    selectParts.push(`j${idx}."${nk}" AS "join_${idx}_${nk}"`);
+                  });
+                } else {
+                  selectParts.push(`j${idx}.*`);
+                }
+              }
+
+              let fromJoin = `FROM ${pQualified} AS p`;
+              joins.forEach((jn, idx) => {
+                const jt = (jn.joinType || "INNER").toUpperCase();
+                const pairs = getJoinConditionPairs(jn);
+                if (pairs.length === 0) throw new Error(`Join ${idx}: se requiere al menos una condición de enlace.`);
+                const onClauses = pairs.map(({ leftColumn: pc, rightColumn: sc }) => {
+                  let leftAlias = "p";
+                  let leftCol = (pc || "").trim();
+                  if (leftCol.includes(".")) {
+                    if (/^primary\./i.test(leftCol)) {
+                      leftCol = normalizeKey(leftCol.replace(/^primary\./i, "").trim());
+                    } else {
+                      const m = leftCol.match(/^join_(\d+)\.(.+)$/i);
+                      if (m) {
+                        const i = Number(m[1]);
+                        if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                          leftAlias = `j${i}`;
+                          leftCol = normalizeKey(m[2].trim());
+                        }
+                      }
+                    }
+                  } else {
+                    leftCol = normalizeKey(leftCol);
+                  }
+                  return `${leftAlias}."${leftCol}" = j${idx}."${normalizeKey((sc || "").trim())}"`;
+                });
+                fromJoin += ` ${jt} JOIN ${jQualified[idx]} AS j${idx} ON ${onClauses.join(" AND ")}`;
+              });
+
+              const normalizedConditions = normalizeStarConditions(conditions || [], joins.length);
+              const { clause: condClause, params: condParams } = buildWhereClausePgStar(normalizedConditions, joins.length);
+              const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(body.dateFilter, condParams.length + 1, "p.", joins.length);
+              const mergedClause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
+              const mergedParams = [...condParams, ...dfParams];
+
+              const stableOrderBy = resolvedPrimaryCols.length > 0
+                ? `ORDER BY ${resolvedPrimaryCols.map((c) => `p."${normalizeKey(c)}"`).join(", ")}`
+                : "ORDER BY 1";
+              const effectiveLimit = limit ?? 50;
+              const effectiveOffset = offset ?? 0;
+              const sql = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause} ${stableOrderBy} LIMIT $${mergedParams.length + 1} OFFSET $${mergedParams.length + 2}`;
+              log("Ejecutando JOIN nativo tras materialización.", { sql: sql.slice(0, 500), paramsLen: mergedParams.length + 2 });
+
+              const resDb = await matClient.query(sql, [...mergedParams, effectiveLimit, effectiveOffset]);
+              log(`JOIN nativo ejecutado: ${resDb.rowCount} filas.`);
+
+              let totalOut: number | undefined = undefined;
+              if (count) {
+                const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${mergedClause}`;
+                const cntRes = await matClient.query(countSql, mergedParams);
+                totalOut = cntRes.rows?.[0]?.c ?? 0;
+              }
+
+              const rowsOut = resDb.rows || [];
+              const jsonPayload: Record<string, unknown> = { ok: true, rows: rowsOut, total: totalOut };
+              jsonPayload.sourceExhausted = rowsOut.length < effectiveLimit;
+              jsonPayload.nextSourceOffset = effectiveOffset + rowsOut.length;
+              jsonPayload.materialized = true;
+
+              await matClient.end().catch(() => {});
+              matClient = null;
+              cleanupTempTables(pgUrl, tempTables).catch((e) => console.error("[materialize cleanup]", e));
+
+              return NextResponse.json(jsonPayload);
+            } catch (matErr: any) {
+              log("Materialización falló, cayendo a in-memory.", { error: matErr?.message, stack: matErr?.stack?.slice(0, 300) });
+              if (matClient) await matClient.end().catch(() => {});
+              if (tempTables.length > 0 && pgUrl) {
+                import("@/lib/etl/materialize-firebird").then(({ cleanupTempTables }) => cleanupTempTables(pgUrl, tempTables).catch(() => {})).catch(() => {});
+              }
+            }
+          }
+        }
+        // ---------- END MATERIALIZATION PATH ----------
+
         log("Iniciando flujo de JOIN star en memoria (Firebird/cross-connection).");
         try {
-          const joinsCount = (joins || []).length;
           validateStarJoinPayloadInMemory(joins || [], joinsCount);
 
           const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);

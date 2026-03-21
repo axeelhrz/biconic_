@@ -842,19 +842,20 @@ async function executeEtlPipeline(
             const joinsCount = (joinObj.joins || []).length;
             // Lotes por petición: con muchos JOINs el costo crece fuerte; lotes chicos evitan timeout (~295s) y el run encadena más vueltas.
             const starChunkCap =
-              joinsCount >= 10 ? 700
-              : joinsCount >= 8 ? 900
-              : joinsCount >= 6 ? 1_200
-              : joinsCount >= 4 ? 1_800
-              : joinsCount >= 3 ? 2_500
+              joinsCount >= 10 ? 15_000
+              : joinsCount >= 8 ? 20_000
+              : joinsCount >= 6 ? 30_000
+              : joinsCount >= 4 ? 40_000
+              : joinsCount >= 3 ? 50_000
               : 250_000;
             const minStarChunkSize =
-              joinsCount >= 10 ? 200
-              : joinsCount >= 8 ? 250
-              : joinsCount >= 6 ? 300
-              : joinsCount >= 4 ? 400
-              : 600;
+              joinsCount >= 10 ? 2_000
+              : joinsCount >= 8 ? 3_000
+              : joinsCount >= 6 ? 4_000
+              : joinsCount >= 4 ? 5_000
+              : 5_000;
             let starChunkSize = Math.max(minStarChunkSize, Math.min(JOIN_CHUNK_SIZE, starChunkCap));
+            let usingMaterialization = false;
             let starOffset = Math.max(0, Number((body as any)?._resumeStartOffset || 0));
             while (true) {
               let starData: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number } = {};
@@ -917,6 +918,11 @@ async function executeEtlPipeline(
                 // conservar chunk menor que funcionó para siguientes iteraciones.
                 starChunkSize = Math.min(starChunkSize, currentChunkSize);
                 lastStarChunkSize = starChunkSize;
+                if ((starData as any)?.materialized === true && !usingMaterialization) {
+                  usingMaterialization = true;
+                  starChunkSize = Math.max(starChunkSize, Math.min(50_000, starChunkCap * 2));
+                  console.log("[ETL Run] Materialización detectada, subiendo chunk.", { runId, starChunkSize });
+                }
                 break;
               }
               if (!Array.isArray(starData.rows)) {
