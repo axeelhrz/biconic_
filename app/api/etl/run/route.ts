@@ -338,13 +338,18 @@ async function executeEtlPipeline(
   const completedAt = () => new Date().toISOString();
   let rowsProcessed = 0;
   const pipelineStartedAt = Date.now();
-  const joinsCountForTimeout = Array.isArray((body as any)?.join?.joins) ? (body as any).join.joins.length : 0;
+  const joinObjForTimeout = (body as any)?.join;
+  const joinsCountForTimeout = Array.isArray(joinObjForTimeout?.joins) ? joinObjForTimeout.joins.length : 0;
+  const hasAnyJoin = !!joinObjForTimeout;
   const adaptiveTimeoutDefault =
     joinsCountForTimeout >= 10 ? 2_400_000
     : joinsCountForTimeout >= 8 ? 1_800_000
     : joinsCountForTimeout >= 5 ? 1_200_000
+    : joinsCountForTimeout >= 2 ? 900_000
+    : hasAnyJoin ? 900_000
     : 750_000;
   const PIPELINE_TIMEOUT_MS = asPositiveInt(process.env.ETL_PIPELINE_TIMEOUT_MS, adaptiveTimeoutDefault);
+  console.log("[ETL Run] Timeout config:", { joinsCountForTimeout, hasAnyJoin, adaptiveTimeoutDefault, PIPELINE_TIMEOUT_MS });
   const PAGE_SIZE = asPositiveInt(process.env.ETL_PAGE_SIZE, 60000);
   const JOIN_KEYSET_SIZE = asPositiveInt(process.env.ETL_JOIN_KEYSET_SIZE, 3000);
   const JOIN_CHUNK_SIZE = asPositiveInt(process.env.ETL_JOIN_CHUNK_SIZE, ETL_JOIN_CHUNK_SIZE_DEFAULT);
@@ -857,11 +862,15 @@ async function executeEtlPipeline(
             let starChunkSize = Math.max(minStarChunkSize, Math.min(JOIN_CHUNK_SIZE, starChunkCap));
             let usingMaterialization = false;
             let starOffset = Math.max(0, Number((body as any)?._resumeStartOffset || 0));
+            const materializationPrefix = (Math.random().toString(36).slice(2, 8) + Date.now().toString(36)).slice(0, 12);
+            const matTempTables = [`etl_temp."${materializationPrefix}_primary"`];
+            for (let mi = 0; mi < joinsCount; mi++) matTempTables.push(`etl_temp."${materializationPrefix}_join_${mi}"`);
+            try {
             while (true) {
               let starData: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number } = {};
               let currentChunkSize = starChunkSize;
               while (true) {
-                const joinQueryBody = {
+                const joinQueryBody: Record<string, unknown> = {
                   primaryConnectionId: joinObj.primaryConnectionId,
                   primaryTable: joinObj.primaryTable || (body!.filter?.table || "").trim(),
                   joins: joinsWithCols,
@@ -872,6 +881,8 @@ async function executeEtlPipeline(
                   offset: starOffset,
                   count: false,
                   fromEtlRun: true,
+                  _materializationPrefix: materializationPrefix,
+                  _skipMaterializationCleanup: true,
                 };
                 const starRes = await fetch(`${origin}/api/connection/join-query`, {
                   method: "POST",
@@ -915,7 +926,6 @@ async function executeEtlPipeline(
                       : `Error ejecutando JOIN múltiple: ${responseError}`
                   );
                 }
-                // conservar chunk menor que funcionó para siguientes iteraciones.
                 starChunkSize = Math.min(starChunkSize, currentChunkSize);
                 lastStarChunkSize = starChunkSize;
                 if ((starData as any)?.materialized === true && !usingMaterialization) {
@@ -955,6 +965,14 @@ async function executeEtlPipeline(
               }
               starOffset = nextSourceOffset;
               if (sourceExhausted) break;
+            }
+            } finally {
+              const pgUrl = process.env.SUPABASE_DB_URL;
+              if (pgUrl) {
+                import("@/lib/etl/materialize-firebird").then(({ cleanupTempTables }) =>
+                  cleanupTempTables(pgUrl, matTempTables).catch((e: any) => console.error("[ETL Run materialize cleanup]", e))
+                ).catch(() => {});
+              }
             }
             return;
           }

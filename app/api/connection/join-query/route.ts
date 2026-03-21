@@ -479,11 +479,11 @@ async function getPasswordFromSecret(
 }
 
 // --- ROUTE HANDLER PRINCIPAL CON LOGGING ---
-/** Límite de ejecución para JOINs pesados (Vercel: 300s en Pro). Evita FUNCTION_INVOCATION_TIMEOUT. */
-export const maxDuration = 300;
+/** Límite de ejecución: 800s para dar margen a materialización Firebird (primera llamada puede tardar varios minutos). */
+export const maxDuration = 800;
 
-/** Timeout interno (ms) para devolver 504 JSON antes de que Vercel mate la función (300s). Refuerzo: default 295s para maximizar margen. Configurable con ETL_JOIN_TIMEOUT_MS. */
-const JOIN_INTERNAL_TIMEOUT_MS = Number(process.env.ETL_JOIN_TIMEOUT_MS) || 295_000;
+/** Timeout interno (ms). Con materialización la primera llamada puede tardar más; default 590s para dar margen. Configurable con ETL_JOIN_TIMEOUT_MS. */
+const JOIN_INTERNAL_TIMEOUT_MS = Number(process.env.ETL_JOIN_TIMEOUT_MS) || 590_000;
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const requestId = randomUUID();
@@ -699,59 +699,79 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         if (hasFirebirdInChain && joinsCount >= 2) {
           const pgUrl = process.env.SUPABASE_DB_URL;
           if (pgUrl) {
-            log("Intentando flujo de materialización (Firebird → PG temporal + JOIN nativo).", { joinsCount });
+            const skipCleanup = (body as any)._skipMaterializationCleanup === true;
+            const externalPrefix = (body as any)._materializationPrefix as string | undefined;
+            log("Intentando flujo de materialización (Firebird → PG temporal + JOIN nativo).", { joinsCount, reusePrefix: externalPrefix || null, skipCleanup });
             const tempTables: string[] = [];
             let matClient: PgClient | null = null;
             try {
               const { materializeFirebirdTable, materializePostgresTable, cleanupTempTables } = await import("@/lib/etl/materialize-firebird");
-              const reqSuffix = randomUUID().replace(/-/g, "").slice(0, 12);
+              const reqSuffix = externalPrefix || randomUUID().replace(/-/g, "").slice(0, 12);
               const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
-
-              const dateFilterCol = (body.dateFilter?.column ?? "").trim();
-              const isDateOnPrimary = /^primary\./i.test(dateFilterCol) || (dateFilterCol && !/^join_\d+\./i.test(dateFilterCol));
-              const dateFilterForPrimary: DateFilterSpec | undefined =
-                body.dateFilter && dateFilterCol && isDateOnPrimary
-                  ? { column: dateFilterCol.replace(/^primary\./i, "").trim(), years: body.dateFilter.years, months: body.dateFilter.months, exactDates: body.dateFilter.exactDates }
-                  : undefined;
-              const getDateFilterForJoinMat = (idx: number): DateFilterSpec | undefined => {
-                if (!body.dateFilter?.column?.trim()) return undefined;
-                const col = body.dateFilter.column.trim();
-                if (!new RegExp(`^join_${idx}\\.`, "i").test(col)) return undefined;
-                return { column: col.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim(), years: body.dateFilter!.years, months: body.dateFilter!.months, exactDates: body.dateFilter!.exactDates };
-              };
-
-              const materializeOne = (conn: any, table: string, cols: string[] | undefined, df: DateFilterSpec | undefined, tblName: string) => {
-                const connType = String(conn?.type || "").toLowerCase();
-                if (connType === "firebird") {
-                  return materializeFirebirdTable(conn, table, cols, df, pgUrl, "etl_temp", tblName);
-                }
-                return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName);
-              };
-
-              const materializePromises: Promise<{ qualifiedTable: string; rowCount: number }>[] = [];
-              const primaryTblName = `${reqSuffix}_primary`;
-              materializePromises.push(
-                materializeOne(primaryConn, primaryTable || "", primaryColumns, dateFilterForPrimary, primaryTblName)
-              );
-              for (let idx = 0; idx < joins.length; idx++) {
-                const jn = joins[idx];
-                const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
-                if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
-                const tblName = `${reqSuffix}_join_${idx}`;
-                materializePromises.push(
-                  materializeOne(secConn, jn.secondaryTable || "", jn.secondaryColumns, getDateFilterForJoinMat(idx), tblName)
-                );
-              }
-
-              const matResults = await Promise.all(materializePromises);
-              for (const mr of matResults) tempTables.push(mr.qualifiedTable);
-              log("Materialización completada.", matResults.map((r, i) => ({ table: r.qualifiedTable, rows: r.rowCount })));
 
               matClient = new PgClient({ connectionString: pgUrl, connectionTimeoutMillis: 15000, statement_timeout: Math.max(120000, JOIN_INTERNAL_TIMEOUT_MS) });
               await matClient.connect();
 
-              const pQualified = matResults[0].qualifiedTable;
-              const jQualified = matResults.slice(1).map((r) => r.qualifiedTable);
+              let tablesAlreadyExist = false;
+              if (externalPrefix) {
+                try {
+                  await matClient.query(`SELECT 1 FROM etl_temp."${reqSuffix}_primary" LIMIT 1`);
+                  tablesAlreadyExist = true;
+                  log("Tablas materializadas encontradas, reutilizando.", { prefix: reqSuffix });
+                } catch {
+                  log("Tablas no encontradas, materializando por primera vez.", { prefix: reqSuffix });
+                }
+              }
+
+              if (!tablesAlreadyExist) {
+                const dateFilterCol = (body.dateFilter?.column ?? "").trim();
+                const isDateOnPrimary = /^primary\./i.test(dateFilterCol) || (dateFilterCol && !/^join_\d+\./i.test(dateFilterCol));
+                const dateFilterForPrimary: DateFilterSpec | undefined =
+                  body.dateFilter && dateFilterCol && isDateOnPrimary
+                    ? { column: dateFilterCol.replace(/^primary\./i, "").trim(), years: body.dateFilter.years, months: body.dateFilter.months, exactDates: body.dateFilter.exactDates }
+                    : undefined;
+                const getDateFilterForJoinMat = (idx: number): DateFilterSpec | undefined => {
+                  if (!body.dateFilter?.column?.trim()) return undefined;
+                  const col = body.dateFilter.column.trim();
+                  if (!new RegExp(`^join_${idx}\\.`, "i").test(col)) return undefined;
+                  return { column: col.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim(), years: body.dateFilter!.years, months: body.dateFilter!.months, exactDates: body.dateFilter!.exactDates };
+                };
+
+                const materializeOne = (conn: any, table: string, cols: string[] | undefined, df: DateFilterSpec | undefined, tblName: string) => {
+                  const connType = String(conn?.type || "").toLowerCase();
+                  if (connType === "firebird") {
+                    return materializeFirebirdTable(conn, table, cols, df, pgUrl, "etl_temp", tblName);
+                  }
+                  return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName);
+                };
+
+                const materializePromises: Promise<{ qualifiedTable: string; rowCount: number }>[] = [];
+                const primaryTblName = `${reqSuffix}_primary`;
+                materializePromises.push(
+                  materializeOne(primaryConn, primaryTable || "", primaryColumns, dateFilterForPrimary, primaryTblName)
+                );
+                for (let idx = 0; idx < joins.length; idx++) {
+                  const jn = joins[idx];
+                  const secConn = connectionsMap.get(String(jn.secondaryConnectionId));
+                  if (!secConn) throw new Error(`Conexión secundaria no encontrada para join_${idx}`);
+                  const tblName = `${reqSuffix}_join_${idx}`;
+                  materializePromises.push(
+                    materializeOne(secConn, jn.secondaryTable || "", jn.secondaryColumns, getDateFilterForJoinMat(idx), tblName)
+                  );
+                }
+
+                const matResults = await Promise.all(materializePromises);
+                for (const mr of matResults) tempTables.push(mr.qualifiedTable);
+                log("Materialización completada.", matResults.map((r) => ({ table: r.qualifiedTable, rows: r.rowCount })));
+              } else {
+                tempTables.push(`etl_temp."${reqSuffix}_primary"`);
+                for (let idx = 0; idx < joins.length; idx++) {
+                  tempTables.push(`etl_temp."${reqSuffix}_join_${idx}"`);
+                }
+              }
+
+              const pQualified = tempTables[0];
+              const jQualified = tempTables.slice(1);
 
               let resolvedPrimaryCols = primaryColumns && primaryColumns.length > 0 ? primaryColumns : [];
               if (resolvedPrimaryCols.length === 0) {
@@ -844,7 +864,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
               await matClient.end().catch(() => {});
               matClient = null;
-              cleanupTempTables(pgUrl, tempTables).catch((e) => console.error("[materialize cleanup]", e));
+              if (!skipCleanup) {
+                cleanupTempTables(pgUrl, tempTables).catch((e) => console.error("[materialize cleanup]", e));
+              }
 
               return NextResponse.json(jsonPayload);
             } catch (matErr: any) {

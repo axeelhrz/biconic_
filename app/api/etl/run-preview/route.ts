@@ -558,9 +558,13 @@ export async function POST(req: NextRequest) {
             const accumulatedRows: unknown[] = [];
             let starOffset = 0;
             const initialSourceOffset = 0;
+            const matPrefix = (Math.random().toString(36).slice(2, 8) + Date.now().toString(36)).slice(0, 12);
+            const matTempTables = [`etl_temp."${matPrefix}_primary"`];
+            for (let mi = 0; mi < joinsCount; mi++) matTempTables.push(`etl_temp."${matPrefix}_join_${mi}"`);
+            try {
             while (accumulatedRows.length < previewTargetRows) {
               const chunkSize = Math.min(previewTargetRows - accumulatedRows.length, microChunkSize);
-              const joinQueryBody = {
+              const joinQueryBody: Record<string, unknown> = {
                 primaryConnectionId: starJoin.primaryConnectionId,
                 primaryTable: starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "",
                 joins: joinsWithCols,
@@ -569,6 +573,8 @@ export async function POST(req: NextRequest) {
                 primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
                 limit: chunkSize,
                 offset: starOffset,
+                _materializationPrefix: matPrefix,
+                _skipMaterializationCleanup: true,
               };
               const res = await fetch(`${origin}/api/connection/join-query`, {
                 method: "POST",
@@ -600,6 +606,14 @@ export async function POST(req: NextRequest) {
               const reachedScanBudget = scannedSoFar >= maxSourceScanAdvance;
               if (data.rows.length === 0 || sourceExhausted || reachedScanBudget || nextSourceOffset <= starOffset) break;
               starOffset = nextSourceOffset;
+            }
+            } finally {
+              const pgUrl = process.env.SUPABASE_DB_URL;
+              if (pgUrl) {
+                import("@/lib/etl/materialize-firebird").then(({ cleanupTempTables }) =>
+                  cleanupTempTables(pgUrl, matTempTables).catch((e: any) => console.error("[Preview materialize cleanup]", e))
+                ).catch(() => {});
+              }
             }
             yield {
               rows: accumulatedRows.slice(0, previewTargetRows),
