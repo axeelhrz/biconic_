@@ -148,6 +148,8 @@ type RunBody = {
   inferTypes?: boolean;
   limit?: number;
   unlimited?: boolean;
+  asyncPreviewAction?: "start" | "execute";
+  previewJobId?: string;
 };
 
 
@@ -191,6 +193,75 @@ export async function POST(req: NextRequest) {
       data: { user },
     } = await supabaseAdmin.auth.getUser();
     if (!user) throw new Error("No autorizado");
+
+    const isAsyncStart = body.asyncPreviewAction === "start";
+    const isAsyncExecute = body.asyncPreviewAction === "execute" && typeof body.previewJobId === "string" && body.previewJobId.trim().length > 0;
+
+    if (isAsyncStart) {
+      const requestBodyForJob: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+      delete requestBodyForJob.asyncPreviewAction;
+      delete requestBodyForJob.previewJobId;
+      const { data: insertedJob, error: insertErr } = await (supabaseService as any)
+        .from("etl_preview_jobs")
+        .insert({
+          user_id: user.id,
+          status: "started",
+          request_body: requestBodyForJob,
+          rows_processed: 0,
+          rows_sample: [],
+          source_offset: 0,
+          source_exhausted: false,
+        })
+        .select("id")
+        .single();
+      if (insertErr || !insertedJob?.id) {
+        throw new Error("No se pudo crear el job de vista previa.");
+      }
+      const previewJobId = String(insertedJob.id);
+      const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");
+      const cookieHeader = req.headers.get("cookie");
+      const executeBody = {
+        ...requestBodyForJob,
+        asyncPreviewAction: "execute" as const,
+        previewJobId,
+      };
+      after(() =>
+        fetch(`${origin}/api/etl/run-preview`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          },
+          body: JSON.stringify(executeBody),
+        }).catch(async (e: any) => {
+          await (supabaseService as any)
+            .from("etl_preview_jobs")
+            .update({
+              status: "failed",
+              completed_at: new Date().toISOString(),
+              error_message: (e?.message || "Error ejecutando preview async").slice(0, 500),
+            })
+            .eq("id", previewJobId);
+        })
+      );
+      return NextResponse.json({
+        ok: true,
+        async: true,
+        previewJobId,
+        status: "started",
+      });
+    }
+
+    if (isAsyncExecute) {
+      await (supabaseService as any)
+        .from("etl_preview_jobs")
+        .update({
+          status: "running",
+          started_at: new Date().toISOString(),
+          error_message: null,
+        })
+        .eq("id", body.previewJobId!);
+    }
 
     const allConditions = body?.filter?.conditions ?? [];
     const sqlConditions = allConditions.filter((c: FilterCondition) => c.operator !== "not in");
@@ -1069,6 +1140,7 @@ export async function POST(req: NextRequest) {
     }
 
     const allPreviewRows: Record<string, any>[] = [];
+    let processedBatches = 0;
 
     let finalExtractionQuery = "";
     const transformationSteps: string[] = [];
@@ -1293,6 +1365,19 @@ export async function POST(req: NextRequest) {
         if (transformedBatch.length) {
             allPreviewRows.push(...transformedBatch);
         }
+        processedBatches += 1;
+        if (isAsyncExecute && body.previewJobId && (processedBatches % 2 === 0 || transformedBatch.length > 0)) {
+          const sampleRows = allPreviewRows.slice(0, Math.min(allPreviewRows.length, 500));
+          await (supabaseService as any)
+            .from("etl_preview_jobs")
+            .update({
+              status: "running",
+              rows_processed: allPreviewRows.length,
+              rows_sample: sampleRows,
+              source_offset: allPreviewRows.length,
+            })
+            .eq("id", body.previewJobId);
+        }
       } catch (err: any) {
          console.error("[Preview Error] Batch processing failed:", err);
          throw err; 
@@ -1307,11 +1392,41 @@ export async function POST(req: NextRequest) {
 
     if (body.inferTypes) {
       const inferredTypes = inferColumnTypes(allPreviewRows);
+      if (isAsyncExecute && body.previewJobId) {
+        await (supabaseService as any)
+          .from("etl_preview_jobs")
+          .update({
+            status: "completed",
+            completed_at: new Date().toISOString(),
+            rows_processed: allPreviewRows.length,
+            rows_sample: allPreviewRows.slice(0, Math.min(allPreviewRows.length, 500)),
+            preview_rows: allPreviewRows,
+            source_exhausted: true,
+          })
+          .eq("id", body.previewJobId);
+      }
       return NextResponse.json({
         ok: true,
         inferredTypes,
         rowsSampled: allPreviewRows.length,
       });
+    }
+
+    if (isAsyncExecute && body.previewJobId) {
+      await (supabaseService as any)
+        .from("etl_preview_jobs")
+        .update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          rows_processed: allPreviewRows.length,
+          rows_sample: allPreviewRows.slice(0, Math.min(allPreviewRows.length, 500)),
+          preview_rows: allPreviewRows,
+          source_offset: allPreviewRows.length,
+          source_exhausted: true,
+          error_message: null,
+        })
+        .eq("id", body.previewJobId);
+      return NextResponse.json({ ok: true, async: true, previewJobId: body.previewJobId, status: "completed" });
     }
 
     return NextResponse.json({
@@ -1325,6 +1440,17 @@ export async function POST(req: NextRequest) {
 
   } catch (err: any) {
     console.error("Error en Preview:", err);
+    if (body?.asyncPreviewAction === "execute" && body?.previewJobId) {
+      const supabaseService = createServiceRoleClient();
+      await (supabaseService as any)
+        .from("etl_preview_jobs")
+        .update({
+          status: "failed",
+          completed_at: new Date().toISOString(),
+          error_message: (err?.message || "Error generando vista previa").slice(0, 500),
+        })
+        .eq("id", body.previewJobId);
+    }
     let message = err?.message || "Error generando vista previa";
     if (
       typeof message === "string" &&

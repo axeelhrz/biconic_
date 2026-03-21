@@ -159,6 +159,10 @@ type RunBody = {
   preview?: boolean;
   /** Si true, la API espera a que el pipeline termine antes de responder (para redirigir a métricas con datos listos). */
   waitForCompletion?: boolean;
+  /** Cursor interno para reanudar runs con muchos JOINs tras timeout global. */
+  _resumeStartOffset?: number;
+  /** Control interno de reintentos de reanudación. */
+  _resumeAttempt?: number;
 };
 
 
@@ -334,20 +338,52 @@ async function executeEtlPipeline(
   const completedAt = () => new Date().toISOString();
   let rowsProcessed = 0;
   const pipelineStartedAt = Date.now();
-  const PIPELINE_TIMEOUT_MS = asPositiveInt(process.env.ETL_PIPELINE_TIMEOUT_MS, 750_000);
+  const joinsCountForTimeout = Array.isArray((body as any)?.join?.joins) ? (body as any).join.joins.length : 0;
+  const adaptiveTimeoutDefault =
+    joinsCountForTimeout >= 10 ? 2_400_000
+    : joinsCountForTimeout >= 8 ? 1_800_000
+    : joinsCountForTimeout >= 5 ? 1_200_000
+    : 750_000;
+  const PIPELINE_TIMEOUT_MS = asPositiveInt(process.env.ETL_PIPELINE_TIMEOUT_MS, adaptiveTimeoutDefault);
   const PAGE_SIZE = asPositiveInt(process.env.ETL_PAGE_SIZE, 60000);
   const JOIN_KEYSET_SIZE = asPositiveInt(process.env.ETL_JOIN_KEYSET_SIZE, 3000);
   const JOIN_CHUNK_SIZE = asPositiveInt(process.env.ETL_JOIN_CHUNK_SIZE, ETL_JOIN_CHUNK_SIZE_DEFAULT);
   const METRICS_LOG_EVERY_BATCHES = asPositiveInt(process.env.ETL_METRICS_LOG_EVERY_BATCHES, 5);
   let pipelineTimedOut = false;
+  let lastStarSourceOffset = Math.max(0, Number((body as any)?._resumeStartOffset || 0));
+  let lastStarChunkSize = 0;
+  let continuationQueued = false;
 
   const pipelineTimer = setTimeout(async () => {
     pipelineTimedOut = true;
     console.error(`[Background Run ${runId}] Timeout de seguridad alcanzado (${PIPELINE_TIMEOUT_MS / 1000}s). Marcando como fallido.`);
     try {
+      const resumeAttempt = Math.max(0, Number((body as any)?._resumeAttempt || 0));
+      const canQueueContinuation = !continuationQueued && lastStarSourceOffset > 0 && resumeAttempt < 2;
+      if (canQueueContinuation) {
+        continuationQueued = true;
+        const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");
+        const cookieHeader = req.headers.get("cookie");
+        const continuationBody = {
+          ...body,
+          waitForCompletion: false,
+          _resumeStartOffset: lastStarSourceOffset,
+          _resumeAttempt: resumeAttempt + 1,
+        };
+        await fetch(`${origin}/api/etl/run`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          },
+          body: JSON.stringify(continuationBody),
+        }).catch(() => {});
+      }
       await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
         completed_at: new Date().toISOString(),
-        error_message: `Timeout de seguridad (${PIPELINE_TIMEOUT_MS / 1000}s): el ETL tardó demasiado. Filas procesadas: ${rowsProcessed}. Considere reducir el volumen de datos o agregar filtros.`,
+        error_message: canQueueContinuation
+          ? `Timeout de seguridad (${PIPELINE_TIMEOUT_MS / 1000}s). Se programó reanudación automática desde offset ${lastStarSourceOffset} (intento ${Math.max(1, Number((body as any)?._resumeAttempt || 0) + 1)}). Filas procesadas: ${rowsProcessed}.`
+          : `Timeout de seguridad (${PIPELINE_TIMEOUT_MS / 1000}s): el ETL tardó demasiado. Filas procesadas: ${rowsProcessed}. Considere reducir el volumen de datos o agregar filtros.`,
         rows_processed: rowsProcessed,
       });
     } catch (_) {}
@@ -819,7 +855,7 @@ async function executeEtlPipeline(
               : joinsCount >= 4 ? 400
               : 600;
             let starChunkSize = Math.max(minStarChunkSize, Math.min(JOIN_CHUNK_SIZE, starChunkCap));
-            let starOffset = 0;
+            let starOffset = Math.max(0, Number((body as any)?._resumeStartOffset || 0));
             while (true) {
               let starData: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number } = {};
               let currentChunkSize = starChunkSize;
@@ -880,6 +916,7 @@ async function executeEtlPipeline(
                 }
                 // conservar chunk menor que funcionó para siguientes iteraciones.
                 starChunkSize = Math.min(starChunkSize, currentChunkSize);
+                lastStarChunkSize = starChunkSize;
                 break;
               }
               if (!Array.isArray(starData.rows)) {
@@ -889,12 +926,14 @@ async function executeEtlPipeline(
               const nextSourceOffset = typeof (starData as { nextSourceOffset?: number }).nextSourceOffset === "number"
                 ? (starData as { nextSourceOffset: number }).nextSourceOffset
                 : starOffset + starData.rows.length;
+              lastStarSourceOffset = nextSourceOffset;
               console.log("[ETL Run join-query iteración]", {
                 runId,
                 sourceOffset: starOffset,
                 rows: starData.rows.length,
                 sourceExhausted,
                 nextSourceOffset,
+                chunkSize: lastStarChunkSize || starChunkSize,
                 dateFilterColumn: body!.filter?.dateFilter?.column ?? null,
               });
               if (starData.rows.length > 0) yield starData.rows;

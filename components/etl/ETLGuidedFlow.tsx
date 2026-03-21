@@ -274,6 +274,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
   const [previewUnlimited, setPreviewUnlimited] = useState(false);
   const previewAbortRef = useRef<AbortController | null>(null);
+  const previewPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewLoadedOnceRef = useRef<boolean>(false);
   const fetchPreviewRef = useRef<() => void>(() => {});
 
@@ -1122,6 +1123,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       return;
     }
     previewAbortRef.current?.abort();
+    if (previewPollTimeoutRef.current) {
+      clearTimeout(previewPollTimeoutRef.current);
+      previewPollTimeoutRef.current = null;
+    }
     previewAbortRef.current = new AbortController();
     previewLoadedOnceRef.current = false;
     setPreviewLoading(true);
@@ -1137,47 +1142,83 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       const u = previewBody.union as { left: unknown; rights: unknown[]; unionAll?: boolean };
       if (u.rights.length > 0) (previewBody.union as Record<string, unknown>).right = u.rights[0];
     }
-    fetch("/api/etl/run-preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(previewBody),
-      signal: previewAbortRef.current.signal,
-    })
-      .then((res) => {
-        if (!res.ok) {
-          return res.text().then((text) => {
-            let errMsg = `Error del servidor (${res.status})`;
-            try {
-              const j = JSON.parse(text) as { error?: string };
-              if (j?.error && typeof j.error === "string") errMsg = j.error;
-            } catch {
-              if (text?.trim()) errMsg = text.trim().slice(0, 200);
+    const signal = previewAbortRef.current.signal;
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        previewPollTimeoutRef.current = setTimeout(() => resolve(), ms);
+      });
+    (async () => {
+      try {
+        const startRes = await fetch("/api/etl/run-preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...previewBody, asyncPreviewAction: "start" }),
+          signal,
+        });
+        if (!startRes.ok) {
+          const text = await startRes.text();
+          let errMsg = `Error del servidor (${startRes.status})`;
+          try {
+            const j = JSON.parse(text) as { error?: string };
+            if (j?.error && typeof j.error === "string") errMsg = j.error;
+          } catch {
+            if (text?.trim()) errMsg = text.trim().slice(0, 200);
+          }
+          throw new Error(errMsg);
+        }
+        const startData = await safeJsonResponse(startRes) as { ok?: boolean; previewJobId?: string; error?: string };
+        if (!startData?.ok || !startData?.previewJobId) {
+          throw new Error(startData?.error || "No se pudo iniciar la vista previa asíncrona.");
+        }
+        const previewJobId = startData.previewJobId;
+        const startedAt = Date.now();
+        while (true) {
+          if (signal.aborted) return;
+          const statusRes = await fetch(`/api/etl/run-preview/status?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
+          const statusData = await safeJsonResponse(statusRes) as {
+            ok?: boolean;
+            status?: string;
+            rowsProcessed?: number;
+            rowsSample?: Record<string, unknown>[];
+            error?: string;
+          };
+          if (!statusRes.ok || !statusData?.ok) {
+            throw new Error(statusData?.error || `Error consultando estado (${statusRes.status})`);
+          }
+          if (Array.isArray(statusData.rowsSample)) {
+            previewLoadedOnceRef.current = true;
+            setPreviewRows(statusData.rowsSample);
+            setPreviewRowsProcessed(statusData.rowsProcessed ?? statusData.rowsSample.length);
+            setPreviewError(null);
+          }
+          if (statusData.status === "failed") {
+            throw new Error(statusData.error || "La vista previa asíncrona falló.");
+          }
+          if (statusData.status === "completed") {
+            const resultRes = await fetch(`/api/etl/run-preview/result?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
+            const resultData = await safeJsonResponse(resultRes) as {
+              ok?: boolean;
+              previewRows?: Record<string, unknown>[];
+              rowsProcessed?: number;
+              error?: string;
+            };
+            if (!resultRes.ok || !resultData?.ok) {
+              throw new Error(resultData?.error || `Error obteniendo resultado (${resultRes.status})`);
             }
-            setPreviewRows(null);
-            setPreviewError(errMsg);
-            throw new Error(errMsg);
-          });
+            const rows = Array.isArray(resultData.previewRows) ? resultData.previewRows : [];
+            previewLoadedOnceRef.current = true;
+            setPreviewRows(rows);
+            setPreviewRowsProcessed(resultData.rowsProcessed ?? rows.length);
+            setPreviewError(null);
+            break;
+          }
+          // Evita polling infinito en jobs colgados.
+          if (Date.now() - startedAt > 15 * 60 * 1000) {
+            throw new Error("La vista previa tardó demasiado. Ajustá filtros o cantidad de joins.");
+          }
+          await sleep(1200);
         }
-        return safeJsonResponse(res);
-      })
-      .then((data) => {
-        if (data.ok && Array.isArray(data.previewRows)) {
-          previewLoadedOnceRef.current = true;
-          setPreviewRows(data.previewRows);
-          setPreviewError(null);
-          setPreviewRowsProcessed((data as { rowsProcessed?: number }).rowsProcessed ?? data.previewRows.length);
-        } else if (data.ok && !Array.isArray(data.previewRows)) {
-          previewLoadedOnceRef.current = true;
-          setPreviewRows([]);
-          setPreviewRowsProcessed(0);
-          setPreviewError("La respuesta del servidor no incluyó datos de vista previa.");
-        } else {
-          setPreviewRows(null);
-          setPreviewRowsProcessed(null);
-          setPreviewError((data as { error?: string })?.error || "Error al cargar vista previa");
-        }
-      })
-      .catch((e: unknown) => {
+      } catch (e: unknown) {
         if ((e as { name?: string }).name === "AbortError") return;
         setPreviewRows(null);
         setPreviewRowsProcessed(null);
@@ -1187,10 +1228,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             ? "No se pudo conectar. Revisá la red y probá de nuevo."
             : msg
         );
-      })
-      .finally(() => {
+      } finally {
+        if (previewPollTimeoutRef.current) {
+          clearTimeout(previewPollTimeoutRef.current);
+          previewPollTimeoutRef.current = null;
+        }
         setPreviewLoading(false);
-      });
+      }
+    })();
   }, [buildGuidedConfigBody, connectionId, selectedTable, previewUnlimited]);
 
   fetchPreviewRef.current = fetchPreview;
