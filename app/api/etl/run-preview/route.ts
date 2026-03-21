@@ -454,7 +454,7 @@ export async function POST(req: NextRequest) {
         return;
       }
 
-        // Star join (multiple JOINs): call join-query API with iterative pagination
+        // Star join (multiple JOINs): call join-query API with fast/stable preview pagination
         const starJoin = body.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[]; conditions?: Array<{ primaryColumn: string; secondaryColumn: string }> }> } | undefined;
         if (starJoin?.primaryConnectionId && Array.isArray(starJoin.joins) && starJoin.joins.length > 0) {
           const filterCols = (body.filter?.columns as string[] | undefined) || [];
@@ -466,10 +466,29 @@ export async function POST(req: NextRequest) {
           try {
             const origin = req.nextUrl?.origin ?? (typeof req.url === "string" ? new URL(req.url).origin : "");
             const cookieHeader = req.headers.get("cookie");
+            const joinsCount = joinsWithCols.length;
+            const previewTargetRows = Math.min(
+              body?.unlimited === true ? 1_500 : effectiveLimit,
+              effectiveLimit
+            );
+            const microChunkSize = Math.min(
+              previewTargetRows,
+              joinsCount >= 10 ? 250
+              : joinsCount >= 8 ? 300
+              : joinsCount >= 6 ? 400
+              : joinsCount >= 4 ? 600
+              : 800
+            );
+            const maxSourceScanAdvance =
+              joinsCount >= 10 ? 12_000
+              : joinsCount >= 8 ? 16_000
+              : joinsCount >= 6 ? 24_000
+              : 35_000;
             const accumulatedRows: unknown[] = [];
             let starOffset = 0;
-            while (accumulatedRows.length < effectiveLimit) {
-              const chunkSize = Math.min(effectiveLimit - accumulatedRows.length, effectiveLimit);
+            const initialSourceOffset = 0;
+            while (accumulatedRows.length < previewTargetRows) {
+              const chunkSize = Math.min(previewTargetRows - accumulatedRows.length, microChunkSize);
               const joinQueryBody = {
                 primaryConnectionId: starJoin.primaryConnectionId,
                 primaryTable: starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "",
@@ -479,7 +498,6 @@ export async function POST(req: NextRequest) {
                 primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
                 limit: chunkSize,
                 offset: starOffset,
-                fromEtlRun: true,
               };
               const res = await fetch(`${origin}/api/connection/join-query`, {
                 method: "POST",
@@ -507,10 +525,15 @@ export async function POST(req: NextRequest) {
               const nextSourceOffset = typeof data.nextSourceOffset === "number"
                 ? data.nextSourceOffset
                 : starOffset + data.rows.length;
-              if (data.rows.length === 0 || sourceExhausted || nextSourceOffset <= starOffset) break;
+              const scannedSoFar = Math.max(0, nextSourceOffset - initialSourceOffset);
+              const reachedScanBudget = scannedSoFar >= maxSourceScanAdvance;
+              if (data.rows.length === 0 || sourceExhausted || reachedScanBudget || nextSourceOffset <= starOffset) break;
               starOffset = nextSourceOffset;
             }
-            yield { rows: accumulatedRows.slice(0, effectiveLimit), query: "Star JOIN (múltiples tablas)" };
+            yield {
+              rows: accumulatedRows.slice(0, previewTargetRows),
+              query: `Star JOIN (múltiples tablas · vista rápida ${accumulatedRows.length}/${previewTargetRows})`,
+            };
           } catch (e) {
             console.error("[Preview] Star join fetch error:", e);
             throw e instanceof Error ? e : new Error("No se pudo ejecutar el JOIN múltiple.");

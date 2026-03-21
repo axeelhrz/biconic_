@@ -695,14 +695,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
           const envSourceLimitMax = Number(process.env.ETL_JOIN_SOURCE_LIMIT_MAX);
           const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
+          const isPreviewMode = !fromEtlRun;
           const capByJoinsPreview =
-            joinsCount >= 10 ? 3_500
-            : joinsCount >= 8 ? 5_000
-            : joinsCount >= 6 ? 7_500
-            : joinsCount >= 4 ? 10_000
-            : joinsCount >= 3 ? 12_000
-            : joinsCount >= 2 ? 20_000
-            : 20_000;
+            joinsCount >= 10 ? 1_800
+            : joinsCount >= 8 ? 2_500
+            : joinsCount >= 6 ? 3_500
+            : joinsCount >= 4 ? 5_000
+            : joinsCount >= 3 ? 7_000
+            : joinsCount >= 2 ? 10_000
+            : 10_000;
           const capByJoinsRun =
             joinsCount >= 10 ? 8_000
             : joinsCount >= 8 ? 12_000
@@ -719,25 +720,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             fromEtlRun && (limit ?? 0) > capByJoins
               ? Math.min(limit ?? capByJoins, ETL_MAX_ROWS_CEILING)
               : capByJoins;
+          const requestedRows = limit ?? 50;
           let sourceLimit = Math.min(
             ETL_MAX_ROWS_CEILING,
-            Math.max((offset ?? 0) + (limit ?? 50) * 8, 500),
+            Math.max(requestedRows * 8, 500),
             effectiveCap
           );
-          if (!fromEtlRun && envSourceLimitMax <= 0) {
-            const previewFloor =
-              joinsCount >= 10 ? 3_500
-              : joinsCount >= 8 ? 4_000
-              : joinsCount >= 6 ? 5_000
-              : joinsCount >= 4 ? 4_000
-              : joinsCount >= 3 ? 3_000
-              : 0;
-            if (previewFloor > 0) sourceLimit = Math.max(sourceLimit, Math.min(previewFloor, effectiveCap));
+          if (isPreviewMode && envSourceLimitMax <= 0) {
+            const previewRequestScanCap =
+              joinsCount >= 10 ? 1_800
+              : joinsCount >= 8 ? 2_000
+              : joinsCount >= 6 ? 2_500
+              : joinsCount >= 4 ? 3_500
+              : 5_000;
+            sourceLimit = Math.min(sourceLimit, previewRequestScanCap);
           }
           if (envSourceLimitMax > 0) sourceLimit = Math.min(sourceLimit, envSourceLimitMax);
           log("JOIN star en memoria - límites de lectura.", {
             joinsCount,
             fromEtlRun,
+            isPreviewMode,
             requestedLimit: limit ?? 50,
             requestedOffset: offset ?? 0,
             capByJoinsPreview,
@@ -1305,9 +1307,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             dateFilterColumn: body.dateFilter?.column ?? null,
           });
           const jsonPayload: Record<string, unknown> = { ok: true, rows: rowsPage, total: totalOut };
-          if (fromEtlRun) {
-            jsonPayload.sourceExhausted = lastSourceExhausted;
-            jsonPayload.nextSourceOffset = lastNextSourceOffset;
+          jsonPayload.sourceExhausted = lastSourceExhausted;
+          jsonPayload.nextSourceOffset = lastNextSourceOffset;
+          if (isPreviewMode) {
+            jsonPayload.previewPartial =
+              lastSourceExhausted === false && rowsPage.length < (limit ?? 50);
           }
           return NextResponse.json(jsonPayload);
         } catch (e: any) {

@@ -806,53 +806,81 @@ async function executeEtlPipeline(
             const joinsCount = (joinObj.joins || []).length;
             // Lotes por petición: con muchos JOINs el costo crece fuerte; lotes chicos evitan timeout (~295s) y el run encadena más vueltas.
             const starChunkCap =
-              joinsCount >= 10 ? 1_800
-              : joinsCount >= 8 ? 2_500
-              : joinsCount >= 6 ? 4_500
-              : joinsCount >= 4 ? 10_000
-              : joinsCount >= 3 ? 14_000
+              joinsCount >= 10 ? 700
+              : joinsCount >= 8 ? 900
+              : joinsCount >= 6 ? 1_200
+              : joinsCount >= 4 ? 1_800
+              : joinsCount >= 3 ? 2_500
               : 250_000;
-            const starChunkSize = Math.min(JOIN_CHUNK_SIZE, starChunkCap);
+            const minStarChunkSize =
+              joinsCount >= 10 ? 200
+              : joinsCount >= 8 ? 250
+              : joinsCount >= 6 ? 300
+              : joinsCount >= 4 ? 400
+              : 600;
+            let starChunkSize = Math.max(minStarChunkSize, Math.min(JOIN_CHUNK_SIZE, starChunkCap));
             let starOffset = 0;
             while (true) {
-              const joinQueryBody = {
-                primaryConnectionId: joinObj.primaryConnectionId,
-                primaryTable: joinObj.primaryTable || (body!.filter?.table || "").trim(),
-                joins: joinsWithCols,
-                primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
-                conditions: body!.filter?.conditions || [],
-                dateFilter: body!.filter?.dateFilter ?? undefined,
-                limit: starChunkSize,
-                offset: starOffset,
-                count: false,
-                fromEtlRun: true,
-              };
-              const starRes = await fetch(`${origin}/api/connection/join-query`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-                },
-                body: JSON.stringify(joinQueryBody),
-              });
-              const text = await starRes.text();
-              let starData: { ok?: boolean; error?: string; rows?: unknown[] };
-              try {
-                starData = text ? JSON.parse(text) : {};
-              } catch {
-                const isTimeout =
-                  starRes.status === 504 ||
-                  /timeout|FUNCTION_INVOCATION_TIMEOUT/i.test(text || "");
-                throw new Error(
-                  isTimeout
-                    ? "La consulta JOIN superó el tiempo permitido. Reduzca el volumen o use filtros; el ETL obtiene datos por lotes. En servidor propio puede aumentar ETL_JOIN_TIMEOUT_MS."
-                    : `El servidor de JOIN devolvió una respuesta no válida (posible timeout o error del servidor). Detalle: ${(text || "").slice(0, 300)}`
-                );
-              }
-              if (!starRes.ok || !starData?.ok) {
-                throw new Error(
-                  `Error ejecutando JOIN múltiple: ${starData?.error || `estado ${starRes.status}`}`
-                );
+              let starData: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number } = {};
+              let currentChunkSize = starChunkSize;
+              while (true) {
+                const joinQueryBody = {
+                  primaryConnectionId: joinObj.primaryConnectionId,
+                  primaryTable: joinObj.primaryTable || (body!.filter?.table || "").trim(),
+                  joins: joinsWithCols,
+                  primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
+                  conditions: body!.filter?.conditions || [],
+                  dateFilter: body!.filter?.dateFilter ?? undefined,
+                  limit: currentChunkSize,
+                  offset: starOffset,
+                  count: false,
+                  fromEtlRun: true,
+                };
+                const starRes = await fetch(`${origin}/api/connection/join-query`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+                  },
+                  body: JSON.stringify(joinQueryBody),
+                });
+                const text = await starRes.text();
+                let parseFailed = false;
+                try {
+                  starData = text ? JSON.parse(text) : {};
+                } catch {
+                  parseFailed = true;
+                }
+                const responseError = parseFailed
+                  ? (text || "").slice(0, 300)
+                  : String(starData?.error || `estado ${starRes.status}`);
+                const isTimeoutResponse =
+                  starRes.status === 504 || /timeout|FUNCTION_INVOCATION_TIMEOUT/i.test(responseError);
+                if (parseFailed || !starRes.ok || !starData?.ok) {
+                  if (isTimeoutResponse && currentChunkSize > minStarChunkSize) {
+                    const reducedChunk = Math.max(minStarChunkSize, Math.floor(currentChunkSize / 2));
+                    if (reducedChunk < currentChunkSize) {
+                      console.log("[ETL Run join-query iteración] Timeout detectado, reintentando con chunk menor.", {
+                        runId,
+                        sourceOffset: starOffset,
+                        previousChunk: currentChunkSize,
+                        nextChunk: reducedChunk,
+                        joinsCount,
+                      });
+                      currentChunkSize = reducedChunk;
+                      starChunkSize = Math.min(starChunkSize, reducedChunk);
+                      continue;
+                    }
+                  }
+                  throw new Error(
+                    isTimeoutResponse
+                      ? "La consulta JOIN superó el tiempo permitido. Reduzca el volumen o use filtros; el ETL obtiene datos por lotes. En servidor propio puede aumentar ETL_JOIN_TIMEOUT_MS."
+                      : `Error ejecutando JOIN múltiple: ${responseError}`
+                  );
+                }
+                // conservar chunk menor que funcionó para siguientes iteraciones.
+                starChunkSize = Math.min(starChunkSize, currentChunkSize);
+                break;
               }
               if (!Array.isArray(starData.rows)) {
                 throw new Error("JOIN múltiple devolvió una respuesta inválida.");
