@@ -157,6 +157,12 @@ function normalizeJoinKeyValue(value: unknown): string {
   if (typeof value === "string") {
     const s = value.trim().replace(/\s+/g, " ");
     if (/^\d{4}-\d{2}-\d{2}(T|\s|$)/.test(s)) return s.slice(0, 10);
+    // Evita fallos de conversión en Firebird al comparar claves numéricas
+    // representadas como texto con escala fija (ej. "1.00000000").
+    if (/^-?\d+\.\d+$/.test(s)) {
+      const normalizedDecimal = s.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
+      return normalizedDecimal === "-0" ? "0" : normalizedDecimal;
+    }
     return s;
   }
   if (typeof value === "number" && !Number.isNaN(value)) return Number.isInteger(value) ? String(value) : String(value);
@@ -828,6 +834,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 if (v == null || v === "") return "NULL";
                 if (typeof v === "boolean") return v ? "1" : "0";
                 if (typeof v === "number" && !Number.isNaN(v)) return Number.isInteger(v) ? String(v) : `CAST('${String(v)}' AS DOUBLE PRECISION)`;
+                if (typeof v === "string" && /^-?\d+\.\d+$/.test(v.trim())) {
+                  const n = v.trim();
+                  return `CAST('${n.replace(/'/g, "''")}' AS DOUBLE PRECISION)`;
+                }
                 return `'${String(v).replace(/'/g, "''")}'`;
               };
               if (filterByKeys?.columns?.length && filterByKeys?.valueTuples?.length) {
