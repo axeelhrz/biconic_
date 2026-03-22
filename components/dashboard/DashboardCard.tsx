@@ -5,10 +5,21 @@ import { LayoutDashboard } from "lucide-react";
 import EyeIcon from "../icons/EyeIcon";
 import EllipsisHorizontalIcon from "../icons/EllipsisHorizontalIcon";
 import ShareDashboardModal from "./ShareDashboardModal"; // Import the modal
+import { DashboardCardMiniPreview } from "./DashboardCardMiniPreview";
 
 // Layout guardado (widgets con posición/span) para previsualización en la tarjeta
 export type DashboardLayoutPreview = {
-  widgets?: Array<{ gridOrder?: number; gridSpan?: number; type?: string; pageId?: string }>;
+  widgets?: Array<{
+    id?: string;
+    title?: string;
+    gridOrder?: number;
+    gridSpan?: number;
+    type?: string;
+    pageId?: string;
+    dataSourceId?: string | null;
+    source?: { labelField?: string };
+    aggregationConfig?: Record<string, unknown>;
+  }>;
   pages?: Array<{ id: string; name?: string }>;
   activePageId?: string;
 };
@@ -35,52 +46,6 @@ interface DashboardCardProps {
     onDelete?: (dashboard: Dashboard) => void;
 }
 
-// Colores por tipo de widget para la minipreview
-const WIDGET_TYPE_COLORS: Record<string, string> = {
-  bar: "#0d9488",
-  horizontalBar: "#0d9488",
-  line: "#2563eb",
-  pie: "#a855f7",
-  doughnut: "#a855f7",
-  kpi: "#16a34a",
-  table: "#64748b",
-  combo: "#ea580c",
-};
-
-function DashboardLayoutPreview({ layout }: { layout: DashboardLayoutPreview }) {
-  const widgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
-  const firstPageId = layout?.activePageId ?? layout?.pages?.[0]?.id;
-  const sorted = [...widgets]
-    .filter((w) => !firstPageId || w.pageId === firstPageId)
-    .sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999))
-    .slice(0, 8); // máximo 8 bloques en la preview
-
-  if (sorted.length === 0) return null;
-
-  return (
-    <div
-      className="grid w-full h-full grid-cols-4 gap-1 p-2"
-      style={{ background: "var(--platform-bg-elevated)" }}
-    >
-      {sorted.map((w, i) => {
-        const span = Math.min(4, Math.max(1, w.gridSpan ?? 2));
-        const color = WIDGET_TYPE_COLORS[w.type ?? ""] ?? "var(--platform-accent)";
-        return (
-          <div
-            key={i}
-            className="rounded min-h-[24px] opacity-90"
-            style={{
-              gridColumn: `span ${span}`,
-              background: color,
-              minHeight: "28px",
-            }}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
 // Inline Share Icon if not available (copying from EtlCard for consistency)
 const InlineShareIcon = ({ className }: { className?: string }) => (
   <svg
@@ -104,7 +69,9 @@ export default function DashboardCard({
 }: DashboardCardProps) {
   const { id, title, imageUrl, status, description, views, owner, layout } = dashboard;
   const [shareModalOpen, setShareModalOpen] = useState(false);
-  const hasLayoutPreview = layout?.widgets && layout.widgets.length > 0;
+  const activePageId = layout?.activePageId ?? layout?.pages?.[0]?.id;
+  const hasLayoutPreview = Array.isArray(layout?.widgets)
+    && layout.widgets.some((w) => !activePageId || w.pageId === activePageId);
 
   // Badge de estado: verde/amarillo con tema oscuro
   const statusClasses =
@@ -129,7 +96,7 @@ export default function DashboardCard({
         {/* Previsualización: layout del dashboard creado o placeholder */}
         <div className="relative h-[193px] w-full overflow-hidden bg-[var(--platform-bg)]">
           {hasLayoutPreview ? (
-            <DashboardLayoutPreview layout={layout!} />
+            <DashboardCardMiniPreview dashboardId={id} layout={layout!} />
           ) : imageUrl && imageUrl !== "/Image.svg" ? (
             <Image
               src={imageUrl}
