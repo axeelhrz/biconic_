@@ -36,8 +36,11 @@ import {
 } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
+import { DashboardWidgetRenderer } from "@/components/dashboard/DashboardWidgetRenderer";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
+import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
 
 ChartJS.register(
@@ -1169,22 +1172,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     if (v == null) return "—";
     const n = typeof v === "number" ? v : Number(v);
     if (isNaN(n)) return String(v);
-    let val = n;
-    let suffix = "";
-    if (chartValueScale === "K" && Math.abs(n) >= 1000) { val = n / 1_000; suffix = "K"; }
-    else if (chartValueScale === "M" && Math.abs(n) >= 1_000_000) { val = n / 1_000_000; suffix = "M"; }
-    else if (chartValueScale === "M" && Math.abs(n) >= 1000) { val = n / 1_000; suffix = "K"; }
-    else if (chartValueScale === "BI" && Math.abs(n) >= 1_000_000_000) { val = n / 1_000_000_000; suffix = "BI"; }
-    else if (chartValueScale === "BI" && Math.abs(n) >= 1_000_000) { val = n / 1_000_000; suffix = "M"; }
-    else if (chartValueScale === "BI" && Math.abs(n) >= 1000) { val = n / 1_000; suffix = "K"; }
-    const formatted = new Intl.NumberFormat("es-AR", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: chartDecimals,
-      useGrouping: chartThousandSep,
-    }).format(val);
-    if (chartValueType === "percent") return `${formatted}${suffix}%`;
-    if (chartValueType === "currency") return `${chartCurrencySymbol}${formatted}${suffix}`;
-    return `${formatted}${suffix}`;
+    const style = toChartStyleConfig({
+      valueType: chartValueType,
+      valueScale: chartValueScale,
+      currencySymbol: chartCurrencySymbol,
+      decimals: chartDecimals,
+      thousandSep: chartThousandSep,
+    });
+    return formatValue(
+      n,
+      style.valueFormat,
+      style.currencySymbol,
+      style.valueScale,
+      style.decimals,
+      style.useGrouping
+    );
   }, [chartValueType, chartValueScale, chartDecimals, chartThousandSep, chartCurrencySymbol]);
 
   /** Formatea un valor de celda como fecha en la vista previa cuando la columna es de tipo fecha (dimensión temporal o columna fecha). */
@@ -1258,6 +1260,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     setFormLimit(100);
     setFormMetric({ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado" });
     setCalcType("formula");
+    setAnalysisSelectedMetricIds([]);
+    setFormulaFromSavedMetricIds([]);
+    setFormulaFromReuseExpr("metric_0 / NULLIF(metric_1, 0)");
+    setMetricNameToSave("");
+    setAnalysisNameToSave("");
+    setTransformCompare("none");
+    setTransformCompareFixedValue("");
+    setTransformShowDelta(true);
+    setTransformShowDeltaPct(true);
+    setTransformShowAccum(true);
     setPreviewData(null);
     if (!hideDatasetTab) {
       setGrainOption("");
@@ -1275,6 +1287,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
   const openEdit = (saved: SavedMetricForm) => {
     setEditingId(saved.id);
     setFormName(saved.name);
+    setAnalysisSelectedMetricIds([]);
+    setFormulaFromSavedMetricIds([]);
+    setFormulaFromReuseExpr("metric_0 / NULLIF(metric_1, 0)");
+    setMetricNameToSave("");
+    setAnalysisNameToSave("");
     const cfg = saved.aggregationConfig as SavedMetricAggregationConfig | undefined;
     setFormChartType((cfg as { chartType?: string })?.chartType ?? (saved as { chartType?: string }).chartType ?? "bar");
     if (cfg) {
@@ -1337,6 +1354,29 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       setChartGridColor(typeof cfg.chartGridColor === "string" ? cfg.chartGridColor : "");
       setChartScalePerMetric(cfg.chartScalePerMetric && typeof cfg.chartScalePerMetric === "object" ? cfg.chartScalePerMetric : {});
       setShowDataLabels(!!cfg.showDataLabels);
+      const compareFromConfig =
+        cfg.transformCompare && ["none", "mom", "yoy", "fixed"].includes(cfg.transformCompare)
+          ? cfg.transformCompare
+          : cfg.comparePeriod === "previous_month"
+            ? "mom"
+            : cfg.comparePeriod === "previous_year"
+              ? "yoy"
+              : "none";
+      setTransformCompare(compareFromConfig as "none" | "mom" | "yoy" | "fixed");
+      const fixedFromConfig =
+        typeof cfg.transformCompareFixedValue === "string" && cfg.transformCompareFixedValue.trim()
+          ? cfg.transformCompareFixedValue
+          : typeof (cfg as { compareFixedValue?: unknown }).compareFixedValue === "number"
+            ? String((cfg as { compareFixedValue?: number }).compareFixedValue)
+            : "";
+      setTransformCompareFixedValue(fixedFromConfig);
+      setTransformShowDelta(cfg.transformShowDelta !== false);
+      setTransformShowDeltaPct(cfg.transformShowDeltaPct !== false);
+      if (typeof cfg.transformShowAccum === "boolean") {
+        setTransformShowAccum(cfg.transformShowAccum);
+      } else {
+        setTransformShowAccum(cfg.cumulative ? cfg.cumulative !== "none" : true);
+      }
       setInterCrossFilter(cfg.interCrossFilter !== false);
       setInterCrossFilterFields(Array.isArray(cfg.interCrossFilterFields) ? cfg.interCrossFilterFields : []);
       setInterDrilldown(!!cfg.interDrilldown);
@@ -1391,6 +1431,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       setChartLabelOverrides({});
       setChartMetricFormats({});
       setShowDataLabels(false);
+      setTransformCompare("none");
+      setTransformCompareFixedValue("");
+      setTransformShowDelta(true);
+      setTransformShowDeltaPct(true);
+      setTransformShowAccum(true);
       setInterCrossFilter(true);
       setInterCrossFilterFields([]);
       setInterDrilldown(false);
@@ -1404,6 +1449,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     setPreviewData(null);
     setShowForm(true);
   };
+  const openEditRef = useRef(openEdit);
+  openEditRef.current = openEdit;
+
+  // Entrada desde /admin/metrics: abrir una métrica puntual con contexto (?metricId=...&step=D)
+  const openedFromQueryMetricRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!hideDatasetTab) return;
+    const metricId = (searchParams.get("metricId") ?? "").trim();
+    if (!metricId) return;
+    if (openedFromQueryMetricRef.current === metricId) return;
+    const target = savedMetrics.find((m) => String(m.id) === metricId);
+    if (!target) return;
+    openedFromQueryMetricRef.current = metricId;
+    openEditRef.current(target);
+    const step = searchParams.get("step");
+    if (step === "D") {
+      setWizard("D");
+      setWizardStep(0);
+    }
+  }, [hideDatasetTab, searchParams, savedMetrics]);
 
   const tableNameForPreview = data?.schema && data?.tableName ? `${data.schema}.${data.tableName}` : null;
 
@@ -1593,6 +1658,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           if (Number.isFinite(fixed)) body.compareFixedValue = fixed;
         }
       }
+      if (wizard === "C" && transformShowAccum) {
+        body.cumulative = "running_sum";
+      }
       const res = await fetch("/api/dashboard/aggregate-data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1664,19 +1732,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
   const chartAutoSelectedRef = useRef(false);
   useEffect(() => {
+    if (editingId) return;
     if (wizard === "D" && wizardStep === 0 && !chartAutoSelectedRef.current) {
       chartAutoSelectedRef.current = true;
       setFormChartType(suggestedChartType);
     }
     if (wizard !== "D") chartAutoSelectedRef.current = false;
-  }, [wizard, wizardStep, suggestedChartType]);
+  }, [wizard, wizardStep, suggestedChartType, editingId]);
 
   useEffect(() => {
+    if (editingId) return;
     if (wizard !== "D" || wizardStep !== 0) return;
     const { hasDimension, hasGeo } = chartTypeRestrictions;
     if (formChartType === "kpi" && hasDimension) setFormChartType(suggestedChartType);
     if (formChartType === "map" && !hasGeo) setFormChartType(suggestedChartType);
-  }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType]);
+  }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType, editingId]);
 
   /** Filas de vista previa con orden y Top N aplicados (misma lógica que el gráfico). Usar en tabla y en previewChartConfig. */
   const previewProcessedRows = useMemo(() => {
@@ -1756,163 +1826,152 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
   const previewChartConfig = useMemo(() => {
     if (!previewProcessedRows || previewProcessedRows.length === 0) return null;
-    const first = previewProcessedRows[0] as Record<string, unknown>;
-    const keys = Object.keys(first);
-
-    const xKey = chartXAxis && keys.includes(chartXAxis) ? chartXAxis : (() => {
-      const firstDim = formDimensions[0];
-      if (firstDim && keys.includes(firstDim)) return firstDim;
-      if (timeColumn && keys.includes(timeColumn)) return timeColumn;
-      const dimByNorm = (k: string) => timeColumn && k.trim().toLowerCase() === timeColumn.trim().toLowerCase();
-      const timeMatch = keys.find(dimByNorm);
-      if (timeMatch) return timeMatch;
-      const metricKeys = keys.filter((k) => /^metric_\d+$/.test(k));
-      return metricKeys.length === keys.length ? undefined : keys[0];
-    })();
-
-    let yKeys = chartYAxes.filter((k) => keys.includes(k));
-    if (yKeys.length === 0) {
-      yKeys = effectiveFormMetrics.map((m) => m.alias || m.field || "").filter(Boolean).filter((k) => keys.includes(k));
-    }
-    if (yKeys.length === 0) {
-      yKeys = xKey != null ? keys.filter((k) => k !== xKey) : keys.filter((k) => /^metric_\d+$/.test(k));
-    }
-    if (yKeys.length === 0) return null;
-
-    const defaultPalette = [
-      "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
-      "#06b6d4", "#84cc16", "#eab308", "#dc2626", "#a855f7", "#d946ef", "#0d9488", "#ea580c",
-      "#2563eb", "#16a34a", "#ca8a04", "#b91c1c", "#7c3aed", "#c026d3", "#0f766e", "#c2410c",
-    ];
-    const colLabel = (k: string) => {
-      const match = k.match(/^metric_(\d+)$/);
-      if (match) {
-        const idx = parseInt(match[1]!, 10);
-        const m = effectiveFormMetrics[idx];
-        return m ? (m.alias || m.field || k) : k;
-      }
-      return k;
-    };
-    const colorKeys = Object.keys(chartSeriesColors);
-    const getColor = (label: string, idx: number) => {
-      const byLabel = chartSeriesColors[label] ?? chartSeriesColors[label?.trim?.() ?? ""];
-      if (byLabel) return byLabel;
-      if (colorKeys[idx] != null) return chartSeriesColors[colorKeys[idx]!]!;
-      return defaultPalette[idx % defaultPalette.length]!;
-    };
-    const getColorByLabelStable = (label: string) => {
-      const byLabel = chartSeriesColors[label] ?? chartSeriesColors[label?.trim?.() ?? ""];
-      if (byLabel) return byLabel;
-      let hash = 0;
-      const s = String(label ?? "");
-      for (let i = 0; i < s.length; i++) hash = ((hash << 5) - hash) + s.charCodeAt(i);
-      const idx = Math.abs(hash) % defaultPalette.length;
-      return defaultPalette[idx]!;
-    };
-
-    const rows = previewProcessedRows;
-
-    const formatLabel = (v: unknown, colKey: string) => {
-      const formatted = formatPreviewDateValue(v, colKey);
-      return formatted ?? String(v ?? "");
-    };
-    const labelOverride = (v: string) => {
-      if (!chartLabelOverrides || Object.keys(chartLabelOverrides).length === 0) return v;
-      const s = String(v ?? "").trim();
-      if (s === "") return v;
-      if (s in chartLabelOverrides) return chartLabelOverrides[s];
-      for (const [k, val] of Object.entries(chartLabelOverrides)) {
-        if (String(k).trim() === s) return val;
-      }
-      return v;
-    };
-
-    if (chartSeriesField && keys.includes(chartSeriesField) && xKey) {
-      const seriesValues = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[chartSeriesField] ?? "")))];
-      const xValuesRaw = [...new Set(rows.map((r) => (r as Record<string, unknown>)[xKey]))];
-      const xValues = xValuesRaw.map((xv) => String(xv ?? ""));
-      const labels = xValues.map((xv) => labelOverride(formatLabel(xv, xKey)));
-      const datasets = seriesValues.flatMap((sv, svIdx) =>
-        yKeys.map((yKey, yIdx) => {
-          const label = `${labelOverride(sv)} (${colLabel(yKey)})`;
-          const color = getColor(label, svIdx * yKeys.length + yIdx);
-          return {
-            label,
-            data: xValues.map((xv) => {
-              const row = rows.find((r) => String((r as Record<string, unknown>)[xKey] ?? "") === xv && String((r as Record<string, unknown>)[chartSeriesField] ?? "") === sv);
-              return row ? Number((row as Record<string, unknown>)[yKey] ?? 0) : 0;
-            }),
-            backgroundColor: color + "99",
-            borderColor: color,
-            borderWidth: 1,
-          };
-        })
-      );
-      return { labels, datasets };
-    }
-
-    const labels = xKey != null ? rows.map((r) => labelOverride(formatLabel((r as Record<string, unknown>)[xKey], xKey))) : rows.map((_, i) => (i === 0 ? "Total" : ""));
-    const datasets = yKeys.map((alias, idx) => {
-      const label = colLabel(alias);
-      const color = getColor(label, idx);
-      const isBarOrHorizontalBar = formChartType === "bar" || formChartType === "horizontalBar";
-      const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
-      const barColors = oneMetricManyCategories
-        ? labels.map((l) => getColorByLabelStable(l))
-        : null;
-      return {
-        label,
-        data: rows.map((r) => Number((r as Record<string, unknown>)[alias] ?? 0)),
-        backgroundColor: barColors ? barColors.map((c) => c + "99") : color + "99",
-        borderColor: barColors ? barColors : color,
-        borderWidth: 1,
-      };
-    });
-
-    if (formChartType === "combo" && yKeys.length >= 2) {
-      return {
-        labels,
-        datasets: [
-          { ...datasets[0], type: "bar" as const, yAxisID: "y" },
-          { ...datasets[1], type: "line" as const, fill: false, yAxisID: "y1" },
-        ],
-      };
-    }
-
-    if (formChartType === "pie" || formChartType === "doughnut") {
-      const yKey = yKeys[0]!;
-      const sliceColors = labels.map((label) => getColorByLabelStable(label));
-      const hoverColors = sliceColors.map((c) => {
-        const hex = String(c).replace(/^#/, "");
-        if (hex.length >= 6) {
-          const r = Math.min(255, (parseInt(hex.slice(0, 2), 16) || 0) + 28);
-          const g = Math.min(255, (parseInt(hex.slice(2, 4), 16) || 0) + 28);
-          const b = Math.min(255, (parseInt(hex.slice(4, 6), 16) || 0) + 28);
-          return `rgb(${r},${g},${b})`;
-        }
-        return c;
-      });
-      return {
-        labels,
-        datasets: [{
-          label: colLabel(yKey),
-          data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
-          backgroundColor: sliceColors,
-          hoverBackgroundColor: hoverColors,
-          borderColor: "#fff",
-          borderWidth: 2,
-        }],
-      };
-    }
-
-    return { labels, datasets };
-  }, [previewProcessedRows, formDimensions, effectiveFormMetrics, chartXAxis, chartYAxes, chartSeriesField, chartSeriesColors, formChartType, timeColumn, formatPreviewDateValue, dateFields, chartLabelOverrides]);
+    const metrics = effectiveFormMetrics.map((m, idx) => ({
+      id: m.id ?? `metric-${idx}`,
+      field: m.field ?? "",
+      func: m.func ?? "SUM",
+      alias: m.alias || m.field || `metric_${idx}`,
+      ...(m.expression ? { expression: m.expression } : {}),
+    }));
+    const chartCfg = buildChartConfig(
+      previewProcessedRows as Record<string, unknown>[],
+      {
+        type: formChartType,
+        aggregationConfig: {
+          enabled: true,
+          dimension: chartXAxis || formDimensions[0],
+          dimensions: formDimensions,
+          metrics,
+          chartType: formChartType,
+          chartXAxis,
+          chartYAxes,
+          chartSeriesField,
+          chartSeriesColors,
+          chartLabelOverrides,
+          chartRankingEnabled,
+          chartRankingTop,
+          chartRankingMetric,
+          chartSortDirection,
+          chartSortBy,
+          chartSortByMetric,
+          chartAxisOrder,
+        },
+      },
+      "#0ea5e9"
+    );
+    return chartCfg ?? null;
+  }, [
+    previewProcessedRows,
+    effectiveFormMetrics,
+    formChartType,
+    chartXAxis,
+    formDimensions,
+    chartYAxes,
+    chartSeriesField,
+    chartSeriesColors,
+    chartLabelOverrides,
+    chartRankingEnabled,
+    chartRankingTop,
+    chartRankingMetric,
+    chartSortDirection,
+    chartSortBy,
+    chartSortByMetric,
+    chartAxisOrder,
+  ]);
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
     const firstNum = previewChartConfig.datasets[0]?.data?.[0];
     return firstNum != null ? firstNum : undefined;
   }, [previewData, previewChartConfig]);
+
+  const previewWidgetForRenderer = useMemo(() => {
+    if (!previewData || previewData.length === 0) return null;
+    const metricFormats = chartYAxes.map((key) =>
+      toChartStyleConfig(
+        chartMetricFormats[key] ?? {
+          valueType: chartValueType,
+          valueScale: chartValueScale,
+          currencySymbol: chartCurrencySymbol,
+          decimals: chartDecimals,
+          thousandSep: chartThousandSep,
+        }
+      )
+    );
+    const widgetRows =
+      formChartType === "table"
+        ? getProcessedRowsForChart(previewProcessedRows as Record<string, unknown>[], {
+            type: formChartType,
+            aggregationConfig: {
+              chartType: formChartType,
+              chartXAxis,
+              chartYAxes,
+              chartSeriesField,
+              chartRankingEnabled,
+              chartRankingTop,
+              chartRankingMetric,
+              chartSortDirection,
+              chartSortBy,
+              chartSortByMetric,
+              chartAxisOrder,
+            },
+          })
+        : previewProcessedRows;
+    return {
+      id: "metric-preview",
+      type: formChartType as "bar" | "horizontalBar" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter",
+      title: formName?.trim() || "Vista previa",
+      config: previewChartConfig ?? undefined,
+      rows:
+        formChartType === "kpi"
+          ? [{ value: previewKpiValue ?? 0 }]
+          : (widgetRows as Record<string, unknown>[]),
+      aggregationConfig: {
+        chartType: formChartType,
+        chartGridXDisplay,
+        chartGridYDisplay,
+        chartGridColor,
+        chartComboSyncAxes,
+      },
+      chartStyle: toChartStyleConfig({
+        valueType: chartValueType,
+        valueScale: chartValueScale,
+        currencySymbol: chartCurrencySymbol,
+        decimals: chartDecimals,
+        thousandSep: chartThousandSep,
+      }),
+      chartMetricStyles: metricFormats,
+      labelDisplayMode: "percent" as const,
+      minHeight: 320,
+    };
+  }, [
+    previewData,
+    previewProcessedRows,
+    previewChartConfig,
+    previewKpiValue,
+    chartYAxes,
+    chartMetricFormats,
+    chartValueType,
+    chartValueScale,
+    chartCurrencySymbol,
+    chartDecimals,
+    chartThousandSep,
+    formChartType,
+    formName,
+    chartXAxis,
+    chartSeriesField,
+    chartRankingEnabled,
+    chartRankingTop,
+    chartRankingMetric,
+    chartSortDirection,
+    chartSortBy,
+    chartSortByMetric,
+    chartAxisOrder,
+    chartGridXDisplay,
+    chartGridYDisplay,
+    chartGridColor,
+    chartComboSyncAxes,
+  ]);
 
   /** Resultado principal del cálculo (paso Cálculo): valor de la última métrica = fórmula o métrica principal. La API devuelve metric_0, metric_1, ... */
   const previewCalculationResult = useMemo(() => {
@@ -2007,6 +2066,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     const chartTypeChanged = lastChartTypeForMappingRef.current !== formChartType;
     lastChartTypeForMappingRef.current = formChartType;
     const emptyMapping = !chartXAxis && chartYAxes.length === 0;
+    if (editingId && !emptyMapping) return;
     if (!chartTypeChanged && !emptyMapping) return;
     if (dims.length === 0 && nums.length === 0) return;
 
@@ -2024,7 +2084,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       if (chartYAxes.length === 0 && nums.length > 0) setChartYAxes(nums.slice(0, Math.min(3, nums.length)).map((c) => c.key));
       if (dims.length >= 2 && !chartSeriesField) setChartSeriesField(dims[1]!.key);
     }
-  }, [wizard, wizardStep, formChartType, chartDimensionColumns, chartNumericColumns, chartXAxis, chartYAxes.length, chartSeriesField, columnRoles]);
+  }, [wizard, wizardStep, formChartType, chartDimensionColumns, chartNumericColumns, chartXAxis, chartYAxes.length, chartSeriesField, columnRoles, editingId]);
 
   /** Encabezados para la tabla de previsualización: metric_0 → alias de la métrica (estilo Excel). */
   const previewDisplayHeaders = useMemo(() => {
@@ -2088,6 +2148,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       return;
     }
     const metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
+    const comparePeriodToSave: "previous_month" | "previous_year" | undefined =
+      transformCompare === "mom"
+        ? "previous_month"
+        : transformCompare === "yoy"
+          ? "previous_year"
+          : undefined;
+    const compareFixedValueToSave =
+      transformCompare === "fixed"
+        ? Number.parseFloat(transformCompareFixedValue)
+        : Number.NaN;
+    const cumulativeToSave: "none" | "running_sum" = transformShowAccum ? "running_sum" : "none";
     const aggregationConfig = {
       dimension: formDimensions[0] || undefined,
       dimension2: formDimensions[1] || undefined,
@@ -2096,6 +2167,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
+      cumulative: cumulativeToSave,
+      comparePeriod: comparePeriodToSave,
+      compareFixedValue: Number.isFinite(compareFixedValueToSave) ? compareFixedValueToSave : undefined,
+      transformCompare,
+      transformCompareFixedValue: transformCompare === "fixed" ? transformCompareFixedValue : undefined,
+      transformShowDelta,
+      transformShowDeltaPct,
+      transformShowAccum,
       chartType: formChartType || undefined,
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
@@ -2327,6 +2406,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
       metricsToStore = formMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` }));
     }
+    const comparePeriodToSave: "previous_month" | "previous_year" | undefined =
+      transformCompare === "mom"
+        ? "previous_month"
+        : transformCompare === "yoy"
+          ? "previous_year"
+          : undefined;
+    const compareFixedValueToSave =
+      transformCompare === "fixed"
+        ? Number.parseFloat(transformCompareFixedValue)
+        : Number.NaN;
+    const cumulativeToSave: "none" | "running_sum" = transformShowAccum ? "running_sum" : "none";
     const aggregationConfig = {
       dimension: formDimensions[0] || undefined,
       dimension2: formDimensions[1] || undefined,
@@ -2335,6 +2425,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
+      cumulative: cumulativeToSave,
+      comparePeriod: comparePeriodToSave,
+      compareFixedValue: Number.isFinite(compareFixedValueToSave) ? compareFixedValueToSave : undefined,
+      transformCompare,
+      transformCompareFixedValue: transformCompare === "fixed" ? transformCompareFixedValue : undefined,
+      transformShowDelta,
+      transformShowDeltaPct,
+      transformShowAccum,
       chartType: formChartType || undefined,
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
@@ -5066,6 +5164,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                           </div>
                         )}
                         {previewChartConfig && formChartType !== "kpi" && formChartType !== "table" && formChartType !== "map" && (() => {
+                          if (previewWidgetForRenderer) {
+                            return (
+                              <div className="h-[320px] w-full">
+                                <DashboardWidgetRenderer
+                                  widget={previewWidgetForRenderer}
+                                  isLoading={false}
+                                  hideHeader
+                                  minHeight={320}
+                                  className="!border-0 !p-0 !shadow-none h-full"
+                                />
+                              </div>
+                            );
+                          }
                           const yValues = previewChartConfig.datasets?.flatMap((d: { data?: number[] }) => d.data ?? []) ?? [];
                           const dataMin = yValues.length ? Math.min(...yValues) : 0;
                           const dataMax = yValues.length ? Math.max(...yValues) : 100;

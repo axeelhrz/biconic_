@@ -205,12 +205,13 @@ export function buildChartOptions(
   }
 
   if (type === "pie" || type === "doughnut") {
+    const plugins = base.plugins as { datalabels?: Record<string, unknown> };
     return {
       ...base,
       plugins: {
         ...base.plugins,
         datalabels: {
-          ...(base.plugins as any).datalabels,
+          ...(plugins.datalabels ?? {}),
           color: "#ffffff",
         },
       },
@@ -218,4 +219,80 @@ export function buildChartOptions(
   }
 
   return base;
+}
+
+export type ChartFormatConfigInput = {
+  valueType?: string;
+  valueScale?: string;
+  currencySymbol?: string;
+  decimals?: number;
+  thousandSep?: boolean;
+};
+
+/**
+ * Convierte configuración libre (DB/UI) al tipo ChartStyleConfig común.
+ */
+export function toChartStyleConfig(input?: ChartFormatConfigInput | null): ChartStyleConfig {
+  const valueType = (input?.valueType ?? "none").toLowerCase();
+  const rawScale = (input?.valueScale ?? "none").toUpperCase();
+  const scale: ValueScaleType =
+    rawScale === "K" ? "K" : rawScale === "M" ? "M" : rawScale === "BI" || rawScale === "B" ? "B" : "none";
+  return {
+    valueFormat: valueType === "currency" ? "currency" : valueType === "percent" ? "percent" : "none",
+    valueScale: scale,
+    currencySymbol: input?.currencySymbol ?? "$",
+    decimals: input?.decimals ?? 2,
+    useGrouping: input?.thousandSep !== false,
+  };
+}
+
+export function buildPieDoughnutLegendShared(
+  chartConfig: { labels?: string[]; datasets?: Array<{ backgroundColor?: string | string[] }> } | null | undefined,
+  textColor: string = "#334155"
+): Record<string, unknown> {
+  const ds0 = chartConfig?.datasets?.[0];
+  if (!ds0 || !Array.isArray(ds0.backgroundColor) || !chartConfig?.labels?.length) {
+    return { display: true, position: "right" as const, labels: { color: textColor, font: { size: 12, color: textColor } } };
+  }
+  return {
+    display: true,
+    position: "right" as const,
+    labels: {
+      color: textColor,
+      font: { size: 12, color: textColor },
+      padding: 12,
+      usePointStyle: false,
+      generateLabels: () =>
+        chartConfig.labels!.map((label, i) => {
+          const bg = (ds0.backgroundColor as string[])[i] ?? (typeof ds0.backgroundColor === "string" ? ds0.backgroundColor : "#0ea5e9");
+          return {
+            text: String(label || ""),
+            fillStyle: typeof bg === "string" ? bg : "#0ea5e9",
+            strokeStyle: "#fff",
+            lineWidth: 1,
+            hidden: false,
+            index: i,
+            datasetIndex: 0,
+            fontColor: textColor,
+          };
+        }),
+    },
+  };
+}
+
+export function buildMiniChartOptions(horizontal: boolean = false): Record<string, unknown> {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: { enabled: false },
+      datalabels: { display: false },
+    },
+    ...(horizontal ? { indexAxis: "y" as const } : {}),
+    scales: {
+      x: { display: false, grid: { display: false } },
+      y: { display: false, grid: { display: false } },
+    },
+  };
 }

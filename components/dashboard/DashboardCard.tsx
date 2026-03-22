@@ -86,10 +86,12 @@ export default function DashboardCard({
       <Link
         href={href ?? `/dashboard/${id}`}
         aria-label={`Abrir dashboard ${title}`}
-        className="flex w-full flex-col overflow-hidden rounded-[15px] border transition-shadow hover:border-[var(--platform-accent)]"
+        className="flex w-full flex-col overflow-hidden border transition-shadow hover:border-[var(--platform-accent)]"
         style={{
           background: "var(--platform-surface)",
           borderColor: "var(--platform-border)",
+          borderWidth: "var(--platform-card-border-width, 1px)",
+          borderRadius: "var(--platform-card-radius, 15px)",
           boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
         }}
       >

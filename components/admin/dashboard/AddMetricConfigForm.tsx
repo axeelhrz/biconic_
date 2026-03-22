@@ -104,6 +104,15 @@ export type SavedMetricAggregationConfig = {
   filters?: AggregationFilterEdit[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
+  cumulative?: "none" | "running_sum" | "ytd";
+  comparePeriod?: "previous_year" | "previous_month";
+  dateDimension?: string;
+  compareFixedValue?: number;
+  transformCompare?: "none" | "mom" | "yoy" | "fixed";
+  transformCompareFixedValue?: string;
+  transformShowDelta?: boolean;
+  transformShowDeltaPct?: boolean;
+  transformShowAccum?: boolean;
   // Opciones de gráfico (persistidas al guardar métrica)
   chartType?: string;
   chartXAxis?: string;
@@ -253,6 +262,9 @@ export function AddMetricConfigForm({
         filters: newFilters.length ? newFilters : agg.filters,
         orderBy: cfg.orderBy ?? agg.orderBy,
         limit: cfg.limit ?? agg.limit,
+        cumulative: cfg.cumulative,
+        comparePeriod: cfg.comparePeriod,
+        dateDimension: cfg.dateDimension,
         chartType: cfg.chartType,
         chartXAxis: cfg.chartXAxis,
         chartYAxes: cfg.chartYAxes,

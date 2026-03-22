@@ -25,6 +25,8 @@
   --platform-muted: #6b7c85;
   --platform-border: rgba(236, 236, 236, 0.08);
   --platform-border-strong: rgba(236, 236, 236, 0.14);
+  --platform-card-border-width: 1px;
+  --platform-card-radius: 20px;
   /* Botones y acento: verdoso (#23E3B4, #40EF8E). Texto sobre acento: oscuro para contraste */
   --platform-accent: #23E3B4;
   --platform-accent-dim: rgba(35, 227, 180, 0.18);

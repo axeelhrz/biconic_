@@ -447,7 +447,7 @@ export default function AdminMetricsPage() {
                     </span>
                     <div className="flex items-center gap-2 shrink-0">
                       <Link
-                        href={`/admin/etl/${etl.id}/metrics`}
+                        href={`/admin/etl/${etl.id}/metrics?metricId=${encodeURIComponent(m.id)}&step=D`}
                         className="text-sm font-medium"
                         style={{ color: "var(--platform-accent)" }}
                       >

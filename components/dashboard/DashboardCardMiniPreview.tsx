@@ -17,6 +17,7 @@ import {
 import { Loader2 } from "lucide-react";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { buildChartConfig, getProcessedRowsForChart, type ChartConfig } from "@/lib/dashboard/buildChartConfig";
+import { buildMiniChartOptions, formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
 
 ChartJS.register(
   CategoryScale,
@@ -105,21 +106,9 @@ type MiniWidgetData = {
   gridSpan: number;
 };
 
-const MINI_CHART_OPTIONS = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: { legend: { display: false }, tooltip: { enabled: false } },
-  scales: {
-    x: { display: false, grid: { display: false } },
-    y: { display: false, grid: { display: false } },
-  },
-};
-
-const MINI_PIE_OPTIONS = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: { legend: { display: false }, tooltip: { enabled: false } },
-};
+const MINI_CHART_OPTIONS = buildMiniChartOptions();
+const MINI_CHART_OPTIONS_HORIZONTAL = buildMiniChartOptions(true);
+const MINI_PIE_OPTIONS = buildMiniChartOptions();
 
 function pickWidgets(layout: LayoutData): LayoutWidget[] {
   const widgets = Array.isArray(layout.widgets) ? layout.widgets : [];
@@ -276,10 +265,14 @@ function MiniWidgetTile({ widget }: { widget: MiniWidgetData }) {
   if (miniType === "kpi") {
     const firstRow = widget.rows[0] ?? {};
     const firstNumeric = Object.values(firstRow).find((v) => typeof v === "number") ?? Object.values(firstRow)[0];
+    const style = toChartStyleConfig({ valueType: "none" });
+    const formatted = typeof firstNumeric === "number"
+      ? formatValue(firstNumeric, style.valueFormat, style.currencySymbol, style.valueScale, style.decimals, style.useGrouping)
+      : String(firstNumeric ?? "—");
     return (
       <div className="flex h-full items-center justify-center rounded-md border px-2 text-center" style={{ borderColor: "var(--platform-border)" }}>
         <span className="truncate text-xs font-semibold" style={{ color: "var(--platform-fg)" }}>
-          {String(firstNumeric ?? "—")}
+          {formatted}
         </span>
       </div>
     );
@@ -310,7 +303,7 @@ function MiniWidgetTile({ widget }: { widget: MiniWidgetData }) {
       {miniType === "horizontalBar" && (
         <Bar
           data={widget.chartConfig as never}
-          options={{ ...MINI_CHART_OPTIONS, indexAxis: "y" as const } as never}
+          options={MINI_CHART_OPTIONS_HORIZONTAL as never}
         />
       )}
       {miniType === "line" && <Line data={widget.chartConfig as never} options={MINI_CHART_OPTIONS as never} />}

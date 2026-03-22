@@ -18,7 +18,7 @@ import {
 } from "chart.js";
 import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Card } from "@/components/ui/card";
-import { buildChartOptions, formatValue, getValueFormatter, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import { buildChartOptions, buildPieDoughnutLegendShared, formatValue, getValueFormatter, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 
 const DashboardMapWidget = dynamic(
@@ -139,38 +139,6 @@ function getChartOptionsBase(darkTheme: boolean) {
   };
 }
 
-function buildPieDoughnutLegend(
-  chartConfig: ChartConfig | null | undefined,
-  darkTheme: boolean
-): Record<string, unknown> {
-  const axisColor = darkTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
-  const ds0 = chartConfig?.datasets?.[0];
-  if (!ds0 || !Array.isArray(ds0.backgroundColor) || !chartConfig?.labels?.length) {
-    return { display: true, position: "right" as const, labels: { color: axisColor } };
-  }
-  return {
-    display: true,
-    position: "right" as const,
-    labels: {
-      color: axisColor,
-      padding: 12,
-      generateLabels: () =>
-        chartConfig.labels.map((label, i) => {
-          const bg = (ds0.backgroundColor as string[])[i] ?? "#0ea5e9";
-          return {
-            text: String(label ?? ""),
-            fillStyle: typeof bg === "string" ? bg : "#0ea5e9",
-            strokeStyle: "#fff",
-            lineWidth: 1,
-            hidden: false,
-            index: i,
-            datasetIndex: 0,
-          };
-        }),
-    },
-  };
-}
-
 function formatKpiValue(value: unknown, style?: ChartStyleConfig | null): string {
   if (value == null || value === "") return "—";
   const n = Number(value);
@@ -282,10 +250,11 @@ export function DashboardWidgetRenderer({
     if (type === "pie" || type === "doughnut") {
       const base = buildChartOptions(type, style, labelMode) as Record<string, unknown>;
       const baseDatalabels = (base.plugins as { datalabels?: Record<string, unknown> })?.datalabels ?? {};
+      const legendColor = darkChartTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
       const plugins = {
         ...optionsBase.plugins,
         ...(base.plugins as object),
-        legend: buildPieDoughnutLegend(chartConfig ?? undefined, darkChartTheme),
+        legend: buildPieDoughnutLegendShared(chartConfig ?? undefined, legendColor),
         datalabels: {
           ...baseDatalabels,
           ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
@@ -536,10 +505,24 @@ export function DashboardWidgetRenderer({
               <div className="h-[220px] w-full">
                 {(chartType === "bar" || chartType === "combo") && <Bar data={(chartType === "combo" && effectiveChartData ? effectiveChartData : chartConfig) as never} options={chartOptions as never} />}
                 {chartType === "horizontalBar" && (
-                  <Bar
-                    data={chartConfig as never}
-                    options={{ ...chartOptions, indexAxis: "y" as const, scales: { ...(chartOptions as any).scales, y: { ...(chartOptions as any).scales?.y, ticks: { ...(chartOptions as any).scales?.y?.ticks, maxTicksLimit: 12 } } } } as never}
-                  />
+                  (() => {
+                    const optionsRecord = chartOptions as Record<string, unknown>;
+                    const scales = (optionsRecord.scales as Record<string, unknown> | undefined) ?? {};
+                    const yScale = (scales.y as Record<string, unknown> | undefined) ?? {};
+                    const yTicks = (yScale.ticks as Record<string, unknown> | undefined) ?? {};
+                    const horizontalOptions = {
+                      ...optionsRecord,
+                      indexAxis: "y" as const,
+                      scales: {
+                        ...scales,
+                        y: {
+                          ...yScale,
+                          ticks: { ...yTicks, maxTicksLimit: 12 },
+                        },
+                      },
+                    };
+                    return <Bar data={chartConfig as never} options={horizontalOptions as never} />;
+                  })()
                 )}
                 {(chartType === "line" || chartType === "area") && (
                   <Line
