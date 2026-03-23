@@ -496,21 +496,39 @@ export function AdminDashboardStudio({
           const derivedByName = Object.fromEntries(
             derivedColumnsFromLayout.map((d) => [d.name.toLowerCase().trim(), d])
           );
+          const widgetMetricId = String((widget as { metricId?: unknown }).metricId ?? "").trim();
+          const widgetMetricIds = Array.isArray((widget as { metricIds?: unknown }).metricIds)
+            ? ((widget as { metricIds?: unknown[] }).metricIds ?? []).map((id) => String(id ?? "").trim()).filter(Boolean)
+            : [];
+          const savedById = widgetMetricId
+            ? savedMetrics.find((s) => String(s.id).trim() === widgetMetricId)
+            : undefined;
           const metricsPayload = agg.metrics
             .map(({ id, ...m }) => {
               if (m.func === "FORMULA")
                 return { formula: m.formula || "", alias: m.alias || "formula", field: "" };
               let expr = (m as { expression?: string }).expression;
               let fieldStr = m.field != null ? String(m.field).trim() : "";
-              const savedByName = savedMetrics.find((s) => (s.name || "").trim().toLowerCase() === fieldStr.toLowerCase());
-              if (savedByName && !expr) {
-                const first = (savedByName as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
-                  ?? (savedByName as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric;
+              if (savedById && !expr && !fieldStr) {
+                const first = (savedById as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
+                  ?? (savedById as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric;
                 if (first) {
                   const ex = (first as { expression?: string }).expression;
                   if (ex && String(ex).trim()) expr = String(ex).trim();
                   const f = String((first as { field?: string }).field ?? "").trim();
-                  if (f && f.toLowerCase() !== (savedByName.name || "").trim().toLowerCase()) fieldStr = f;
+                  if (f) fieldStr = f;
+                }
+              }
+              // Fallback legacy por nombre: solo cuando no hay vínculo por ID y falta definición explícita.
+              if (!savedById && !expr && fieldStr) {
+                const savedByName = savedMetrics.find((s) => (s.name || "").trim().toLowerCase() === fieldStr.toLowerCase());
+                const first = (savedByName as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } } | undefined)?.aggregationConfig?.metrics?.[0]
+                  ?? (savedByName as { metric?: { field?: string; func?: string; alias?: string; expression?: string } } | undefined)?.metric;
+                if (first) {
+                  const ex = (first as { expression?: string }).expression;
+                  if (ex && String(ex).trim()) expr = String(ex).trim();
+                  const f = String((first as { field?: string }).field ?? "").trim();
+                  if (f && savedByName && f.toLowerCase() !== (savedByName.name || "").trim().toLowerCase()) fieldStr = f;
                 }
               }
               const derived = fieldStr ? derivedByName[fieldStr.toLowerCase()] : undefined;
@@ -546,31 +564,35 @@ export function AdminDashboardStudio({
           const rankingOrderBy = rankingLimit && (agg.chartRankingMetric || metricAliasesForApi[0])
             ? { field: agg.chartRankingMetric || metricAliasesForApi[0], direction: "DESC" as const }
             : undefined;
-          // Enviar definiciones de métricas guardadas referenciadas por nombre para que el backend las resuelva (multi-ETL o cuando el lookup falla)
+          const toSavedMetricPayload = (s: SavedMetric) => {
+            const first = (s as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
+              ?? (s as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric;
+            const name = String(s.name ?? "").trim();
+            if (!first) return { name, field: name, func: "SUM", alias: name };
+            const field = String((first as { field?: string }).field ?? "").trim() || name;
+            const func = String((first as { func?: string }).func ?? "SUM");
+            const alias = String((first as { alias?: string }).alias ?? name);
+            const expression = (first as { expression?: string }).expression;
+            return {
+              name,
+              field,
+              func,
+              alias,
+              ...(expression && String(expression).trim() ? { expression: String(expression).trim() } : {}),
+            };
+          };
+          // Priorizar métricas vinculadas por ID; usar nombre solo como fallback legado.
           const metricFieldNames = new Set(
             agg.metrics
               .filter((m) => m.func !== "FORMULA" && m.field != null && String(m.field).trim() !== "")
               .map((m) => String(m.field).trim().toLowerCase())
           );
-          const savedMetricsForBody = savedMetrics
-            .filter((s) => (s.name || "").trim() && metricFieldNames.has((s.name || "").trim().toLowerCase()))
-            .map((s) => {
-              const first = (s as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
-                ?? (s as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric;
-              const name = String(s.name ?? "").trim();
-              if (!first) return { name, field: name, func: "SUM", alias: name };
-              const field = String((first as { field?: string }).field ?? "").trim() || name;
-              const func = String((first as { func?: string }).func ?? "SUM");
-              const alias = String((first as { alias?: string }).alias ?? name);
-              const expression = (first as { expression?: string }).expression;
-              return {
-                name,
-                field,
-                func,
-                alias,
-                ...(expression && String(expression).trim() ? { expression: String(expression).trim() } : {}),
-              };
-            });
+          const idSet = new Set([widgetMetricId, ...widgetMetricIds].filter(Boolean));
+          const savedByLinkedIds = savedMetrics.filter((s) => idSet.has(String(s.id).trim()));
+          const savedMetricsForBody = (savedByLinkedIds.length > 0
+            ? savedByLinkedIds
+            : savedMetrics.filter((s) => (s.name || "").trim() && metricFieldNames.has((s.name || "").trim().toLowerCase()))
+          ).map(toSavedMetricPayload);
           const res = await fetch("/api/dashboard/aggregate-data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -838,30 +860,65 @@ export function AdminDashboardStudio({
   const addSavedMetricToDashboard = useCallback(
     (saved: SavedMetricForm) => {
       const newWidget = buildWidgetFromSavedMetric(saved);
-      setWidgets((prev) => [...prev, newWidget]);
+      const existing = widgets.find((w) => String((w as { metricId?: unknown }).metricId ?? "").trim() === String(saved.id).trim());
+      const targetWidgetId = existing?.id ?? newWidget.id;
+      setWidgets((prev) =>
+        existing
+          ? prev.map((w) =>
+              w.id === existing.id
+                ? {
+                    ...w,
+                    type: newWidget.type,
+                    title: newWidget.title,
+                    metricId: saved.id,
+                    aggregationConfig: newWidget.aggregationConfig,
+                    dataSourceId: newWidget.dataSourceId,
+                  }
+                : w
+            )
+          : [...prev, newWidget]
+      );
       setSelectedId(null);
       setIsDirty(true);
       setAddMetricOpen(false);
       setAddMetricStep("list");
       setAddMetricInitialIntent(null);
-      if (etlData) setTimeout(() => loadMetricData(newWidget.id), 300);
+      if (etlData) setTimeout(() => loadMetricData(targetWidgetId), 300);
     },
-    [buildWidgetFromSavedMetric, etlData, loadMetricData]
+    [buildWidgetFromSavedMetric, etlData, loadMetricData, widgets]
   );
 
   /** Añade al dashboard un análisis ya creado (métricas + dimensiones + tipo de gráfico). */
   const addSavedAnalysisToDashboard = useCallback(
     (analysis: SavedAnalysis) => {
       const newWidget = buildWidgetFromSavedAnalysis(analysis);
-      setWidgets((prev) => [...prev, newWidget]);
+      const existing = widgets.find((w) => String((w as { analysisId?: unknown }).analysisId ?? "").trim() === String(analysis.id).trim());
+      const targetWidgetId = existing?.id ?? newWidget.id;
+      setWidgets((prev) =>
+        existing
+          ? prev.map((w) =>
+              w.id === existing.id
+                ? {
+                    ...w,
+                    type: newWidget.type,
+                    title: newWidget.title,
+                    analysisId: analysis.id,
+                    metricIds: [...(analysis.metricIds || [])],
+                    aggregationConfig: newWidget.aggregationConfig,
+                    dataSourceId: newWidget.dataSourceId,
+                  }
+                : w
+            )
+          : [...prev, newWidget]
+      );
       setSelectedId(null);
       setIsDirty(true);
       setAddMetricOpen(false);
       setAddMetricStep("list");
       setAddMetricInitialIntent(null);
-      if (etlData) setTimeout(() => loadMetricData(newWidget.id), 300);
+      if (etlData) setTimeout(() => loadMetricData(targetWidgetId), 300);
     },
-    [buildWidgetFromSavedAnalysis, etlData, loadMetricData]
+    [buildWidgetFromSavedAnalysis, etlData, loadMetricData, widgets]
   );
 
   const openAddMetricList = useCallback(() => {
