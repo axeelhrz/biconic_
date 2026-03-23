@@ -6,6 +6,7 @@ import postgres from "postgres";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { Database } from "@/lib/supabase/database.types";
+import { formatDateByGranularity, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 
 // --- Interfaces ---
 interface MetricCondition {
@@ -1074,6 +1075,7 @@ export async function POST(req: NextRequest) {
     let dimensionSelectClause = "";
     let dimensionGroupByClause = "";
     let dateGroupByExpr = "";
+    let dateGroupByDisplayExpr = "";
 
     if (body.dateGroupBy?.field && body.dateGroupBy?.granularity) {
       const dgCol = quotedColumn(body.dateGroupBy.field);
@@ -1082,8 +1084,19 @@ export async function POST(req: NextRequest) {
       const validGran = validGranList.includes(gran) ? gran : "month";
       if (validGran === "semester") {
         dateGroupByExpr = `(EXTRACT(YEAR FROM ${dgCol}::timestamp)::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${dgCol}::timestamp) <= 6 THEN '1' ELSE '2' END)`;
+        dateGroupByDisplayExpr = `(CASE WHEN EXTRACT(MONTH FROM ${dgCol}::timestamp) <= 6 THEN 'S1/' ELSE 'S2/' END || EXTRACT(YEAR FROM ${dgCol}::timestamp)::text)`;
       } else {
         dateGroupByExpr = `DATE_TRUNC('${validGran}', ${dgCol}::timestamp)`;
+        if (validGran === "year") {
+          dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'YYYY')`;
+        } else if (validGran === "month") {
+          dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'MM/YYYY')`;
+        } else if (validGran === "quarter") {
+          dateGroupByDisplayExpr = `('T' || EXTRACT(QUARTER FROM ${dateGroupByExpr})::text || '/' || EXTRACT(YEAR FROM ${dateGroupByExpr})::text)`;
+        } else {
+          // day/week: mostrar fecha de inicio del bucket
+          dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'DD/MM/YYYY')`;
+        }
       }
       // No agregar columna "periodo": la dimensión temporal usa el nombre del campo (ej. FECHA_COMPRA) con valores agrupados por granularidad.
       const timeField = (body.dateGroupBy.field || "").trim().replace(/"/g, '""');
@@ -1092,12 +1105,12 @@ export async function POST(req: NextRequest) {
           ? dimList.map((d) => {
               const alias = (d || "").trim().replace(/"/g, '""');
               if (alias === body.dateGroupBy!.field?.trim() || normalizeStr(alias) === normalizeStr(body.dateGroupBy!.field || "")) {
-                return `${dateGroupByExpr}::text AS "${alias}"`;
+                return `${dateGroupByDisplayExpr} AS "${alias}"`;
               }
               const col = quotedColumn(d);
               return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
             })
-          : [`${dateGroupByExpr}::text AS "${timeField}"`];
+          : [`${dateGroupByDisplayExpr} AS "${timeField}"`];
       dimensionSelectClause = dateParts.join(", ");
       const groupParts = [dateGroupByExpr];
       if (dimList.length > 0) {
@@ -1520,6 +1533,22 @@ export async function POST(req: NextRequest) {
           }
         }
       });
+
+      // Compatibilidad defensiva: normalizar formato temporal legacy en memoria.
+      if (body.dateGroupBy?.field && body.dateGroupBy?.granularity) {
+        const key =
+          Object.keys(newRow).find((k) => normalizeStr(k) === normalizeStr(body.dateGroupBy?.field ?? "")) ??
+          body.dateGroupBy.field;
+        const current = newRow[key];
+        if (typeof current === "string" && current.trim() !== "") {
+          const normalized = formatDateByGranularity(
+            current,
+            body.dateGroupBy.granularity as DateGranularity,
+            current
+          );
+          if (normalized != null) newRow[key] = normalized;
+        }
+      }
 
       return newRow;
     });

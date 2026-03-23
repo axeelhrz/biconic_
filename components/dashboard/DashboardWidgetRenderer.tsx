@@ -19,6 +19,7 @@ import {
 import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Card } from "@/components/ui/card";
 import { buildChartOptions, buildPieDoughnutLegendShared, formatValue, getValueFormatter, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import { formatDateByGranularity, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 
 const DashboardMapWidget = dynamic(
@@ -233,7 +234,14 @@ export function DashboardWidgetRenderer({
   }, [isCombo, comboSyncAxes, chartConfig]);
 
   const chartOptions = useMemo(() => {
-    const agg = widget.aggregationConfig as { chartGridXDisplay?: boolean; chartGridYDisplay?: boolean; chartGridColor?: string } | undefined;
+    const agg = widget.aggregationConfig as {
+      chartGridXDisplay?: boolean;
+      chartGridYDisplay?: boolean;
+      chartGridColor?: string;
+      chartXAxis?: string;
+      dateDimension?: string;
+      dateGroupByGranularity?: DateGranularity;
+    } | undefined;
     const style: ChartStyleConfig | undefined = {
       ...(widget.chartStyle as ChartStyleConfig | undefined),
       ...(agg && {
@@ -247,6 +255,16 @@ export function DashboardWidgetRenderer({
     const metricStyles = widget.chartMetricStyles as (ChartStyleConfig | undefined)[] | undefined;
     const usePerMetricFormat = Array.isArray(metricStyles) && metricStyles.length > 0;
     const optionsBase = getChartOptionsBase(darkChartTheme);
+    const xAxisKey = String(agg?.chartXAxis ?? "").trim().toLowerCase();
+    const dateDimensionKey = String(agg?.dateDimension ?? "").trim().toLowerCase();
+    const dateGranularity = agg?.dateGroupByGranularity;
+    const shouldFormatDateAxis = !!dateGranularity || (xAxisKey !== "" && dateDimensionKey !== "" && xAxisKey === dateDimensionKey);
+    const formatTemporalLabel = (raw: unknown): string => {
+      const base = String(raw ?? "");
+      if (!shouldFormatDateAxis) return base;
+      const formatted = formatDateByGranularity(raw, dateGranularity ?? "day", base);
+      return formatted ?? base;
+    };
     if (type === "pie" || type === "doughnut") {
       const base = buildChartOptions(type, style, labelMode) as Record<string, unknown>;
       const baseDatalabels = (base.plugins as { datalabels?: Record<string, unknown> })?.datalabels ?? {};
@@ -328,6 +346,10 @@ export function DashboardWidgetRenderer({
       const tooltipCallbacks =
         usePerMetricFormat || syncAxes
           ? {
+              title: (items: Array<{ label?: unknown }>) => {
+                const first = items?.[0];
+                return formatTemporalLabel(first?.label ?? "");
+              },
               label: (context: { dataset: { label?: string }; parsed: { y?: number }; datasetIndex?: number }) => {
                 let rawY = context.parsed?.y ?? 0;
                 if (syncAxes && chartConfig?.datasets?.[0]?.data && chartConfig?.datasets?.[1]?.data && context.datasetIndex != null) {
@@ -346,7 +368,33 @@ export function DashboardWidgetRenderer({
                 return `${context.dataset?.label ?? ""}: ${formatted}`;
               },
             }
-          : undefined;
+          : shouldFormatDateAxis
+            ? {
+                title: (items: Array<{ label?: unknown }>) => {
+                  const first = items?.[0];
+                  return formatTemporalLabel(first?.label ?? "");
+                },
+              }
+            : undefined;
+      const builtScales = (built.scales as Record<string, unknown> | undefined) ?? {};
+      const xScale = (builtScales.x as Record<string, unknown> | undefined) ?? {};
+      const xTicks = (xScale.ticks as Record<string, unknown> | undefined) ?? {};
+      const patchedScales = {
+        ...builtScales,
+        x: {
+          ...xScale,
+          ticks: {
+            ...xTicks,
+            callback: (value: unknown, index: number) => {
+              const source =
+                Array.isArray(chartConfig?.labels) && chartConfig.labels[index] != null
+                  ? chartConfig.labels[index]
+                  : value;
+              return formatTemporalLabel(source);
+            },
+          },
+        },
+      };
       const plugins = {
         ...optionsBase.plugins,
         ...builtPlugins,
@@ -362,8 +410,16 @@ export function DashboardWidgetRenderer({
           },
         }),
       };
-      const baseReturn = { ...optionsBase, ...built, plugins };
-      if (comboScales) return { ...baseReturn, scales: comboScales };
+      const baseReturn = { ...optionsBase, ...built, plugins, scales: patchedScales };
+      if (comboScales) {
+        return {
+          ...baseReturn,
+          scales: {
+            ...comboScales,
+            x: (patchedScales.x as Record<string, unknown> | undefined) ?? (comboScales as Record<string, unknown>).x,
+          },
+        };
+      }
       return baseReturn;
     }
     return optionsBase;

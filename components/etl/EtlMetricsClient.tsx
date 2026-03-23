@@ -41,6 +41,7 @@ import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
 
 ChartJS.register(
@@ -1200,20 +1201,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         const s = String(value).trim();
         if (!/^\d{4}-\d{2}-\d{2}/.test(s) && !/^\d{1,2}\/\d{1,2}\/\d{4}/.test(s)) return null;
       }
-      let date: Date | null = null;
-      if (value instanceof Date) date = value;
-      else if (typeof value === "string") date = new Date(value);
-      else if (typeof value === "number") date = value > 1e10 ? new Date(value) : new Date(1899, 11, 30 + (value | 0));
-      if (!date || isNaN(date.getTime())) return null;
+      const normalizedGranularity = (
+        analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
+          ? analysisGranularity
+          : null
+      ) as DateGranularity | null;
+      if (isDateCol && normalizedGranularity) {
+        const byGranularity = formatDateByGranularity(value, normalizedGranularity);
+        if (byGranularity != null) return byGranularity;
+      }
+      const date = parseDateLike(value);
+      if (!date) return null;
       const pad = (n: number) => String(n).padStart(2, "0");
       const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-      if (analysisDateFormat === "short") return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`;
-      if (analysisDateFormat === "monthYear") return `${months[date.getMonth()]} ${date.getFullYear()}`;
-      if (analysisDateFormat === "year") return String(date.getFullYear());
-      if (analysisDateFormat === "datetime") return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-      return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`;
+      if (analysisDateFormat === "short") return `${pad(date.getUTCDate())}/${pad(date.getUTCMonth() + 1)}/${date.getUTCFullYear()}`;
+      if (analysisDateFormat === "monthYear") return `${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+      if (analysisDateFormat === "year") return String(date.getUTCFullYear());
+      if (analysisDateFormat === "datetime") return `${pad(date.getUTCDate())}/${pad(date.getUTCMonth() + 1)}/${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+      return `${pad(date.getUTCDate())}/${pad(date.getUTCMonth() + 1)}/${date.getUTCFullYear()}`;
     },
-    [timeColumn, dateFields, analysisDateFormat]
+    [timeColumn, dateFields, analysisDateFormat, analysisGranularity]
   );
 
   const formatSampleCell = (col: string, value: unknown): string => {
@@ -1833,6 +1840,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       alias: m.alias || m.field || `metric_${idx}`,
       ...(m.expression ? { expression: m.expression } : {}),
     }));
+    const normalizedGranularity = (
+      analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
+        ? analysisGranularity
+        : undefined
+    ) as DateGranularity | undefined;
     const chartCfg = buildChartConfig(
       previewProcessedRows as Record<string, unknown>[],
       {
@@ -1846,6 +1858,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           chartXAxis,
           chartYAxes,
           chartSeriesField,
+          dateDimension: timeColumn || undefined,
+          dateGroupByGranularity: normalizedGranularity,
           chartSeriesColors,
           chartLabelOverrides,
           chartRankingEnabled,
@@ -1868,6 +1882,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     formDimensions,
     chartYAxes,
     chartSeriesField,
+    timeColumn,
+    analysisGranularity,
     chartSeriesColors,
     chartLabelOverrides,
     chartRankingEnabled,
@@ -1917,6 +1933,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
             },
           })
         : previewProcessedRows;
+    const normalizedGranularity = (
+      analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
+        ? analysisGranularity
+        : undefined
+    ) as DateGranularity | undefined;
     return {
       id: "metric-preview",
       type: formChartType as "bar" | "horizontalBar" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter",
@@ -1928,6 +1949,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           : (widgetRows as Record<string, unknown>[]),
       aggregationConfig: {
         chartType: formChartType,
+        chartXAxis,
+        dateDimension: timeColumn || undefined,
+        dateGroupByGranularity: normalizedGranularity,
         chartGridXDisplay,
         chartGridYDisplay,
         chartGridColor,
@@ -1971,6 +1995,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     chartGridYDisplay,
     chartGridColor,
     chartComboSyncAxes,
+    timeColumn,
+    analysisGranularity,
   ]);
 
   /** Resultado principal del cálculo (paso Cálculo): valor de la última métrica = fórmula o métrica principal. La API devuelve metric_0, metric_1, ... */

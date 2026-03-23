@@ -4,6 +4,8 @@
  * para que la visualización sea idéntica en ambos contextos.
  */
 
+import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
+
 export type ChartConfig = {
   labels: string[];
   datasets: Array<{
@@ -30,6 +32,8 @@ export type BuildChartConfigWidget = {
     chartXAxis?: string;
     chartYAxes?: string[];
     chartSeriesField?: string;
+    dateDimension?: string;
+    dateGroupByGranularity?: DateGranularity;
     chartType?: string;
     chartSeriesColors?: Record<string, string>;
     chartLabelOverrides?: Record<string, string>;
@@ -195,6 +199,22 @@ export function buildChartConfig(
     }
     return v;
   };
+  const normalizedDateDim = String(agg?.dateDimension ?? "").trim().toLowerCase();
+  const normalizedXKey = String(xKey ?? "").trim().toLowerCase();
+  const configuredGranularity = (agg?.dateGroupByGranularity as DateGranularity | undefined) ?? undefined;
+  const shouldTreatXAsDate =
+    !!configuredGranularity ||
+    (normalizedDateDim !== "" && normalizedDateDim === normalizedXKey) ||
+    dataArray.some((r) => parseDateLike((r as Record<string, unknown>)[xKey]) != null);
+  const formatXLabel = (value: unknown): string => {
+    const raw = String(value ?? "");
+    const overridden = labelOverride(raw);
+    if (overridden !== raw) return overridden;
+    if (!shouldTreatXAsDate) return overridden;
+    const granularity = configuredGranularity ?? "day";
+    const formatted = formatDateByGranularity(value, granularity, overridden);
+    return formatted ?? overridden;
+  };
 
   const basePalette = widget.color ? [widget.color, ...DEFAULT_PALETTE] : accentColor ? [accentColor, ...DEFAULT_PALETTE] : DEFAULT_PALETTE;
   const cfgSeriesColors = agg?.chartSeriesColors as Record<string, string> | undefined;
@@ -302,7 +322,7 @@ export function buildChartConfig(
     const uniqueX = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? "")))];
     const seriesValues = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[seriesField] ?? "")))];
     return {
-      labels: uniqueX.map(labelOverride),
+      labels: uniqueX.map((value) => formatXLabel(value)),
       datasets: seriesValues.map((sv, idx) => ({
         label: labelOverride(sv),
         data: uniqueX.map((xv) => {
@@ -321,7 +341,7 @@ export function buildChartConfig(
   }
 
   if (isPieOrDoughnut) {
-    const labels = rows.map((r) => labelOverride(String((r as Record<string, unknown>)[xKey] ?? "")));
+    const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
     const firstYKey = yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
     return {
       labels,
@@ -338,7 +358,7 @@ export function buildChartConfig(
   }
 
   if (resolvedType === "combo" && yKeys.length >= 2) {
-    const labels = rows.map((r) => labelOverride(String((r as Record<string, unknown>)[xKey] ?? "")));
+    const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
     const label0 = aliasForYKey(yKeys[0]!);
     const label1 = aliasForYKey(yKeys[1]!);
     return {
@@ -367,7 +387,7 @@ export function buildChartConfig(
     };
   }
 
-  const labels = rows.map((r) => labelOverride(String((r as Record<string, unknown>)[xKey] ?? "")));
+  const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
   const isBarOrHorizontalBar = resolvedType === "bar" || resolvedType === "horizontalBar";
   const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
   if (oneMetricManyCategories) {
