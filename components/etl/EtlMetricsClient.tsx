@@ -1636,7 +1636,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         body.derivedColumns = derivedToSend.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" }));
       }
       const includePeriodInResult = formDimensions.some((d) => d && String(d).trim() === timeColumn);
-      if (wizard === "C" && timeColumn) {
+      const useAnalysisConfig = wizard === "C" || wizard === "D";
+      if (useAnalysisConfig && timeColumn) {
         if (analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo) {
           body.dateRangeFilter = { field: timeColumn, from: analysisDateFrom, to: analysisDateTo };
         } else if (analysisTimeRange && analysisTimeRange !== "0") {
@@ -1651,7 +1652,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           body.dateGroupBy = { field: timeColumn, granularity: analysisGranularity };
         }
       }
-      if (wizard === "C" && transformCompare !== "none") {
+      if (useAnalysisConfig && transformCompare !== "none") {
         if (transformCompare === "mom") {
           body.comparePeriod = "previous_month";
           body.dateDimension = timeColumn || undefined;
@@ -1665,7 +1666,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
           if (Number.isFinite(fixed)) body.compareFixedValue = fixed;
         }
       }
-      if (wizard === "C" && transformShowAccum) {
+      if (useAnalysisConfig && transformShowAccum) {
         body.cumulative = "running_sum";
       }
       const res = await fetch("/api/dashboard/aggregate-data", {
@@ -1701,6 +1702,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       fetchPreviewRef.current();
     }
   }, [wizard, wizardStep, showForm]);
+
+  // Si se entra directo al paso Gráfico (p.ej. desde /admin/metrics?metricId=...&step=D),
+  // intentar cargar preview automáticamente una vez por métrica para habilitar el mapeo.
+  const autoPreviewForEditRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!showForm) autoPreviewForEditRef.current = null;
+  }, [showForm]);
+  useEffect(() => {
+    if (!showForm || wizard !== "D") return;
+    if (!editingId) return;
+    if (previewLoading) return;
+    if (previewData && previewData.length > 0) return;
+    if (effectiveFormMetrics.length === 0) return;
+    if (autoPreviewForEditRef.current === editingId) return;
+    autoPreviewForEditRef.current = editingId;
+    fetchPreviewRef.current();
+  }, [showForm, wizard, editingId, previewLoading, previewData, effectiveFormMetrics.length]);
 
   /** Única fuente de sugerencias de tipo de gráfico según métricas, dimensiones y datos (evitar duplicar lógica en otros pasos). */
   const { recommendationText, suggestedChartType } = useMemo(() => {
@@ -2484,6 +2502,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
+      dateDimension: timeColumn || undefined,
+      dateGroupByGranularity:
+        analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
+          ? (analysisGranularity as "day" | "week" | "month" | "quarter" | "semester" | "year")
+          : undefined,
+      dateRangeFilter:
+        timeColumn && analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo
+          ? { field: timeColumn, from: analysisDateFrom, to: analysisDateTo }
+          : timeColumn && analysisTimeRange && analysisTimeRange !== "0" && Number(analysisTimeRange) > 0
+            ? {
+                field: timeColumn,
+                last: Number(analysisTimeRange),
+                unit: analysisTimeRange === "7" || analysisTimeRange === "30" ? "days" : "months",
+              }
+            : undefined,
       chartMetricFormats:
         chartYAxes.length > 1
           ? Object.fromEntries(

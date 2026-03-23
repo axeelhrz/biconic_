@@ -147,6 +147,7 @@ export type SavedMetricAggregationConfig = {
   chartGridColor?: string;
   chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string };
   interCrossFilter?: boolean;
   interCrossFilterFields?: string[];
   interDrilldown?: boolean;
