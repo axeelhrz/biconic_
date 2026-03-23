@@ -8,7 +8,7 @@ import {
   DEFAULT_DASHBOARD_THEME,
   mergeTheme,
 } from "@/types/dashboard";
-import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget, type ChartConfig } from "./DashboardWidgetRenderer";
+import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./DashboardWidgetRenderer";
 import type { ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import { safeJsonResponse } from "@/lib/safe-json-response";
@@ -75,6 +75,13 @@ type AggregationConfig = {
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
   chartComboSyncAxes?: boolean;
+  showDataLabels?: boolean;
+  chartScaleMode?: "auto" | "dataset" | "custom";
+  chartScaleMin?: string | number;
+  chartScaleMax?: string | number;
+  chartAxisStep?: string | number;
+  chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
+  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
 };
 
 export type Widget = DashboardWidgetRendererWidget & {
@@ -176,7 +183,7 @@ function buildChartStyleFromMetricFormat(m: MetricFormatEntry | undefined, agg: 
 function buildChartMetricStyles(agg: AggregationConfig | undefined): (ChartStyleConfig | undefined)[] {
   if (!agg) return [];
   const yKeys = Array.isArray(agg.chartYAxes) ? agg.chartYAxes : [];
-  if (yKeys.length <= 1) return [];
+  if (yKeys.length === 0) return [];
   return yKeys.map((key) => buildChartStyleFromMetricFormat(agg.chartMetricFormats?.[key], agg));
 }
 
@@ -541,7 +548,8 @@ export function DashboardViewer({
         };
         const columnsDetected = Object.keys(sample).map((k) => ({ name: k, type: inferType((sample as any)[k]) }));
         const config = buildChartConfig(dataArray, widget, accentColor);
-        const rowsForWidget = widget.type === "table" ? getProcessedRowsForChart(dataArray, widget) : dataArray;
+        const resolvedChartType = (aggConfig?.chartType as string | undefined) ?? widget.type;
+        const rowsForWidget = resolvedChartType === "table" ? getProcessedRowsForChart(dataArray, widget) : dataArray;
 
         setWidgets((prev) =>
           prev.map((w) =>

@@ -39,7 +39,7 @@ import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector"
 import { DashboardWidgetRenderer } from "@/components/dashboard/DashboardWidgetRenderer";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
+import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
@@ -1773,84 +1773,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     if (formChartType === "map" && !hasGeo) setFormChartType(suggestedChartType);
   }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType, editingId]);
 
-  /** Filas de vista previa con orden y Top N aplicados (misma lógica que el gráfico). Usar en tabla y en previewChartConfig. */
-  const previewProcessedRows = useMemo(() => {
-    if (!previewData || previewData.length === 0) return [];
-    const first = previewData[0] as Record<string, unknown>;
-    const keys = Object.keys(first);
-    const xKey = chartXAxis && keys.includes(chartXAxis) ? chartXAxis : (() => {
-      const firstDim = formDimensions[0];
-      if (firstDim && keys.includes(firstDim)) return firstDim;
-      if (timeColumn && keys.includes(timeColumn)) return timeColumn;
-      const dimByNorm = (k: string) => timeColumn && k.trim().toLowerCase() === timeColumn.trim().toLowerCase();
-      const timeMatch = keys.find(dimByNorm);
-      if (timeMatch) return timeMatch;
-      const metricKeys = keys.filter((k) => /^metric_\d+$/.test(k));
-      return metricKeys.length === keys.length ? undefined : keys[0];
-    })();
-    let yKeys = chartYAxes.filter((k) => keys.includes(k));
-    if (yKeys.length === 0) {
-      yKeys = effectiveFormMetrics.map((m) => m.alias || m.field || "").filter(Boolean).filter((k) => keys.includes(k));
-    }
-    if (yKeys.length === 0) {
-      yKeys = xKey != null ? keys.filter((k) => k !== xKey) : keys.filter((k) => /^metric_\d+$/.test(k));
-    }
-    if (yKeys.length === 0) return [...previewData];
-    let rows = [...previewData];
-    if (chartSortBy === "axis" && xKey) {
-      rows.sort((a, b) => {
-        const va = (a as Record<string, unknown>)[xKey];
-        const vb = (b as Record<string, unknown>)[xKey];
-        const sa = String(va ?? "");
-        const sb = String(vb ?? "");
-        if (chartAxisOrder === "date_asc" || chartAxisOrder === "date_desc") {
-          const ta = typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : 0;
-          const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : 0;
-          return chartAxisOrder === "date_asc" ? ta - tb : tb - ta;
-        }
-        return chartAxisOrder === "alpha" ? sa.localeCompare(sb, undefined, { numeric: true }) : sb.localeCompare(sa, undefined, { numeric: true });
-      });
-    } else if (chartSortDirection !== "none" && xKey && chartSortBy === "series") {
-      let sortKey = yKeys[0]!;
-      if (chartSortByMetric) {
-        if (keys.includes(chartSortByMetric)) sortKey = chartSortByMetric;
-        else {
-          const metricMatch = chartSortByMetric.match(/^metric_(\d+)$/);
-          if (metricMatch) {
-            const idx = parseInt(metricMatch[1]!, 10);
-            const resolved = yKeys[idx];
-            if (resolved != null && keys.includes(resolved)) sortKey = resolved;
-          }
-        }
-      }
-      rows.sort((a, b) => {
-        const va = Number((a as Record<string, unknown>)[sortKey] ?? 0);
-        const vb = Number((b as Record<string, unknown>)[sortKey] ?? 0);
-        return chartSortDirection === "asc" ? va - vb : vb - va;
-      });
-    }
-    const isTimeSeriesX = !!xKey && (xKey === timeColumn || timeColumn?.trim().toLowerCase() === xKey.trim().toLowerCase() || dateFields.some((f) => f.trim().toLowerCase() === (xKey || "").trim().toLowerCase()));
-    if (chartRankingEnabled && chartRankingTop > 0 && !isTimeSeriesX) {
-      let rKey = yKeys[0]!;
-      if (chartRankingMetric) {
-        if (keys.includes(chartRankingMetric)) rKey = chartRankingMetric;
-        else {
-          const metricMatch = chartRankingMetric.match(/^metric_(\d+)$/);
-          if (metricMatch) {
-            const idx = parseInt(metricMatch[1]!, 10);
-            const resolved = yKeys[idx];
-            if (resolved != null && keys.includes(resolved)) rKey = resolved;
-          }
-        }
-      }
-      rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
-      rows = rows.slice(0, chartRankingTop);
-    }
-    return rows;
-  }, [previewData, formDimensions, effectiveFormMetrics, chartXAxis, chartYAxes, chartSortDirection, chartSortBy, chartSortByMetric, chartAxisOrder, chartRankingEnabled, chartRankingTop, chartRankingMetric, timeColumn, dateFields]);
-
-  const previewChartConfig = useMemo(() => {
-    if (!previewProcessedRows || previewProcessedRows.length === 0) return null;
+  const previewPipelineWidget = useMemo<BuildChartConfigWidget>(() => {
     const metrics = effectiveFormMetrics.map((m, idx) => ({
       id: m.id ?? `metric-${idx}`,
       field: m.field ?? "",
@@ -1863,45 +1786,39 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         ? analysisGranularity
         : undefined
     ) as DateGranularity | undefined;
-    const chartCfg = buildChartConfig(
-      previewProcessedRows as Record<string, unknown>[],
-      {
-        type: formChartType,
-        aggregationConfig: {
-          enabled: true,
-          dimension: chartXAxis || formDimensions[0],
-          dimensions: formDimensions,
-          metrics,
-          chartType: formChartType,
-          chartXAxis,
-          chartYAxes,
-          chartSeriesField,
-          dateDimension: timeColumn || undefined,
-          dateGroupByGranularity: normalizedGranularity,
-          chartSeriesColors,
-          chartLabelOverrides,
-          chartRankingEnabled,
-          chartRankingTop,
-          chartRankingMetric,
-          chartSortDirection,
-          chartSortBy,
-          chartSortByMetric,
-          chartAxisOrder,
-        },
+    return {
+      type: formChartType,
+      aggregationConfig: {
+        enabled: true,
+        dimension: chartXAxis || formDimensions[0],
+        dimensions: formDimensions,
+        metrics,
+        chartType: formChartType,
+        chartXAxis,
+        chartYAxes,
+        chartSeriesField,
+        dateDimension: timeColumn || undefined,
+        dateGroupByGranularity: normalizedGranularity,
+        chartSeriesColors,
+        chartLabelOverrides,
+        chartRankingEnabled,
+        chartRankingTop,
+        chartRankingMetric,
+        chartSortDirection,
+        chartSortBy,
+        chartSortByMetric,
+        chartAxisOrder,
       },
-      "#0ea5e9"
-    );
-    return chartCfg ?? null;
+    };
   }, [
-    previewProcessedRows,
     effectiveFormMetrics,
+    analysisGranularity,
     formChartType,
     chartXAxis,
     formDimensions,
     chartYAxes,
     chartSeriesField,
     timeColumn,
-    analysisGranularity,
     chartSeriesColors,
     chartLabelOverrides,
     chartRankingEnabled,
@@ -1911,6 +1828,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     chartSortBy,
     chartSortByMetric,
     chartAxisOrder,
+  ]);
+
+  /** Filas de vista previa con orden y Top N aplicados desde el pipeline compartido. */
+  const previewProcessedRows = useMemo(() => {
+    if (!previewData || previewData.length === 0) return [];
+    return getProcessedRowsForChart(previewData as Record<string, unknown>[], previewPipelineWidget);
+  }, [previewData, previewPipelineWidget]);
+
+  const previewChartConfig = useMemo(() => {
+    if (!previewData || previewData.length === 0) return null;
+    const chartCfg = buildChartConfig(
+      previewData as Record<string, unknown>[],
+      previewPipelineWidget,
+      "#0ea5e9"
+    );
+    return chartCfg ?? null;
+  }, [
+    previewData,
+    previewPipelineWidget,
   ]);
 
   const previewKpiValue = useMemo(() => {
@@ -1932,25 +1868,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         }
       )
     );
-    const widgetRows =
-      formChartType === "table"
-        ? getProcessedRowsForChart(previewProcessedRows as Record<string, unknown>[], {
-            type: formChartType,
-            aggregationConfig: {
-              chartType: formChartType,
-              chartXAxis,
-              chartYAxes,
-              chartSeriesField,
-              chartRankingEnabled,
-              chartRankingTop,
-              chartRankingMetric,
-              chartSortDirection,
-              chartSortBy,
-              chartSortByMetric,
-              chartAxisOrder,
-            },
-          })
-        : previewProcessedRows;
+    const widgetRows = previewProcessedRows;
     const normalizedGranularity = (
       analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
         ? analysisGranularity
@@ -1968,11 +1886,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       aggregationConfig: {
         chartType: formChartType,
         chartXAxis,
+        chartYAxes,
+        chartSeriesField,
         dateDimension: timeColumn || undefined,
         dateGroupByGranularity: normalizedGranularity,
+        chartRankingEnabled,
+        chartRankingTop,
+        chartRankingMetric,
+        chartSortDirection,
+        chartSortBy,
+        chartSortByMetric,
+        chartAxisOrder,
         chartGridXDisplay,
         chartGridYDisplay,
         chartGridColor,
+        chartScaleMode,
+        chartScaleMin,
+        chartScaleMax,
+        chartAxisStep,
+        chartScalePerMetric,
+        showDataLabels,
         chartComboSyncAxes,
       },
       chartStyle: toChartStyleConfig({
@@ -2012,6 +1945,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     chartGridXDisplay,
     chartGridYDisplay,
     chartGridColor,
+    chartScaleMode,
+    chartScaleMin,
+    chartScaleMax,
+    chartAxisStep,
+    chartScalePerMetric,
+    showDataLabels,
     chartComboSyncAxes,
     timeColumn,
     analysisGranularity,

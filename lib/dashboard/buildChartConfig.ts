@@ -50,6 +50,20 @@ export type BuildChartConfigWidget = {
   color?: string;
 };
 
+function shouldApplyTemporalRankingRule(
+  rows: Record<string, unknown>[],
+  xKey: string,
+  agg?: BuildChartConfigWidget["aggregationConfig"]
+): boolean {
+  const normalizedDateDim = String(agg?.dateDimension ?? "").trim().toLowerCase();
+  const normalizedXKey = String(xKey ?? "").trim().toLowerCase();
+  return (
+    !!agg?.dateGroupByGranularity ||
+    (normalizedDateDim !== "" && normalizedDateDim === normalizedXKey) ||
+    rows.some((r) => parseDateLike((r as Record<string, unknown>)[xKey]) != null)
+  );
+}
+
 /**
  * Aplica el mismo orden y ranking que buildChartConfig y devuelve las filas procesadas.
  * Usar para widgets tipo "table" para que la tabla muestre el mismo orden y Top N que los gráficos.
@@ -88,7 +102,9 @@ export function getProcessedRowsForChart(
 
   let rows = [...dataArray];
 
-  if (agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0) {
+  const isTemporalXAxis = shouldApplyTemporalRankingRule(dataArray, xKey, agg);
+  const shouldApplyRanking = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0 && !isTemporalXAxis;
+  if (shouldApplyRanking) {
     let rKey = yKeys[0] || resultKeys[0];
     if (agg?.chartRankingMetric) {
       if (resultKeys.includes(agg.chartRankingMetric as string)) {
@@ -250,7 +266,9 @@ export function buildChartConfig(
   const resolvedType = (agg?.chartType as string) || widget.type;
 
   // Ranking: top N por métrica (resolver metric_N a yKeys[N] cuando la API devuelve alias)
-  if (agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0) {
+  const isTemporalXAxis = shouldApplyTemporalRankingRule(dataArray, xKey, agg);
+  const shouldApplyRanking = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0 && !isTemporalXAxis;
+  if (shouldApplyRanking) {
     let rKey = yKeys[0] || resultKeys[0];
     if (agg?.chartRankingMetric) {
       if (resultKeys.includes(agg.chartRankingMetric as string)) {

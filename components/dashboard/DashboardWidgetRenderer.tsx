@@ -186,7 +186,11 @@ export function DashboardWidgetRenderer({
   hideHeader = false,
 }: DashboardWidgetRendererProps) {
   const effectiveMinHeight = widget.minHeight ?? minHeight;
-  const chartType = (widget.type === "kpi" || widget.type === "table" ? widget.type : (widget.aggregationConfig as { chartType?: string } | undefined)?.chartType ?? widget.type) as WidgetChartType;
+  const chartType = useMemo(() => {
+    const aggType = String((widget.aggregationConfig as { chartType?: string } | undefined)?.chartType ?? "").trim() as WidgetChartType;
+    if (widget.type === "filter" || widget.type === "text" || widget.type === "image" || widget.type === "map") return widget.type;
+    return (aggType || widget.type) as WidgetChartType;
+  }, [widget.type, widget.aggregationConfig]);
   const chartConfig = widget.config;
   const tableRows = widget.rows;
   const hasViz = useMemo(() => {
@@ -210,7 +214,16 @@ export function DashboardWidgetRenderer({
   }, [chartType, widget.rows, widget.chartStyle]);
 
   const isCombo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2;
-  const aggConfig = widget.aggregationConfig as { chartComboSyncAxes?: boolean } | undefined;
+  const aggConfig = widget.aggregationConfig as {
+    chartComboSyncAxes?: boolean;
+    chartYAxes?: string[];
+    chartScaleMode?: "auto" | "dataset" | "custom";
+    chartScaleMin?: string | number;
+    chartScaleMax?: string | number;
+    chartAxisStep?: string | number;
+    chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
+    showDataLabels?: boolean;
+  } | undefined;
   const comboSyncAxes = isCombo && aggConfig?.chartComboSyncAxes === true;
 
   const effectiveChartData = useMemo((): ChartConfig | null | undefined => {
@@ -239,8 +252,15 @@ export function DashboardWidgetRenderer({
       chartGridYDisplay?: boolean;
       chartGridColor?: string;
       chartXAxis?: string;
+      chartYAxes?: string[];
       dateDimension?: string;
       dateGroupByGranularity?: DateGranularity;
+      showDataLabels?: boolean;
+      chartScaleMode?: "auto" | "dataset" | "custom";
+      chartScaleMin?: string | number;
+      chartScaleMax?: string | number;
+      chartAxisStep?: string | number;
+      chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
     } | undefined;
     const style: ChartStyleConfig | undefined = {
       ...(widget.chartStyle as ChartStyleConfig | undefined),
@@ -255,6 +275,33 @@ export function DashboardWidgetRenderer({
     const metricStyles = widget.chartMetricStyles as (ChartStyleConfig | undefined)[] | undefined;
     const usePerMetricFormat = Array.isArray(metricStyles) && metricStyles.length > 0;
     const optionsBase = getChartOptionsBase(darkChartTheme);
+    const showDataLabels =
+      typeof agg?.showDataLabels === "boolean"
+        ? agg.showDataLabels
+        : undefined;
+    const allYValues = (chartConfig?.datasets ?? []).flatMap((ds) =>
+      (Array.isArray(ds.data) ? ds.data : []).map((v) => Number(v)).filter((n) => Number.isFinite(n))
+    );
+    const datasetMin = allYValues.length > 0 ? Math.min(...allYValues) : undefined;
+    const datasetMax = allYValues.length > 0 ? Math.max(...allYValues) : undefined;
+    const parseNumeric = (raw: unknown): number | undefined => {
+      if (raw == null || raw === "") return undefined;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const globalMin = agg?.chartScaleMode === "custom" ? parseNumeric(agg.chartScaleMin) : agg?.chartScaleMode === "dataset" ? datasetMin : undefined;
+    const globalMax = agg?.chartScaleMode === "custom" ? parseNumeric(agg.chartScaleMax) : agg?.chartScaleMode === "dataset" ? datasetMax : undefined;
+    const globalStep = parseNumeric(agg?.chartAxisStep);
+    const yAxisKeys = Array.isArray(agg?.chartYAxes) ? agg.chartYAxes : [];
+    const resolveMetricScale = (datasetIndex: number) => {
+      const yKey = yAxisKeys[datasetIndex] ?? "";
+      const per = yKey && agg?.chartScalePerMetric ? agg.chartScalePerMetric[yKey] : undefined;
+      return {
+        min: per?.min ?? globalMin,
+        max: per?.max ?? globalMax,
+        step: per?.step ?? globalStep,
+      };
+    };
     const xAxisKey = String(agg?.chartXAxis ?? "").trim().toLowerCase();
     const dateDimensionKey = String(agg?.dateDimension ?? "").trim().toLowerCase();
     const dateGranularity = agg?.dateGroupByGranularity;
@@ -275,6 +322,7 @@ export function DashboardWidgetRenderer({
         legend: buildPieDoughnutLegendShared(chartConfig ?? undefined, legendColor),
         datalabels: {
           ...baseDatalabels,
+          ...(showDataLabels !== undefined ? { display: showDataLabels } : {}),
           ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
         },
       };
@@ -341,6 +389,31 @@ export function DashboardWidgetRenderer({
             }),
           },
         };
+        if (!syncAxes) {
+          const scale0 = resolveMetricScale(0);
+          const scale1 = resolveMetricScale(1);
+          comboScales = {
+            ...comboScales,
+            y: {
+              ...((comboScales.y as Record<string, unknown> | undefined) ?? {}),
+              ...(scale0.min != null ? { min: scale0.min } : {}),
+              ...(scale0.max != null ? { max: scale0.max } : {}),
+              ticks: {
+                ...((((comboScales.y as Record<string, unknown> | undefined)?.ticks as Record<string, unknown>) ?? {})),
+                ...(scale0.step != null ? { stepSize: scale0.step } : {}),
+              },
+            },
+            y1: {
+              ...((comboScales.y1 as Record<string, unknown> | undefined) ?? {}),
+              ...(scale1.min != null ? { min: scale1.min } : {}),
+              ...(scale1.max != null ? { max: scale1.max } : {}),
+              ticks: {
+                ...((((comboScales.y1 as Record<string, unknown> | undefined)?.ticks as Record<string, unknown>) ?? {})),
+                ...(scale1.step != null ? { stepSize: scale1.step } : {}),
+              },
+            },
+          };
+        }
       }
 
       const tooltipCallbacks =
@@ -377,29 +450,51 @@ export function DashboardWidgetRenderer({
               }
             : undefined;
       const builtScales = (built.scales as Record<string, unknown> | undefined) ?? {};
+      const primaryScaleKey = type === "horizontalBar" ? "x" : "y";
       const xScale = (builtScales.x as Record<string, unknown> | undefined) ?? {};
       const xTicks = (xScale.ticks as Record<string, unknown> | undefined) ?? {};
-      const patchedScales = {
-        ...builtScales,
-        x: {
-          ...xScale,
-          ticks: {
-            ...xTicks,
-            callback: (value: unknown, index: number) => {
-              const source =
-                Array.isArray(chartConfig?.labels) && chartConfig.labels[index] != null
-                  ? chartConfig.labels[index]
-                  : value;
-              return formatTemporalLabel(source);
-            },
+      const primaryScale = (builtScales[primaryScaleKey] as Record<string, unknown> | undefined) ?? {};
+      const primaryTicks = (primaryScale.ticks as Record<string, unknown> | undefined) ?? {};
+      const primaryMetricScale = resolveMetricScale(0);
+      const patchedXScale = {
+        ...xScale,
+        ...(primaryScaleKey === "x" && primaryMetricScale.min != null ? { min: primaryMetricScale.min } : {}),
+        ...(primaryScaleKey === "x" && primaryMetricScale.max != null ? { max: primaryMetricScale.max } : {}),
+        ticks: {
+          ...xTicks,
+          ...(primaryScaleKey === "x" && primaryMetricScale.step != null ? { stepSize: primaryMetricScale.step } : {}),
+          callback: (value: unknown, index: number) => {
+            const source =
+              Array.isArray(chartConfig?.labels) && chartConfig.labels[index] != null
+                ? chartConfig.labels[index]
+                : value;
+            return formatTemporalLabel(source);
           },
         },
+      };
+      const patchedScales = {
+        ...builtScales,
+        x: patchedXScale,
+        ...(primaryScaleKey === "y"
+          ? {
+              y: {
+                ...primaryScale,
+                ...(primaryMetricScale.min != null ? { min: primaryMetricScale.min } : {}),
+                ...(primaryMetricScale.max != null ? { max: primaryMetricScale.max } : {}),
+                ticks: {
+                  ...primaryTicks,
+                  ...(primaryMetricScale.step != null ? { stepSize: primaryMetricScale.step } : {}),
+                },
+              },
+            }
+          : {}),
       };
       const plugins = {
         ...optionsBase.plugins,
         ...builtPlugins,
         datalabels: {
           ...builtDatalabels,
+          ...(showDataLabels !== undefined ? { display: showDataLabels } : {}),
           ...(datalabelFormatter != null && { formatter: datalabelFormatter }),
           ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
         },
