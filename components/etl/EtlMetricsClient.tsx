@@ -3037,7 +3037,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       size="sm"
                       className="rounded-lg"
                       style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                      onClick={saveMetric}
+                      onClick={() => void saveMetric()}
                       disabled={saving}
                     >
                       {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{" "}
