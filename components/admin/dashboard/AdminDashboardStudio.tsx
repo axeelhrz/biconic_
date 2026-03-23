@@ -742,8 +742,8 @@ export function AdminDashboardStudio({
       const sources = etlData?.dataSources;
       const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
       const aggregationConfig: AggregationConfig = {
-        enabled: true,
         ...(cfg as AggregationConfig),
+        enabled: true,
         dimension: dims[0] || (typeof cfg.dimension === "string" ? cfg.dimension : undefined),
         dimension2: dims[1] || (typeof cfg.dimension2 === "string" ? cfg.dimension2 : undefined),
         dimensions: dims.length > 0 ? dims : undefined,
@@ -778,11 +778,16 @@ export function AdminDashboardStudio({
       const firstMetricCfg = ((linkedSavedMetrics[0]?.aggregationConfig ?? {}) as Record<string, unknown>);
       const analysisCfg = (analysis as unknown as Record<string, unknown>);
       const mergedCfg = { ...firstMetricCfg, ...analysisCfg } as Record<string, unknown>;
+      const firstLinked = linkedSavedMetrics[0];
+      const legacyChartType =
+        firstLinked && typeof (firstLinked as SavedMetricForm & { type?: unknown }).type === "string"
+          ? String((firstLinked as SavedMetricForm & { type?: string }).type)
+          : undefined;
       const chartType = normalizeChartType(
         mergedCfg.chartType ??
           firstMetricCfg.chartType ??
-          linkedSavedMetrics[0]?.chartType ??
-          linkedSavedMetrics[0]?.type ??
+          firstLinked?.chartType ??
+          legacyChartType ??
           "bar"
       );
       const dims = Array.isArray(mergedCfg.dimensions)
@@ -800,8 +805,8 @@ export function AdminDashboardStudio({
       const sources = etlData?.dataSources;
       const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
       const aggregationConfig: AggregationConfig = {
-        enabled: true,
         ...(mergedCfg as AggregationConfig),
+        enabled: true,
         dimension: dims[0] || (typeof mergedCfg.dimension === "string" ? mergedCfg.dimension : undefined),
         dimension2: dims[1] || (typeof mergedCfg.dimension2 === "string" ? mergedCfg.dimension2 : undefined),
         dimensions: dims.length > 0 ? dims : undefined,
