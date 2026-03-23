@@ -862,6 +862,23 @@ export function AdminDashboardStudio({
       const newWidget = buildWidgetFromSavedMetric(saved);
       const existing = widgets.find((w) => String((w as { metricId?: unknown }).metricId ?? "").trim() === String(saved.id).trim());
       const targetWidgetId = existing?.id ?? newWidget.id;
+      const newWidgets = existing
+        ? widgets.map((w) =>
+            w.id === existing.id
+              ? {
+                  ...w,
+                  type: newWidget.type,
+                  title: newWidget.title,
+                  metricId: saved.id,
+                  aggregationConfig: newWidget.aggregationConfig,
+                  dataSourceId: newWidget.dataSourceId,
+                  config: undefined,
+                  rows: undefined,
+                  isLoading: true,
+                }
+              : w
+          )
+        : [...widgets, { ...newWidget, isLoading: true }];
       setWidgets((prev) =>
         existing
           ? prev.map((w) =>
@@ -873,19 +890,24 @@ export function AdminDashboardStudio({
                     metricId: saved.id,
                     aggregationConfig: newWidget.aggregationConfig,
                     dataSourceId: newWidget.dataSourceId,
+                    config: undefined,
+                    rows: undefined,
+                    isLoading: true,
                   }
                 : w
             )
-          : [...prev, newWidget]
+          : [...prev, { ...newWidget, isLoading: true }]
       );
       setSelectedId(null);
       setIsDirty(true);
+      // Persistir alta/actualización para que no se pierda al refrescar.
+      saveDashboard({ widgets: newWidgets });
       setAddMetricOpen(false);
       setAddMetricStep("list");
       setAddMetricInitialIntent(null);
       if (etlData) setTimeout(() => loadMetricData(targetWidgetId), 300);
     },
-    [buildWidgetFromSavedMetric, etlData, loadMetricData, widgets]
+    [buildWidgetFromSavedMetric, etlData, loadMetricData, widgets, saveDashboard]
   );
 
   /** Añade al dashboard un análisis ya creado (métricas + dimensiones + tipo de gráfico). */
@@ -894,6 +916,24 @@ export function AdminDashboardStudio({
       const newWidget = buildWidgetFromSavedAnalysis(analysis);
       const existing = widgets.find((w) => String((w as { analysisId?: unknown }).analysisId ?? "").trim() === String(analysis.id).trim());
       const targetWidgetId = existing?.id ?? newWidget.id;
+      const newWidgets = existing
+        ? widgets.map((w) =>
+            w.id === existing.id
+              ? {
+                  ...w,
+                  type: newWidget.type,
+                  title: newWidget.title,
+                  analysisId: analysis.id,
+                  metricIds: [...(analysis.metricIds || [])],
+                  aggregationConfig: newWidget.aggregationConfig,
+                  dataSourceId: newWidget.dataSourceId,
+                  config: undefined,
+                  rows: undefined,
+                  isLoading: true,
+                }
+              : w
+          )
+        : [...widgets, { ...newWidget, isLoading: true }];
       setWidgets((prev) =>
         existing
           ? prev.map((w) =>
@@ -906,19 +946,24 @@ export function AdminDashboardStudio({
                     metricIds: [...(analysis.metricIds || [])],
                     aggregationConfig: newWidget.aggregationConfig,
                     dataSourceId: newWidget.dataSourceId,
+                    config: undefined,
+                    rows: undefined,
+                    isLoading: true,
                   }
                 : w
             )
-          : [...prev, newWidget]
+          : [...prev, { ...newWidget, isLoading: true }]
       );
       setSelectedId(null);
       setIsDirty(true);
+      // Persistir alta/actualización para que no se pierda al refrescar.
+      saveDashboard({ widgets: newWidgets });
       setAddMetricOpen(false);
       setAddMetricStep("list");
       setAddMetricInitialIntent(null);
       if (etlData) setTimeout(() => loadMetricData(targetWidgetId), 300);
     },
-    [buildWidgetFromSavedAnalysis, etlData, loadMetricData, widgets]
+    [buildWidgetFromSavedAnalysis, etlData, loadMetricData, widgets, saveDashboard]
   );
 
   const openAddMetricList = useCallback(() => {
