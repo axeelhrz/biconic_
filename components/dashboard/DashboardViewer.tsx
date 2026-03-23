@@ -548,7 +548,7 @@ export function DashboardViewer({
         };
         const columnsDetected = Object.keys(sample).map((k) => ({ name: k, type: inferType((sample as any)[k]) }));
         const config = buildChartConfig(dataArray, widget, accentColor);
-        const resolvedChartType = (aggConfig?.chartType as string | undefined) ?? widget.type;
+        const resolvedChartType = String((aggConfig?.chartType as string | undefined) ?? "").trim() || widget.type;
         const rowsForWidget = resolvedChartType === "table" ? getProcessedRowsForChart(dataArray, widget) : dataArray;
 
         setWidgets((prev) =>

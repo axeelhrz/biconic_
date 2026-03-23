@@ -177,6 +177,32 @@ interface AdminDashboardStudioProps {
   createdAt?: string | null;
 }
 
+const SUPPORTED_CHART_TYPES = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "kpi", "table", "combo", "scatter"] as const;
+type SupportedChartType = typeof SUPPORTED_CHART_TYPES[number];
+
+function normalizeChartType(raw: unknown, fallback: SupportedChartType = "bar"): SupportedChartType {
+  const value = String(raw ?? "").trim();
+  return (SUPPORTED_CHART_TYPES as readonly string[]).includes(value) ? (value as SupportedChartType) : fallback;
+}
+
+function toAggregationMetricList(input: unknown, fallbackMetric?: SavedMetricForm["metric"]): AggregationMetric[] {
+  const list = Array.isArray(input) ? input : fallbackMetric ? [fallbackMetric] : [];
+  const out = list.map((m) => {
+    const met = (m ?? {}) as Record<string, unknown>;
+    return {
+      id: String(met.id ?? `m-${Date.now()}`),
+      field: String(met.field ?? ""),
+      func: String(met.func ?? "SUM"),
+      alias: String(met.alias ?? ""),
+      condition: met.condition as AggregationMetric["condition"],
+      formula: typeof met.formula === "string" ? met.formula : undefined,
+      expression: typeof met.expression === "string" ? met.expression : undefined,
+    } satisfies AggregationMetric;
+  });
+  if (out.length > 0) return out;
+  return [{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" }];
+}
+
 export function AdminDashboardStudio({
   dashboardId,
   title,
@@ -706,20 +732,29 @@ export function AdminDashboardStudio({
     }
   }, [widgets, activePageId, loadMetricData]);
 
-  /** Añade al dashboard una métrica ya creada (del ETL). */
-  const addSavedMetricToDashboard = useCallback(
-    (saved: SavedMetricForm) => {
-      const cfg = (saved.aggregationConfig ?? {}) as Record<string, unknown>;
-      const chartType = (cfg.chartType as string) || saved.chartType || "bar";
-      const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter(Boolean) as string[];
-      const metricsArr = Array.isArray(cfg.metrics) ? cfg.metrics : [saved.metric];
+  const buildWidgetFromSavedMetric = useCallback(
+    (saved: SavedMetricForm): StudioWidget => {
+      const cfg = ((saved.aggregationConfig ?? {}) as Record<string, unknown>);
+      const chartType = normalizeChartType((cfg.chartType as string | undefined) ?? saved.chartType ?? "bar");
+      const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions.map((d) => String(d)) : [cfg.dimension, cfg.dimension2].filter(Boolean).map((d) => String(d));
+      const metrics = toAggregationMetricList(cfg.metrics, saved.metric);
       const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
       const sources = etlData?.dataSources;
       const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
-      const newWidget: StudioWidget = {
+      const aggregationConfig: AggregationConfig = {
+        enabled: true,
+        ...(cfg as AggregationConfig),
+        dimension: dims[0] || (typeof cfg.dimension === "string" ? cfg.dimension : undefined),
+        dimension2: dims[1] || (typeof cfg.dimension2 === "string" ? cfg.dimension2 : undefined),
+        dimensions: dims.length > 0 ? dims : undefined,
+        metrics,
+        chartType,
+      };
+      return {
         id: `w-${saved.id}-${Date.now()}`,
         type: chartType,
         title: saved.name,
+        metricId: saved.id,
         x: 0,
         y: 0,
         w: 400,
@@ -727,52 +762,77 @@ export function AdminDashboardStudio({
         gridOrder: currentPageWidgets.length,
         gridSpan: chartType === "kpi" ? 1 : 2,
         pageId: activePageId ?? "page-1",
-        aggregationConfig: {
-          enabled: true,
-          dimension: dims[0] || undefined,
-          dimension2: dims[1] || undefined,
-          dimensions: dims.length > 0 ? dims : undefined,
-          metrics: metricsArr.map((m: any) => ({
-            id: m.id || `m-${Date.now()}`,
-            field: m.field || "",
-            func: m.func || "SUM",
-            alias: m.alias || "",
-            condition: m.condition,
-            formula: m.formula,
-            expression: m.expression,
-          })),
-          filters: Array.isArray(cfg.filters) ? (cfg.filters as AggregationFilter[]) : undefined,
-          orderBy: cfg.orderBy as { field: string; direction: "ASC" | "DESC" } | undefined,
-          limit: (cfg.limit as number) ?? 100,
-          cumulative: (cfg.cumulative as AggregationConfig["cumulative"]) ?? undefined,
-          comparePeriod: (cfg.comparePeriod as AggregationConfig["comparePeriod"]) ?? undefined,
-          dateDimension: (cfg.dateDimension as string) ?? undefined,
-          chartSeriesColors: cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? (cfg.chartSeriesColors as Record<string, string>) : undefined,
-          chartType,
-          chartXAxis: (cfg.chartXAxis as string) || undefined,
-          chartYAxes: Array.isArray(cfg.chartYAxes) ? (cfg.chartYAxes as string[]) : undefined,
-          chartSeriesField: (cfg.chartSeriesField as string) || undefined,
-          chartNumberFormat: (cfg.chartNumberFormat as string) || undefined,
-          chartValueType: (cfg.chartValueType as string) || undefined,
-          chartValueScale: (cfg.chartValueScale as string) || undefined,
-          chartCurrencySymbol: (cfg.chartCurrencySymbol as string) || undefined,
-          chartThousandSep: cfg.chartThousandSep != null ? (cfg.chartThousandSep as boolean) : undefined,
-          chartDecimals: cfg.chartDecimals != null ? (cfg.chartDecimals as number) : undefined,
-          chartSortDirection: (cfg.chartSortDirection as string) || undefined,
-          chartSortBy: (cfg.chartSortBy as string) || undefined,
-          chartSortByMetric: (cfg.chartSortByMetric as string) || undefined,
-          chartRankingEnabled: (cfg.chartRankingEnabled as boolean) || undefined,
-          chartRankingTop: (cfg.chartRankingTop as number) || undefined,
-          chartRankingMetric: (cfg.chartRankingMetric as string) || undefined,
-          chartColorScheme: (cfg.chartColorScheme as string) || undefined,
-          showDataLabels: (cfg.showDataLabels as boolean) || undefined,
-          chartAxisOrder: (cfg.chartAxisOrder as string) || undefined,
-          chartLabelOverrides: cfg.chartLabelOverrides && typeof cfg.chartLabelOverrides === "object" ? (cfg.chartLabelOverrides as Record<string, string>) : undefined,
-          chartMetricFormats: cfg.chartMetricFormats && typeof cfg.chartMetricFormats === "object" ? (cfg.chartMetricFormats as Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>) : undefined,
-        },
+        aggregationConfig,
         excludeGlobalFilters: false,
         dataSourceId: primaryId,
       };
+    },
+    [widgets, activePageId, etlData]
+  );
+
+  const buildWidgetFromSavedAnalysis = useCallback(
+    (analysis: SavedAnalysis): StudioWidget => {
+      const linkedSavedMetrics = (analysis.metricIds || [])
+        .map((mid) => savedMetrics.find((s) => String(s.id) === String(mid)))
+        .filter((s): s is SavedMetricForm => s != null);
+      const firstMetricCfg = ((linkedSavedMetrics[0]?.aggregationConfig ?? {}) as Record<string, unknown>);
+      const analysisCfg = (analysis as unknown as Record<string, unknown>);
+      const mergedCfg = { ...firstMetricCfg, ...analysisCfg } as Record<string, unknown>;
+      const chartType = normalizeChartType(
+        mergedCfg.chartType ??
+          firstMetricCfg.chartType ??
+          linkedSavedMetrics[0]?.chartType ??
+          linkedSavedMetrics[0]?.type ??
+          "bar"
+      );
+      const dims = Array.isArray(mergedCfg.dimensions)
+        ? mergedCfg.dimensions.map((d) => String(d))
+        : [mergedCfg.dimension, mergedCfg.dimension2].filter(Boolean).map((d) => String(d));
+      const metricsFromLinked = linkedSavedMetrics.flatMap((saved) => {
+        const cfg = (saved.aggregationConfig ?? {}) as Record<string, unknown>;
+        return toAggregationMetricList(cfg.metrics, saved.metric);
+      });
+      const metrics =
+        metricsFromLinked.length > 0
+          ? metricsFromLinked
+          : toAggregationMetricList(mergedCfg.metrics);
+      const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
+      const sources = etlData?.dataSources;
+      const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
+      const aggregationConfig: AggregationConfig = {
+        enabled: true,
+        ...(mergedCfg as AggregationConfig),
+        dimension: dims[0] || (typeof mergedCfg.dimension === "string" ? mergedCfg.dimension : undefined),
+        dimension2: dims[1] || (typeof mergedCfg.dimension2 === "string" ? mergedCfg.dimension2 : undefined),
+        dimensions: dims.length > 0 ? dims : undefined,
+        metrics,
+        chartType,
+      };
+      return {
+        id: `w-${analysis.id}-${Date.now()}`,
+        type: chartType,
+        title: analysis.name,
+        analysisId: analysis.id,
+        metricIds: [...(analysis.metricIds || [])],
+        x: 0,
+        y: 0,
+        w: 400,
+        h: 280,
+        gridOrder: currentPageWidgets.length,
+        gridSpan: chartType === "kpi" ? 1 : 2,
+        pageId: activePageId ?? "page-1",
+        aggregationConfig,
+        excludeGlobalFilters: false,
+        dataSourceId: primaryId,
+      };
+    },
+    [widgets, activePageId, etlData, savedMetrics]
+  );
+
+  /** Añade al dashboard una métrica ya creada (del ETL). */
+  const addSavedMetricToDashboard = useCallback(
+    (saved: SavedMetricForm) => {
+      const newWidget = buildWidgetFromSavedMetric(saved);
       setWidgets((prev) => [...prev, newWidget]);
       setSelectedId(null);
       setIsDirty(true);
@@ -781,77 +841,13 @@ export function AdminDashboardStudio({
       setAddMetricInitialIntent(null);
       if (etlData) setTimeout(() => loadMetricData(newWidget.id), 300);
     },
-    [widgets, activePageId, etlData, loadMetricData]
+    [buildWidgetFromSavedMetric, etlData, loadMetricData]
   );
 
   /** Añade al dashboard un análisis ya creado (métricas + dimensiones + tipo de gráfico). */
   const addSavedAnalysisToDashboard = useCallback(
     (analysis: SavedAnalysis) => {
-      const metricConfigs: AggregationMetric[] = [];
-      for (const mid of analysis.metricIds || []) {
-        const saved = savedMetrics.find((s) => String(s.id) === String(mid));
-        if (!saved) continue;
-        const cfg = (saved.aggregationConfig ?? {}) as Record<string, unknown>;
-        const list = Array.isArray(cfg.metrics) ? cfg.metrics : (saved.metric ? [saved.metric] : []);
-        list.forEach((m: any) => metricConfigs.push({
-          id: m.id || `m-${Date.now()}`,
-          field: m.field || "",
-          func: m.func || "SUM",
-          alias: m.alias || "",
-          condition: m.condition,
-          formula: m.formula,
-          expression: m.expression,
-        }));
-      }
-      const chartType = (analysis.chartType as string) || "bar";
-      const dims = Array.isArray(analysis.dimensions) ? analysis.dimensions : [analysis.dimension].filter(Boolean) as string[];
-      const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
-      const sources = etlData?.dataSources;
-      const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
-      const newWidget: StudioWidget = {
-        id: `w-${analysis.id}-${Date.now()}`,
-        type: chartType,
-        title: analysis.name,
-        x: 0,
-        y: 0,
-        w: 400,
-        h: 280,
-        gridOrder: currentPageWidgets.length,
-        gridSpan: chartType === "kpi" ? 1 : 2,
-        pageId: activePageId ?? "page-1",
-        aggregationConfig: {
-          enabled: true,
-          dimension: dims[0] || undefined,
-          dimension2: dims[1] || undefined,
-          dimensions: dims.length > 0 ? dims : undefined,
-          metrics: metricConfigs.length > 0 ? metricConfigs : [{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" }],
-          filters: analysis.filters,
-          orderBy: analysis.orderBy,
-          limit: analysis.limit ?? 100,
-          dateDimension: analysis.dateDimension,
-          chartType,
-          chartXAxis: analysis.chartXAxis,
-          chartYAxes: analysis.chartYAxes,
-          chartSeriesField: analysis.chartSeriesField,
-          chartLabelOverrides: analysis.chartLabelOverrides,
-          chartValueType: analysis.chartValueType,
-          chartValueScale: analysis.chartValueScale,
-          chartCurrencySymbol: analysis.chartCurrencySymbol,
-          chartThousandSep: analysis.chartThousandSep,
-          chartDecimals: analysis.chartDecimals,
-          chartSeriesColors: analysis.chartSeriesColors,
-          chartSortDirection: analysis.chartSortDirection,
-          chartSortBy: analysis.chartSortBy,
-          chartSortByMetric: analysis.chartSortByMetric,
-          chartRankingEnabled: analysis.chartRankingEnabled,
-          chartRankingTop: analysis.chartRankingTop,
-          chartRankingMetric: analysis.chartRankingMetric,
-          dateGroupByGranularity: analysis.dateGroupByGranularity,
-          dateRangeFilter: analysis.dateRangeFilter,
-        },
-        excludeGlobalFilters: false,
-        dataSourceId: primaryId,
-      };
+      const newWidget = buildWidgetFromSavedAnalysis(analysis);
       setWidgets((prev) => [...prev, newWidget]);
       setSelectedId(null);
       setIsDirty(true);
@@ -860,7 +856,7 @@ export function AdminDashboardStudio({
       setAddMetricInitialIntent(null);
       if (etlData) setTimeout(() => loadMetricData(newWidget.id), 300);
     },
-    [widgets, activePageId, etlData, savedMetrics, loadMetricData]
+    [buildWidgetFromSavedAnalysis, etlData, loadMetricData]
   );
 
   const openAddMetricList = useCallback(() => {
@@ -1478,16 +1474,7 @@ export function AdminDashboardStudio({
                   w.rows && Array.isArray(w.rows)
                     ? `${w.rows.length} puntos de datos`
                     : "Ejecutá para actualizar";
-                const savedForTitle = savedMetrics.find((s) => (s.name || "").trim() === (w.title || "").trim());
-                const chartTypeFromSaved = (savedForTitle?.aggregationConfig as { chartType?: string })?.chartType ?? (savedForTitle as { chartType?: string })?.chartType;
-                const chartTypeRaw =
-                  (w.aggregationConfig as { chartType?: string })?.chartType
-                  || chartTypeFromSaved
-                  || w.type
-                  || "bar";
-                type SupportedChartType = "bar" | "horizontalBar" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter";
-                const SUPPORTED_CHART_TYPES: string[] = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "kpi", "table", "combo", "scatter"];
-                const chartType: SupportedChartType = SUPPORTED_CHART_TYPES.includes(chartTypeRaw) ? chartTypeRaw as SupportedChartType : "bar";
+                const chartType = normalizeChartType((w.aggregationConfig as { chartType?: string })?.chartType ?? w.type ?? "bar");
                 let kpiValue: string | number | undefined;
                 if (chartType === "kpi" && w.config?.datasets?.[0]?.data?.[0] != null) {
                   kpiValue = w.config.datasets[0].data[0];
