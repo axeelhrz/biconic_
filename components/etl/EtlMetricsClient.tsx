@@ -408,7 +408,7 @@ export type EtlMetricsClientProps = {
   embeddedInDatasetsModal?: boolean;
 };
 
-export default function EtlMetricsClient({ etlId, etlTitle, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false, onDatasetSaved, embeddedInDatasetsModal = false }: EtlMetricsClientProps) {
+export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false, onDatasetSaved, embeddedInDatasetsModal = false }: EtlMetricsClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
@@ -2119,7 +2119,128 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
     }
   }, [etlId, savedMetrics, dashboardFilters, linkedDashboardId]);
 
-  const saveMetric = async () => {
+  const resolveDashboardForPublish = useCallback(async () => {
+    if (linkedDashboardId) return linkedDashboardId;
+    const createRes = await fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: `${etlTitle} - Dashboard`,
+        etl_id: etlId,
+        ...(etlClientId ? { client_id: etlClientId } : {}),
+      }),
+    });
+    const created = await safeJsonResponse(createRes);
+    if (!createRes.ok || !created?.ok || !created?.id) {
+      throw new Error(created?.error ?? "No se pudo crear el dashboard");
+    }
+    const newDashboardId = String(created.id);
+    setLinkedDashboardId(newDashboardId);
+    setData((prev) => (prev ? { ...prev, linkedDashboardId: newDashboardId } : prev));
+    return newDashboardId;
+  }, [linkedDashboardId, etlTitle, etlId, etlClientId]);
+
+  const upsertMetricWidgetOnDashboard = useCallback(async (dashboardId: string, metricItem: SavedMetricForm) => {
+    const getRes = await fetch(`/api/dashboard/${dashboardId}/layout`);
+    const getJson = await safeJsonResponse(getRes);
+    if (!getRes.ok || !getJson?.ok || !getJson?.data) {
+      throw new Error(getJson?.error ?? "No se pudo cargar el dashboard para publicar la métrica");
+    }
+
+    const dashboardData = getJson.data as {
+      title?: string;
+      global_filters_config?: unknown;
+      layout?: {
+        widgets?: Array<Record<string, unknown>>;
+        theme?: Record<string, unknown>;
+        pages?: Array<Record<string, unknown>>;
+        activePageId?: string;
+        savedMetrics?: SavedMetricForm[];
+      };
+    };
+
+    const layout = dashboardData.layout && typeof dashboardData.layout === "object" ? dashboardData.layout : {};
+    const currentWidgets = Array.isArray(layout.widgets) ? layout.widgets : [];
+    const chartType = String(metricItem.aggregationConfig?.chartType ?? "bar");
+    const activePageId =
+      typeof layout.activePageId === "string" && layout.activePageId.trim() !== ""
+        ? layout.activePageId
+        : (Array.isArray(layout.pages) && layout.pages.length > 0 && typeof layout.pages[0]?.id === "string"
+            ? String(layout.pages[0]?.id)
+            : undefined);
+
+    const samePageWidgets = activePageId
+      ? currentWidgets.filter((w) => String(w.pageId ?? "") === activePageId)
+      : currentWidgets;
+    const nextGridOrder =
+      samePageWidgets.reduce((max, w) => Math.max(max, Number(w.gridOrder ?? 0)), -1) + 1;
+
+    const nextWidget: Record<string, unknown> = {
+      id: `w-${Date.now()}`,
+      type: chartType,
+      title: metricItem.name,
+      metricId: metricItem.id,
+      x: 0,
+      y: 0,
+      w: 2,
+      h: 2,
+      gridSpan: 2,
+      minHeight: 320,
+      gridOrder: nextGridOrder,
+      ...(activePageId ? { pageId: activePageId } : {}),
+      aggregationConfig: {
+        enabled: true,
+        ...(metricItem.aggregationConfig ?? {}),
+        metrics:
+          Array.isArray(metricItem.aggregationConfig?.metrics) && metricItem.aggregationConfig.metrics.length > 0
+            ? metricItem.aggregationConfig.metrics
+            : [metricItem.metric],
+        chartType,
+      },
+    };
+
+    const existingIndex = currentWidgets.findIndex(
+      (w) => String(w.metricId ?? "").trim() === String(metricItem.id).trim()
+    );
+    const widgetsUpdated =
+      existingIndex >= 0
+        ? currentWidgets.map((w, idx) =>
+            idx === existingIndex
+              ? {
+                  ...w,
+                  type: chartType,
+                  title: metricItem.name,
+                  aggregationConfig: nextWidget.aggregationConfig,
+                }
+              : w
+          )
+        : [...currentWidgets, nextWidget];
+
+    const savedMetricsInLayout = Array.isArray(layout.savedMetrics) ? layout.savedMetrics : [];
+    const byId = new Map(savedMetricsInLayout.map((m) => [m.id, m]));
+    byId.set(metricItem.id, metricItem);
+    const mergedSavedMetrics = Array.from(byId.values());
+
+    const putRes = await fetch(`/api/dashboard/${dashboardId}/layout`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: dashboardData.title,
+        global_filters_config: dashboardData.global_filters_config,
+        layout: {
+          ...layout,
+          widgets: widgetsUpdated,
+          savedMetrics: mergedSavedMetrics,
+        },
+      }),
+    });
+    const putJson = await safeJsonResponse(putRes);
+    if (!putRes.ok || !putJson?.ok) {
+      throw new Error(putJson?.error ?? "No se pudo subir la métrica al dashboard");
+    }
+  }, []);
+
+  const saveMetric = async (options?: { publishToDashboard?: boolean; redirectToDashboard?: boolean }) => {
     const name = formName.trim();
     if (!name) {
       toast.error("Nombre requerido");
@@ -2248,6 +2369,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
 
     setSaving(true);
     try {
+      let targetDashboardId = linkedDashboardId ?? null;
+      if (options?.publishToDashboard) {
+        targetDashboardId = await resolveDashboardForPublish();
+      }
+
       let next: SavedMetricForm[];
       const item: SavedMetricForm = {
         id: editingId ?? `sm-${Date.now()}`,
@@ -2266,6 +2392,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
         body: JSON.stringify({
           savedMetrics: next,
           datasetConfig: datasetConfigToSave,
+          ...(targetDashboardId ? { dashboardId: targetDashboardId } : linkedDashboardId ? { dashboardId: linkedDashboardId } : {}),
         }),
       });
       const json = await safeJsonResponse(res);
@@ -2278,7 +2405,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
       if (createDerivedColumn) toast.success(`Se creó la columna «${alias}» en el dataset; la podés usar en «Insertar columna» en otras métricas.`, { duration: 6000 });
       setData((prev) => (prev ? { ...prev, savedMetrics: next, datasetConfig: datasetConfigToSave } : null));
       if (createDerivedColumn) setDerivedColumns(nextDerivedColumns);
+      if (options?.publishToDashboard && targetDashboardId) {
+        await upsertMetricWidgetOnDashboard(targetDashboardId, item);
+        toast.success("Métrica subida al dashboard");
+      }
       closeForm();
+      if (options?.publishToDashboard && options?.redirectToDashboard && targetDashboardId) {
+        router.push(`/admin/dashboard/${targetDashboardId}`);
+      }
     } catch {
       toast.error("Error al guardar");
     } finally {
@@ -5491,10 +5625,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, connections: connect
                   )}
                   <div className="flex justify-between items-center">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
-                    <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetric} disabled={saving}>
-                      {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                      {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? "Guardar análisis" : "Crear métrica"}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="rounded-xl px-4 font-semibold"
+                        style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
+                        onClick={() => saveMetric({ publishToDashboard: true, redirectToDashboard: true })}
+                        disabled={saving}
+                      >
+                        {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                        Guardar y subir al dashboard
+                      </Button>
+                      <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={() => saveMetric()} disabled={saving}>
+                        {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                        {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? "Guardar análisis" : "Crear métrica"}
+                      </Button>
+                    </div>
                   </div>
                 </section>
               )}
