@@ -125,6 +125,10 @@ function detectSeparator(filePath: string): string {
 
 type ParseMode = "strict" | "tolerant" | "mixed";
 type FileFormat = "xlsx" | "xlsm" | "xls" | "ods" | "csv";
+type SheetSelection = {
+  sheetName: string;
+  sheetIndex: number; // 1-based index
+};
 
 const getExtensionFromPath = (filePath: string) =>
   path.extname(filePath || "").replace(".", "").toLowerCase();
@@ -161,11 +165,58 @@ const getSheetNamesFromWorkbook = (filePath: string): string[] => {
     : [];
 };
 
+const resolveSheetSelection = (
+  sheetNames: string[],
+  requestedSheet: string | undefined,
+  parseMode: ParseMode,
+  warnings: string[]
+): SheetSelection => {
+  if (sheetNames.length === 0) {
+    throw new Error("El archivo no contiene hojas legibles.");
+  }
+
+  if (!requestedSheet) {
+    return { sheetName: sheetNames[0], sheetIndex: 1 };
+  }
+
+  const exactIndex = sheetNames.indexOf(requestedSheet);
+  if (exactIndex >= 0) {
+    return { sheetName: sheetNames[exactIndex], sheetIndex: exactIndex + 1 };
+  }
+
+  const normalizedRequested = requestedSheet.trim().toLowerCase();
+  const relaxedIndex = sheetNames.findIndex(
+    (sheet) => sheet.trim().toLowerCase() === normalizedRequested
+  );
+
+  if (relaxedIndex >= 0) {
+    const resolvedName = sheetNames[relaxedIndex];
+    if (requestedSheet !== resolvedName) {
+      warnings.push(
+        `La hoja "${requestedSheet}" no coincidía exactamente. Se utilizó "${resolvedName}".`
+      );
+    }
+    return { sheetName: resolvedName, sheetIndex: relaxedIndex + 1 };
+  }
+
+  if (parseMode === "strict") {
+    throw new Error(
+      `La hoja seleccionada "${requestedSheet}" no existe en el archivo (modo: ${parseMode}). Hojas detectadas: ${sheetNames.join(", ")}.`
+    );
+  }
+
+  warnings.push(
+    `La hoja "${requestedSheet}" no existe. Se utilizó "${sheetNames[0]}".`
+  );
+  return { sheetName: sheetNames[0], sheetIndex: 1 };
+};
+
 // --- ⭐ GENERADOR HÍBRIDO OPTIMIZADO ⭐ ---
 async function* getRowGenerator(
   filePath: string,
   format: FileFormat,
-  selectedSheet?: string
+  selectedSheet?: string,
+  selectedSheetIndex?: number
 ) {
   if (format === "csv") {
     const separator = detectSeparator(filePath);
@@ -215,22 +266,16 @@ async function* getRowGenerator(
     hyperlinks: "ignore",
   };
   const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, options);
-  let matchedSheet = false;
+  const targetSheetIndex = selectedSheetIndex ?? 1;
+  let sheetIdx = 0;
   let firstSheetProcessed = false;
 
-  // Los tipos de ExcelJS no exponen `name` en WorksheetReader; en runtime sí existe.
-  type WorksheetReaderWithSheetName = InstanceType<
-    typeof ExcelJS.stream.xlsx.WorksheetReader
-  > & { name?: string };
-
   for await (const worksheetReader of workbookReader) {
-    const sheetName =
-      String((worksheetReader as WorksheetReaderWithSheetName).name ?? "");
+    sheetIdx++;
     const shouldProcess = selectedSheet
-      ? sheetName === selectedSheet
+      ? sheetIdx === targetSheetIndex
       : !firstSheetProcessed;
     if (!shouldProcess) continue;
-    matchedSheet = true;
     firstSheetProcessed = true;
     for await (const row of worksheetReader) {
       if (Array.isArray(row.values)) {
@@ -240,7 +285,7 @@ async function* getRowGenerator(
     if (!selectedSheet) break;
   }
 
-  if (selectedSheet && !matchedSheet) {
+  if (selectedSheet && !firstSheetProcessed) {
     throw new Error(`La hoja "${selectedSheet}" no existe en el archivo.`);
   }
 }
@@ -388,29 +433,28 @@ async function processDataImport(
     const warnings: string[] = [];
     const fileFormat = detectFileFormat(tempFilePath, preferredExtension);
     let finalSelectedSheet = selectedSheet || undefined;
+    let finalSelectedSheetIndex: number | undefined = undefined;
 
     if (fileFormat !== "csv") {
       const sheetNames = getSheetNamesFromWorkbook(tempFilePath);
-      if (sheetNames.length === 0) {
-        throw new Error("El archivo no contiene hojas legibles.");
-      }
-      if (finalSelectedSheet && !sheetNames.includes(finalSelectedSheet)) {
-        if (parseMode === "strict") {
-          throw new Error(
-            `La hoja seleccionada "${finalSelectedSheet}" no existe en el archivo.`
-          );
-        }
-        warnings.push(
-          `La hoja "${finalSelectedSheet}" no existe. Se utilizó "${sheetNames[0]}".`
-        );
-        finalSelectedSheet = sheetNames[0];
-      }
-      if (!finalSelectedSheet) finalSelectedSheet = sheetNames[0];
+      const selection = resolveSheetSelection(
+        sheetNames,
+        finalSelectedSheet,
+        parseMode,
+        warnings
+      );
+      finalSelectedSheet = selection.sheetName;
+      finalSelectedSheetIndex = selection.sheetIndex;
     } else {
       finalSelectedSheet = "CSV";
     }
 
-    const rowGenerator = getRowGenerator(tempFilePath, fileFormat, finalSelectedSheet);
+    const rowGenerator = getRowGenerator(
+      tempFilePath,
+      fileFormat,
+      finalSelectedSheet,
+      finalSelectedSheetIndex
+    );
 
     for await (const values of rowGenerator) {
       if (!values || values.length === 0) continue;
