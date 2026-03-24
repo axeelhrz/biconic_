@@ -9,6 +9,7 @@ import os from "os";
 import { pipeline } from "stream/promises";
 import dns from "node:dns";
 import csvParser from "csv-parser"; // ⚡ NECESARIO: npm install csv-parser
+import * as XLSX from "xlsx";
 
 // Forzar IPv4 para evitar ECONNRESET
 dns.setDefaultResultOrder("ipv4first");
@@ -17,6 +18,7 @@ dns.setDefaultResultOrder("ipv4first");
 const INSERT_BATCH_SIZE = 2000;
 const SAMPLE_SIZE = 1000;
 const PROGRESS_UPDATE_INTERVAL = 2000; // Actualizar DB cada X filas
+const MAX_WARNINGS = 20;
 
 // --- UTILIDADES ---
 const sanitizeColumnName = (name: any) =>
@@ -121,41 +123,51 @@ function detectSeparator(filePath: string): string {
   return ",";
 }
 
-// --- ⭐ GENERADOR HÍBRIDO OPTIMIZADO ⭐ ---
-async function* getRowGenerator(filePath: string) {
-  // 1. Detección Magic Bytes (Primeros 4 bytes)
+type ParseMode = "strict" | "tolerant" | "mixed";
+type FileFormat = "xlsx" | "xlsm" | "xls" | "ods" | "csv";
+
+const getExtensionFromPath = (filePath: string) =>
+  path.extname(filePath || "").replace(".", "").toLowerCase();
+
+const detectFileFormat = (
+  filePath: string,
+  preferredExtension?: string
+): FileFormat => {
+  const extension = (preferredExtension || getExtensionFromPath(filePath)).toLowerCase();
+  if (extension === "csv") return "csv";
+  if (extension === "xls") return "xls";
+  if (extension === "ods") return "ods";
+  if (extension === "xlsm") return "xlsm";
+  if (extension === "xlsx") return "xlsx";
+
   const buffer = Buffer.alloc(4);
   const fd = fs.openSync(filePath, "r");
-  fs.readSync(fd, buffer, 0, 4, 0);
-  fs.closeSync(fd);
+  try {
+    fs.readSync(fd, buffer, 0, 4, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
 
-  const isXlsx = buffer.toString("hex") === "504b0304"; // Firma PK.. (ZIP)
+  const signature = buffer.toString("hex");
+  if (signature === "504b0304") return "xlsx";
+  if (signature.startsWith("d0cf11e0")) return "xls";
+  return "csv";
+};
 
-  if (isXlsx) {
-    console.log("[LOG] Modo: XLSX Stream (ExcelJS)");
-    const options: any = {
-      entries: "emit",
-      sharedStrings: "cache",
-      styles: "cache",
-      hyperlinks: "ignore",
-    };
-    const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(
-      filePath,
-      options
-    );
+const getSheetNamesFromWorkbook = (filePath: string): string[] => {
+  const workbook = XLSX.readFile(filePath, { cellDates: true });
+  return Array.isArray(workbook.SheetNames)
+    ? workbook.SheetNames.filter(Boolean)
+    : [];
+};
 
-    let sheetIdx = 0;
-    for await (const worksheetReader of workbookReader) {
-      sheetIdx++;
-      if (sheetIdx > 1) break;
-      for await (const row of worksheetReader) {
-        if (Array.isArray(row.values)) {
-          yield row.values.slice(1);
-        }
-      }
-    }
-  } else {
-    // Detectar separador automáticamente (Fix para CSV con punto y coma)
+// --- ⭐ GENERADOR HÍBRIDO OPTIMIZADO ⭐ ---
+async function* getRowGenerator(
+  filePath: string,
+  format: FileFormat,
+  selectedSheet?: string
+) {
+  if (format === "csv") {
     const separator = detectSeparator(filePath);
     console.log(
       `[LOG] Modo: CSV Stream. Separador detectado: [ ${
@@ -163,19 +175,67 @@ async function* getRowGenerator(filePath: string) {
       } ]`
     );
 
-    // ⚡ STREAM REAL PARA CSV
     const stream = fs.createReadStream(filePath).pipe(
       csvParser({
         headers: false,
-        separator: separator,
+        separator,
       })
     );
 
     for await (const row of stream) {
-      // csv-parser devuelve objeto { '0': 'val', '1': 'val' } si headers es false
-      // o array dependiendo de la versión. Lo forzamos a array.
       yield Object.values(row);
     }
+    return;
+  }
+
+  if (format === "xls" || format === "ods") {
+    console.log(`[LOG] Modo: ${format.toUpperCase()} (SheetJS)`);
+    const workbook = XLSX.readFile(filePath, { cellDates: true });
+    const sheetName =
+      selectedSheet && workbook.SheetNames.includes(selectedSheet)
+        ? selectedSheet
+        : workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(worksheet, {
+      header: 1,
+      defval: null,
+      raw: false,
+    }) as any[][];
+    for (const row of rows) {
+      yield Array.isArray(row) ? row : [];
+    }
+    return;
+  }
+
+  console.log("[LOG] Modo: XLSX/XLSM Stream (ExcelJS)");
+  const options: any = {
+    entries: "emit",
+    sharedStrings: "cache",
+    styles: "cache",
+    hyperlinks: "ignore",
+  };
+  const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, options);
+  let matchedSheet = false;
+  let firstSheetProcessed = false;
+
+  for await (const worksheetReader of workbookReader) {
+    const sheetName = worksheetReader.name || "";
+    const shouldProcess = selectedSheet
+      ? sheetName === selectedSheet
+      : !firstSheetProcessed;
+    if (!shouldProcess) continue;
+    matchedSheet = true;
+    firstSheetProcessed = true;
+    for await (const row of worksheetReader) {
+      if (Array.isArray(row.values)) {
+        yield row.values.slice(1);
+      }
+    }
+    if (!selectedSheet) break;
+  }
+
+  if (selectedSheet && !matchedSheet) {
+    throw new Error(`La hoja "${selectedSheet}" no existe en el archivo.`);
   }
 }
 
@@ -187,7 +247,9 @@ async function processDataImport(
   connectionId: string,
   dataTableId: string,
   supabaseAdmin: any,
-  dbUrl: string
+  dbUrl: string,
+  parseMode: ParseMode,
+  selectedSheet?: string | null
 ) {
   let tempFilePath: string | null = null;
   let sql: any = null;
@@ -227,7 +289,7 @@ async function processDataImport(
 
     const { data: connection } = await supabaseAdmin
       .from("connections")
-      .select("storage_object_path")
+      .select("storage_object_path, original_file_name")
       .eq("id", connectionId)
       .single()
       .throwOnError();
@@ -238,6 +300,9 @@ async function processDataImport(
       );
     }
     const storagePath = connection.storage_object_path;
+    const preferredExtension = getExtensionFromPath(
+      connection.original_file_name || storagePath
+    );
 
     let downloadSuccess = false;
     let attempts = 0;
@@ -314,7 +379,32 @@ async function processDataImport(
     let currentBatchSize = INSERT_BATCH_SIZE;
 
     if (!tempFilePath) throw new Error("Error interno: tempFilePath es nulo");
-    const rowGenerator = getRowGenerator(tempFilePath);
+    const warnings: string[] = [];
+    const fileFormat = detectFileFormat(tempFilePath, preferredExtension);
+    let finalSelectedSheet = selectedSheet || undefined;
+
+    if (fileFormat !== "csv") {
+      const sheetNames = getSheetNamesFromWorkbook(tempFilePath);
+      if (sheetNames.length === 0) {
+        throw new Error("El archivo no contiene hojas legibles.");
+      }
+      if (finalSelectedSheet && !sheetNames.includes(finalSelectedSheet)) {
+        if (parseMode === "strict") {
+          throw new Error(
+            `La hoja seleccionada "${finalSelectedSheet}" no existe en el archivo.`
+          );
+        }
+        warnings.push(
+          `La hoja "${finalSelectedSheet}" no existe. Se utilizó "${sheetNames[0]}".`
+        );
+        finalSelectedSheet = sheetNames[0];
+      }
+      if (!finalSelectedSheet) finalSelectedSheet = sheetNames[0];
+    } else {
+      finalSelectedSheet = "CSV";
+    }
+
+    const rowGenerator = getRowGenerator(tempFilePath, fileFormat, finalSelectedSheet);
 
     for await (const values of rowGenerator) {
       if (!values || values.length === 0) continue;
@@ -342,7 +432,26 @@ async function processDataImport(
         continue;
       }
 
-      buffer.push(values);
+      if (values.length !== headers.length) {
+        if (parseMode === "strict") {
+          throw new Error(
+            `La fila ${rowCount + 1} tiene ${values.length} columnas y se esperaban ${headers.length}.`
+          );
+        }
+        if (warnings.length < MAX_WARNINGS) {
+          warnings.push(
+            `Fila ${rowCount + 1} normalizada por diferencia de columnas (${values.length}/${headers.length}).`
+          );
+        }
+      }
+      const normalizedValues =
+        values.length > headers.length
+          ? values.slice(0, headers.length)
+          : values.length < headers.length
+            ? [...values, ...Array(headers.length - values.length).fill(null)]
+            : values;
+
+      buffer.push(normalizedValues);
 
       // --- FASE 1: INFERENCIA DE TIPOS ---
       if (!isTableCreated && buffer.length >= SAMPLE_SIZE) {
@@ -422,6 +531,9 @@ async function processDataImport(
         import_status: "completed",
         columns: columnMetadata,
         total_rows: rowCount - 1,
+        error_message: warnings.length
+          ? `Advertencias:\n${warnings.join("\n")}`
+          : null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", dataTableId);
@@ -461,6 +573,16 @@ export async function POST(req: Request) {
     }
 
     const { connectionId, dataTableId } = body;
+    const parseMode: ParseMode =
+      body?.parseMode === "strict" ||
+      body?.parseMode === "tolerant" ||
+      body?.parseMode === "mixed"
+        ? body.parseMode
+        : "mixed";
+    const selectedSheet =
+      typeof body?.selectedSheet === "string" && body.selectedSheet.trim() !== ""
+        ? body.selectedSheet.trim()
+        : null;
 
     // Validar variables de entorno antes de iniciar (evita que "siempre falle" sin mensaje claro)
     const missing: string[] = [];
@@ -499,7 +621,9 @@ export async function POST(req: Request) {
       connectionId,
       dataTableId,
       supabaseAdmin,
-      process.env.SUPABASE_DB_URL!
+      process.env.SUPABASE_DB_URL!,
+      parseMode,
+      selectedSheet
     ).catch((err) => console.error("[FATAL BACKGROUND ERROR]", err));
 
     // Next 15: after() evita que el proceso se corte al enviar la respuesta (Vercel/local)

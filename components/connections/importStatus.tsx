@@ -72,11 +72,16 @@ export default function ImportStatus({
         if (isFinished) {
           if (intervalId.current) clearInterval(intervalId.current);
           if (!compact) {
-            toast[data.import_status === "completed" ? "success" : "error"](
-              data.import_status === "completed"
-                ? `¡Importación completa! Se procesaron ${data.total_rows} filas.`
-                : `Error en la importación: ${data.error_message}`
-            );
+            if (data.import_status === "completed") {
+              toast.success(
+                `¡Importación completa! Se procesaron ${data.total_rows} filas.`
+              );
+              if (data.error_message) {
+                toast.warning(data.error_message);
+              }
+            } else {
+              toast.error(`Error en la importación: ${data.error_message}`);
+            }
           }
           onProcessFinished();
           return;
@@ -104,7 +109,7 @@ export default function ImportStatus({
               if (!compact) toast.error("La importación tardó demasiado y se marcó como fallida. Podés volver a subir el archivo.");
               onProcessFinished();
             }
-          } catch (_) {}
+          } catch {}
         }
       }
     };
@@ -133,6 +138,11 @@ export default function ImportStatus({
             ? `${status.total_rows || 0} filas` 
             : `Importando filas... (${status.total_rows || 0} procesadas)`;
       case "completed":
+        if (status.error_message) {
+          return compact
+            ? "Completado (con advertencias)"
+            : `Proceso completado con advertencias. Tabla "${status.physical_table_name}" creada con ${status.total_rows} filas.`;
+        }
         return compact 
             ? "Completado" 
             : `Proceso completado. Tabla "${status.physical_table_name}" creada con ${status.total_rows} filas.`;

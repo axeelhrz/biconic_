@@ -3,6 +3,7 @@
 import { AlertCircle, Building2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
+import * as XLSX from "xlsx";
 import { DialogClose } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Select, type SelectOption } from "../ui/Select";
@@ -50,7 +51,11 @@ type ConnectionFormProps = {
     values: ConnectionFormValues
   ) => Promise<boolean> | boolean;
   onSubmit?: (values: ConnectionFormValues) => Promise<void> | void;
-  onExcelUpload?: (file: File, connectionName: string) => Promise<void> | void;
+  onExcelUpload?: (
+    file: File,
+    connectionName: string,
+    options: { parseMode: "strict" | "tolerant" | "mixed"; selectedSheet?: string }
+  ) => Promise<void> | void;
   // Nuevas props para recibir el estado del proceso desde el diálogo padre
   isProcessing?: boolean;
   currentImportId?: string | null;
@@ -100,6 +105,12 @@ export default function ConnectionForm({
 
   const [isExcelMode, setIsExcelMode] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [availableSheets, setAvailableSheets] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState("");
+  const [sheetInspectError, setSheetInspectError] = useState<string | null>(null);
+  const [parseMode, setParseMode] = useState<"strict" | "tolerant" | "mixed">(
+    "mixed"
+  );
   // Este estado ahora solo controla el feedback inmediato del botón "Subiendo..."
   const [isUploading, setIsUploading] = useState(false);
 
@@ -127,10 +138,41 @@ export default function ConnectionForm({
     await onTestConnection?.(getValues());
   };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       setSelectedFile(file);
+      setSheetInspectError(null);
+      setAvailableSheets([]);
+      setSelectedSheet("");
+      try {
+        const fileExt = file.name.split(".").pop()?.toLowerCase();
+        if (fileExt === "csv") {
+          setAvailableSheets(["CSV"]);
+          setSelectedSheet("CSV");
+          return;
+        }
+
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: "array" });
+        const sheets = Array.isArray(workbook.SheetNames)
+          ? workbook.SheetNames.filter(Boolean)
+          : [];
+
+        if (sheets.length === 0) {
+          setSheetInspectError(
+            "No se detectaron hojas en el archivo. Verificá el formato y volvé a intentar."
+          );
+          return;
+        }
+
+        setAvailableSheets(sheets);
+        setSelectedSheet(sheets[0]);
+      } catch {
+        setSheetInspectError(
+          "No se pudieron leer las hojas del archivo. Podés continuar y se usará la primera hoja disponible."
+        );
+      }
     }
   };
 
@@ -146,7 +188,10 @@ export default function ConnectionForm({
     setIsUploading(true);
     try {
       // Llamamos a la función del padre, que manejará toda la lógica
-      await onExcelUpload?.(selectedFile, connectionName);
+      await onExcelUpload?.(selectedFile, connectionName, {
+        parseMode,
+        selectedSheet: selectedSheet || undefined,
+      });
     } catch (error) {
       console.error("Error uploading Excel:", error);
       // El padre se encargará de mostrar los toasts de error
@@ -159,6 +204,10 @@ export default function ConnectionForm({
     setIsExcelMode(connectionType === "excel");
     if (connectionType !== "excel") {
       setSelectedFile(null);
+      setAvailableSheets([]);
+      setSelectedSheet("");
+      setSheetInspectError(null);
+      setParseMode("mixed");
     }
   }, [connectionType]);
 
@@ -288,7 +337,7 @@ export default function ConnectionForm({
                       <input
                         id="excel-file"
                         type="file"
-                        accept=".xlsx,.xls,.csv"
+                        accept=".xlsx,.xls,.xlsm,.csv,.ods"
                         onChange={handleFileChange}
                         className="hidden"
                       />
@@ -306,8 +355,70 @@ export default function ConnectionForm({
                       </p>
                     </div>
                   )}
-                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                    Formatos soportados: .xlsx, .xls, .csv
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 text-left">
+                    <div>
+                      <label
+                        htmlFor="parse-mode"
+                        className="block text-xs font-medium mb-1"
+                        style={{ color: "var(--platform-fg-muted)" }}
+                      >
+                        Modo de lectura
+                      </label>
+                      <select
+                        id="parse-mode"
+                        value={parseMode}
+                        onChange={(e) =>
+                          setParseMode(
+                            e.target.value as "strict" | "tolerant" | "mixed"
+                          )
+                        }
+                        className={inputClass}
+                      >
+                        <option value="mixed">Mixto (recomendado)</option>
+                        <option value="strict">Estricto</option>
+                        <option value="tolerant">Tolerante</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="sheet-name"
+                        className="block text-xs font-medium mb-1"
+                        style={{ color: "var(--platform-fg-muted)" }}
+                      >
+                        Hoja
+                      </label>
+                      <select
+                        id="sheet-name"
+                        value={selectedSheet}
+                        onChange={(e) => setSelectedSheet(e.target.value)}
+                        className={inputClass}
+                        disabled={!selectedFile || availableSheets.length === 0}
+                      >
+                        {availableSheets.length === 0 ? (
+                          <option value="">Se seleccionará automáticamente</option>
+                        ) : (
+                          availableSheets.map((sheet) => (
+                            <option key={sheet} value={sheet}>
+                              {sheet}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                  </div>
+                  {sheetInspectError && (
+                    <p
+                      className="mt-2 text-xs"
+                      style={{ color: "var(--platform-danger)" }}
+                    >
+                      {sheetInspectError}
+                    </p>
+                  )}
+                  <p
+                    className="text-xs mt-2"
+                    style={{ color: "var(--platform-fg-muted)" }}
+                  >
+                    Formatos soportados: .xlsx, .xls, .xlsm, .csv, .ods
                   </p>
                 </>
               )}

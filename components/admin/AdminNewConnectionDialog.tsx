@@ -200,7 +200,11 @@ export default function AdminNewConnectionDialog({
     throw new Error("No se pudo encontrar un cliente asociado a tu cuenta.");
   };
 
-  const handleExcelUpload = async (file: File, connectionName: string) => {
+  const handleExcelUpload = async (
+    file: File,
+    connectionName: string,
+    options: { parseMode: "strict" | "tolerant" | "mixed"; selectedSheet?: string }
+  ) => {
     try {
       const supabase = createClient();
       const {
@@ -208,11 +212,11 @@ export default function AdminNewConnectionDialog({
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuario no autenticado.");
 
-      const allowed = ["xlsx", "xls", "csv"] as const;
+      const allowed = ["xlsx", "xls", "xlsm", "csv", "ods"] as const;
       const fileExt = file.name.split(".").pop()?.toLowerCase();
       if (!fileExt || !allowed.includes(fileExt as any)) {
         throw new Error(
-          "Formato no soportado. Sube un archivo .xlsx, .xls o .csv."
+          "Formato no soportado. Sube un archivo .xlsx, .xls, .xlsm, .csv u .ods."
         );
       }
 
@@ -258,6 +262,37 @@ export default function AdminNewConnectionDialog({
 
       const dataTableId = dataTableMeta.id;
 
+      let selectedSheet = options.selectedSheet;
+      if (fileExt !== "csv") {
+        const sheetsRes = await fetch("/api/process-excel/sheets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ connectionId: newConnectionId }),
+        });
+
+        if (sheetsRes.ok) {
+          const sheetsData = await safeJsonResponse<{
+            sheets?: string[];
+            defaultSheet?: string;
+          }>(sheetsRes);
+          const availableSheets = Array.isArray(sheetsData.sheets)
+            ? sheetsData.sheets
+            : [];
+          if (
+            selectedSheet &&
+            availableSheets.length > 0 &&
+            !availableSheets.includes(selectedSheet)
+          ) {
+            selectedSheet = sheetsData.defaultSheet || availableSheets[0];
+            toast.warning(
+              "La hoja elegida no existe en el archivo subido. Se usará la hoja por defecto."
+            );
+          } else if (!selectedSheet && availableSheets.length > 0) {
+            selectedSheet = sheetsData.defaultSheet || availableSheets[0];
+          }
+        }
+      }
+
       setCurrentImportId(dataTableId);
       setIsProcessing(true);
       
@@ -271,6 +306,8 @@ export default function AdminNewConnectionDialog({
         body: JSON.stringify({
           connectionId: newConnectionId,
           dataTableId: dataTableId,
+          parseMode: options.parseMode || "mixed",
+          selectedSheet: selectedSheet || null,
         }),
       });
 
