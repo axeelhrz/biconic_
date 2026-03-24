@@ -369,8 +369,12 @@ async function processDataImport(
     const preferredExtension = getExtensionFromPath(
       connection.original_file_name || storagePath
     );
+    const preferredFormat =
+      preferredExtension === "xlsx" || preferredExtension === "xlsm"
+        ? (preferredExtension as FileFormat)
+        : undefined;
 
-    const downloadToTempFile = async (): Promise<string> => {
+    const downloadToBuffer = async (): Promise<Buffer> => {
       let attempts = 0;
       const maxAttempts = 3;
 
@@ -397,28 +401,15 @@ async function processDataImport(
           if (!response.ok) {
             throw new Error(`Error descargando archivo: ${response.statusText}`);
           }
-          if (!response.body) {
-            throw new Error("El cuerpo de la respuesta está vacío");
-          }
-
-          const tmpPath = path.join(
-            os.tmpdir(),
-            `import-${dataTableId}-${Date.now()}.tmp`
-          );
-
-          await pipeline(
-            Readable.fromWeb(response.body as any),
-            fs.createWriteStream(tmpPath)
-          );
-
-          return tmpPath;
+          const buffer = Buffer.from(await response.arrayBuffer());
+          return buffer;
         } catch (err) {
           console.warn(`[WARN] Falló descarga (intento ${attempts}):`, err);
           if (attempts >= maxAttempts) {
             throw new StageError(
               "temp_file_access",
-              "No se pudo descargar el archivo temporal para procesarlo.",
-              err instanceof Error ? err.message : String(err)
+              "No se pudo descargar el archivo para procesarlo.",
+              `[download] ${err instanceof Error ? err.message : String(err)}`
             );
           }
           await new Promise((r) => setTimeout(r, 2000));
@@ -427,11 +418,56 @@ async function processDataImport(
 
       throw new StageError(
         "temp_file_access",
-        "No se pudo preparar el archivo temporal."
+        "No se pudo preparar el buffer del archivo.",
+        "[download] retry_exhausted"
       );
     };
 
-    tempFilePath = await downloadToTempFile();
+    const downloadToTempFile = async (): Promise<string> => {
+      const buffer = await downloadToBuffer();
+      const tmpPath = path.join(
+        os.tmpdir(),
+        `import-${dataTableId}-${Date.now()}.tmp`
+      );
+      await fs.promises.writeFile(tmpPath, buffer);
+      return tmpPath;
+    };
+
+    const preWarnings: string[] = [];
+    let inMemoryRows: any[][] | null = null;
+    if (preferredFormat === "xlsx" || preferredFormat === "xlsm") {
+      // Para evitar errores recurrentes de /tmp con archivos grandes,
+      // parseamos xlsx/xlsm desde memoria y luego iteramos filas.
+      const buffer = await downloadToBuffer();
+      const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+      const sheets = Array.isArray(workbook.SheetNames)
+        ? workbook.SheetNames.filter(Boolean)
+        : [];
+      if (!sheets.length) {
+        throw new StageError(
+          "temp_file_access",
+          "No se encontraron hojas legibles en el workbook en memoria.",
+          "[read_metadata] sheets_empty"
+        );
+      }
+      let sheetToUse = sheets[0];
+      if (selectedSheet && sheets.includes(selectedSheet)) {
+        sheetToUse = selectedSheet;
+      } else if (selectedSheet) {
+        // robustez > strict: continuar con hoja por defecto.
+        preWarnings.push(
+          `La hoja '${selectedSheet}' no se encontró. Se usó '${sheetToUse}' por robustez.`
+        );
+      }
+      const worksheet = workbook.Sheets[sheetToUse];
+      inMemoryRows = XLSX.utils.sheet_to_json(worksheet, {
+        header: 1,
+        defval: null,
+        raw: false,
+      }) as any[][];
+    } else {
+      tempFilePath = await downloadToTempFile();
+    }
     // -----------------------------------------------------------------------
 
     // 2. CONEXIÓN DB
@@ -457,8 +493,8 @@ async function processDataImport(
     let rowCount = 0;
     let currentBatchSize = INSERT_BATCH_SIZE;
 
-    if (!tempFilePath) throw new Error("Error interno: tempFilePath es nulo");
     const ensureTempFileReadable = async () => {
+      if (inMemoryRows) return;
       if (!tempFilePath) {
         throw new StageError(
           "temp_file_access",
@@ -485,10 +521,12 @@ async function processDataImport(
         }
       }
     };
-    const warnings: string[] = [];
+    const warnings: string[] = [...preWarnings];
     await ensureTempFileReadable();
     assertNotTimedOut();
-    const fileFormat = detectFileFormat(tempFilePath, preferredExtension);
+    const fileFormat = inMemoryRows
+      ? preferredFormat || "xlsx"
+      : detectFileFormat(tempFilePath!, preferredExtension);
     let finalSelectedSheet = selectedSheet || undefined;
     let finalSelectedSheetIndex: number | undefined = undefined;
 
@@ -508,11 +546,11 @@ async function processDataImport(
         canResolveByMetadata = false;
       } else {
         try {
-          sheetNames = getSheetNamesFromWorkbook(tempFilePath);
+          sheetNames = getSheetNamesFromWorkbook(tempFilePath!);
         } catch (err) {
           await ensureTempFileReadable();
           try {
-            sheetNames = getSheetNamesFromWorkbook(tempFilePath);
+            sheetNames = getSheetNamesFromWorkbook(tempFilePath!);
           } catch (err2) {
             throw new StageError(
               "temp_file_access",
@@ -538,11 +576,18 @@ async function processDataImport(
     }
 
     let rowGenerator = getRowGenerator(
-      tempFilePath,
+      tempFilePath!,
       fileFormat,
       finalSelectedSheet,
       finalSelectedSheetIndex
     );
+    if (inMemoryRows) {
+      rowGenerator = (async function* () {
+        for (const row of inMemoryRows!) {
+          yield Array.isArray(row) ? row : [];
+        }
+      })();
+    }
 
     let generatorRetried = false;
     const consumeRows = async () => {
@@ -644,7 +689,7 @@ async function processDataImport(
         generatorRetried = true;
         await ensureTempFileReadable();
         rowGenerator = getRowGenerator(
-          tempFilePath,
+          tempFilePath!,
           fileFormat,
           finalSelectedSheet,
           finalSelectedSheetIndex
