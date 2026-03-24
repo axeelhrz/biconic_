@@ -247,23 +247,32 @@ export default function NewConnectionDialog({
   };
 
   // ================== LA CORRECCIÓN CLAVE ESTÁ AQUÍ ==================
-  const handleProcessFinished = useCallback(() => {
-    // EL "GATEKEEPER": Si el proceso ya está marcado como finalizado,
-    // salimos inmediatamente para no ejecutar la lógica de nuevo.
-    if (isFinished) {
-      return;
-    }
+  const handleProcessFinished = useCallback(
+    (result: { status: "completed" | "failed"; errorMessage?: string | null }) => {
+      if (result.status === "failed") {
+        setIsProcessing(false);
+        setExcelError(
+          toStageError(
+            "import_polling",
+            "La importación falló durante el procesamiento.",
+            result.errorMessage || undefined
+          )
+        );
+        return;
+      }
 
-    // Si es la primera vez que se llama, marcamos como finalizado
-    // y ejecutamos la lógica de cierre.
-    setIsFinished(true);
-    onCreated?.();
+      if (isFinished) return;
 
-    setTimeout(() => {
-      // Usamos la versión estable de handleOpenChange
-      handleOpenChange(false);
-    }, 2000);
-  }, [isFinished, onCreated, handleOpenChange]);
+      setIsFinished(true);
+      setIsProcessing(false);
+      onCreated?.();
+
+      setTimeout(() => {
+        handleOpenChange(false);
+      }, 2000);
+    },
+    [isFinished, onCreated, handleOpenChange]
+  );
   // ====================================================================
 
   return (

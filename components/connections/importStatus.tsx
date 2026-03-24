@@ -17,7 +17,10 @@ interface ImportStatusData {
 
 type ImportStatusProps = {
   dataTableId: string;
-  onProcessFinished: () => void;
+  onProcessFinished: (result: {
+    status: "completed" | "failed";
+    errorMessage?: string | null;
+  }) => void;
   compact?: boolean;
   /** Si se pasa, el timeout de 12 min se cuenta desde esta fecha (ej. updated_at del data_table) */
   importStartedAt?: string;
@@ -84,7 +87,11 @@ export default function ImportStatus({
               toast.error(`Error en la importación: ${data.error_message}`);
             }
           }
-          onProcessFinished();
+          onProcessFinished({
+            status:
+              data.import_status === "completed" ? "completed" : "failed",
+            errorMessage: data.error_message,
+          });
           return;
         }
 
@@ -108,7 +115,11 @@ export default function ImportStatus({
               });
               setProgress(100);
               if (!compact) toast.error("La importación tardó demasiado y se marcó como fallida. Podés volver a subir el archivo.");
-              onProcessFinished();
+              onProcessFinished({
+                status: "failed",
+                errorMessage:
+                  json?.message ?? "El procesamiento no completó a tiempo.",
+              });
             }
           } catch {}
         }

@@ -378,17 +378,30 @@ export default function AdminNewConnectionDialog({
     }
   };
 
-  const handleProcessFinished = useCallback(() => {
-    if (isFinished) {
-      return;
-    }
+  const handleProcessFinished = useCallback(
+    (result: { status: "completed" | "failed"; errorMessage?: string | null }) => {
+      if (result.status === "failed") {
+        setIsProcessing(false);
+        setExcelError(
+          toStageError(
+            "import_polling",
+            "La importación falló durante el procesamiento.",
+            result.errorMessage || undefined
+          )
+        );
+        return;
+      }
 
-    setIsFinished(true);
-    // Instead of closing, we switch to permissions mode
-    setShowPermissions(true);
-    toast.success("Conexión creada correctamente. Ahora puedes configurar los permisos.");
-    onCreated?.(); 
-  }, [isFinished, onCreated]);
+      if (isFinished) return;
+
+      setIsFinished(true);
+      setIsProcessing(false);
+      setShowPermissions(true);
+      toast.success("Conexión creada correctamente. Ahora puedes configurar los permisos.");
+      onCreated?.();
+    },
+    [isFinished, onCreated]
+  );
 
   // Fetch tables when step 2 (table selection) is shown for DB connection
   useEffect(() => {

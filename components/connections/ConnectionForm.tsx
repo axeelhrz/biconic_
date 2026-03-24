@@ -65,7 +65,10 @@ type ConnectionFormProps = {
   // Nuevas props para recibir el estado del proceso desde el diálogo padre
   isProcessing?: boolean;
   currentImportId?: string | null;
-  onProcessFinished?: () => void;
+  onProcessFinished?: (result: {
+    status: "completed" | "failed";
+    errorMessage?: string | null;
+  }) => void;
   // Selector de cliente (admin): se muestra dentro del modal
   clientOptions?: SelectOption[];
   selectedClientId?: string;
