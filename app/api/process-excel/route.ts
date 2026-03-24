@@ -302,7 +302,7 @@ async function* getRowGenerator(
 }
 
 // Tiempo máximo de procesamiento (no dejar "Procesando" para siempre)
-const IMPORT_TIMEOUT_MS = 12 * 60 * 1000; // 12 minutos
+const IMPORT_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutos para archivos grandes
 
 // --- PROCESAMIENTO EN BACKGROUND ---
 async function processDataImport(
@@ -497,24 +497,23 @@ async function processDataImport(
       let sheetNames: string[] = [];
       let canResolveByMetadata = true;
 
-      try {
-        sheetNames = getSheetNamesFromWorkbook(tempFilePath);
-      } catch (err) {
-        await ensureTempFileReadable();
+      if (isStreamingExcel) {
+        if (finalSelectedSheet) {
+          warnings.push(
+            `No se pudo garantizar la hoja "${finalSelectedSheet}" en modo streaming; se utilizará la primera hoja disponible.`
+          );
+        }
+        finalSelectedSheet = undefined;
+        finalSelectedSheetIndex = 1;
+        canResolveByMetadata = false;
+      } else {
         try {
           sheetNames = getSheetNamesFromWorkbook(tempFilePath);
-        } catch (err2) {
-          if (isStreamingExcel) {
-            canResolveByMetadata = false;
-            warnings.push(
-              `[temp_file_access] No se pudo validar hojas por metadata en /tmp. Se usará la primera hoja disponible.`
-            );
-            if (finalSelectedSheet) {
-              warnings.push(
-                `No se pudo validar la hoja "${finalSelectedSheet}" por fallo temporal de metadata.`
-              );
-            }
-          } else {
+        } catch (err) {
+          await ensureTempFileReadable();
+          try {
+            sheetNames = getSheetNamesFromWorkbook(tempFilePath);
+          } catch (err2) {
             throw new StageError(
               "temp_file_access",
               "No se pudo leer el workbook desde /tmp.",
@@ -533,9 +532,6 @@ async function processDataImport(
         );
         finalSelectedSheet = selection.sheetName;
         finalSelectedSheetIndex = selection.sheetIndex;
-      } else {
-        finalSelectedSheet = undefined;
-        finalSelectedSheetIndex = 1;
       }
     } else {
       finalSelectedSheet = "CSV";

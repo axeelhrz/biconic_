@@ -6,7 +6,7 @@ import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
 
-const STALE_AFTER_MS = 12 * 60 * 1000; // 12 min: si sigue "Procesando", marcar como fallido
+const STALE_AFTER_MS = 45 * 60 * 1000; // 45 min para archivos grandes
 
 interface ImportStatusData {
   import_status: string;

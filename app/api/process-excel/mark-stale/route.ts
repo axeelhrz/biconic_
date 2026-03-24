@@ -1,11 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
-const STALE_MINUTES = 12;
+const STALE_MINUTES = 45;
 
 /**
  * Marca una importación Excel como fallida si lleva demasiado tiempo en estado no terminal.
- * Así la UI deja de mostrar "Procesando" / "Descargando..." para siempre.
+ * Así la UI deja de mostrar "Procesando" para siempre.
  */
 export async function POST(req: Request) {
   try {
