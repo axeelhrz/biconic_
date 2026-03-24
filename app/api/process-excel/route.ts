@@ -218,8 +218,14 @@ async function* getRowGenerator(
   let matchedSheet = false;
   let firstSheetProcessed = false;
 
+  // Los tipos de ExcelJS no exponen `name` en WorksheetReader; en runtime sí existe.
+  type WorksheetReaderWithSheetName = InstanceType<
+    typeof ExcelJS.stream.xlsx.WorksheetReader
+  > & { name?: string };
+
   for await (const worksheetReader of workbookReader) {
-    const sheetName = worksheetReader.name || "";
+    const sheetName =
+      String((worksheetReader as WorksheetReaderWithSheetName).name ?? "");
     const shouldProcess = selectedSheet
       ? sheetName === selectedSheet
       : !firstSheetProcessed;
