@@ -130,6 +130,17 @@ type SheetSelection = {
   sheetIndex: number; // 1-based index
 };
 
+class StageError extends Error {
+  stage: string;
+  details?: string;
+  constructor(stage: string, message: string, details?: string) {
+    super(message);
+    this.name = "StageError";
+    this.stage = stage;
+    this.details = details;
+  }
+}
+
 const getExtensionFromPath = (filePath: string) =>
   path.extname(filePath || "").replace(".", "").toLowerCase();
 
@@ -321,12 +332,16 @@ async function processDataImport(
     `[BACKGROUND] Iniciando importación para Data Table: ${dataTableId}`
   );
 
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error("TIMEOUT")), IMPORT_TIMEOUT_MS);
-  });
+  const deadlineTs = Date.now() + IMPORT_TIMEOUT_MS;
+  const assertNotTimedOut = () => {
+    if (Date.now() >= deadlineTs) {
+      throw new Error("TIMEOUT");
+    }
+  };
 
   const runImport = async () => {
     try {
+      assertNotTimedOut();
       if (!dbUrl || dbUrl.trim() === "") {
         await markFailed("SUPABASE_DB_URL no está configurada. Configurala en .env.local (Supabase → Settings → Database → Connection string).");
         return;
@@ -355,55 +370,68 @@ async function processDataImport(
       connection.original_file_name || storagePath
     );
 
-    let downloadSuccess = false;
-    let attempts = 0;
-    const maxAttempts = 3;
+    const downloadToTempFile = async (): Promise<string> => {
+      let attempts = 0;
+      const maxAttempts = 3;
 
-    while (!downloadSuccess && attempts < maxAttempts) {
-      try {
-        attempts++;
-        if (attempts > 1)
-          console.log(
-            `[LOG] Reintentando descarga (${attempts}/${maxAttempts})...`
+      while (attempts < maxAttempts) {
+        try {
+          assertNotTimedOut();
+          attempts++;
+          if (attempts > 1) {
+            console.log(
+              `[LOG] Reintentando descarga (${attempts}/${maxAttempts})...`
+            );
+          }
+
+          const { data: signedData, error: signErr } = await supabaseAdmin.storage
+            .from("excel-uploads")
+            .createSignedUrl(storagePath, 3600);
+
+          if (signErr) throw signErr;
+          if (!signedData?.signedUrl) {
+            throw new Error("No se pudo generar URL firmada");
+          }
+
+          const response = await fetch(signedData.signedUrl);
+          if (!response.ok) {
+            throw new Error(`Error descargando archivo: ${response.statusText}`);
+          }
+          if (!response.body) {
+            throw new Error("El cuerpo de la respuesta está vacío");
+          }
+
+          const tmpPath = path.join(
+            os.tmpdir(),
+            `import-${dataTableId}-${Date.now()}.tmp`
           );
 
-        // CAMBIO CLAVE: No usamos .download(), usamos createSignedUrl
-        const { data: signedData, error: signErr } = await supabaseAdmin.storage
-          .from("excel-uploads")
-          .createSignedUrl(storagePath, 3600); // URL válida por 1 hora (antes 60s)
+          await pipeline(
+            Readable.fromWeb(response.body as any),
+            fs.createWriteStream(tmpPath)
+          );
 
-        if (signErr) throw signErr;
-        if (!signedData?.signedUrl)
-          throw new Error("No se pudo generar URL firmada");
-
-        // Hacemos el fetch manual
-        const response = await fetch(signedData.signedUrl);
-        if (!response.ok)
-          throw new Error(`Error descargando archivo: ${response.statusText}`);
-        if (!response.body)
-          throw new Error("El cuerpo de la respuesta está vacío");
-
-        tempFilePath = path.join(
-          os.tmpdir(),
-          `import-${dataTableId}-${Date.now()}.tmp`
-        );
-
-        // Pipe directo del Web Stream al File System (Sin cargar todo en RAM)
-        // Nota: response.body es un ReadableStream web, pipeline lo maneja bien en Node recientes
-        // Si te da error de tipos, usa Readable.fromWeb(response.body as any)
-        await pipeline(
-          Readable.fromWeb(response.body as any),
-          fs.createWriteStream(tempFilePath)
-        );
-
-        downloadSuccess = true;
-        console.log("[LOG] Descarga completada exitosamente.");
-      } catch (err) {
-        console.warn(`[WARN] Falló descarga (intento ${attempts}):`, err);
-        if (attempts >= maxAttempts) throw err;
-        await new Promise((r) => setTimeout(r, 2000)); // Esperar 2s
+          return tmpPath;
+        } catch (err) {
+          console.warn(`[WARN] Falló descarga (intento ${attempts}):`, err);
+          if (attempts >= maxAttempts) {
+            throw new StageError(
+              "temp_file_access",
+              "No se pudo descargar el archivo temporal para procesarlo.",
+              err instanceof Error ? err.message : String(err)
+            );
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+        }
       }
-    }
+
+      throw new StageError(
+        "temp_file_access",
+        "No se pudo preparar el archivo temporal."
+      );
+    };
+
+    tempFilePath = await downloadToTempFile();
     // -----------------------------------------------------------------------
 
     // 2. CONEXIÓN DB
@@ -430,13 +458,56 @@ async function processDataImport(
     let currentBatchSize = INSERT_BATCH_SIZE;
 
     if (!tempFilePath) throw new Error("Error interno: tempFilePath es nulo");
+    const ensureTempFileReadable = async () => {
+      if (!tempFilePath) {
+        throw new StageError(
+          "temp_file_access",
+          "El archivo temporal no está inicializado."
+        );
+      }
+      try {
+        await fs.promises.access(tempFilePath, fs.constants.R_OK);
+      } catch (err) {
+        try {
+          if (tempFilePath && fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+          }
+        } catch (_) {}
+        tempFilePath = await downloadToTempFile();
+        try {
+          await fs.promises.access(tempFilePath, fs.constants.R_OK);
+        } catch (err2) {
+          throw new StageError(
+            "temp_file_access",
+            "Cannot access file en /tmp para iniciar el parser.",
+            err2 instanceof Error ? err2.message : String(err2)
+          );
+        }
+      }
+    };
     const warnings: string[] = [];
+    await ensureTempFileReadable();
+    assertNotTimedOut();
     const fileFormat = detectFileFormat(tempFilePath, preferredExtension);
     let finalSelectedSheet = selectedSheet || undefined;
     let finalSelectedSheetIndex: number | undefined = undefined;
 
     if (fileFormat !== "csv") {
-      const sheetNames = getSheetNamesFromWorkbook(tempFilePath);
+      let sheetNames: string[] = [];
+      try {
+        sheetNames = getSheetNamesFromWorkbook(tempFilePath);
+      } catch (err) {
+        await ensureTempFileReadable();
+        try {
+          sheetNames = getSheetNamesFromWorkbook(tempFilePath);
+        } catch (err2) {
+          throw new StageError(
+            "temp_file_access",
+            "No se pudo leer el workbook desde /tmp.",
+            err2 instanceof Error ? err2.message : String(err2)
+          );
+        }
+      }
       const selection = resolveSheetSelection(
         sheetNames,
         finalSelectedSheet,
@@ -449,102 +520,121 @@ async function processDataImport(
       finalSelectedSheet = "CSV";
     }
 
-    const rowGenerator = getRowGenerator(
+    let rowGenerator = getRowGenerator(
       tempFilePath,
       fileFormat,
       finalSelectedSheet,
       finalSelectedSheetIndex
     );
 
-    for await (const values of rowGenerator) {
-      if (!values || values.length === 0) continue;
-      if (values.every((v: any) => v === null || v === "" || v === undefined))
-        continue;
+    let generatorRetried = false;
+    const consumeRows = async () => {
+      for await (const values of rowGenerator) {
+        assertNotTimedOut();
+        if (!values || values.length === 0) continue;
+        if (values.every((v: any) => v === null || v === "" || v === undefined))
+          continue;
 
-      if (rowCount === 0) {
-        headers = values.map(String);
-        headersSanitized = headers.map(sanitizeColumnName);
+        if (rowCount === 0) {
+          headers = values.map(String);
+          headersSanitized = headers.map(sanitizeColumnName);
 
-        // ⚡ AJUSTE DINÁMICO DE BATCH SIZE ⚡
-        // Postgres tiene un límite de 65535 parámetros por query.
-        // BatchSize * NumColumnas debe ser < 65535.
-        const numCols = headers.length;
-        if (numCols > 0) {
-          const maxSafeParams = 60000; // Margen de seguridad
-          const calculatedBatch = Math.floor(maxSafeParams / numCols);
-          currentBatchSize = Math.min(INSERT_BATCH_SIZE, calculatedBatch);
-          console.log(
-            `[LOG] Batch Size ajustado a: ${currentBatchSize} filas (Columnas: ${numCols})`
-          );
+          const numCols = headers.length;
+          if (numCols > 0) {
+            const maxSafeParams = 60000;
+            const calculatedBatch = Math.floor(maxSafeParams / numCols);
+            currentBatchSize = Math.min(INSERT_BATCH_SIZE, calculatedBatch);
+            console.log(
+              `[LOG] Batch Size ajustado a: ${currentBatchSize} filas (Columnas: ${numCols})`
+            );
+          }
+
+          rowCount++;
+          continue;
         }
 
-        rowCount++;
-        continue;
-      }
-
-      if (values.length !== headers.length) {
-        if (parseMode === "strict") {
-          throw new Error(
-            `La fila ${rowCount + 1} tiene ${values.length} columnas y se esperaban ${headers.length}.`
-          );
-        }
-        if (warnings.length < MAX_WARNINGS) {
-          warnings.push(
-            `Fila ${rowCount + 1} normalizada por diferencia de columnas (${values.length}/${headers.length}).`
-          );
-        }
-      }
-      const normalizedValues =
-        values.length > headers.length
-          ? values.slice(0, headers.length)
-          : values.length < headers.length
-            ? [...values, ...Array(headers.length - values.length).fill(null)]
-            : values;
-
-      buffer.push(normalizedValues);
-
-      // --- FASE 1: INFERENCIA DE TIPOS ---
-      if (!isTableCreated && buffer.length >= SAMPLE_SIZE) {
-        console.log(`[LOG] Inferiendo tipos con ${buffer.length} filas...`);
-        inferredTypes = inferColumnTypes(buffer, headers.length);
-
-        const cols = headersSanitized
-          .map((h, i) => `${h} ${inferredTypes[i] || "TEXT"}`)
-          .join(", ");
-
-        await sql.unsafe(
-          `CREATE TABLE IF NOT EXISTS data_warehouse.${tableName} (_import_id BIGSERIAL PRIMARY KEY, ${cols})`
-        );
-
-        isTableCreated = true;
-        await supabaseAdmin
-          .from("data_tables")
-          .update({ import_status: "processing" })
-          .eq("id", dataTableId);
-      }
-
-      // --- FASE 2: INSERCIÓN POR LOTES ---
-      if (isTableCreated && buffer.length >= currentBatchSize) {
-        // Procesar el buffer en trozos respetando el límite de parámetros
-        while (buffer.length >= currentBatchSize) {
-          const chunk = buffer.splice(0, currentBatchSize);
-          await insertBatch(sql, tableName, headersSanitized, chunk);
-        }
-
-        if (rowCount % PROGRESS_UPDATE_INTERVAL === 0) {
-          console.log(`[PROGRESO] Insertadas: ${rowCount} filas...`);
-          // Reporte de Progreso en Realtime (Silencioso)
-          try {
-            await supabaseAdmin
-              .from("data_tables")
-              .update({ total_rows: rowCount })
-              .eq("id", dataTableId);
-          } catch (progressError) {
-            console.warn("[WARN] Error actualizando progreso:", progressError);
+        if (values.length !== headers.length) {
+          if (parseMode === "strict") {
+            throw new Error(
+              `La fila ${rowCount + 1} tiene ${values.length} columnas y se esperaban ${headers.length}.`
+            );
+          }
+          if (warnings.length < MAX_WARNINGS) {
+            warnings.push(
+              `Fila ${rowCount + 1} normalizada por diferencia de columnas (${values.length}/${headers.length}).`
+            );
           }
         }
+        const normalizedValues =
+          values.length > headers.length
+            ? values.slice(0, headers.length)
+            : values.length < headers.length
+              ? [...values, ...Array(headers.length - values.length).fill(null)]
+              : values;
+
+        buffer.push(normalizedValues);
+
+        if (!isTableCreated && buffer.length >= SAMPLE_SIZE) {
+          console.log(`[LOG] Inferiendo tipos con ${buffer.length} filas...`);
+          inferredTypes = inferColumnTypes(buffer, headers.length);
+
+          const cols = headersSanitized
+            .map((h, i) => `${h} ${inferredTypes[i] || "TEXT"}`)
+            .join(", ");
+
+          await sql.unsafe(
+            `CREATE TABLE IF NOT EXISTS data_warehouse.${tableName} (_import_id BIGSERIAL PRIMARY KEY, ${cols})`
+          );
+
+          isTableCreated = true;
+          await supabaseAdmin
+            .from("data_tables")
+            .update({ import_status: "processing" })
+            .eq("id", dataTableId);
+        }
+
+        if (isTableCreated && buffer.length >= currentBatchSize) {
+          while (buffer.length >= currentBatchSize) {
+            const chunk = buffer.splice(0, currentBatchSize);
+            await insertBatch(sql, tableName, headersSanitized, chunk);
+          }
+
+          if (rowCount % PROGRESS_UPDATE_INTERVAL === 0) {
+            console.log(`[PROGRESO] Insertadas: ${rowCount} filas...`);
+            try {
+              await supabaseAdmin
+                .from("data_tables")
+                .update({ total_rows: rowCount })
+                .eq("id", dataTableId);
+            } catch (progressError) {
+              console.warn("[WARN] Error actualizando progreso:", progressError);
+            }
+          }
+        }
+        rowCount++;
       }
-      rowCount++;
+    };
+
+    try {
+      await consumeRows();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        !generatorRetried &&
+        msg.toLowerCase().includes("cannot access file")
+      ) {
+        generatorRetried = true;
+        await ensureTempFileReadable();
+        rowGenerator = getRowGenerator(
+          tempFilePath,
+          fileFormat,
+          finalSelectedSheet,
+          finalSelectedSheetIndex
+        );
+        await consumeRows();
+      } else {
+        throw err;
+      }
     }
 
     // --- FASE 3: LIMPIEZA FINAL ---
@@ -592,6 +682,9 @@ async function processDataImport(
     } catch (error: any) {
       console.error("[ERROR BACKGROUND]", error);
       let msg = error?.message || "Error desconocido";
+      if (error instanceof StageError) {
+        msg = `[${error.stage}] ${error.message}${error.details ? ` | ${error.details}` : ""}`;
+      }
       if (typeof msg === "string" && msg.includes("does not exist") && msg.toLowerCase().includes("schema"))
         msg = "El schema data_warehouse no existe. Ejecutá las migraciones de Supabase (supabase db push o desde el panel SQL).";
       if (typeof msg === "string" && (msg.includes("ECONNREFUSED") || msg.includes("connection")))
@@ -606,7 +699,7 @@ async function processDataImport(
   };
 
   try {
-    await Promise.race([runImport(), timeoutPromise]);
+    await runImport();
   } catch (e: any) {
     if (e?.message === "TIMEOUT") await markFailed("Timeout (máximo 12 minutos).");
   } finally {
