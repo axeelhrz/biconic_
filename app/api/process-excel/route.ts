@@ -335,7 +335,7 @@ async function processDataImport(
       // 1. DESCARGA EFICIENTE (MODIFICADO) -------------------------------------
       await supabaseAdmin
         .from("data_tables")
-        .update({ import_status: "downloading_file" })
+        .update({ import_status: "processing" })
         .eq("id", dataTableId);
 
     const { data: connection } = await supabaseAdmin
@@ -417,7 +417,7 @@ async function processDataImport(
     // 3. PROCESAMIENTO STREAMING
     await supabaseAdmin
       .from("data_tables")
-      .update({ import_status: "creating_table" })
+      .update({ import_status: "processing" })
       .eq("id", dataTableId);
 
     const tableName = `import_${connectionId.replaceAll("-", "_")}`;
@@ -519,7 +519,7 @@ async function processDataImport(
         isTableCreated = true;
         await supabaseAdmin
           .from("data_tables")
-          .update({ import_status: "inserting_rows" })
+          .update({ import_status: "processing" })
           .eq("id", dataTableId);
       }
 
@@ -678,7 +678,7 @@ export async function POST(req: Request) {
 
     const { error: queueError } = await supabaseAdmin
       .from("data_tables")
-      .update({ import_status: "queued" })
+      .update({ import_status: "processing" })
       .eq("id", dataTableId);
     if (queueError) {
       return NextResponse.json(

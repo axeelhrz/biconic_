@@ -63,6 +63,7 @@ export default function ImportStatus({
           case "downloading_file": setProgress(10); break;
           case "creating_table": setProgress(30); break;
           case "inserting_rows": setProgress(60); break;
+          case "processing": setProgress(35); break;
           case "completed": setProgress(100); break;
           case "failed": setProgress(100); break;
         }
