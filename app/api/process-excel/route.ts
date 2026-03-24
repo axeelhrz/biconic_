@@ -493,7 +493,10 @@ async function processDataImport(
     let finalSelectedSheetIndex: number | undefined = undefined;
 
     if (fileFormat !== "csv") {
+      const isStreamingExcel = fileFormat === "xlsx" || fileFormat === "xlsm";
       let sheetNames: string[] = [];
+      let canResolveByMetadata = true;
+
       try {
         sheetNames = getSheetNamesFromWorkbook(tempFilePath);
       } catch (err) {
@@ -501,21 +504,39 @@ async function processDataImport(
         try {
           sheetNames = getSheetNamesFromWorkbook(tempFilePath);
         } catch (err2) {
-          throw new StageError(
-            "temp_file_access",
-            "No se pudo leer el workbook desde /tmp.",
-            err2 instanceof Error ? err2.message : String(err2)
-          );
+          if (isStreamingExcel) {
+            canResolveByMetadata = false;
+            warnings.push(
+              `[temp_file_access] No se pudo validar hojas por metadata en /tmp. Se usará la primera hoja disponible.`
+            );
+            if (finalSelectedSheet) {
+              warnings.push(
+                `No se pudo validar la hoja "${finalSelectedSheet}" por fallo temporal de metadata.`
+              );
+            }
+          } else {
+            throw new StageError(
+              "temp_file_access",
+              "No se pudo leer el workbook desde /tmp.",
+              err2 instanceof Error ? err2.message : String(err2)
+            );
+          }
         }
       }
-      const selection = resolveSheetSelection(
-        sheetNames,
-        finalSelectedSheet,
-        parseMode,
-        warnings
-      );
-      finalSelectedSheet = selection.sheetName;
-      finalSelectedSheetIndex = selection.sheetIndex;
+
+      if (canResolveByMetadata) {
+        const selection = resolveSheetSelection(
+          sheetNames,
+          finalSelectedSheet,
+          parseMode,
+          warnings
+        );
+        finalSelectedSheet = selection.sheetName;
+        finalSelectedSheetIndex = selection.sheetIndex;
+      } else {
+        finalSelectedSheet = undefined;
+        finalSelectedSheetIndex = 1;
+      }
     } else {
       finalSelectedSheet = "CSV";
     }
@@ -621,6 +642,7 @@ async function processDataImport(
       const msg = err instanceof Error ? err.message : String(err);
       if (
         !generatorRetried &&
+        rowCount === 0 &&
         msg.toLowerCase().includes("cannot access file")
       ) {
         generatorRetried = true;
@@ -633,6 +655,13 @@ async function processDataImport(
         );
         await consumeRows();
       } else {
+        if (msg.toLowerCase().includes("cannot access file")) {
+          throw new StageError(
+            "temp_file_access",
+            "No se pudo acceder al archivo temporal durante el parseo.",
+            msg
+          );
+        }
         throw err;
       }
     }

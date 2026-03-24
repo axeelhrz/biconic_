@@ -312,7 +312,12 @@ export default function AdminNewConnectionDialog({
           const sheetsData = await safeJsonResponse<{
             sheets?: string[];
             defaultSheet?: string;
+            degraded?: boolean;
+            warning?: string;
           }>(sheetsRes);
+          if (sheetsData.degraded && sheetsData.warning) {
+            toast.warning(sheetsData.warning);
+          }
           const availableSheets = Array.isArray(sheetsData.sheets)
             ? sheetsData.sheets
             : [];

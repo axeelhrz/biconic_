@@ -85,21 +85,34 @@ export async function POST(req: Request) {
       });
     }
 
-    const workbook = XLSX.readFile(tempFilePath, { cellDates: true });
-    const sheets = Array.isArray(workbook.SheetNames)
-      ? workbook.SheetNames.filter(Boolean)
-      : [];
-    if (sheets.length === 0) {
-      return NextResponse.json(
-        { error: "No se encontraron hojas legibles en el archivo." },
-        { status: 400 }
-      );
-    }
+    try {
+      const workbook = XLSX.readFile(tempFilePath, { cellDates: true });
+      const sheets = Array.isArray(workbook.SheetNames)
+        ? workbook.SheetNames.filter(Boolean)
+        : [];
+      if (sheets.length === 0) {
+        return NextResponse.json(
+          { error: "No se encontraron hojas legibles en el archivo." },
+          { status: 400 }
+        );
+      }
 
-    return NextResponse.json({
-      sheets,
-      defaultSheet: sheets[0],
-    });
+      return NextResponse.json({
+        sheets,
+        defaultSheet: sheets[0],
+        degraded: false,
+      });
+    } catch (error: unknown) {
+      const details = error instanceof Error ? error.message : String(error);
+      return NextResponse.json({
+        sheets: [],
+        defaultSheet: null,
+        degraded: true,
+        warning:
+          "No se pudieron inspeccionar las hojas por un problema temporal. Se usará la hoja por defecto al importar.",
+        details,
+      });
+    }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Error al inspeccionar hojas.";
     return NextResponse.json(

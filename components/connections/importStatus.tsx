@@ -191,6 +191,11 @@ export default function ImportStatus({
                 {status.error_message}
               </div>
             )}
+            {status?.import_status === "completed" && status.error_message && (
+              <div className="mt-1 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+                {status.error_message}
+              </div>
+            )}
         </div>
      )
   }
@@ -225,6 +230,14 @@ export default function ImportStatus({
           >
             Copiar detalle
           </button>
+        </div>
+      )}
+      {status?.import_status === "completed" && status.error_message && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-medium">Advertencias de importación</p>
+          <p className="mt-1 whitespace-pre-wrap break-words">
+            {status.error_message}
+          </p>
         </div>
       )}
     </div>
