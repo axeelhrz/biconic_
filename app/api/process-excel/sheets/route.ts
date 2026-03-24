@@ -4,6 +4,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { Readable } from "stream";
+import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 import { pipeline } from "stream/promises";
 import * as XLSX from "xlsx";
 
@@ -66,8 +67,11 @@ export async function POST(req: Request) {
       os.tmpdir(),
       `sheets-${body.connectionId}-${Date.now()}.tmp`
     );
+    // fetch() usa ReadableStream del DOM; Readable.fromWeb espera el de node:stream/web.
     await pipeline(
-      Readable.fromWeb(response.body as ReadableStream),
+      Readable.fromWeb(
+        response.body as unknown as NodeWebReadableStream
+      ),
       fs.createWriteStream(tempFilePath)
     );
 
