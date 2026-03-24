@@ -619,7 +619,14 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     if (!body?.connectionId || !body?.dataTableId) {
-      return NextResponse.json({ error: "Faltan parámetros" }, { status: 400 });
+      return NextResponse.json(
+        {
+          error: "Faltan parámetros.",
+          stage: "request_validation",
+          details: "Se requieren connectionId y dataTableId.",
+        },
+        { status: 400 }
+      );
     }
 
     const { connectionId, dataTableId } = body;
@@ -654,7 +661,14 @@ export async function POST(req: Request) {
             .eq("id", dataTableId);
         } catch (_) {}
       }
-      return NextResponse.json({ error: msg }, { status: 503 });
+      return NextResponse.json(
+        {
+          error: "Configuración del servidor incompleta.",
+          stage: "server_config",
+          details: msg,
+        },
+        { status: 503 }
+      );
     }
 
     const supabaseAdmin = createClient(
@@ -662,10 +676,20 @@ export async function POST(req: Request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    await supabaseAdmin
+    const { error: queueError } = await supabaseAdmin
       .from("data_tables")
       .update({ import_status: "queued" })
       .eq("id", dataTableId);
+    if (queueError) {
+      return NextResponse.json(
+        {
+          error: "No se pudo encolar la importación.",
+          stage: "process_excel_start",
+          details: queueError.message,
+        },
+        { status: 500 }
+      );
+    }
 
     const importPromise = processDataImport(
       connectionId,
@@ -686,7 +710,16 @@ export async function POST(req: Request) {
     });
   } catch (error: any) {
     console.error("[ERROR POST]", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: "Error interno al iniciar la importación.",
+        stage: "process_excel_start",
+        details:
+          error?.message ||
+          "Error desconocido al preparar el procesamiento.",
+      },
+      { status: 500 }
+    );
   }
 }
 

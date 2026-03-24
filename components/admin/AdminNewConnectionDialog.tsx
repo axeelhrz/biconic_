@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { Dialog, DialogContent, DialogTitle, DialogHeader, DialogDescription } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import ConnectionForm from "@/components/connections/ConnectionForm";
+import ConnectionForm, { type ExcelUploadErrorInfo } from "@/components/connections/ConnectionForm";
 import { createClient } from "@/lib/supabase/client";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import ShareConnectionModal from "@/components/connection/ShareConnectionModal";
@@ -44,6 +44,29 @@ export default function AdminNewConnectionDialog({
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [clientsLoading, setClientsLoading] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState<string>("");
+  const [excelError, setExcelError] = useState<ExcelUploadErrorInfo | null>(null);
+
+  const toStageError = (
+    stage: string,
+    message: string,
+    details?: string
+  ): ExcelUploadErrorInfo => {
+    const isPermissionError =
+      /row-level security|permission denied|not authorized|violates/i.test(
+        `${message} ${details || ""}`
+      );
+
+    if (isPermissionError) {
+      return {
+        stage,
+        message:
+          "No tienes permisos para completar esta acción. Verifica políticas/RLS para tu usuario.",
+        details: details || message,
+      };
+    }
+
+    return { stage, message, details };
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -86,6 +109,7 @@ export default function AdminNewConnectionDialog({
           setSavingTables(false);
           setConnectionNameCreated("");
           setSelectedClientId("");
+          setExcelError(null);
         }, 300);
       }
       onOpenChange(isOpen);
@@ -206,6 +230,7 @@ export default function AdminNewConnectionDialog({
     options: { parseMode: "strict" | "tolerant" | "mixed"; selectedSheet?: string }
   ) => {
     try {
+      setExcelError(null);
       const supabase = createClient();
       const {
         data: { user },
@@ -227,8 +252,13 @@ export default function AdminNewConnectionDialog({
       const { error: uploadError } = await supabase.storage
         .from("excel-uploads")
         .upload(filePath, file);
-      if (uploadError)
-        throw new Error(`Error al subir el archivo: ${uploadError.message}`);
+      if (uploadError) {
+        throw toStageError(
+          "upload_storage",
+          "Error al subir el archivo.",
+          uploadError.message
+        );
+      }
 
       const { data: newConnection, error: connectionError } = await supabase
         .from("connections")
@@ -242,10 +272,13 @@ export default function AdminNewConnectionDialog({
         })
         .select("id")
         .single();
-      if (connectionError)
-        throw new Error(
-          `Error al crear la conexión: ${connectionError.message}`
+      if (connectionError) {
+        throw toStageError(
+          "insert_connection",
+          "Error al crear la conexión.",
+          connectionError.message
         );
+      }
 
       const newConnectionId = newConnection.id;
       const { data: dataTableMeta, error: metaError } = await supabase
@@ -257,8 +290,13 @@ export default function AdminNewConnectionDialog({
         })
         .select("id")
         .single();
-      if (metaError || !dataTableMeta)
-        throw new Error("No se pudo crear el registro de metadatos.");
+      if (metaError || !dataTableMeta) {
+        throw toStageError(
+          "insert_data_table",
+          "No se pudo crear el registro de metadatos.",
+          metaError?.message
+        );
+      }
 
       const dataTableId = dataTableMeta.id;
 
@@ -312,13 +350,29 @@ export default function AdminNewConnectionDialog({
       });
 
       if (!response.ok) {
-        const errorData = await safeJsonResponse(response);
-        throw new Error(
-          errorData.error || "El servidor no pudo iniciar el proceso."
+        const errorData = await safeJsonResponse<{
+          error?: string;
+          stage?: string;
+          details?: string;
+        }>(response);
+        throw toStageError(
+          errorData.stage || "process_excel_start",
+          errorData.error || "El servidor no pudo iniciar el proceso.",
+          errorData.details
         );
       }
-    } catch (err: any) {
-      toast.error(err.message);
+    } catch (err: unknown) {
+      const fallback = toStageError(
+        "unknown",
+        "Error inesperado durante la carga.",
+        err instanceof Error ? err.message : String(err)
+      );
+      const parsed =
+        typeof err === "object" && err !== null && "stage" in err && "message" in err
+          ? (err as ExcelUploadErrorInfo)
+          : fallback;
+      setExcelError(parsed);
+      toast.error(parsed.message);
       setIsProcessing(false);
       setCurrentImportId(null);
     }
@@ -544,6 +598,8 @@ export default function AdminNewConnectionDialog({
           selectedClientId={selectedClientId}
           onClientIdChange={setSelectedClientId}
           clientsLoading={clientsLoading}
+          excelError={excelError}
+          onClearExcelError={() => setExcelError(null)}
         />
         
       </DialogContent>

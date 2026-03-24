@@ -44,6 +44,12 @@ type ConnectionFormValues = {
   port?: number;
 };
 
+export type ExcelUploadErrorInfo = {
+  stage: string;
+  message: string;
+  details?: string;
+};
+
 // NOTA: Se ha simplificado onExcelUpload para que coincida con lo que el padre provee.
 type ConnectionFormProps = {
   defaultValues?: Partial<ConnectionFormValues>;
@@ -65,6 +71,8 @@ type ConnectionFormProps = {
   selectedClientId?: string;
   onClientIdChange?: (clientId: string) => void;
   clientsLoading?: boolean;
+  excelError?: ExcelUploadErrorInfo | null;
+  onClearExcelError?: () => void;
 };
 
 export default function ConnectionForm({
@@ -80,6 +88,8 @@ export default function ConnectionForm({
   selectedClientId = "",
   onClientIdChange,
   clientsLoading = false,
+  excelError,
+  onClearExcelError,
 }: ConnectionFormProps) {
   const {
     register,
@@ -214,6 +224,36 @@ export default function ConnectionForm({
   const inputClass =
     "w-full h-11 px-4 rounded-lg text-[15px] transition-colors border bg-[var(--platform-surface)] border-[var(--platform-border)] text-[var(--platform-fg)] placeholder:text-[var(--platform-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]/30 focus:border-[var(--platform-accent)]";
 
+  const stageLabelMap: Record<string, string> = {
+    upload_storage: "Subida de archivo",
+    insert_connection: "Creación de conexión",
+    insert_data_table: "Creación de metadatos",
+    process_excel_start: "Inicio de procesamiento",
+    import_polling: "Seguimiento de importación",
+    request_validation: "Validación de solicitud",
+    server_config: "Configuración del servidor",
+    unknown: "Desconocido",
+  };
+
+  const getStageLabel = (stage?: string) =>
+    stageLabelMap[stage || "unknown"] || stage || "Desconocido";
+
+  const handleCopyErrorDetail = async () => {
+    if (!excelError) return;
+    const detail = [
+      `Etapa: ${excelError.stage}`,
+      `Mensaje: ${excelError.message}`,
+      excelError.details ? `Detalle: ${excelError.details}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(detail);
+    } catch (error) {
+      console.error("No se pudo copiar el error", error);
+    }
+  };
+
   return (
     <div className="rounded-xl shadow-lg w-full max-w-[640px] mx-auto overflow-hidden border" style={{ background: "var(--platform-bg-elevated)", borderColor: "var(--platform-border)" }}>
       <div className="px-8 pt-8 pb-6 border-b flex justify-between items-start gap-4" style={{ borderColor: "var(--platform-border)" }}>
@@ -307,6 +347,58 @@ export default function ConnectionForm({
         {isExcelMode && (
           <div className="border-2 border-dashed rounded-lg p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
             <div className="text-center">
+              {excelError && (
+                <div
+                  className="mb-4 rounded-lg border p-3 text-left"
+                  style={{
+                    borderColor: "rgba(248, 113, 113, 0.35)",
+                    background: "rgba(248, 113, 113, 0.08)",
+                  }}
+                >
+                  <p className="text-sm font-semibold" style={{ color: "var(--platform-danger)" }}>
+                    {excelError.message}
+                  </p>
+                  <p className="mt-1 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                    Etapa: {getStageLabel(excelError.stage)} ({excelError.stage})
+                  </p>
+                  {excelError.details && (
+                    <p
+                      className="mt-1 max-h-[80px] overflow-auto text-xs"
+                      style={{ color: "var(--platform-fg-muted)" }}
+                    >
+                      {excelError.details}
+                    </p>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyErrorDetail}
+                      className="h-8 rounded-md border px-3 text-xs font-medium"
+                      style={{
+                        borderColor: "var(--platform-border)",
+                        color: "var(--platform-fg)",
+                        background: "var(--platform-bg)",
+                      }}
+                    >
+                      Copiar detalle
+                    </button>
+                    {onClearExcelError && (
+                      <button
+                        type="button"
+                        onClick={onClearExcelError}
+                        className="h-8 rounded-md border px-3 text-xs font-medium"
+                        style={{
+                          borderColor: "var(--platform-border)",
+                          color: "var(--platform-fg-muted)",
+                          background: "transparent",
+                        }}
+                      >
+                        Cerrar
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               {isProcessing && currentImportId && onProcessFinished ? (
                 <ImportStatus
                   dataTableId={currentImportId}

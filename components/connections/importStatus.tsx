@@ -153,6 +153,16 @@ export default function ImportStatus({
     }
   };
 
+  const copyStatusError = async () => {
+    if (!status?.error_message) return;
+    try {
+      await navigator.clipboard.writeText(status.error_message);
+      if (!compact) toast.success("Detalle del error copiado.");
+    } catch {
+      if (!compact) toast.error("No se pudo copiar el detalle del error.");
+    }
+  };
+
   if (compact) {
      return (
         <div className="w-full flex flex-col gap-1">
@@ -164,6 +174,11 @@ export default function ImportStatus({
                 value={progress} 
                 className={`w-full h-1 ${status?.import_status === 'failed' ? '[&>div]:bg-red-500' : '[&>div]:bg-teal-600'}`} 
             />
+            {status?.import_status === "failed" && status.error_message && (
+              <div className="mt-1 rounded border border-red-300 bg-red-50 px-2 py-1 text-[11px] text-red-700">
+                {status.error_message}
+              </div>
+            )}
         </div>
      )
   }
@@ -185,6 +200,21 @@ export default function ImportStatus({
         value={progress} 
         className={`w-full h-2 ${status?.import_status === 'failed' ? '[&>div]:bg-red-500' : '[&>div]:bg-teal-600'}`} 
       />
+      {status?.import_status === "failed" && status.error_message && (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          <p className="font-medium">Detalle del error</p>
+          <p className="mt-1 whitespace-pre-wrap break-words">
+            {status.error_message}
+          </p>
+          <button
+            type="button"
+            onClick={copyStatusError}
+            className="mt-2 rounded border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700"
+          >
+            Copiar detalle
+          </button>
+        </div>
+      )}
     </div>
   );
 }
