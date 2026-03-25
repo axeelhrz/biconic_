@@ -500,6 +500,8 @@ async function processDataImport(
     let isTableCreated = false;
     let hasMarkedInserting = false;
     let rowCount = 0;
+    let insertedRows = 0;
+    let lastReportedInsertedRows = 0;
     let currentBatchSize = INSERT_BATCH_SIZE;
 
     const ensureTempFileReadable = async () => {
@@ -671,17 +673,19 @@ async function processDataImport(
           while (buffer.length >= currentBatchSize) {
             const chunk = buffer.splice(0, currentBatchSize);
             await insertBatch(sql, tableName, headersSanitized, chunk);
-          }
+            insertedRows += chunk.length;
 
-          if (rowCount % PROGRESS_UPDATE_INTERVAL === 0) {
-            console.log(`[PROGRESO] Insertadas: ${rowCount} filas...`);
-            try {
-              await supabaseAdmin
-                .from("data_tables")
-                .update({ import_status: "inserting_rows", total_rows: rowCount })
-                .eq("id", dataTableId);
-            } catch (progressError) {
-              console.warn("[WARN] Error actualizando progreso:", progressError);
+            if (insertedRows - lastReportedInsertedRows >= PROGRESS_UPDATE_INTERVAL) {
+              lastReportedInsertedRows = insertedRows;
+              console.log(`[PROGRESO] Insertadas: ${insertedRows} filas...`);
+              try {
+                await supabaseAdmin
+                  .from("data_tables")
+                  .update({ import_status: "inserting_rows", total_rows: insertedRows })
+                  .eq("id", dataTableId);
+              } catch (progressError) {
+                console.warn("[WARN] Error actualizando progreso:", progressError);
+              }
             }
           }
         }
@@ -737,6 +741,18 @@ async function processDataImport(
       while (buffer.length > 0) {
         const chunk = buffer.splice(0, currentBatchSize);
         await insertBatch(sql, tableName, headersSanitized, chunk);
+        insertedRows += chunk.length;
+      }
+    }
+
+    if (insertedRows > lastReportedInsertedRows) {
+      try {
+        await supabaseAdmin
+          .from("data_tables")
+          .update({ import_status: "inserting_rows", total_rows: insertedRows })
+          .eq("id", dataTableId);
+      } catch (progressError) {
+        console.warn("[WARN] Error actualizando progreso final:", progressError);
       }
     }
 
@@ -753,7 +769,7 @@ async function processDataImport(
       .update({
         import_status: "completed",
         columns: columnMetadata,
-        total_rows: rowCount - 1,
+        total_rows: insertedRows,
         error_message: warnings.length
           ? `Advertencias:\n${warnings.join("\n")}`
           : null,
