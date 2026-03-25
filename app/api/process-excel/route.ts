@@ -409,14 +409,10 @@ async function processDataImport(
     const preferredExtension = getExtensionFromPath(
       connection.original_file_name || storagePath
     );
-    const preferredFormat =
-      preferredExtension === "xlsx" || preferredExtension === "xlsm"
-        ? (preferredExtension as FileFormat)
-        : undefined;
-
-    const downloadToBuffer = async (): Promise<Buffer> => {
+    const downloadToTempFile = async (): Promise<string> => {
       let attempts = 0;
       const maxAttempts = 3;
+      let tmpPath: string | null = null;
 
       while (attempts < maxAttempts) {
         try {
@@ -438,18 +434,32 @@ async function processDataImport(
           }
 
           const response = await fetch(signedData.signedUrl);
-          if (!response.ok) {
+          if (!response.ok || !response.body) {
             throw new Error(`Error descargando archivo: ${response.statusText}`);
           }
-          const buffer = Buffer.from(await response.arrayBuffer());
-          return buffer;
+
+          tmpPath = path.join(
+            os.tmpdir(),
+            `import-${dataTableId}-${Date.now()}-${attempts}.tmp`
+          );
+
+          await pipeline(
+            Readable.fromWeb(response.body as any),
+            fs.createWriteStream(tmpPath)
+          );
+          return tmpPath;
         } catch (err) {
+          if (tmpPath && fs.existsSync(tmpPath)) {
+            try {
+              fs.unlinkSync(tmpPath);
+            } catch (_) {}
+          }
           console.warn(`[WARN] Falló descarga (intento ${attempts}):`, err);
           if (attempts >= maxAttempts) {
             throw new StageError(
               "temp_file_access",
               "No se pudo descargar el archivo para procesarlo.",
-              `[download] ${err instanceof Error ? err.message : String(err)}`
+              `[download_stream] ${err instanceof Error ? err.message : String(err)}`
             );
           }
           await new Promise((r) => setTimeout(r, 2000));
@@ -458,83 +468,14 @@ async function processDataImport(
 
       throw new StageError(
         "temp_file_access",
-        "No se pudo preparar el buffer del archivo.",
-        "[download] retry_exhausted"
+        "No se pudo preparar el archivo temporal.",
+        "[download_stream] retry_exhausted"
       );
-    };
-
-    const downloadToTempFile = async (): Promise<string> => {
-      const buffer = await downloadToBuffer();
-      const tmpPath = path.join(
-        os.tmpdir(),
-        `import-${dataTableId}-${Date.now()}.tmp`
-      );
-      await fs.promises.writeFile(tmpPath, buffer);
-      return tmpPath;
     };
 
     const preWarnings: string[] = [];
-    let inMemoryRows: any[][] | null = null;
     const isAllSheets = selectedSheet === "__ALL__";
-    if (preferredFormat === "xlsx" || preferredFormat === "xlsm") {
-      const buffer = await downloadToBuffer();
-      const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-      const sheets = Array.isArray(workbook.SheetNames)
-        ? workbook.SheetNames.filter(Boolean)
-        : [];
-      if (!sheets.length) {
-        throw new StageError(
-          "temp_file_access",
-          "No se encontraron hojas legibles en el workbook en memoria.",
-          "[read_metadata] sheets_empty"
-        );
-      }
-
-      if (isAllSheets) {
-        inMemoryRows = [];
-        let globalHeaders: any[] | null = null;
-        for (const sheetName of sheets) {
-          const worksheet = workbook.Sheets[sheetName];
-          const sheetRows = XLSX.utils.sheet_to_json(worksheet, {
-            header: 1,
-            defval: null,
-            raw: false,
-          }) as any[][];
-          if (sheetRows.length === 0) continue;
-          if (globalHeaders === null) {
-            globalHeaders = sheetRows[0];
-            inMemoryRows.push(...sheetRows);
-          } else {
-            inMemoryRows.push(...sheetRows.slice(1));
-          }
-        }
-        if (inMemoryRows.length === 0) {
-          throw new StageError(
-            "temp_file_access",
-            "Ninguna hoja contiene datos.",
-            "[read_all_sheets] empty"
-          );
-        }
-        preWarnings.push(`Se combinaron ${sheets.length} hoja(s): ${sheets.join(", ")}.`);
-      } else {
-        let sheetToUse = sheets[0];
-        if (selectedSheet && sheets.includes(selectedSheet)) {
-          sheetToUse = selectedSheet;
-        } else if (selectedSheet) {
-          preWarnings.push(
-            `La hoja '${selectedSheet}' no se encontró. Se usó '${sheetToUse}' por robustez.`
-          );
-        }
-        const worksheet = workbook.Sheets[sheetToUse];
-        inMemoryRows = XLSX.utils.sheet_to_json(worksheet, {
-          header: 1,
-          defval: null,
-          raw: false,
-        }) as any[][];
-      }
-    } else {
-      tempFilePath = await downloadToTempFile();
-    }
+    tempFilePath = await downloadToTempFile();
     // -----------------------------------------------------------------------
 
     // 2. CONEXIÓN DB
@@ -557,11 +498,11 @@ async function processDataImport(
     let inferredTypes: string[] = [];
     let buffer: any[][] = [];
     let isTableCreated = false;
+    let hasMarkedInserting = false;
     let rowCount = 0;
     let currentBatchSize = INSERT_BATCH_SIZE;
 
     const ensureTempFileReadable = async () => {
-      if (inMemoryRows) return;
       if (!tempFilePath) {
         throw new StageError(
           "temp_file_access",
@@ -591,9 +532,7 @@ async function processDataImport(
     const warnings: string[] = [...preWarnings];
     await ensureTempFileReadable();
     assertNotTimedOut();
-    const fileFormat = inMemoryRows
-      ? preferredFormat || "xlsx"
-      : detectFileFormat(tempFilePath!, preferredExtension);
+    const fileFormat = detectFileFormat(tempFilePath!, preferredExtension);
     let finalSelectedSheet = isAllSheets ? undefined : (selectedSheet || undefined);
     let finalSelectedSheetIndex: number | undefined = undefined;
 
@@ -649,13 +588,6 @@ async function processDataImport(
       finalSelectedSheetIndex,
       isAllSheets
     );
-    if (inMemoryRows) {
-      rowGenerator = (async function* () {
-        for (const row of inMemoryRows!) {
-          yield Array.isArray(row) ? row : [];
-        }
-      })();
-    }
 
     let generatorRetried = false;
     const consumeRows = async () => {
@@ -701,6 +633,18 @@ async function processDataImport(
             : values.length < headers.length
               ? [...values, ...Array(headers.length - values.length).fill(null)]
               : values;
+
+        if (!hasMarkedInserting) {
+          hasMarkedInserting = true;
+          try {
+            await supabaseAdmin
+              .from("data_tables")
+              .update({ import_status: "inserting_rows" })
+              .eq("id", dataTableId);
+          } catch (progressError) {
+            console.warn("[WARN] Error actualizando estado a inserting_rows:", progressError);
+          }
+        }
 
         buffer.push(normalizedValues);
 

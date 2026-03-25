@@ -22,7 +22,7 @@ type ImportStatusProps = {
     errorMessage?: string | null;
   }) => void;
   compact?: boolean;
-  /** Si se pasa, el timeout de 12 min se cuenta desde esta fecha (ej. updated_at del data_table) */
+  /** Si se pasa, el timeout de 45 min se cuenta desde esta fecha (ej. updated_at del data_table) */
   importStartedAt?: string;
 };
 
@@ -95,7 +95,7 @@ export default function ImportStatus({
           return;
         }
 
-        // Si lleva más de 12 min en "Procesando", marcar como fallido para no quedar colgado
+        // Si lleva más de 45 min en "Procesando", marcar como fallido para no quedar colgado
         const elapsed = Date.now() - startedAt.current;
         if (elapsed >= STALE_AFTER_MS) {
           if (intervalId.current) clearInterval(intervalId.current);
@@ -142,9 +142,9 @@ export default function ImportStatus({
       case "processing":
         return "Preparando...";
       case "downloading_file":
-        return "Descargando...";
+        return "Descargando archivo...";
       case "creating_table":
-        return "Creando tabla...";
+        return "Preparando importación...";
       case "inserting_rows":
         return compact 
             ? `${status.total_rows || 0} filas` 
