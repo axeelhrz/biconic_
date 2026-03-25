@@ -222,12 +222,13 @@ const resolveSheetSelection = (
   return { sheetName: sheetNames[0], sheetIndex: 1 };
 };
 
-// --- ⭐ GENERADOR HÍBRIDO OPTIMIZADO ⭐ ---
+// --- GENERADOR HIBRIDO OPTIMIZADO ---
 async function* getRowGenerator(
   filePath: string,
   format: FileFormat,
   selectedSheet?: string,
-  selectedSheetIndex?: number
+  selectedSheetIndex?: number,
+  allSheets?: boolean
 ) {
   if (format === "csv") {
     const separator = detectSeparator(filePath);
@@ -253,6 +254,26 @@ async function* getRowGenerator(
   if (format === "xls" || format === "ods") {
     console.log(`[LOG] Modo: ${format.toUpperCase()} (SheetJS)`);
     const workbook = XLSX.readFile(filePath, { cellDates: true });
+
+    if (allSheets) {
+      let isFirstSheet = true;
+      for (const name of workbook.SheetNames) {
+        const worksheet = workbook.Sheets[name];
+        const rows = XLSX.utils.sheet_to_json(worksheet, {
+          header: 1,
+          defval: null,
+          raw: false,
+        }) as any[][];
+        if (rows.length === 0) continue;
+        const startIdx = isFirstSheet ? 0 : 1;
+        for (let i = startIdx; i < rows.length; i++) {
+          yield Array.isArray(rows[i]) ? rows[i] : [];
+        }
+        isFirstSheet = false;
+      }
+      return;
+    }
+
     const sheetName =
       selectedSheet && workbook.SheetNames.includes(selectedSheet)
         ? selectedSheet
@@ -280,6 +301,25 @@ async function* getRowGenerator(
   const targetSheetIndex = selectedSheetIndex ?? 1;
   let sheetIdx = 0;
   let firstSheetProcessed = false;
+
+  if (allSheets) {
+    let isFirstSheet = true;
+    for await (const worksheetReader of workbookReader) {
+      let isFirstRow = true;
+      for await (const row of worksheetReader) {
+        if (Array.isArray(row.values)) {
+          if (!isFirstSheet && isFirstRow) {
+            isFirstRow = false;
+            continue;
+          }
+          isFirstRow = false;
+          yield row.values.slice(1);
+        }
+      }
+      isFirstSheet = false;
+    }
+    return;
+  }
 
   for await (const worksheetReader of workbookReader) {
     sheetIdx++;
@@ -347,10 +387,10 @@ async function processDataImport(
         return;
       }
 
-      // 1. DESCARGA EFICIENTE (MODIFICADO) -------------------------------------
+      // 1. DESCARGA EFICIENTE -------------------------------------
       await supabaseAdmin
         .from("data_tables")
-        .update({ import_status: "processing" })
+        .update({ import_status: "downloading_file" })
         .eq("id", dataTableId);
 
     const { data: connection } = await supabaseAdmin
@@ -435,9 +475,8 @@ async function processDataImport(
 
     const preWarnings: string[] = [];
     let inMemoryRows: any[][] | null = null;
+    const isAllSheets = selectedSheet === "__ALL__";
     if (preferredFormat === "xlsx" || preferredFormat === "xlsm") {
-      // Para evitar errores recurrentes de /tmp con archivos grandes,
-      // parseamos xlsx/xlsm desde memoria y luego iteramos filas.
       const buffer = await downloadToBuffer();
       const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
       const sheets = Array.isArray(workbook.SheetNames)
@@ -450,21 +489,49 @@ async function processDataImport(
           "[read_metadata] sheets_empty"
         );
       }
-      let sheetToUse = sheets[0];
-      if (selectedSheet && sheets.includes(selectedSheet)) {
-        sheetToUse = selectedSheet;
-      } else if (selectedSheet) {
-        // robustez > strict: continuar con hoja por defecto.
-        preWarnings.push(
-          `La hoja '${selectedSheet}' no se encontró. Se usó '${sheetToUse}' por robustez.`
-        );
+
+      if (isAllSheets) {
+        inMemoryRows = [];
+        let globalHeaders: any[] | null = null;
+        for (const sheetName of sheets) {
+          const worksheet = workbook.Sheets[sheetName];
+          const sheetRows = XLSX.utils.sheet_to_json(worksheet, {
+            header: 1,
+            defval: null,
+            raw: false,
+          }) as any[][];
+          if (sheetRows.length === 0) continue;
+          if (globalHeaders === null) {
+            globalHeaders = sheetRows[0];
+            inMemoryRows.push(...sheetRows);
+          } else {
+            inMemoryRows.push(...sheetRows.slice(1));
+          }
+        }
+        if (inMemoryRows.length === 0) {
+          throw new StageError(
+            "temp_file_access",
+            "Ninguna hoja contiene datos.",
+            "[read_all_sheets] empty"
+          );
+        }
+        preWarnings.push(`Se combinaron ${sheets.length} hoja(s): ${sheets.join(", ")}.`);
+      } else {
+        let sheetToUse = sheets[0];
+        if (selectedSheet && sheets.includes(selectedSheet)) {
+          sheetToUse = selectedSheet;
+        } else if (selectedSheet) {
+          preWarnings.push(
+            `La hoja '${selectedSheet}' no se encontró. Se usó '${sheetToUse}' por robustez.`
+          );
+        }
+        const worksheet = workbook.Sheets[sheetToUse];
+        inMemoryRows = XLSX.utils.sheet_to_json(worksheet, {
+          header: 1,
+          defval: null,
+          raw: false,
+        }) as any[][];
       }
-      const worksheet = workbook.Sheets[sheetToUse];
-      inMemoryRows = XLSX.utils.sheet_to_json(worksheet, {
-        header: 1,
-        defval: null,
-        raw: false,
-      }) as any[][];
     } else {
       tempFilePath = await downloadToTempFile();
     }
@@ -481,7 +548,7 @@ async function processDataImport(
     // 3. PROCESAMIENTO STREAMING
     await supabaseAdmin
       .from("data_tables")
-      .update({ import_status: "processing" })
+      .update({ import_status: "creating_table" })
       .eq("id", dataTableId);
 
     const tableName = `import_${connectionId.replaceAll("-", "_")}`;
@@ -527,10 +594,10 @@ async function processDataImport(
     const fileFormat = inMemoryRows
       ? preferredFormat || "xlsx"
       : detectFileFormat(tempFilePath!, preferredExtension);
-    let finalSelectedSheet = selectedSheet || undefined;
+    let finalSelectedSheet = isAllSheets ? undefined : (selectedSheet || undefined);
     let finalSelectedSheetIndex: number | undefined = undefined;
 
-    if (fileFormat !== "csv") {
+    if (!isAllSheets && fileFormat !== "csv") {
       const isStreamingExcel = fileFormat === "xlsx" || fileFormat === "xlsm";
       let sheetNames: string[] = [];
       let canResolveByMetadata = true;
@@ -571,7 +638,7 @@ async function processDataImport(
         finalSelectedSheet = selection.sheetName;
         finalSelectedSheetIndex = selection.sheetIndex;
       }
-    } else {
+    } else if (!isAllSheets) {
       finalSelectedSheet = "CSV";
     }
 
@@ -579,7 +646,8 @@ async function processDataImport(
       tempFilePath!,
       fileFormat,
       finalSelectedSheet,
-      finalSelectedSheetIndex
+      finalSelectedSheetIndex,
+      isAllSheets
     );
     if (inMemoryRows) {
       rowGenerator = (async function* () {
@@ -651,7 +719,7 @@ async function processDataImport(
           isTableCreated = true;
           await supabaseAdmin
             .from("data_tables")
-            .update({ import_status: "processing" })
+            .update({ import_status: "inserting_rows" })
             .eq("id", dataTableId);
         }
 
@@ -666,7 +734,7 @@ async function processDataImport(
             try {
               await supabaseAdmin
                 .from("data_tables")
-                .update({ total_rows: rowCount })
+                .update({ import_status: "inserting_rows", total_rows: rowCount })
                 .eq("id", dataTableId);
             } catch (progressError) {
               console.warn("[WARN] Error actualizando progreso:", progressError);
@@ -692,7 +760,8 @@ async function processDataImport(
           tempFilePath!,
           fileFormat,
           finalSelectedSheet,
-          finalSelectedSheetIndex
+          finalSelectedSheetIndex,
+          isAllSheets
         );
         await consumeRows();
       } else {
@@ -771,7 +840,7 @@ async function processDataImport(
   try {
     await runImport();
   } catch (e: any) {
-    if (e?.message === "TIMEOUT") await markFailed("Timeout (máximo 12 minutos).");
+    if (e?.message === "TIMEOUT") await markFailed("Timeout (máximo 45 minutos).");
   } finally {
     if (!terminalStatus) await markFailed("Procesamiento interrumpido.");
   }

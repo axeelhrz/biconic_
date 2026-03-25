@@ -15,6 +15,8 @@ type NewConnectionDialogProps = {
   onCreated?: () => void;
 };
 
+const SHEET_INSPECTION_MAX_SIZE_BYTES = 15 * 1024 * 1024;
+
 export default function NewConnectionDialog({
   open,
   onOpenChange,
@@ -173,7 +175,8 @@ export default function NewConnectionDialog({
       const dataTableId = dataTableMeta.id;
 
       let selectedSheet = options.selectedSheet;
-      if (fileExt !== "csv") {
+      const wantsAllSheets = selectedSheet === "__ALL__";
+      if (!wantsAllSheets && fileExt !== "csv" && file.size <= SHEET_INSPECTION_MAX_SIZE_BYTES) {
         const sheetsRes = await fetch("/api/process-excel/sheets", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -206,6 +209,8 @@ export default function NewConnectionDialog({
             selectedSheet = sheetsData.defaultSheet || availableSheets[0];
           }
         }
+      } else if (!wantsAllSheets && fileExt !== "csv") {
+        selectedSheet = undefined;
       }
 
       setCurrentImportId(dataTableId);

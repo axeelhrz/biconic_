@@ -50,6 +50,8 @@ export type ExcelUploadErrorInfo = {
   details?: string;
 };
 
+const LARGE_FILE_SHEET_INSPECTION_LIMIT_BYTES = 15 * 1024 * 1024;
+
 // NOTA: Se ha simplificado onExcelUpload para que coincida con lo que el padre provee.
 type ConnectionFormProps = {
   defaultValues?: Partial<ConnectionFormValues>;
@@ -121,6 +123,9 @@ export default function ConnectionForm({
   const [availableSheets, setAvailableSheets] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState("");
   const [sheetInspectError, setSheetInspectError] = useState<string | null>(null);
+  const [sheetInspectWarning, setSheetInspectWarning] = useState<string | null>(
+    null
+  );
   const [parseMode, setParseMode] = useState<"strict" | "tolerant" | "mixed">(
     "mixed"
   );
@@ -156,6 +161,7 @@ export default function ConnectionForm({
     if (file) {
       setSelectedFile(file);
       setSheetInspectError(null);
+      setSheetInspectWarning(null);
       setAvailableSheets([]);
       setSelectedSheet("");
       try {
@@ -163,6 +169,13 @@ export default function ConnectionForm({
         if (fileExt === "csv") {
           setAvailableSheets(["CSV"]);
           setSelectedSheet("CSV");
+          return;
+        }
+
+        if (file.size > LARGE_FILE_SHEET_INSPECTION_LIMIT_BYTES) {
+          setSheetInspectWarning(
+            "Archivo grande: se omite inspección de hojas para evitar bloqueos. Se usará la hoja por defecto al importar."
+          );
           return;
         }
 
@@ -180,7 +193,7 @@ export default function ConnectionForm({
         }
 
         setAvailableSheets(sheets);
-        setSelectedSheet(sheets[0]);
+        setSelectedSheet("__ALL__");
       } catch {
         setSheetInspectError(
           "No se pudieron leer las hojas del archivo. Podés continuar y se usará la primera hoja disponible."
@@ -220,6 +233,7 @@ export default function ConnectionForm({
       setAvailableSheets([]);
       setSelectedSheet("");
       setSheetInspectError(null);
+      setSheetInspectWarning(null);
       setParseMode("mixed");
     }
   }, [connectionType]);
@@ -492,11 +506,16 @@ export default function ConnectionForm({
                         {availableSheets.length === 0 ? (
                           <option value="">Se seleccionará automáticamente</option>
                         ) : (
-                          availableSheets.map((sheet) => (
-                            <option key={sheet} value={sheet}>
-                              {sheet}
-                            </option>
-                          ))
+                          <>
+                            {availableSheets.length > 1 && (
+                              <option value="__ALL__">Todas las hojas</option>
+                            )}
+                            {availableSheets.map((sheet) => (
+                              <option key={sheet} value={sheet}>
+                                {sheet}
+                              </option>
+                            ))}
+                          </>
                         )}
                       </select>
                     </div>
@@ -507,6 +526,14 @@ export default function ConnectionForm({
                       style={{ color: "var(--platform-danger)" }}
                     >
                       {sheetInspectError}
+                    </p>
+                  )}
+                  {sheetInspectWarning && (
+                    <p
+                      className="mt-2 text-xs"
+                      style={{ color: "var(--platform-warning)" }}
+                    >
+                      {sheetInspectWarning}
                     </p>
                   )}
                   <p
