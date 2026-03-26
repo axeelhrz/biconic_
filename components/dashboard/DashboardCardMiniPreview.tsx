@@ -214,20 +214,25 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
 
   useEffect(() => {
     let cancelled = false;
+    const abortController = new AbortController();
     if (!isVisible || selectedWidgets.length === 0) {
       setLoading(false);
       return;
     }
 
     const run = async () => {
+      const etlTimeoutId = setTimeout(() => abortController.abort(), 15000);
       try {
         setLoading(true);
         setFailed(false);
-        const etlRes = await fetch(`/api/dashboard/${dashboardId}/etl-data`, { cache: "no-store" });
+        const etlRes = await fetch(`/api/dashboard/${dashboardId}/etl-data`, {
+          cache: "no-store",
+          signal: abortController.signal,
+        });
+        clearTimeout(etlTimeoutId);
         const etlJson = await safeJsonResponse<{ data?: EtlDataPayload }>(etlRes);
         if (!etlRes.ok || !etlJson.ok || !etlJson.data) throw new Error(etlJson.error ?? "No se pudo cargar ETL");
 
-        // Limita concurrencia para evitar saturar la grilla de tarjetas.
         const queue = [...selectedWidgets];
         const partial: MiniWidgetData[] = [];
         const workers = Array.from({ length: 2 }).map(async () => {
@@ -262,12 +267,14 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
       } catch {
         if (!cancelled) setFailed(true);
       } finally {
+        clearTimeout(etlTimeoutId);
         if (!cancelled) setLoading(false);
       }
     };
     run();
     return () => {
       cancelled = true;
+      abortController.abort();
     };
   }, [dashboardId, selectedWidgets, isVisible]);
 

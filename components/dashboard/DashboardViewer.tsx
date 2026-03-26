@@ -322,6 +322,14 @@ export function DashboardViewer({
         return;
       }
 
+      setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: true } : w)));
+      const safetyTimeout = setTimeout(() => {
+        setWidgets((prev) => prev.map((w) =>
+          w.id === widgetId && w.isLoading ? { ...w, isLoading: false } : w
+        ));
+      }, 30000);
+
+      try {
       const aggConfig = widget.aggregationConfig;
       const fieldsWithWidgets = new Set(
         widgets.filter((w) => w.type === "filter" && (w as any).filterConfig?.field).map((w) => (w as any).filterConfig!.field)
@@ -398,9 +406,6 @@ export function DashboardViewer({
         ...(f.id != null && { id: f.id }),
       }));
 
-      setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: true } : w)));
-
-      try {
         let dataArray: Record<string, unknown>[] = [];
         let resolvedChartType: string = widget.type;
         if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
@@ -561,6 +566,8 @@ export function DashboardViewer({
         );
       } catch {
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+      } finally {
+        clearTimeout(safetyTimeout);
       }
     },
     [widgets, etlData, globalFilters, filterValues, apiEndpoints, getTableNameForWidget, isPublic, accentColor]
@@ -578,7 +585,7 @@ export function DashboardViewer({
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [filterValues]);
+  }, [filterValues, loadDataForWidget, etlData]);
 
   const initialLoadedRef = useRef(false);
   useEffect(() => {
