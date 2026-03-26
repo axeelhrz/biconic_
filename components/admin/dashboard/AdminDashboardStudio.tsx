@@ -1676,8 +1676,15 @@ export function AdminDashboardStudio({
                     : "Ejecutá para actualizar";
                 const chartType = normalizeChartType((w.aggregationConfig as { chartType?: string })?.chartType ?? w.type ?? "bar");
                 let kpiValue: string | number | undefined;
-                if (chartType === "kpi" && w.config?.datasets?.[0]?.data?.[0] != null) {
-                  kpiValue = w.config.datasets[0].data[0];
+                if (chartType === "kpi") {
+                  const fromConfig = w.config?.datasets?.[0]?.data?.[0];
+                  if (fromConfig != null) {
+                    kpiValue = fromConfig;
+                  } else if (Array.isArray(w.rows) && w.rows.length > 0) {
+                    const firstRow = w.rows[0] as Record<string, unknown>;
+                    const numVal = Object.values(firstRow).find((v) => Number.isFinite(Number(v)));
+                    if (numVal != null) kpiValue = Number(numVal);
+                  }
                 }
                 const span = Math.min(4, Math.max(1, w.gridSpan ?? 2));
                 const isSelected = selectedId === w.id;

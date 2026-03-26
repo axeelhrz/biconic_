@@ -110,10 +110,13 @@ export function MetricBlock({
   darkChartTheme = false,
 }: MetricBlockProps) {
   const hasViz = useMemo(() => {
-    if (chartType === "kpi") return kpiValue != null;
+    if (chartType === "kpi") {
+      return kpiValue != null
+        || (Array.isArray(widgetForRenderer?.rows) && widgetForRenderer.rows.length > 0);
+    }
     if (chartType === "table") return Array.isArray(tableRows) && tableRows.length > 0;
     return chartConfig?.labels?.length && (chartConfig.datasets?.length ?? 0) > 0;
-  }, [chartType, chartConfig, kpiValue, tableRows]);
+  }, [chartType, chartConfig, kpiValue, tableRows, widgetForRenderer?.rows]);
 
   const fallbackWidget = useMemo<DashboardWidgetRendererWidget>(() => {
     const kpiAsNumber = typeof kpiValue === "number" ? kpiValue : Number(kpiValue);

@@ -232,6 +232,25 @@ export function buildChartConfig(
 ): ChartConfig | undefined {
   if (!Array.isArray(dataArray) || dataArray.length === 0) return undefined;
   const agg = widget.aggregationConfig;
+  const resolvedTypeEarly = (agg?.chartType as string) || widget.type;
+
+  if (resolvedTypeEarly === "kpi") {
+    const sample = (dataArray[0] ?? {}) as Record<string, unknown>;
+    const resultKeys = Object.keys(sample);
+    const metricAliases =
+      agg?.enabled && agg.metrics?.length
+        ? agg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
+        : [];
+    const yKey =
+      (Array.isArray(agg?.chartYAxes) && agg.chartYAxes[0] && resultKeys.includes(agg.chartYAxes[0]) ? agg.chartYAxes[0] : undefined)
+      ?? metricAliases.find((k) => resultKeys.includes(k))
+      ?? resultKeys.find((k) => typeof sample[k] === "number")
+      ?? resultKeys[0];
+    if (!yKey) return undefined;
+    const sum = dataArray.reduce((acc, row) => acc + Number((row as Record<string, unknown>)[yKey] ?? 0), 0);
+    return { labels: ["Total"], datasets: [{ label: yKey, data: [sum] }] };
+  }
+
   const axis = resolveWidgetAxisKeys(dataArray, widget);
   if (!axis) return undefined;
   const { xKey, yKeys, resultKeys } = axis;
@@ -369,12 +388,6 @@ export function buildChartConfig(
     !!seriesField &&
     (resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "combo") &&
     (typeof agg?.chartStackBySeries === "boolean" ? agg.chartStackBySeries : true);
-
-  if (resolvedType === "kpi") {
-    const valueField = yKeys[0];
-    const sum = rows.reduce((acc, row) => acc + Number((row as Record<string, unknown>)[valueField] ?? 0), 0);
-    return { labels: ["Total"], datasets: [{ label: aliasForYKey(valueField), data: [sum] }] };
-  }
 
   if (seriesField && resultKeys.includes(seriesField) && !isPieOrDoughnut) {
     const uniqueX = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? "")))];
