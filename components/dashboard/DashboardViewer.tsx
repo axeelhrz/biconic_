@@ -95,6 +95,30 @@ type AggregationConfig = {
   };
 };
 
+function isInvalidIdentifierValue(value: unknown): boolean {
+  if (value == null) return true;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "" || normalized === "undefined" || normalized === "null";
+}
+
+function sanitizeDimensionList(values: unknown[]): string[] {
+  return values
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => !isInvalidIdentifierValue(value));
+}
+
+const WIDGET_FETCH_TIMEOUT_MS = 25000;
+
+async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs = WIDGET_FETCH_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export type Widget = DashboardWidgetRendererWidget & {
   x: number;
   y: number;
@@ -163,10 +187,14 @@ export function DashboardViewer({
   const [globalFilterDistinctValues, setGlobalFilterDistinctValues] = useState<Record<string, unknown[]>>({});
   const stateRef = useRef({ widgets, setWidgets });
 
-  const { data: etlData } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
+  const { data: etlData, error: etlDataError } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
 
   const themeMerged = useMemo(() => mergeTheme(dashboardTheme), [dashboardTheme]);
   const accentColor = themeMerged.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor ?? "#0ea5e9";
+
+  useEffect(() => {
+    stateRef.current.widgets = widgets;
+  }, [widgets]);
 
   useEffect(() => {
     if (initialWidgets?.length) {
@@ -376,17 +404,34 @@ export function DashboardViewer({
         let dataArray: Record<string, unknown>[] = [];
         let resolvedChartType: string = widget.type;
         if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
-          const dimensionsArray = (aggConfig as any).dimensions?.length
+          const dimensionsArrayRaw = (aggConfig as any).dimensions?.length
             ? (aggConfig as any).dimensions
             : [aggConfig.dimension, (aggConfig as any).dimension2].filter(Boolean);
+          const dimensionsArray = sanitizeDimensionList(dimensionsArrayRaw);
           // Métricas guardadas del ETL del widget para que el backend resuelva por nombre
           const dataSources = (etlData as any)?.dataSources as { id: string; etlId: string; savedMetrics?: unknown[] }[] | undefined;
           const widgetSource = widget.dataSourceId && dataSources?.length
             ? dataSources.find((s) => s.id === widget.dataSourceId)
             : dataSources?.[0];
           const savedMetricsList = widgetSource?.savedMetrics ?? (etlData as any)?.savedMetrics ?? [];
+          const safeMetrics = aggConfig.metrics
+            .map(({ id, ...rest }) => ({
+              ...rest,
+              field: isInvalidIdentifierValue(rest.field) ? undefined : String(rest.field).trim(),
+              alias: String(rest.alias ?? "").trim() || undefined,
+              cast: rest.numericCast && rest.numericCast !== "none" ? rest.numericCast : undefined,
+            }))
+            .filter((metric) => String(metric.func ?? "").toUpperCase() === "FORMULA" || !isInvalidIdentifierValue(metric.field));
+          if (safeMetrics.length === 0) {
+            setWidgets((prev) =>
+              prev.map((w) =>
+                w.id === widgetId ? { ...w, rows: [], config: { labels: [], datasets: [] }, isLoading: false } : w
+              )
+            );
+            return;
+          }
           const metricFieldNames = new Set(
-            aggConfig.metrics
+            safeMetrics
               .filter((m) => (m as any).func !== "FORMULA" && m.field != null && String(m.field).trim() !== "")
               .map((m) => String(m.field).trim().toLowerCase())
           );
@@ -413,13 +458,10 @@ export function DashboardViewer({
           resolvedChartType = String((aggConfig?.chartType as string | undefined) ?? "").trim() || widget.type;
           const bodyPayload: Record<string, unknown> = {
             tableName: fullTableName,
-            dimension: aggConfig.dimension,
+            dimension: isInvalidIdentifierValue(aggConfig.dimension) ? undefined : aggConfig.dimension,
             chartType: resolvedChartType,
-            chartXAxis: aggConfig.chartXAxis,
-            metrics: aggConfig.metrics.map(({ id, ...rest }) => ({
-              ...rest,
-              cast: rest.numericCast && rest.numericCast !== "none" ? rest.numericCast : undefined,
-            })),
+            chartXAxis: isInvalidIdentifierValue(aggConfig.chartXAxis) ? undefined : aggConfig.chartXAxis,
+            metrics: safeMetrics,
             filters: preparedFilters,
             orderBy: aggConfig.orderBy,
             limit: aggConfig.limit ?? 1000,
@@ -431,7 +473,7 @@ export function DashboardViewer({
           if ((aggConfig as any).comparePeriod) bodyPayload.comparePeriod = (aggConfig as any).comparePeriod;
           if ((aggConfig as any).dateDimension) bodyPayload.dateDimension = (aggConfig as any).dateDimension;
           if (savedMetricsForBody.length > 0) bodyPayload.savedMetrics = savedMetricsForBody;
-          const primaryDim = dimensionsArray[0] ?? aggConfig.dimension;
+          const primaryDim = dimensionsArray[0] ?? (isInvalidIdentifierValue(aggConfig.dimension) ? undefined : aggConfig.dimension);
           const dateFields = (widgetSource as { fields?: { date?: string[] } })?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
           const isDateDim = primaryDim && dateFields.some((d: string) => (d || "").toLowerCase() === (primaryDim || "").toLowerCase());
           const dateGroupByGranularity = (aggConfig as { dateGroupByGranularity?: string }).dateGroupByGranularity;
@@ -445,7 +487,7 @@ export function DashboardViewer({
             !isTemporalAxis;
           if (shouldApplyRanking) {
             bodyPayload.orderBy = {
-              field: (aggConfig as { chartRankingMetric?: string }).chartRankingMetric || aggConfig.metrics[0]?.alias,
+              field: (aggConfig as { chartRankingMetric?: string }).chartRankingMetric || (safeMetrics[0] as { alias?: string } | undefined)?.alias,
               direction: "DESC",
             };
             bodyPayload.limit = (aggConfig as { chartRankingTop?: number }).chartRankingTop;
@@ -455,7 +497,7 @@ export function DashboardViewer({
           if (dateRangeFilter?.field) bodyPayload.dateRangeFilter = dateRangeFilter;
 
           const url = apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data";
-          const res = await fetch(url, {
+          const res = await fetchWithTimeout(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(bodyPayload),
@@ -465,7 +507,7 @@ export function DashboardViewer({
           dataArray = (Array.isArray(aggData) ? aggData : (aggData as { rows?: Record<string, unknown>[] })?.rows ?? []) as Record<string, unknown>[];
         } else {
           const url = apiEndpoints?.rawData ?? "/api/dashboard/raw-data";
-          const res = await fetch(url, {
+          const res = await fetchWithTimeout(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -791,9 +833,15 @@ export function DashboardViewer({
 
       <div className={`flex-1 overflow-auto p-4 min-h-0${useClientTheme ? " client-view-canvas" : ""}`}>
         {!etlData && !initialWidgets?.length ? (
+          etlDataError ? (
+            <div className="flex h-48 items-center justify-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+              {etlDataError}
+            </div>
+          ) : (
           <div className="flex h-48 items-center justify-center" style={{ color: "var(--platform-fg-muted)" }}>
             <Loader2 className="h-8 w-8 animate-spin" />
           </div>
+          )
         ) : placements.length === 0 ? (
           <div className="flex h-48 items-center justify-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
             No hay widgets en este dashboard

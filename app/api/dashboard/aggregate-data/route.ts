@@ -163,6 +163,12 @@ function isYearLike(value: any): boolean {
 const normalizeStr = (str: string) =>
   str ? str.replace(/\s+/g, "").toUpperCase() : "";
 
+function isInvalidIdentifier(value: unknown): boolean {
+  if (value == null) return true;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "" || normalized === "undefined" || normalized === "null";
+}
+
 /** Convierte nombre de columna del front (primary.COL, join_N.COL) al nombre físico en la tabla ETL (primary_col, join_n_col). */
 function displayColumnToPhysical(name: string): string {
   let n = (name || "").trim();
@@ -645,6 +651,30 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    const invalidDimensions = [
+      ...(Array.isArray(body.dimensions) ? body.dimensions : []),
+      body.dimension,
+      body.dateDimension,
+      body.chartXAxis,
+      body.dateGroupBy?.field,
+      body.dateRangeFilter?.field,
+    ].filter((value) => value !== undefined && isInvalidIdentifier(value));
+    if (invalidDimensions.length > 0) {
+      return NextResponse.json(
+        { error: "Hay dimensiones/campos inválidos en la configuración (valor vacío, undefined o null)." },
+        { status: 400 }
+      );
+    }
+    for (let i = 0; i < body.metrics.length; i++) {
+      const metric = body.metrics[i];
+      if (metric.formula) continue;
+      if (isInvalidIdentifier(metric.field) && !String(metric.expression ?? "").trim()) {
+        return NextResponse.json(
+          { error: `Métrica en posición ${i + 1}: field inválido (vacío, undefined o null).` },
+          { status: 400 }
+        );
+      }
+    }
 
     // Validar que cada métrica base use una función de agregación permitida (o expresión con COUNTIF/SUMIF/etc.)
     const allowedAggSet = new Set(ALLOWED_AGG_FUNCTIONS.map((f) => f.toUpperCase()));
@@ -1090,8 +1120,8 @@ export async function POST(req: NextRequest) {
 
     // 2. Dimensiones (una o varias) + dateGroupBy (DATE_TRUNC)
     const dimList = (body.dimensions && body.dimensions.length > 0)
-      ? body.dimensions
-      : body.dimension
+      ? body.dimensions.filter((d) => !isInvalidIdentifier(d))
+      : body.dimension && !isInvalidIdentifier(body.dimension)
         ? [body.dimension]
         : [];
     let dimensionSelectClause = "";

@@ -70,6 +70,7 @@ export function useDashboardEtlData(
   const [data, setData] = useState<ETLDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const REQUEST_TIMEOUT_MS = 20000;
 
   const fetchData = async () => {
     try {
@@ -89,7 +90,14 @@ export function useDashboardEtlData(
             : `/api/dashboard/${dashboardId}/etl-data`;
       }
 
-      const response = await fetch(endpoint);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      let response: Response;
+      try {
+        response = await fetch(endpoint, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
       const result = await safeJsonResponse<{ data?: ETLDataResponse | null }>(response);
 
       if (!response.ok || !result.ok) {
@@ -99,7 +107,10 @@ export function useDashboardEtlData(
       setData(result.data ?? null);
     } catch (err: any) {
       console.error("Error fetching ETL data:", err);
-      setError(err.message || "Error al cargar datos del ETL");
+      const msg = err?.name === "AbortError"
+        ? "La carga del dashboard tardó demasiado. Reintentá en unos segundos."
+        : err.message || "Error al cargar datos del ETL";
+      setError(msg);
       setData(null);
     } finally {
       setLoading(false);

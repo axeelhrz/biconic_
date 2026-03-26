@@ -208,6 +208,12 @@ function normalizeChartType(raw: unknown, fallback: SupportedChartType = "bar"):
   return (SUPPORTED_CHART_TYPES as readonly string[]).includes(value) ? (value as SupportedChartType) : fallback;
 }
 
+function isInvalidIdentifierValue(value: unknown): boolean {
+  if (value == null) return true;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "" || normalized === "undefined" || normalized === "null";
+}
+
 function toAggregationMetricList(input: unknown, fallbackMetric?: SavedMetricForm["metric"]): AggregationMetric[] {
   const list = Array.isArray(input) ? input : fallbackMetric ? [fallbackMetric] : [];
   const out = list.map((m) => {
@@ -515,9 +521,12 @@ export function AdminDashboardStudio({
         const agg = widget.aggregationConfig;
         const widgetForBuild = { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color };
         if (agg?.enabled && agg.metrics.length > 0) {
-          const dimensions = (agg as any).dimensions?.length > 0
+          const dimensionsRaw = (agg as any).dimensions?.length > 0
             ? (agg as any).dimensions as string[]
             : [agg.dimension, agg.dimension2].filter(Boolean) as string[];
+          const dimensions = dimensionsRaw
+            .map((d) => String(d ?? "").trim())
+            .filter((d) => !isInvalidIdentifierValue(d));
           const derivedByName = Object.fromEntries(
             derivedColumnsFromLayout.map((d) => [d.name.toLowerCase().trim(), d])
           );
@@ -534,6 +543,7 @@ export function AdminDashboardStudio({
                 return { formula: m.formula || "", alias: m.alias || "formula", field: "" };
               let expr = (m as { expression?: string }).expression;
               let fieldStr = m.field != null ? String(m.field).trim() : "";
+              if (isInvalidIdentifierValue(fieldStr)) fieldStr = "";
               if (savedById && !expr && !fieldStr) {
                 const first = (savedById as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
                   ?? (savedById as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric;
@@ -625,10 +635,10 @@ export function AdminDashboardStudio({
           const aggregatePayload = {
             tableName,
             etlId: widgetEtlId || undefined,
-            dimension: agg.dimension,
+            dimension: isInvalidIdentifierValue(agg.dimension) ? undefined : agg.dimension,
             dimensions: dimensions.length > 0 ? dimensions : undefined,
             chartType: agg.chartType || widget.type,
-            chartXAxis: agg.chartXAxis || undefined,
+            chartXAxis: isInvalidIdentifierValue(agg.chartXAxis) ? undefined : agg.chartXAxis || undefined,
             ...(agg.geoHints ? { geoHints: agg.geoHints } : {}),
             metrics: metricsPayload,
             filters: [...(agg.filters || []), ...filters],

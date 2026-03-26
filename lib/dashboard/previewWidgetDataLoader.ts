@@ -49,6 +49,8 @@ type SavedMetricLike = {
   aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> };
 };
 
+const PREVIEW_FETCH_TIMEOUT_MS = 25000;
+
 export type LoadPreviewWidgetDataParams = {
   widget: WidgetLike;
   tableName: string;
@@ -71,6 +73,25 @@ export type LoadedPreviewWidgetData = {
   processedRows: Record<string, unknown>[];
   hasData: boolean;
 };
+
+function extractRowsFromApiResult(result: unknown): Record<string, unknown>[] {
+  if (Array.isArray(result)) return result as Record<string, unknown>[];
+  if (result && typeof result === "object") {
+    const maybeRows = (result as { rows?: unknown }).rows;
+    if (Array.isArray(maybeRows)) return maybeRows as Record<string, unknown>[];
+  }
+  return [];
+}
+
+async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs = PREVIEW_FETCH_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 function mapField(
   field: string | undefined,
@@ -170,14 +191,14 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       ...(aggregateExtraPayload ?? {}),
     };
 
-    const response = await fetch(aggregateEndpoint, {
+    const response = await fetchWithTimeout(aggregateEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     const result = await safeJsonResponse<{ rows?: Record<string, unknown>[] }>(response);
-    if (!response.ok || !result.ok) throw new Error(result.error ?? "Error agregando datos");
-    rows = Array.isArray(result) ? result : Array.isArray(result.rows) ? result.rows : [];
+    if (!response.ok) throw new Error(result.error ?? "Error agregando datos");
+    rows = extractRowsFromApiResult(result);
   } else {
     const payload = {
       tableName,
@@ -185,14 +206,14 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       limit: rawLimit,
       ...(rawExtraPayload ?? {}),
     };
-    const response = await fetch(rawEndpoint, {
+    const response = await fetchWithTimeout(rawEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     const result = await safeJsonResponse<{ rows?: Record<string, unknown>[] }>(response);
-    if (!response.ok || !result.ok) throw new Error(result.error ?? "Error cargando datos");
-    rows = Array.isArray(result) ? result : Array.isArray(result.rows) ? result.rows : [];
+    if (!response.ok) throw new Error(result.error ?? "Error cargando datos");
+    rows = extractRowsFromApiResult(result);
   }
 
   if (rows.length === 0) {
