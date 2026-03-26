@@ -401,7 +401,8 @@ async function processDataImport(
   supabaseAdmin: any,
   dbUrl: string,
   parseMode: ParseMode,
-  selectedSheet?: string | null
+  selectedSheet?: string | null,
+  requestOrigin?: string | null
 ) {
   let tempFilePath: string | null = null;
   let sql: any = null;
@@ -423,29 +424,56 @@ async function processDataImport(
     sheetToContinue: string | null,
     parseModeToContinue: ParseMode
   ) => {
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL
-      ? process.env.NEXT_PUBLIC_SITE_URL.replace(/\/$/, "")
-      : process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:3000";
-    const res = await fetch(`${baseUrl}/api/process-excel`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        connectionId,
-        dataTableId,
-        parseMode: parseModeToContinue,
-        selectedSheet: sheetToContinue,
-      }),
-    });
-    if (!res.ok) {
-      const details = await res.text().catch(() => "Sin detalle");
-      throw new StageError(
-        "resume_enqueue",
-        "No se pudo encolar la continuación del procesamiento.",
-        details
-      );
+    const normalizeBaseUrl = (value?: string | null) => {
+      if (!value || typeof value !== "string") return null;
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      const withProtocol =
+        trimmed.startsWith("http://") || trimmed.startsWith("https://")
+          ? trimmed
+          : `https://${trimmed}`;
+      return withProtocol.replace(/\/$/, "");
+    };
+
+    const baseCandidatesRaw = [
+      requestOrigin,
+      process.env.NEXT_PUBLIC_SITE_URL,
+      process.env.SITE_URL,
+      process.env.VERCEL_PROJECT_PRODUCTION_URL,
+      process.env.VERCEL_BRANCH_URL,
+      process.env.VERCEL_URL,
+      "http://localhost:3000",
+    ];
+    const baseCandidates = Array.from(
+      new Set(baseCandidatesRaw.map(normalizeBaseUrl).filter(Boolean))
+    ) as string[];
+
+    let lastErrorDetails = "Sin detalle";
+    for (const baseUrl of baseCandidates) {
+      try {
+        const res = await fetch(`${baseUrl}/api/process-excel`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            connectionId,
+            dataTableId,
+            parseMode: parseModeToContinue,
+            selectedSheet: sheetToContinue,
+            resumeOrigin: requestOrigin || baseUrl,
+          }),
+        });
+        if (res.ok) return;
+        lastErrorDetails = await res.text().catch(() => `HTTP ${res.status}`);
+      } catch (err) {
+        lastErrorDetails = err instanceof Error ? err.message : String(err);
+      }
     }
+
+    throw new StageError(
+      "resume_enqueue",
+      "No se pudo encolar la continuación del procesamiento.",
+      `${lastErrorDetails} | bases probadas: ${baseCandidates.join(", ")}`
+    );
   };
 
   console.log(
@@ -986,6 +1014,22 @@ export async function POST(req: Request) {
       typeof body?.selectedSheet === "string" && body.selectedSheet.trim() !== ""
         ? body.selectedSheet.trim()
         : null;
+    const requestOriginFromBody =
+      typeof body?.resumeOrigin === "string" && body.resumeOrigin.trim() !== ""
+        ? body.resumeOrigin.trim()
+        : null;
+    const requestOriginFromUrl = (() => {
+      try {
+        return new URL(req.url).origin;
+      } catch {
+        return null;
+      }
+    })();
+    const requestOrigin =
+      requestOriginFromBody ||
+      requestOriginFromUrl ||
+      req.headers.get("origin") ||
+      null;
 
     // Validar variables de entorno antes de iniciar (evita que "siempre falle" sin mensaje claro)
     const missing: string[] = [];
@@ -1043,7 +1087,8 @@ export async function POST(req: Request) {
       supabaseAdmin,
       process.env.SUPABASE_DB_URL!,
       parseMode,
-      selectedSheet
+      selectedSheet,
+      requestOrigin
     ).catch((err) => console.error("[FATAL BACKGROUND ERROR]", err));
 
     // Next 15: after() evita que el proceso se corte al enviar la respuesta (Vercel/local)
