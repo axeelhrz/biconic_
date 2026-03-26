@@ -1628,7 +1628,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           log("Resolviendo nombres de tablas físicas...");
           const pPhysical = await resolvePhysical(primaryConnectionId!);
           const jPhysicals = await Promise.all(
-            joins.map((jn) => resolvePhysical(jn.secondaryConnectionId!))
+            joins.map((jn, idx) => {
+              const secId = jn.secondaryConnectionId;
+              if (secId == null || String(secId).trim() === "") {
+                throw new Error(`Join ${idx}: secondaryConnectionId inválido al resolver tablas físicas.`);
+              }
+              return resolvePhysical(secId);
+            })
           );
           log("Nombres de tablas físicas resueltos.", {
             pPhysical,

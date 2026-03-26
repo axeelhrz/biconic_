@@ -527,10 +527,21 @@ export async function POST(req: NextRequest) {
 
         // Star join (multiple JOINs): call join-query API with fast/stable preview pagination
         const starJoin = body.join as { primaryConnectionId?: string | number; primaryTable?: string; joins?: Array<{ id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[]; conditions?: Array<{ primaryColumn: string; secondaryColumn: string }> }> } | undefined;
-        if (starJoin?.primaryConnectionId && Array.isArray(starJoin.joins) && starJoin.joins.length > 0) {
+        const rawStarJoins = Array.isArray(starJoin?.joins) ? starJoin.joins : [];
+        const sanitizedStarJoins = rawStarJoins.filter(
+          (jn): jn is NonNullable<typeof rawStarJoins[number]> =>
+            !!jn &&
+            typeof jn === "object" &&
+            jn.secondaryConnectionId != null &&
+            String(jn.secondaryConnectionId).trim() !== ""
+        );
+        if (rawStarJoins.length !== sanitizedStarJoins.length) {
+          throw new Error("Configuración JOIN inválida: se detectaron joins vacíos o sin secondaryConnectionId.");
+        }
+        if (starJoin?.primaryConnectionId && sanitizedStarJoins.length > 0) {
           const filterCols = (body.filter?.columns as string[] | undefined) || [];
           const primaryColumns = filterCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, ""));
-          const joinsWithCols = (starJoin.joins || []).map((jn: any, idx: number) => ({
+          const joinsWithCols = sanitizedStarJoins.map((jn: any, idx: number) => ({
             ...jn,
             secondaryColumns: filterCols.filter((c: string) => new RegExp(`^join_${idx}\\.`, "i").test(c)).map((c: string) => c.replace(new RegExp(`^join_${idx}\\.`, "i"), "")),
           }));

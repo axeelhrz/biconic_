@@ -364,6 +364,28 @@ async function executeEtlPipeline(
   let rowsProcessed = 0;
   const pipelineStartedAt = Date.now();
   const supabaseService = createServiceRoleClient();
+  const buildRef =
+    process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ||
+    process.env.VERCEL_URL ||
+    "local";
+  const formatRunError = (err: any) => {
+    const message = String(err?.message || "Error desconocido").trim();
+    const firstStackFrame =
+      typeof err?.stack === "string"
+        ? err.stack
+            .split("\n")
+            .map((line: string) => line.trim())
+            .find((line: string) => !!line && line.startsWith("at "))
+        : "";
+    const merged = [
+      message || "Error desconocido",
+      firstStackFrame ? `frame=${firstStackFrame}` : "",
+      `ref=${buildRef}`,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+    return merged.slice(0, 500);
+  };
   const joinObjForTimeout = (body as any)?.join;
   const joinsCountForTimeout = Array.isArray(joinObjForTimeout?.joins) ? joinObjForTimeout.joins.length : 0;
   const hasAnyJoin = !!joinObjForTimeout;
@@ -418,7 +440,7 @@ async function executeEtlPipeline(
         completed_at: new Date().toISOString(),
         error_message: canQueueContinuation
           ? `Timeout de seguridad (${PIPELINE_TIMEOUT_MS / 1000}s). Se programó reanudación automática desde offset ${lastStarSourceOffset} (intento ${Math.max(1, Number((body as any)?._resumeAttempt || 0) + 1)}). Filas procesadas: ${rowsProcessed}.`
-          : `Timeout de seguridad (${PIPELINE_TIMEOUT_MS / 1000}s): el ETL tardó demasiado. Filas procesadas: ${rowsProcessed}. Considere reducir el volumen de datos o agregar filtros.`,
+          : `Timeout de seguridad (${PIPELINE_TIMEOUT_MS / 1000}s): el ETL tardó demasiado. Filas procesadas: ${rowsProcessed}. Considere reducir el volumen de datos o agregar filtros. (ref=${buildRef})`,
         rows_processed: rowsProcessed,
       });
     } catch (_) {}
@@ -2167,7 +2189,7 @@ async function executeEtlPipeline(
     try {
       await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
         completed_at: completedAt(),
-        error_message: (err?.message || "Error desconocido").slice(0, 500),
+        error_message: formatRunError(err),
         rows_processed: rowsProcessed,
       });
     } catch (logErr) {
@@ -2186,7 +2208,7 @@ async function executeEtlPipeline(
         if (status === "started" || status === "running") {
           await ensureRunTerminalState(supabaseAdmin, runId, "failed", {
             completed_at: completedAt(),
-            error_message: "Ejecución interrumpida o error no registrado",
+            error_message: `Ejecución interrumpida o error no registrado (ref=${buildRef})`,
             rows_processed: rowsProcessed,
           });
         }
@@ -2303,9 +2325,13 @@ export async function POST(req: NextRequest) {
      if (runLogInserted) {
        try {
          const admin = await createServiceRoleClient();
+        const initBuildRef =
+          process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ||
+          process.env.VERCEL_URL ||
+          "local";
          await ensureRunTerminalState(admin, runId, "failed", {
            completed_at: new Date().toISOString(),
-           error_message: (err?.message || "Error al iniciar ETL").slice(0, 500),
+          error_message: `${String(err?.message || "Error al iniciar ETL").slice(0, 420)} | ref=${initBuildRef}`.slice(0, 500),
          });
        } catch (logErr) {
          console.error("Error marking failed run during initialization:", logErr);
