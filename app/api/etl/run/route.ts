@@ -363,6 +363,7 @@ async function executeEtlPipeline(
   const completedAt = () => new Date().toISOString();
   let rowsProcessed = 0;
   const pipelineStartedAt = Date.now();
+  const supabaseService = createServiceRoleClient();
   const joinObjForTimeout = (body as any)?.join;
   const joinsCountForTimeout = Array.isArray(joinObjForTimeout?.joins) ? joinObjForTimeout.joins.length : 0;
   const hasAnyJoin = !!joinObjForTimeout;
@@ -744,10 +745,10 @@ async function executeEtlPipeline(
           connId: string,
           filter?: { table?: string; columns?: string[]; conditions?: FilterCondition[] }
         ) => {
-          const { data: c } = await supabaseAdmin.from("connections").select("*").eq("id", connId).single();
+          const { data: c } = await supabaseService.from("connections").select("*").eq("id", connId).single();
           if (!c) throw new Error(`Conexión ${connId} no encontrada.`);
           if (c.type === "excel_file") {
-            const { data: meta } = await supabaseAdmin.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", connId).single();
+            const { data: meta } = await supabaseService.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", connId).single();
             if (!meta?.physical_table_name) throw new Error(`Sin tabla física para conexión Excel ${connId}.`);
             return { table: `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`, conn: c, type: "excel" };
           }
@@ -830,9 +831,8 @@ async function executeEtlPipeline(
       }
 
       const joinObj: any = (body as any).join;
-      const isJoin = !!joinObj;
+      const isJoin = !!joinObj && typeof joinObj === "object";
       if (isJoin && Array.isArray(joinObj.joins)) {
-        // Defensivo: algunos ETL legacy pueden persistir joins nulos/incompletos.
         const providedJoinsCount = joinObj.joins.length;
         joinObj.joins = joinObj.joins.filter(
           (jn: unknown) => !!jn && typeof jn === "object"
@@ -842,6 +842,15 @@ async function executeEtlPipeline(
             "JOIN estrella inválido: se detectaron joins vacíos o corruptos. Edita el ETL y vuelve a guardarlo.",
             400
           );
+        }
+        for (let idx = 0; idx < joinObj.joins.length; idx++) {
+          const jn = joinObj.joins[idx];
+          if (!jn || typeof jn !== "object") {
+            throw createHttpError(`Join ${idx}: configuración inválida (elemento no es un objeto).`, 400);
+          }
+          if (!Object.prototype.hasOwnProperty.call(jn, "secondaryConnectionId") || jn.secondaryConnectionId == null || String(jn.secondaryConnectionId).trim() === "") {
+            throw createHttpError(`Join ${idx}: secondaryConnectionId es obligatorio (valor actual: ${JSON.stringify(jn.secondaryConnectionId)}).`, 400);
+          }
         }
       }
       const isStarJoin = isJoin && !!joinObj.primaryConnectionId && Array.isArray(joinObj.joins);
@@ -883,7 +892,7 @@ async function executeEtlPipeline(
       
       if (!primaryConnId) throw createHttpError("ID de conexión primario no encontrado.", 400);
 
-      const { data: conn } = await supabaseAdmin
+      const { data: conn } = await supabaseService
         .from("connections")
         .select("*")
         .eq("id", String(primaryConnId))
@@ -1053,8 +1062,8 @@ async function executeEtlPipeline(
             return;
           }
           const leftTable = isStar ? (joinObj.primaryTable || (body!.filter?.table || "").trim()) : (joinObj.leftTable || "").trim();
-          const rightTable = isStar ? (joinObj.joins![0] as any).secondaryTable : (joinObj.rightTable || "").trim();
-          const jc = isStar ? (joinObj.joins![0] as any) : (joinObj.joinConditions?.[0] || {});
+          const rightTable = isStar ? (joinObj.joins?.[0] as any)?.secondaryTable ?? "" : (joinObj.rightTable || "").trim();
+          const jc = isStar ? (joinObj.joins?.[0] as any) ?? {} : (joinObj.joinConditions?.[0] || {});
           const joinConditionPairsFb: Array<{ primaryColumn: string; secondaryColumn: string }> = isStar
             ? ((jc.conditions && jc.conditions.length > 0)
                 ? jc.conditions
@@ -1075,11 +1084,11 @@ async function executeEtlPipeline(
           const leftCol = leftColsFb[0] ?? "";
           const rightCol = rightColsFb[0] ?? "";
           const joinType = (jc.joinType || "INNER").toString().toUpperCase();
-          const secondaryConnId = isStar ? (joinObj.joins![0] as any).secondaryConnectionId : joinObj.secondaryConnectionId;
+          const secondaryConnId = isStar ? (joinObj.joins?.[0] as any)?.secondaryConnectionId : joinObj.secondaryConnectionId;
           if (!leftTable || !rightTable || leftColsFb.length === 0 || rightColsFb.length !== leftColsFb.length || !secondaryConnId)
             throw new Error("JOIN con Firebird requiere tabla izquierda, tabla derecha, al menos un par de columnas de enlace y conexión secundaria.");
 
-          const { data: conn2 } = await supabaseAdmin.from("connections").select("*").eq("id", secondaryConnId).single();
+          const { data: conn2 } = await supabaseService.from("connections").select("*").eq("id", secondaryConnId).single();
           if (!conn2) throw new Error(`Conexión secundaria ${secondaryConnId} no encontrada.`);
 
           const selectedCols = (body!.filter?.columns || []) as string[];
@@ -1494,12 +1503,12 @@ async function executeEtlPipeline(
       // JOIN entre dos conexiones distintas (cross-DB): ejecutar en memoria
       const secondaryConnIdForCrossDb = isStarJoin ? (joinObj.joins?.[0] as any)?.secondaryConnectionId : joinObj.secondaryConnectionId;
       if (isJoin && secondaryConnIdForCrossDb && String(primaryConnId) !== String(secondaryConnIdForCrossDb)) {
-        const { data: conn2 } = await supabaseAdmin.from("connections").select("*").eq("id", secondaryConnIdForCrossDb).single();
+        const { data: conn2 } = await supabaseService.from("connections").select("*").eq("id", secondaryConnIdForCrossDb).single();
         if (!conn2) throw new Error(`Conexión secundaria ${secondaryConnIdForCrossDb} no encontrada.`);
         const isStar = isStarJoin && Array.isArray(joinObj.joins) && joinObj.joins.length > 0;
         const leftTable = isStar ? (joinObj.primaryTable || (body!.filter?.table || "").trim()) : (joinObj.leftTable || "").trim();
-        const rightTable = isStar ? (joinObj.joins![0] as any).secondaryTable : (joinObj.rightTable || "").trim();
-        const jc = isStar ? (joinObj.joins![0] as any) : (joinObj.joinConditions?.[0] || {});
+        const rightTable = isStar ? (joinObj.joins?.[0] as any)?.secondaryTable ?? "" : (joinObj.rightTable || "").trim();
+        const jc = isStar ? (joinObj.joins?.[0] as any) ?? {} : (joinObj.joinConditions?.[0] || {});
         const joinConditionPairs: Array<{ primaryColumn: string; secondaryColumn: string }> = isStar
           ? ((jc.conditions && jc.conditions.length > 0)
               ? jc.conditions
@@ -1558,7 +1567,7 @@ async function executeEtlPipeline(
           if (connType === "excel_file") {
             const dbUrl = process.env.SUPABASE_DB_URL;
             if (!dbUrl) throw new Error("SUPABASE_DB_URL no disponible para JOIN con Excel.");
-            const { data: meta } = await supabaseAdmin
+            const { data: meta } = await supabaseService
               .from("data_tables")
               .select("physical_schema_name, physical_table_name")
               .eq("connection_id", String(connection.id))
@@ -1720,7 +1729,7 @@ async function executeEtlPipeline(
               });
                if (conn.type === "excel_file") {
                  const resolvePhysical = async (connId: string | number) => {
-                    const { data: meta } = await supabaseAdmin
+                    const { data: meta } = await supabaseService
                       .from("data_tables")
                       .select("physical_schema_name, physical_table_name")
                       .eq("connection_id", String(connId))
@@ -1778,7 +1787,7 @@ async function executeEtlPipeline(
                }
            } else {
               // Star Join
-               const { data: pConn } = await supabaseAdmin.from("connections").select("*").eq("id", String(star.primaryConnectionId)).single();
+               const { data: pConn } = await supabaseService.from("connections").select("*").eq("id", String(star.primaryConnectionId)).single();
                const dbType = (pConn?.type || "postgres").toLowerCase();
                const selectedCols: string[] = body!.filter?.columns || [];
                const primarySelected = selectedCols.filter(c => c.startsWith("primary.")).map(c => c.slice("primary.".length));
@@ -1797,7 +1806,7 @@ async function executeEtlPipeline(
                   await internalClient.connect();
                   try {
                      const resolvePhysical = async (connId: string | number) => {
-                        const { data: meta } = await supabaseAdmin.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", String(connId)).single();
+                        const { data: meta } = await supabaseService.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", String(connId)).single();
                         if (!meta) throw new Error("Metadatos no encontrados");
                         return `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
                      };
@@ -1946,7 +1955,7 @@ async function executeEtlPipeline(
            // Simple Table Select
            let tableToQuery = body!.filter?.table;
            if (conn.type === "excel_file") {
-              const { data: meta } = await supabaseAdmin.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", conn.id).single();
+              const { data: meta } = await supabaseService.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", conn.id).single();
               if (!meta || !meta.physical_table_name) throw new Error("Metadatos Excel no encontrados");
               tableToQuery = `${meta.physical_schema_name || "excel_imports"}.${meta.physical_table_name}`;
            }

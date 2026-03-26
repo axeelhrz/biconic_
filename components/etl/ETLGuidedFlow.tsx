@@ -1041,11 +1041,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         unionAll,
       };
     } else if (useJoin) {
-      const effectiveJoinItems = joinItems.length > 0
+      const rawJoinItems = joinItems.length > 0
         ? joinItems
         : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
           ? [{ id: "join_0", connectionId: joinSecondaryConnectionId, table: joinSecondaryTable, joinType, conditions: [{ leftColumn: joinLeftColumn, rightColumn: joinRightColumn }], rightColumns: joinRightColumns }]
           : [];
+      const effectiveJoinItems = rawJoinItems.filter(
+        (j) => j.connectionId != null && String(j.connectionId).trim() !== "" && j.table != null && String(j.table).trim() !== ""
+      );
       if (effectiveJoinItems.length > 0) {
         body.connectionId = connectionId;
         body.filter = {

@@ -73,29 +73,31 @@ export async function POST(
     const connIdRaw = guidedConfig.connectionId ?? union?.left?.connectionId ?? join?.primaryConnectionId;
     const connectionId = toStr(connIdRaw) ?? undefined;
 
-    // Deep-clone join/union so we never mutate the stored layout and preserve full structure
     let normalizedJoin: Record<string, unknown> | undefined;
     if (guidedConfig.join && typeof guidedConfig.join === "object") {
       const j = JSON.parse(JSON.stringify(guidedConfig.join)) as Record<string, unknown>;
       if (j.primaryConnectionId != null) j.primaryConnectionId = toStr(j.primaryConnectionId);
+      if (j.secondaryConnectionId != null) j.secondaryConnectionId = toStr(j.secondaryConnectionId);
       if (Array.isArray(j.joins)) {
         const rawJoins = j.joins;
         const safeJoins = rawJoins.filter(
           (jn): jn is Record<string, unknown> => !!jn && typeof jn === "object"
         );
-        j.joins = safeJoins.map((jn: Record<string, unknown>) => ({
-          ...jn,
-          secondaryConnectionId:
-            jn.secondaryConnectionId != null
-              ? toStr(jn.secondaryConnectionId)
-              : jn.secondaryConnectionId,
-        }));
-        if (rawJoins.length !== safeJoins.length) {
+        j.joins = safeJoins
+          .filter((jn: Record<string, unknown>) => {
+            const secId = jn.secondaryConnectionId;
+            return secId != null && String(secId).trim() !== "";
+          })
+          .map((jn: Record<string, unknown>) => ({
+            ...jn,
+            secondaryConnectionId: toStr(jn.secondaryConnectionId),
+          }));
+        if (j.joins.length === 0) {
           return NextResponse.json(
             {
               ok: false,
               error:
-                "Configuración JOIN inválida: se detectaron entradas vacías en joins. Edita el ETL y vuelve a guardarlo.",
+                "Configuración JOIN inválida: ningún join tiene secondaryConnectionId válido. Edita el ETL y vuelve a guardarlo.",
             },
             { status: 400 }
           );

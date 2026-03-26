@@ -77,12 +77,23 @@ async function runScheduled() {
   let triggered = 0;
 
   for (const { id, layout, guidedConfig } of due) {
+    let sanitizedJoin = guidedConfig.join as Record<string, unknown> | undefined;
+    if (sanitizedJoin && typeof sanitizedJoin === "object" && Array.isArray(sanitizedJoin.joins)) {
+      const validJoins = (sanitizedJoin.joins as Record<string, unknown>[]).filter(
+        (jn) => !!jn && typeof jn === "object" && jn.secondaryConnectionId != null && String(jn.secondaryConnectionId).trim() !== ""
+      );
+      if (validJoins.length === 0) {
+        sanitizedJoin = undefined;
+      } else {
+        sanitizedJoin = { ...sanitizedJoin, joins: validJoins };
+      }
+    }
     const body = {
       etlId: id,
       connectionId: guidedConfig.connectionId,
       filter: guidedConfig.filter,
       union: guidedConfig.union,
-      join: guidedConfig.join,
+      ...(sanitizedJoin ? { join: sanitizedJoin } : {}),
       clean: guidedConfig.clean,
       end: guidedConfig.end,
       schedule: guidedConfig.schedule,
