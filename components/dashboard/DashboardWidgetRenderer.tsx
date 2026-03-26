@@ -18,7 +18,18 @@ import {
 } from "chart.js";
 import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Card } from "@/components/ui/card";
-import { buildChartOptions, buildPieDoughnutLegendShared, formatValue, getValueFormatter, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import {
+  buildChartOptions,
+  buildPieDoughnutLegendShared,
+  createCategoryTickCallback,
+  createDataLabelDisplay,
+  createLegendLabelFilter,
+  formatValue,
+  getValueFormatter,
+  normalizeLabelVisibilityMode,
+  type ChartLabelVisibilityMode,
+  type ChartStyleConfig,
+} from "@/lib/dashboard/chartOptions";
 import { formatDateByGranularity, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { DashboardTextWidget } from "./DashboardTextWidget";
@@ -250,6 +261,7 @@ export function DashboardWidgetRenderer({
     chartAxisStep?: string | number;
     chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
     showDataLabels?: boolean;
+    labelVisibilityMode?: ChartLabelVisibilityMode;
   } | undefined;
   const comboSyncAxes = isCombo && aggConfig?.chartComboSyncAxes === true;
 
@@ -288,6 +300,7 @@ export function DashboardWidgetRenderer({
       chartScaleMax?: string | number;
       chartAxisStep?: string | number;
       chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
+      labelVisibilityMode?: ChartLabelVisibilityMode;
     } | undefined;
     const style: ChartStyleConfig | undefined = {
       ...(widget.chartStyle as ChartStyleConfig | undefined),
@@ -298,10 +311,19 @@ export function DashboardWidgetRenderer({
       }),
     };
     const labelMode = widget.labelDisplayMode ?? "percent";
-    const type = chartType === "horizontalBar" ? "horizontalBar" : chartType === "area" ? "line" : chartType === "combo" ? "bar" : (chartType as "bar" | "line" | "pie" | "doughnut");
+    const type = chartType === "horizontalBar"
+      ? "horizontalBar"
+      : chartType === "area"
+        ? "line"
+        : chartType === "combo"
+          ? "bar"
+          : chartType === "scatter"
+            ? "line"
+            : (chartType as "bar" | "line" | "pie" | "doughnut");
     const metricStyles = widget.chartMetricStyles as (ChartStyleConfig | undefined)[] | undefined;
     const usePerMetricFormat = Array.isArray(metricStyles) && metricStyles.length > 0;
     const optionsBase = getChartOptionsBase(darkChartTheme);
+    const labelVisibilityMode = normalizeLabelVisibilityMode(agg?.labelVisibilityMode);
     const showDataLabels =
       typeof agg?.showDataLabels === "boolean"
         ? agg.showDataLabels
@@ -343,13 +365,32 @@ export function DashboardWidgetRenderer({
       const base = buildChartOptions(type, style, labelMode) as Record<string, unknown>;
       const baseDatalabels = (base.plugins as { datalabels?: Record<string, unknown> })?.datalabels ?? {};
       const legendColor = darkChartTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
+      const pieLegend = buildPieDoughnutLegendShared(chartConfig ?? undefined, legendColor) as Record<string, unknown>;
+      const pieLegendLabels = (pieLegend.labels as Record<string, unknown> | undefined) ?? {};
+      const pieLegendFilter = createLegendLabelFilter({
+        mode: labelVisibilityMode,
+        labels: chartConfig?.labels,
+        datasets: chartConfig?.datasets,
+      });
       const plugins = {
         ...optionsBase.plugins,
         ...(base.plugins as object),
-        legend: buildPieDoughnutLegendShared(chartConfig ?? undefined, legendColor),
+        legend: {
+          ...pieLegend,
+          labels: {
+            ...pieLegendLabels,
+            ...(pieLegendFilter ? { filter: pieLegendFilter } : {}),
+          },
+        },
         datalabels: {
           ...baseDatalabels,
-          ...(showDataLabels !== undefined ? { display: showDataLabels } : {}),
+          display:
+            showDataLabels === false
+              ? false
+              : createDataLabelDisplay({
+                  mode: labelVisibilityMode,
+                  datasets: chartConfig?.datasets,
+                }),
           ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
         },
       };
@@ -359,7 +400,7 @@ export function DashboardWidgetRenderer({
         plugins,
       };
     }
-    if (type === "bar" || type === "horizontalBar" || type === "line" || chartType === "combo") {
+    if (type === "bar" || type === "horizontalBar" || type === "line" || chartType === "combo" || chartType === "scatter") {
       const built = buildChartOptions(type, style, "value") as Record<string, unknown>;
       const builtPlugins = built.plugins as Record<string, unknown> | undefined;
       const builtDatalabels = builtPlugins?.datalabels as Record<string, unknown> | undefined ?? {};
@@ -477,51 +518,83 @@ export function DashboardWidgetRenderer({
               }
             : undefined;
       const builtScales = (built.scales as Record<string, unknown> | undefined) ?? {};
-      const primaryScaleKey = type === "horizontalBar" ? "x" : "y";
-      const xScale = (builtScales.x as Record<string, unknown> | undefined) ?? {};
-      const xTicks = (xScale.ticks as Record<string, unknown> | undefined) ?? {};
-      const primaryScale = (builtScales[primaryScaleKey] as Record<string, unknown> | undefined) ?? {};
-      const primaryTicks = (primaryScale.ticks as Record<string, unknown> | undefined) ?? {};
+      const categoryScaleKey = type === "horizontalBar" ? "y" : "x";
+      const valueScaleKey = type === "horizontalBar" ? "x" : "y";
+      const categoryScale = (builtScales[categoryScaleKey] as Record<string, unknown> | undefined) ?? {};
+      const categoryTicks = (categoryScale.ticks as Record<string, unknown> | undefined) ?? {};
+      const valueScale = (builtScales[valueScaleKey] as Record<string, unknown> | undefined) ?? {};
+      const valueTicks = (valueScale.ticks as Record<string, unknown> | undefined) ?? {};
       const primaryMetricScale = resolveMetricScale(0);
-      const patchedXScale = {
-        ...xScale,
-        ...(primaryScaleKey === "x" && primaryMetricScale.min != null ? { min: primaryMetricScale.min } : {}),
-        ...(primaryScaleKey === "x" && primaryMetricScale.max != null ? { max: primaryMetricScale.max } : {}),
+      const patchedCategoryScale = {
+        ...categoryScale,
         ticks: {
-          ...xTicks,
-          ...(primaryScaleKey === "x" && primaryMetricScale.step != null ? { stepSize: primaryMetricScale.step } : {}),
-          callback: (value: unknown, index: number) => {
-            const source =
-              Array.isArray(chartConfig?.labels) && chartConfig.labels[index] != null
-                ? chartConfig.labels[index]
-                : value;
-            return formatTemporalLabel(source);
-          },
+          ...categoryTicks,
+          ...(labelVisibilityMode === "all" ? { autoSkip: false } : {}),
+          ...(labelVisibilityMode === "auto" ? { maxTicksLimit: 8 } : {}),
+          ...(labelVisibilityMode === "min_max" ? { autoSkip: false } : {}),
+          callback: createCategoryTickCallback({
+            labels: chartConfig?.labels,
+            mode: labelVisibilityMode,
+            formatter: (raw: unknown) => formatTemporalLabel(raw),
+          }),
         },
       };
       const patchedScales = {
         ...builtScales,
-        x: patchedXScale,
-        ...(primaryScaleKey === "y"
+        [categoryScaleKey]: patchedCategoryScale,
+        ...(valueScaleKey === "x"
           ? {
-              y: {
-                ...primaryScale,
+              x: {
+                ...valueScale,
                 ...(primaryMetricScale.min != null ? { min: primaryMetricScale.min } : {}),
                 ...(primaryMetricScale.max != null ? { max: primaryMetricScale.max } : {}),
                 ticks: {
-                  ...primaryTicks,
+                  ...valueTicks,
+                  ...(primaryMetricScale.step != null ? { stepSize: primaryMetricScale.step } : {}),
+                },
+              },
+            }
+          : {}),
+        ...(valueScaleKey === "y"
+          ? {
+              y: {
+                ...valueScale,
+                ...(primaryMetricScale.min != null ? { min: primaryMetricScale.min } : {}),
+                ...(primaryMetricScale.max != null ? { max: primaryMetricScale.max } : {}),
+                ticks: {
+                  ...valueTicks,
                   ...(primaryMetricScale.step != null ? { stepSize: primaryMetricScale.step } : {}),
                 },
               },
             }
           : {}),
       };
+      const legendFilter = createLegendLabelFilter({
+        mode: labelVisibilityMode,
+        labels: chartConfig?.labels,
+        datasets: chartConfig?.datasets,
+      });
+      const builtLegend = (builtPlugins?.legend as Record<string, unknown> | undefined) ?? {};
+      const builtLegendLabels = (builtLegend.labels as Record<string, unknown> | undefined) ?? {};
       const plugins = {
         ...optionsBase.plugins,
         ...builtPlugins,
+        legend: {
+          ...builtLegend,
+          labels: {
+            ...builtLegendLabels,
+            ...(legendFilter ? { filter: legendFilter } : {}),
+          },
+        },
         datalabels: {
           ...builtDatalabels,
-          ...(showDataLabels !== undefined ? { display: showDataLabels } : {}),
+          display:
+            showDataLabels === false
+              ? false
+              : createDataLabelDisplay({
+                  mode: labelVisibilityMode,
+                  datasets: chartConfig?.datasets,
+                }),
           ...(datalabelFormatter != null && { formatter: datalabelFormatter }),
           ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
         },
@@ -539,6 +612,9 @@ export function DashboardWidgetRenderer({
           scales: {
             ...comboScales,
             x: (patchedScales.x as Record<string, unknown> | undefined) ?? (comboScales as Record<string, unknown>).x,
+            ...(categoryScaleKey === "y" && {
+              y: (patchedScales.y as Record<string, unknown> | undefined) ?? (comboScales as Record<string, unknown>).y,
+            }),
           },
         };
       }

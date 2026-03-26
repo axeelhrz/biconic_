@@ -113,6 +113,12 @@ const CHART_TYPES: { value: string; label: string; icon: ComponentType<{ classNa
   { value: "map", label: "Mapa", icon: MapPin, description: "Visualización geográfica (requiere dimensión de ubicación)" },
 ];
 
+const LABEL_VISIBILITY_OPTIONS: Array<{ value: "all" | "auto" | "min_max"; label: string }> = [
+  { value: "all", label: "Todas" },
+  { value: "auto", label: "Algunas (automático)" },
+  { value: "min_max", label: "Máximos y mínimos" },
+];
+
 // Reserved for formula quick-insert UI
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _FORMULA_QUICKS = [
@@ -483,7 +489,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [transformShowDelta, setTransformShowDelta] = useState(true);
   const [transformShowDeltaPct, setTransformShowDeltaPct] = useState(true);
   const [transformShowAccum, setTransformShowAccum] = useState(true);
-  const [showDataLabels, setShowDataLabels] = useState(false);
+  const [showDataLabels, setShowDataLabels] = useState(true);
+  const [labelVisibilityMode, setLabelVisibilityMode] = useState<"all" | "auto" | "min_max">("auto");
   const [chartColorScheme, setChartColorScheme] = useState("auto");
   const [chartValueType, setChartValueType] = useState<"number" | "currency" | "percent">("number");
   const [chartValueScale, setChartValueScale] = useState<"none" | "K" | "M" | "BI">("none");
@@ -1277,6 +1284,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setTransformShowDelta(true);
     setTransformShowDeltaPct(true);
     setTransformShowAccum(true);
+    setShowDataLabels(true);
+    setLabelVisibilityMode("auto");
     setPreviewData(null);
     if (!hideDatasetTab) {
       setGrainOption("");
@@ -1361,6 +1370,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartGridColor(typeof cfg.chartGridColor === "string" ? cfg.chartGridColor : "");
       setChartScalePerMetric(cfg.chartScalePerMetric && typeof cfg.chartScalePerMetric === "object" ? cfg.chartScalePerMetric : {});
       setShowDataLabels(!!cfg.showDataLabels);
+      setLabelVisibilityMode(
+        cfg.labelVisibilityMode === "all" || cfg.labelVisibilityMode === "min_max" || cfg.labelVisibilityMode === "auto"
+          ? cfg.labelVisibilityMode
+          : "auto"
+      );
       const compareFromConfig =
         cfg.transformCompare && ["none", "mom", "yoy", "fixed"].includes(cfg.transformCompare)
           ? cfg.transformCompare
@@ -1437,7 +1451,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartSeriesColors({});
       setChartLabelOverrides({});
       setChartMetricFormats({});
-      setShowDataLabels(false);
+      setShowDataLabels(true);
+      setLabelVisibilityMode("auto");
       setTransformCompare("none");
       setTransformCompareFixedValue("");
       setTransformShowDelta(true);
@@ -1808,6 +1823,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartSortBy,
         chartSortByMetric,
         chartAxisOrder,
+        labelVisibilityMode,
       },
     };
   }, [
@@ -1828,6 +1844,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartSortBy,
     chartSortByMetric,
     chartAxisOrder,
+    labelVisibilityMode,
   ]);
 
   /** Filas de vista previa con orden y Top N aplicados desde el pipeline compartido. */
@@ -1906,6 +1923,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartAxisStep,
         chartScalePerMetric,
         showDataLabels,
+        labelVisibilityMode,
         chartComboSyncAxes,
       },
       chartStyle: toChartStyleConfig({
@@ -1951,6 +1969,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartAxisStep,
     chartScalePerMetric,
     showDataLabels,
+    labelVisibilityMode,
     chartComboSyncAxes,
     timeColumn,
     analysisGranularity,
@@ -2342,6 +2361,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartGridColor: chartGridColor.trim() || undefined,
       chartScalePerMetric: Object.keys(chartScalePerMetric).length > 0 ? chartScalePerMetric : undefined,
       showDataLabels: showDataLabels || undefined,
+      labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
       interCrossFilter: interCrossFilter === false ? false : undefined,
       interCrossFilterFields: interCrossFilterFields.length > 0 ? interCrossFilterFields : undefined,
       interDrilldown: interDrilldown || undefined,
@@ -2613,6 +2633,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartGridColor: chartGridColor.trim() || undefined,
       chartScalePerMetric: Object.keys(chartScalePerMetric).length > 0 ? chartScalePerMetric : undefined,
       showDataLabels: showDataLabels || undefined,
+      labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
       interCrossFilter: interCrossFilter === false ? false : undefined,
       interCrossFilterFields: interCrossFilterFields.length > 0 ? interCrossFilterFields : undefined,
       interDrilldown: interDrilldown || undefined,
@@ -2697,6 +2718,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
       chartSeriesField: chartSeriesField || undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
+      labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
       chartValueType: chartValueType !== "number" ? chartValueType : undefined,
       chartValueScale: chartValueScale !== "none" ? chartValueScale : undefined,
       chartCurrencySymbol: chartValueType === "currency" ? chartCurrencySymbol : undefined,
@@ -4885,10 +4907,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                             <input type="checkbox" checked={chartThousandSep} onChange={(e) => setChartThousandSep(e.target.checked)} className="rounded" />
                             Separador de miles
                           </label>
-                          <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
-                            <input type="checkbox" checked={showDataLabels} onChange={(e) => setShowDataLabels(e.target.checked)} className="rounded" />
-                            Mostrar etiquetas en gráfico
-                          </label>
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Visibilidad de etiquetas</Label>
+                            <select
+                              value={labelVisibilityMode}
+                              onChange={(e) => {
+                                setLabelVisibilityMode(e.target.value as "all" | "auto" | "min_max");
+                                setShowDataLabels(true);
+                              }}
+                              className="h-8 rounded-lg border px-2 text-xs"
+                              style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                            >
+                              {LABEL_VISIBILITY_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
                         <p className="text-xs mt-2" style={{ color: "var(--platform-fg-muted)" }}>Vista previa: {formatNumber(1234567.89)}</p>
                       </div>
@@ -4937,10 +4971,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                             );
                           })}
                         </div>
-                        <label className="flex items-center gap-2 text-xs cursor-pointer mt-3" style={{ color: "var(--platform-fg)" }}>
-                          <input type="checkbox" checked={showDataLabels} onChange={(e) => setShowDataLabels(e.target.checked)} className="rounded" />
-                          Mostrar etiquetas en gráfico
-                        </label>
+                        <div className="flex items-center gap-2 mt-3">
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Visibilidad de etiquetas</Label>
+                          <select
+                            value={labelVisibilityMode}
+                            onChange={(e) => {
+                              setLabelVisibilityMode(e.target.value as "all" | "auto" | "min_max");
+                              setShowDataLabels(true);
+                            }}
+                            className="h-8 rounded-lg border px-2 text-xs"
+                            style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          >
+                            {LABEL_VISIBILITY_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     )}
 

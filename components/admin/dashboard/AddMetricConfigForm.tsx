@@ -70,6 +70,7 @@ export type AggregationConfigEdit = {
   chartColorScheme?: string;
   chartSeriesColors?: Record<string, string>;
   showDataLabels?: boolean;
+  labelVisibilityMode?: "all" | "auto" | "min_max";
   /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
   chartLabelOverrides?: Record<string, string>;
   /** Formato por métrica (clave = chartYAxes key). Si existe, se usa en lugar del formato global para esa serie. */
@@ -139,6 +140,7 @@ export type SavedMetricAggregationConfig = {
   chartColorScheme?: string;
   chartSeriesColors?: Record<string, string>;
   showDataLabels?: boolean;
+  labelVisibilityMode?: "all" | "auto" | "min_max";
   chartLabelOverrides?: Record<string, string>;
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   chartComboSyncAxes?: boolean;
@@ -193,6 +195,11 @@ const AGG_FUNCS = [
 ];
 
 const OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE", "IN", "BETWEEN", "MONTH", "YEAR", "DAY", "QUARTER", "SEMESTER", "IS", "IS NOT"];
+const LABEL_VISIBILITY_OPTIONS: Array<{ value: "all" | "auto" | "min_max"; label: string }> = [
+  { value: "all", label: "Todas" },
+  { value: "auto", label: "Algunas (automático)" },
+  { value: "min_max", label: "Máximos y mínimos" },
+];
 
 type AddMetricConfigFormProps = {
   initialValues: AddMetricFormConfig;
@@ -291,6 +298,7 @@ export function AddMetricConfigForm({
         chartColorScheme: cfg.chartColorScheme,
         chartSeriesColors: cfg.chartSeriesColors,
         showDataLabels: cfg.showDataLabels,
+        labelVisibilityMode: cfg.labelVisibilityMode,
         chartLabelOverrides: cfg.chartLabelOverrides,
         chartMetricFormats: cfg.chartMetricFormats,
         chartComboSyncAxes: (cfg as { chartComboSyncAxes?: boolean }).chartComboSyncAxes,
@@ -433,6 +441,20 @@ export function AddMetricConfigForm({
             >
               <option value="percent">Porcentaje</option>
               <option value="value">Valor</option>
+            </select>
+          </div>
+        )}
+        {CHART_TYPES_FOR_LABELS.includes(form.type) && (
+          <div>
+            <Label className="add-metric-label">Visibilidad de etiquetas</Label>
+            <select
+              value={agg.labelVisibilityMode ?? "auto"}
+              onChange={(e) => updateAgg({ labelVisibilityMode: e.target.value as "all" | "auto" | "min_max" })}
+              className="add-metric-select mt-1"
+            >
+              {LABEL_VISIBILITY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
             </select>
           </div>
         )}

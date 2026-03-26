@@ -135,6 +135,156 @@ export function getValueFormatter(
   };
 }
 
+export type ChartLabelVisibilityMode = "all" | "auto" | "min_max";
+
+const DEFAULT_AUTO_LABEL_LIMIT = 8;
+
+function toFiniteNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function resolveAutoLimit(limit?: number): number {
+  const n = Number(limit);
+  if (!Number.isFinite(n) || n < 2) return DEFAULT_AUTO_LABEL_LIMIT;
+  return Math.floor(n);
+}
+
+export function normalizeLabelVisibilityMode(mode?: unknown): ChartLabelVisibilityMode {
+  if (mode === "all" || mode === "auto" || mode === "min_max") return mode;
+  return "auto";
+}
+
+export function getSampledIndices(total: number, maxVisible?: number): Set<number> {
+  const out = new Set<number>();
+  if (total <= 0) return out;
+  const limit = resolveAutoLimit(maxVisible);
+  if (total <= limit) {
+    for (let i = 0; i < total; i += 1) out.add(i);
+    return out;
+  }
+  const step = (total - 1) / (limit - 1);
+  for (let slot = 0; slot < limit; slot += 1) {
+    out.add(Math.round(slot * step));
+  }
+  out.add(0);
+  out.add(total - 1);
+  return out;
+}
+
+export function getMinMaxValueIndices(values: unknown[]): Set<number> {
+  const out = new Set<number>();
+  if (!Array.isArray(values) || values.length === 0) return out;
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  const numericAt: Array<{ index: number; value: number }> = [];
+  values.forEach((value, index) => {
+    const n = toFiniteNumber(value);
+    if (n == null) return;
+    numericAt.push({ index, value: n });
+    if (n < min) min = n;
+    if (n > max) max = n;
+  });
+  if (numericAt.length === 0) return out;
+  numericAt.forEach(({ index, value }) => {
+    if (value === min || value === max) out.add(index);
+  });
+  return out;
+}
+
+export function getVisibleIndices(params: {
+  total: number;
+  mode?: ChartLabelVisibilityMode;
+  values?: unknown[];
+  maxVisible?: number;
+}): Set<number> {
+  const { total, values, maxVisible } = params;
+  const mode = normalizeLabelVisibilityMode(params.mode);
+  if (total <= 0) return new Set<number>();
+  if (mode === "all") {
+    const all = new Set<number>();
+    for (let i = 0; i < total; i += 1) all.add(i);
+    return all;
+  }
+  if (mode === "min_max") {
+    const minMax = getMinMaxValueIndices(values ?? []);
+    if (minMax.size > 0) return minMax;
+    return new Set<number>([0, total - 1]);
+  }
+  return getSampledIndices(total, maxVisible);
+}
+
+export function createCategoryTickCallback(params: {
+  labels?: unknown[];
+  mode?: ChartLabelVisibilityMode;
+  maxVisible?: number;
+  formatter?: (raw: unknown, index: number) => string;
+}): (value: unknown, index: number) => string {
+  const labels = Array.isArray(params.labels) ? params.labels : [];
+  const visible = getVisibleIndices({
+    total: labels.length,
+    mode: params.mode,
+    values: labels,
+    maxVisible: params.maxVisible,
+  });
+  return (value: unknown, index: number) => {
+    if (labels.length > 0 && !visible.has(index)) return "";
+    const raw = labels[index] ?? value;
+    const text = params.formatter ? params.formatter(raw, index) : String(raw ?? "");
+    return text;
+  };
+}
+
+export function createDataLabelDisplay(params: {
+  mode?: ChartLabelVisibilityMode;
+  datasets?: Array<{ data?: unknown[] }>;
+  maxVisible?: number;
+}): boolean | ((ctx: { datasetIndex?: number; dataIndex?: number }) => boolean) {
+  const mode = normalizeLabelVisibilityMode(params.mode);
+  if (mode === "all") return true;
+  const datasets = Array.isArray(params.datasets) ? params.datasets : [];
+  const perDataset = datasets.map((dataset) =>
+    getVisibleIndices({
+      total: Array.isArray(dataset.data) ? dataset.data.length : 0,
+      mode,
+      values: Array.isArray(dataset.data) ? dataset.data : [],
+      maxVisible: params.maxVisible,
+    })
+  );
+  return (ctx: { datasetIndex?: number; dataIndex?: number }) => {
+    const datasetIndex = ctx?.datasetIndex ?? 0;
+    const dataIndex = ctx?.dataIndex ?? -1;
+    const visible = perDataset[datasetIndex];
+    if (!visible || dataIndex < 0) return false;
+    return visible.has(dataIndex);
+  };
+}
+
+export function createLegendLabelFilter(params: {
+  mode?: ChartLabelVisibilityMode;
+  labels?: unknown[];
+  datasets?: Array<{ data?: unknown[] }>;
+  maxVisible?: number;
+}): ((item: { index?: number; datasetIndex?: number }) => boolean) | undefined {
+  const mode = normalizeLabelVisibilityMode(params.mode);
+  if (mode === "all") return undefined;
+  const labels = Array.isArray(params.labels) ? params.labels : [];
+  const datasets = Array.isArray(params.datasets) ? params.datasets : [];
+  const firstDatasetValues = Array.isArray(datasets[0]?.data) ? datasets[0]!.data : [];
+  const isCategoryLegend = labels.length > 0 && datasets.length <= 1 && firstDatasetValues.length === labels.length;
+  const total = isCategoryLegend ? labels.length : datasets.length;
+  const visible = getVisibleIndices({
+    total,
+    mode,
+    values: isCategoryLegend ? firstDatasetValues : undefined,
+    maxVisible: params.maxVisible,
+  });
+  return (item: { index?: number; datasetIndex?: number }) => {
+    const idx = typeof item.index === "number" ? item.index : typeof item.datasetIndex === "number" ? item.datasetIndex : -1;
+    return idx >= 0 && visible.has(idx);
+  };
+}
+
 export function buildChartOptions(
   type: "bar" | "line" | "pie" | "doughnut" | "horizontalBar",
   style?: ChartStyleConfig | null,

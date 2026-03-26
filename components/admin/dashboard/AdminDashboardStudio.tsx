@@ -116,6 +116,7 @@ type AggregationConfig = {
   chartRankingMetric?: string;
   chartColorScheme?: string;
   showDataLabels?: boolean;
+  labelVisibilityMode?: "all" | "auto" | "min_max";
   chartAxisOrder?: string;
   chartScaleMode?: string;
   chartScaleMin?: string | number;

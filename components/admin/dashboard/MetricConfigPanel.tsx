@@ -65,6 +65,7 @@ export type AggregationConfigEdit = {
   chartRankingMetric?: string;
   chartColorScheme?: string;
   showDataLabels?: boolean;
+  labelVisibilityMode?: "all" | "auto" | "min_max";
   /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
   chartLabelOverrides?: Record<string, string>;
   /** Formato por métrica (clave = chartYAxes key). */
@@ -135,6 +136,11 @@ type MetricConfigPanelProps = {
 };
 
 const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
+const LABEL_VISIBILITY_OPTIONS: Array<{ value: "all" | "auto" | "min_max"; label: string }> = [
+  { value: "all", label: "Todas" },
+  { value: "auto", label: "Algunas (automático)" },
+  { value: "min_max", label: "Máximos y mínimos" },
+];
 
 export function MetricConfigPanel({
   widget,
@@ -297,6 +303,20 @@ export function MetricConfigPanel({
             >
               <option value="percent">Porcentaje</option>
               <option value="value">Valor</option>
+            </select>
+          </div>
+        )}
+        {showLabelOverrides && (
+          <div>
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Visibilidad de etiquetas</Label>
+            <select
+              value={agg.labelVisibilityMode ?? "auto"}
+              onChange={(e) => updateAgg({ labelVisibilityMode: e.target.value as "all" | "auto" | "min_max" })}
+              className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+            >
+              {LABEL_VISIBILITY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
             </select>
           </div>
         )}

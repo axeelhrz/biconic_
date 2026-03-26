@@ -272,6 +272,7 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
     chartDecimals: cfg.chartDecimals,
     chartSeriesColors: cfg.chartSeriesColors,
     chartLabelOverrides: cfg.chartLabelOverrides,
+    labelVisibilityMode: cfg.labelVisibilityMode,
     chartMetricFormats: cfg.chartMetricFormats,
     chartComboSyncAxes: cfg.chartComboSyncAxes,
     chartGridXDisplay: cfg.chartGridXDisplay,
