@@ -248,6 +248,7 @@ export default function ConnectionForm({
     insert_data_table: "Creación de metadatos",
     process_excel_start: "Inicio de procesamiento",
     import_polling: "Seguimiento de importación",
+    resume_enqueue: "Reanudación por tramos",
     request_validation: "Validación de solicitud",
     server_config: "Configuración del servidor",
     unknown: "Desconocido",

@@ -21,6 +21,9 @@ const PROGRESS_UPDATE_INTERVAL = 2000; // Actualizar DB cada X filas
 const MAX_WARNINGS = 20;
 const CHUNK_MAX_INSERTED_ROWS = 50000;
 const CHUNK_MAX_DURATION_MS = 120000;
+const ENQUEUE_RETRY_ATTEMPTS = 2;
+const ENQUEUE_RETRY_DELAY_MS = 750;
+const ENQUEUE_REQUEST_TIMEOUT_MS = 12000;
 const IMPORT_CURSOR_KEY = "__import_cursor_v1";
 const DEBUG_INGEST_URL =
   "http://127.0.0.1:7710/ingest/20cf47c8-0473-4ba0-9564-fc0b0bf73d37";
@@ -410,6 +413,7 @@ async function processDataImport(
   let tempFilePath: string | null = null;
   let sql: any = null;
   let terminalStatus = false; // true cuando ya pusimos "completed" o "failed"
+  let resumeScheduled = false; // true cuando el siguiente tramo quedó encolado
   const runStartedAt = Date.now();
 
   const markFailed = async (message: string) => {
@@ -431,12 +435,24 @@ async function processDataImport(
       if (!value || typeof value !== "string") return null;
       const trimmed = value.trim();
       if (!trimmed) return null;
-      const withProtocol =
-        trimmed.startsWith("http://") || trimmed.startsWith("https://")
-          ? trimmed
-          : `https://${trimmed}`;
-      return withProtocol.replace(/\/$/, "");
+      try {
+        const withProtocol =
+          trimmed.startsWith("http://") || trimmed.startsWith("https://")
+            ? trimmed
+            : /^(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(trimmed)
+              ? `http://${trimmed}`
+              : `https://${trimmed}`;
+        return new URL(withProtocol).origin;
+      } catch {
+        return null;
+      }
     };
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const isLocalUrl = (url: string) =>
+      /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(url);
+    const shouldRetry = (status: number) =>
+      status === 408 || status === 425 || status === 429 || status >= 500;
+    const isProduction = process.env.NODE_ENV === "production";
 
     const baseCandidatesRaw = [
       requestOrigin,
@@ -448,39 +464,77 @@ async function processDataImport(
       "http://localhost:3000",
     ];
     const baseCandidates = Array.from(
-      new Set(baseCandidatesRaw.map(normalizeBaseUrl).filter(Boolean))
+      new Set(
+        baseCandidatesRaw
+          .map(normalizeBaseUrl)
+          .filter((value): value is string => Boolean(value))
+          .filter((value) => !isProduction || !isLocalUrl(value))
+      )
     ) as string[];
+    if (baseCandidates.length === 0) {
+      throw new StageError(
+        "resume_enqueue",
+        "No se pudo encolar la continuación del procesamiento.",
+        "No hay URLs base válidas para reanudar la importación."
+      );
+    }
     // #region agent log
     fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H1",location:"app/api/process-excel/route.ts:452",message:"enqueueNextChunk start",data:{connectionId,dataTableId,sheetToContinue,parseModeToContinue,requestOrigin,baseCandidates},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
 
     let lastErrorDetails = "Sin detalle";
     for (const baseUrl of baseCandidates) {
-      try {
-        // #region agent log
-        fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H1",location:"app/api/process-excel/route.ts:459",message:"enqueueNextChunk attempt",data:{baseUrl,sheetToContinue,parseModeToContinue},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
-        const res = await fetch(`${baseUrl}/api/process-excel`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            connectionId,
-            dataTableId,
-            parseMode: parseModeToContinue,
-            selectedSheet: sheetToContinue,
-            resumeOrigin: requestOrigin || baseUrl,
-          }),
-        });
-        if (res.ok) return;
-        lastErrorDetails = await res.text().catch(() => `HTTP ${res.status}`);
-        // #region agent log
-        fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H2",location:"app/api/process-excel/route.ts:474",message:"enqueueNextChunk non-ok response",data:{baseUrl,status:res.status,lastErrorDetailsSnippet:String(lastErrorDetails).slice(0,500)},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
-      } catch (err) {
-        lastErrorDetails = err instanceof Error ? err.message : String(err);
-        // #region agent log
-        fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H3",location:"app/api/process-excel/route.ts:479",message:"enqueueNextChunk fetch threw",data:{baseUrl,errorMessage:lastErrorDetails},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
+      for (let attempt = 1; attempt <= ENQUEUE_RETRY_ATTEMPTS; attempt++) {
+        let timeout: NodeJS.Timeout | null = null;
+        try {
+          // #region agent log
+          fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H1",location:"app/api/process-excel/route.ts:459",message:"enqueueNextChunk attempt",data:{baseUrl,sheetToContinue,parseModeToContinue,attempt},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          const controller = new AbortController();
+          timeout = setTimeout(
+            () => controller.abort(),
+            ENQUEUE_REQUEST_TIMEOUT_MS
+          );
+          const res = await fetch(`${baseUrl}/api/process-excel`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              connectionId,
+              dataTableId,
+              parseMode: parseModeToContinue,
+              selectedSheet: sheetToContinue,
+              resumeOrigin: requestOrigin || baseUrl,
+            }),
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          timeout = null;
+          if (res.ok) return;
+          const responseSnippet = await res.text().catch(() => `HTTP ${res.status}`);
+          lastErrorDetails = `[${baseUrl}] intento ${attempt}/${ENQUEUE_RETRY_ATTEMPTS} -> HTTP ${res.status}: ${responseSnippet}`;
+          // #region agent log
+          fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H2",location:"app/api/process-excel/route.ts:474",message:"enqueueNextChunk non-ok response",data:{baseUrl,status:res.status,lastErrorDetailsSnippet:String(lastErrorDetails).slice(0,500),attempt},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          if (attempt < ENQUEUE_RETRY_ATTEMPTS && shouldRetry(res.status)) {
+            await sleep(ENQUEUE_RETRY_DELAY_MS * attempt);
+            continue;
+          }
+          break;
+        } catch (err) {
+          lastErrorDetails = `[${baseUrl}] intento ${attempt}/${ENQUEUE_RETRY_ATTEMPTS} -> ${
+            err instanceof Error ? err.message : String(err)
+          }`;
+          // #region agent log
+          fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H3",location:"app/api/process-excel/route.ts:479",message:"enqueueNextChunk fetch threw",data:{baseUrl,errorMessage:lastErrorDetails,attempt},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          if (attempt < ENQUEUE_RETRY_ATTEMPTS) {
+            await sleep(ENQUEUE_RETRY_DELAY_MS * attempt);
+            continue;
+          }
+          break;
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
       }
     }
     // #region agent log
@@ -947,6 +1001,7 @@ async function processDataImport(
           })
           .eq("id", dataTableId);
         await enqueueNextChunk(selectedSheetToUse, parseModeToUse);
+        resumeScheduled = true;
       } catch (resumeErr) {
         const details =
           resumeErr instanceof Error ? resumeErr.message : String(resumeErr);
@@ -1005,7 +1060,9 @@ async function processDataImport(
   } catch (e: any) {
     if (e?.message === "TIMEOUT") await markFailed("Timeout (máximo 45 minutos).");
   } finally {
-    if (!terminalStatus) await markFailed("Procesamiento interrumpido.");
+    if (!terminalStatus && !resumeScheduled) {
+      await markFailed("Procesamiento interrumpido.");
+    }
   }
 }
 
@@ -1042,6 +1099,17 @@ export async function POST(req: Request) {
       typeof body?.resumeOrigin === "string" && body.resumeOrigin.trim() !== ""
         ? body.resumeOrigin.trim()
         : null;
+    const requestOriginFromForwarded = (() => {
+      const forwardedHost =
+        req.headers.get("x-forwarded-host") || req.headers.get("host");
+      if (!forwardedHost) return null;
+      const forwardedProto = req.headers.get("x-forwarded-proto") || "https";
+      try {
+        return new URL(`${forwardedProto}://${forwardedHost}`).origin;
+      } catch {
+        return null;
+      }
+    })();
     const requestOriginFromUrl = (() => {
       try {
         return new URL(req.url).origin;
@@ -1051,6 +1119,7 @@ export async function POST(req: Request) {
     })();
     const requestOrigin =
       requestOriginFromBody ||
+      requestOriginFromForwarded ||
       requestOriginFromUrl ||
       req.headers.get("origin") ||
       null;

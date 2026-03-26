@@ -48,27 +48,52 @@ export default function AdminNewConnectionDialog({
   const [selectedClientId, setSelectedClientId] = useState<string>("");
   const [excelError, setExcelError] = useState<ExcelUploadErrorInfo | null>(null);
 
-  const toStageError = (
-    stage: string,
-    message: string,
-    details?: string
-  ): ExcelUploadErrorInfo => {
-    const isPermissionError =
-      /row-level security|permission denied|not authorized|violates/i.test(
-        `${message} ${details || ""}`
+  const toStageError = useCallback(
+    (
+      stage: string,
+      message: string,
+      details?: string
+    ): ExcelUploadErrorInfo => {
+      const isPermissionError =
+        /row-level security|permission denied|not authorized|violates/i.test(
+          `${message} ${details || ""}`
+        );
+
+      if (isPermissionError) {
+        return {
+          stage,
+          message:
+            "No tienes permisos para completar esta acción. Verifica políticas/RLS para tu usuario.",
+          details: details || message,
+        };
+      }
+
+      return { stage, message, details };
+    },
+    []
+  );
+
+  const toPollingStageError = useCallback(
+    (errorMessage?: string | null): ExcelUploadErrorInfo => {
+      const raw = typeof errorMessage === "string" ? errorMessage.trim() : "";
+      const match = raw.match(/^\[([a-z0-9_]+)\]\s*(.+)$/i);
+      if (match) {
+        const [, backendStage, backendMessage] = match;
+        return toStageError(
+          backendStage,
+          backendMessage || "La importación falló durante el procesamiento.",
+          raw
+        );
+      }
+
+      return toStageError(
+        "import_polling",
+        "La importación falló durante el procesamiento.",
+        raw || undefined
       );
-
-    if (isPermissionError) {
-      return {
-        stage,
-        message:
-          "No tienes permisos para completar esta acción. Verifica políticas/RLS para tu usuario.",
-        details: details || message,
-      };
-    }
-
-    return { stage, message, details };
-  };
+    },
+    [toStageError]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -392,13 +417,7 @@ export default function AdminNewConnectionDialog({
     (result: { status: "completed" | "failed"; errorMessage?: string | null }) => {
       if (result.status === "failed") {
         setIsProcessing(false);
-        setExcelError(
-          toStageError(
-            "import_polling",
-            "La importación falló durante el procesamiento.",
-            result.errorMessage || undefined
-          )
-        );
+        setExcelError(toPollingStageError(result.errorMessage));
         return;
       }
 
@@ -410,7 +429,7 @@ export default function AdminNewConnectionDialog({
       toast.success("Conexión creada correctamente. Ahora puedes configurar los permisos.");
       onCreated?.();
     },
-    [isFinished, onCreated]
+    [isFinished, onCreated, toPollingStageError]
   );
 
   // Fetch tables when step 2 (table selection) is shown for DB connection
