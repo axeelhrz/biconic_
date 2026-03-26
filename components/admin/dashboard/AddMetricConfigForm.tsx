@@ -77,8 +77,23 @@ export type AggregationConfigEdit = {
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
   chartComboSyncAxes?: boolean;
+  chartGridXDisplay?: boolean;
+  chartGridYDisplay?: boolean;
+  chartGridColor?: string;
+  chartAxisXVisible?: boolean;
+  chartAxisYVisible?: boolean;
+  /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
+  chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  geoHints?: {
+    countryField?: string;
+    provinceField?: string;
+    cityField?: string;
+    addressField?: string;
+    latField?: string;
+    lonField?: string;
+  };
 };
 
 export type AddMetricFormConfig = {
@@ -86,7 +101,7 @@ export type AddMetricFormConfig = {
   type: string;
   gridSpan?: number;
   color?: string;
-  labelDisplayMode?: "percent" | "value";
+  labelDisplayMode?: "percent" | "value" | "both";
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
   aggregationConfig: AggregationConfigEdit;
@@ -147,8 +162,19 @@ export type SavedMetricAggregationConfig = {
   chartGridXDisplay?: boolean;
   chartGridYDisplay?: boolean;
   chartGridColor?: string;
+  chartAxisXVisible?: boolean;
+  chartAxisYVisible?: boolean;
+  chartStackBySeries?: boolean;
   chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  geoHints?: {
+    countryField?: string;
+    provinceField?: string;
+    cityField?: string;
+    addressField?: string;
+    latField?: string;
+    lonField?: string;
+  };
   dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string };
   interCrossFilter?: boolean;
   interCrossFilterFields?: string[];
@@ -302,6 +328,9 @@ export function AddMetricConfigForm({
         chartLabelOverrides: cfg.chartLabelOverrides,
         chartMetricFormats: cfg.chartMetricFormats,
         chartComboSyncAxes: (cfg as { chartComboSyncAxes?: boolean }).chartComboSyncAxes,
+        chartStackBySeries: (cfg as { chartStackBySeries?: boolean }).chartStackBySeries,
+        chartAxisXVisible: (cfg as { chartAxisXVisible?: boolean }).chartAxisXVisible,
+        chartAxisYVisible: (cfg as { chartAxisYVisible?: boolean }).chartAxisYVisible,
         dateGroupByGranularity: (cfg as { dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year" }).dateGroupByGranularity,
       });
     } else {
@@ -460,13 +489,25 @@ export function AddMetricConfigForm({
             <Label className="add-metric-label">Etiquetas</Label>
             <select
               value={form.labelDisplayMode || "percent"}
-              onChange={(e) => updateForm({ labelDisplayMode: e.target.value as "percent" | "value" })}
+              onChange={(e) => updateForm({ labelDisplayMode: e.target.value as "percent" | "value" | "both" })}
               className="add-metric-select mt-1"
             >
               <option value="percent">Porcentaje</option>
               <option value="value">Valor</option>
+              <option value="both">Valor + porcentaje</option>
             </select>
           </div>
+        )}
+        {CHART_TYPES_FOR_LABELS.includes(form.type) && (
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={agg.showDataLabels !== false}
+              onChange={(e) => updateAgg({ showDataLabels: e.target.checked })}
+              className="rounded"
+            />
+            <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar etiquetas sobre el gráfico</span>
+          </label>
         )}
         {CHART_TYPES_FOR_LABELS.includes(form.type) && (
           <div>
@@ -512,6 +553,65 @@ export function AddMetricConfigForm({
             <span className="text-xs text-[var(--studio-fg-muted)]">Sincronizar ejes</span>
             <span className="text-[10px] text-[var(--studio-fg-muted)]">Alinear el eje derecho con el izquierdo para comparar dos métricas con escalas distintas.</span>
           </label>
+        )}
+        {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes(form.type) && (
+          <div className="space-y-2 rounded-lg border border-[var(--studio-border)] p-3">
+            <Label className="add-metric-label">Visibilidad de ejes</Label>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agg.chartAxisXVisible !== false}
+                  onChange={(e) => updateAgg({ chartAxisXVisible: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar eje X</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agg.chartAxisYVisible !== false}
+                  onChange={(e) => updateAgg({ chartAxisYVisible: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar eje Y</span>
+              </label>
+            </div>
+          </div>
+        )}
+        {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes(form.type) && (
+          <div className="space-y-2 rounded-lg border border-[var(--studio-border)] p-3">
+            <Label className="add-metric-label">Líneas de cuadrícula</Label>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agg.chartGridXDisplay !== false}
+                  onChange={(e) => updateAgg({ chartGridXDisplay: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar líneas en eje X</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agg.chartGridYDisplay !== false}
+                  onChange={(e) => updateAgg({ chartGridYDisplay: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar líneas en eje Y</span>
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-[var(--studio-fg-muted)]">Color</span>
+              <input
+                type="color"
+                value={agg.chartGridColor || "#e2e8f0"}
+                onChange={(e) => updateAgg({ chartGridColor: e.target.value })}
+                className="h-8 w-10 rounded border border-[var(--studio-border)]"
+              />
+            </div>
+          </div>
         )}
         {showLabelOverrides && (
           <div>
@@ -593,12 +693,30 @@ export function AddMetricConfigForm({
                 <AdminFieldSelector
                   label="Segunda dimensión (opcional)"
                   value={agg.dimension2 || ""}
-                  onChange={(v) => updateAgg({ dimension2: v || undefined })}
+                  onChange={(v) =>
+                    updateAgg({
+                      dimension2: v || undefined,
+                      chartSeriesField: v || undefined,
+                    })
+                  }
                   etlData={etlData}
                   dataSourceId={form.dataSourceId}
                   fieldType="all"
                   placeholder="Ninguna..."
                 />
+                {["bar", "horizontalBar", "combo"].includes(form.type) && (
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={agg.chartStackBySeries !== false}
+                      onChange={(e) => updateAgg({ chartStackBySeries: e.target.checked })}
+                      className="rounded"
+                    />
+                    <span className="text-xs text-[var(--studio-fg-muted)]">
+                      Columna única por X segmentada por segunda dimensión
+                    </span>
+                  </label>
+                )}
                 <div>
                   <Label className="add-metric-label text-[11px]">Acumulado</Label>
                   <select value={agg.cumulative ?? "none"} onChange={(e) => updateAgg({ cumulative: e.target.value as "none" | "running_sum" | "ytd" })} className="add-metric-select mt-0.5 h-8 text-xs w-full">

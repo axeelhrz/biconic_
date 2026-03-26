@@ -72,8 +72,23 @@ export type AggregationConfigEdit = {
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
   chartComboSyncAxes?: boolean;
+  chartGridXDisplay?: boolean;
+  chartGridYDisplay?: boolean;
+  chartGridColor?: string;
+  chartAxisXVisible?: boolean;
+  chartAxisYVisible?: boolean;
+  /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
+  chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  geoHints?: {
+    countryField?: string;
+    provinceField?: string;
+    cityField?: string;
+    addressField?: string;
+    latField?: string;
+    lonField?: string;
+  };
 };
 
 export type MetricConfigWidget = {
@@ -83,7 +98,7 @@ export type MetricConfigWidget = {
   gridSpan?: number;
   minHeight?: number;
   aggregationConfig?: AggregationConfigEdit;
-  labelDisplayMode?: "percent" | "value";
+  labelDisplayMode?: "percent" | "value" | "both";
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
@@ -322,12 +337,27 @@ export function MetricConfigPanel({
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Etiquetas en gráfico</Label>
             <select
               value={widget.labelDisplayMode || "percent"}
-              onChange={(e) => onUpdate({ labelDisplayMode: e.target.value as "percent" | "value" })}
+              onChange={(e) => onUpdate({ labelDisplayMode: e.target.value as "percent" | "value" | "both" })}
               className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
             >
               <option value="percent">Porcentaje</option>
               <option value="value">Valor</option>
+              <option value="both">Valor + porcentaje</option>
             </select>
+          </div>
+        )}
+        {showLabelOverrides && (
+          <div>
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Mostrar etiquetas de datos</Label>
+            <div className="mt-1.5 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={agg.showDataLabels !== false}
+                onChange={(e) => updateAgg({ showDataLabels: e.target.checked })}
+                className="rounded"
+              />
+              <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar texto sobre los puntos/porciones</span>
+            </div>
           </div>
         )}
         {showLabelOverrides && (
@@ -360,6 +390,65 @@ export function MetricConfigPanel({
                 onChange={(e) => onUpdate({ color: e.target.value || undefined })}
                 className="h-9 flex-1 font-mono text-xs"
                 placeholder="#0ea5e9"
+              />
+            </div>
+          </div>
+        )}
+        {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes((widget.aggregationConfig as any)?.chartType || widget.type) && (
+          <div>
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Visibilidad de ejes</Label>
+            <div className="mt-1.5 flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agg.chartAxisXVisible !== false}
+                  onChange={(e) => updateAgg({ chartAxisXVisible: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar eje X</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agg.chartAxisYVisible !== false}
+                  onChange={(e) => updateAgg({ chartAxisYVisible: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar eje Y</span>
+              </label>
+            </div>
+          </div>
+        )}
+        {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes((widget.aggregationConfig as any)?.chartType || widget.type) && (
+          <div>
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Líneas de cuadrícula</Label>
+            <div className="mt-1.5 flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agg.chartGridXDisplay !== false}
+                  onChange={(e) => updateAgg({ chartGridXDisplay: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar líneas en eje X</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agg.chartGridYDisplay !== false}
+                  onChange={(e) => updateAgg({ chartGridYDisplay: e.target.checked })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar líneas en eje Y</span>
+              </label>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-xs text-[var(--studio-fg-muted)]">Color</span>
+              <input
+                type="color"
+                value={agg.chartGridColor || "#e2e8f0"}
+                onChange={(e) => updateAgg({ chartGridColor: e.target.value })}
+                className="h-8 w-10 rounded border border-[var(--studio-border)]"
               />
             </div>
           </div>
@@ -608,12 +697,30 @@ export function MetricConfigPanel({
                       <AdminFieldSelector
                         label="Segunda dimensión (opcional)"
                         value={agg.dimension2 || ""}
-                        onChange={(v) => updateAgg({ dimension2: v || undefined })}
+                        onChange={(v) =>
+                          updateAgg({
+                            dimension2: v || undefined,
+                            chartSeriesField: v || undefined,
+                          })
+                        }
                         etlData={etlData}
                         dataSourceId={widget.dataSourceId}
                         fieldType="all"
                         placeholder="Ninguna..."
                       />
+                      {["bar", "horizontalBar", "combo"].includes((agg.chartType as string) || widget.type) && (
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={agg.chartStackBySeries !== false}
+                            onChange={(e) => updateAgg({ chartStackBySeries: e.target.checked })}
+                            className="rounded"
+                          />
+                          <span className="text-xs text-[var(--studio-fg-muted)]">
+                            Columna única por X segmentada por segunda dimensión
+                          </span>
+                        </label>
+                      )}
                       <div>
                         <Label className="text-[11px] text-[var(--studio-fg-muted)]">Acumulado</Label>
                         <select

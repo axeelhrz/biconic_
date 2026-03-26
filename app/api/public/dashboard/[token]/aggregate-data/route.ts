@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import postgres from "postgres";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { enrichRowsWithGeo, type GeoHints } from "@/lib/geo/geo-enrichment";
 
 // --- Interfaces (Copied from internal route) ---
 interface Metric {
@@ -26,10 +27,14 @@ interface OrderBy {
 interface AggregationRequest {
   tableName: string;
   dimension?: string;
+  dimensions?: string[];
   metrics: Metric[];
   filters?: Filter[];
   orderBy?: OrderBy;
   limit?: number;
+  chartType?: string;
+  chartXAxis?: string;
+  geoHints?: GeoHints;
 }
 
 // --- Constantes ---
@@ -77,6 +82,7 @@ export async function POST(
     const awaitedParams = await params;
     const token = awaitedParams["token"];
     const body: AggregationRequest = await req.json();
+    const requestedChartType = String(body.chartType ?? "").trim().toLowerCase();
 
     if (!token) {
       return NextResponse.json({ error: "Token required" }, { status: 400 });
@@ -217,14 +223,23 @@ export async function POST(
       .join(", ");
 
     // 2. Construcción de Dimensión
+    const dimList =
+      Array.isArray(body.dimensions) && body.dimensions.length > 0
+        ? body.dimensions
+        : body.dimension
+          ? [body.dimension]
+          : [];
     let dimensionSelectClause = "";
     let dimensionGroupByClause = "";
 
-    if (body.dimension) {
-      const safeDimension = body.dimension.replace(/"/g, '""');
-      const coalesceExpression = `COALESCE("${safeDimension}"::text, 'Sin Categoría')`;
-      dimensionSelectClause = `${coalesceExpression} AS "${safeDimension}"`;
-      dimensionGroupByClause = coalesceExpression;
+    if (dimList.length > 0) {
+      const parts = dimList.map((d) => {
+        const safeDimension = d.replace(/"/g, '""');
+        const coalesceExpression = `COALESCE("${safeDimension}"::text, 'Sin Categoría')`;
+        return { select: `${coalesceExpression} AS "${safeDimension}"`, group: coalesceExpression };
+      });
+      dimensionSelectClause = parts.map((p) => p.select).join(", ");
+      dimensionGroupByClause = parts.map((p) => p.group).join(", ");
     }
 
     const selectClause = [dimensionSelectClause, metricClauses]
@@ -399,10 +414,23 @@ export async function POST(
       return newRow;
     });
 
+    const shouldEnrichGeo =
+      requestedChartType === "map" ||
+      /\b(lat|lon|lng|geo|country|pais|ciudad|city|localidad|provincia|estado)\b/i.test(dimList.join(" "));
+    const geoReadyRows = shouldEnrichGeo
+      ? await enrichRowsWithGeo({
+          rows: mappedResults as Record<string, unknown>[],
+          dimList,
+          chartXAxis: body.chartXAxis ?? body.dimension ?? body.dimensions?.[0],
+          geoHints: body.geoHints,
+          cacheClient: supabase,
+        })
+      : mappedResults;
+
     if (filterWarnings.length > 0) {
-      return NextResponse.json({ rows: mappedResults, filterWarnings });
+      return NextResponse.json({ rows: geoReadyRows, filterWarnings });
     }
-    return NextResponse.json(mappedResults);
+    return NextResponse.json(geoReadyRows);
   } catch (err: any) {
     console.error("Error en API:", err);
     return NextResponse.json({ error: err.message }, { status: 500 });

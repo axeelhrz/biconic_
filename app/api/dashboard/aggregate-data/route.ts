@@ -6,7 +6,9 @@ import postgres from "postgres";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { Database } from "@/lib/supabase/database.types";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 import { formatDateByGranularity, type DateGranularity } from "@/lib/dashboard/dateFormatting";
+import { enrichRowsWithGeo, type GeoHints } from "@/lib/geo/geo-enrichment";
 
 // --- Interfaces ---
 interface MetricCondition {
@@ -75,6 +77,9 @@ interface AggregationRequest {
   dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string };
   /** Definiciones de métricas guardadas enviadas por el cliente para resolver por nombre (evita depender solo del ETL lookup). */
   savedMetrics?: Array<{ name: string; field?: string; func?: string; alias?: string; expression?: string }>;
+  chartType?: string;
+  chartXAxis?: string;
+  geoHints?: GeoHints;
 }
 
 // --- Constantes ---
@@ -183,6 +188,22 @@ function safeNumericCast(expr: string): string {
   const e = expr.trim();
   const pattern = "'^[[:space:]]*[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?[[:space:]]*$'";
   return `(CASE WHEN (${e})::text ~ ${pattern} THEN ((${e})::text)::numeric ELSE NULL END)`;
+}
+
+/** Parseo robusto de fechas para columnas texto/date/timestamp. Soporta DD/MM/YYYY y YYYY-MM-DD (con o sin hora). */
+function safeDateCast(expr: string): string {
+  const e = expr.trim();
+  return `(
+    CASE
+      WHEN ${e} IS NULL THEN NULL
+      WHEN trim((${e})::text) ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(trim((${e})::text), 'DD/MM/YYYY')
+      WHEN trim((${e})::text) ~ '^\\d{1,2}-\\d{1,2}-\\d{4}$' THEN to_date(trim((${e})::text), 'DD-MM-YYYY')
+      WHEN trim((${e})::text) ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(trim((${e})::text), 'YYYY-MM-DD')
+      WHEN trim((${e})::text) ~ '^\\d{4}-\\d{2}-\\d{2}[ T].*$' THEN (trim((${e})::text))::timestamp::date
+      WHEN (${e})::text LIKE '%, % de % de %' THEN to_date((${e})::text, 'Day, DD "de" Month "de" YYYY')
+      ELSE NULL
+    END
+  )`;
 }
 
 const SQL_KNOWN_FUNCTIONS = new Set([
@@ -616,6 +637,7 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    const requestedChartType = String(body.chartType ?? "").trim().toLowerCase();
 
     if (!Array.isArray(body.metrics) || body.metrics.length === 0) {
       return NextResponse.json(
@@ -1079,14 +1101,15 @@ export async function POST(req: NextRequest) {
 
     if (body.dateGroupBy?.field && body.dateGroupBy?.granularity) {
       const dgCol = quotedColumn(body.dateGroupBy.field);
+      const dgDateExpr = safeDateCast(dgCol);
       const gran = body.dateGroupBy.granularity.toLowerCase().replace(/[^a-z]/g, "");
       const validGranList = ["day", "week", "month", "quarter", "semester", "year"];
       const validGran = validGranList.includes(gran) ? gran : "month";
       if (validGran === "semester") {
-        dateGroupByExpr = `(EXTRACT(YEAR FROM ${dgCol}::timestamp)::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${dgCol}::timestamp) <= 6 THEN '1' ELSE '2' END)`;
-        dateGroupByDisplayExpr = `(CASE WHEN EXTRACT(MONTH FROM ${dgCol}::timestamp) <= 6 THEN 'S1/' ELSE 'S2/' END || EXTRACT(YEAR FROM ${dgCol}::timestamp)::text)`;
+        dateGroupByExpr = `(EXTRACT(YEAR FROM ${dgDateExpr}::timestamp)::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${dgDateExpr}::timestamp) <= 6 THEN '1' ELSE '2' END)`;
+        dateGroupByDisplayExpr = `(CASE WHEN EXTRACT(MONTH FROM ${dgDateExpr}::timestamp) <= 6 THEN 'S1/' ELSE 'S2/' END || EXTRACT(YEAR FROM ${dgDateExpr}::timestamp)::text)`;
       } else {
-        dateGroupByExpr = `DATE_TRUNC('${validGran}', ${dgCol}::timestamp)`;
+        dateGroupByExpr = `DATE_TRUNC('${validGran}', ${dgDateExpr}::timestamp)`;
         if (validGran === "year") {
           dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'YYYY')`;
         } else if (validGran === "month") {
@@ -1150,18 +1173,19 @@ export async function POST(req: NextRequest) {
       const dr = body.dateRangeFilter;
       if (!dr?.field) return "";
       const drCol = quotedColumn(dr.field);
+      const drDateExpr = safeDateCast(drCol);
       if (dr.from != null && dr.to != null) {
         const from = String(dr.from).trim().replace(/'/g, "''");
         const to = String(dr.to).trim().replace(/'/g, "''");
         if (/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
-          return `${drCol}::date BETWEEN '${from}' AND '${to}'`;
+          return `${drDateExpr} BETWEEN '${from}' AND '${to}'`;
         }
       }
       if (dr.last == null || Number(dr.last) <= 0) return "";
       const n = Math.max(1, Math.min(9999, Math.round(Number(dr.last))));
       const unit = dr.unit === "days" ? "days" : "months";
-      const maxDateSubquery = `(SELECT MAX(${drCol}::date) FROM "${schema}"."${table}")`;
-      return `${drCol}::date >= (${maxDateSubquery} - INTERVAL '${n} ${unit}')`;
+      const maxDateSubquery = `(SELECT MAX(${drDateExpr}) FROM "${schema}"."${table}")`;
+      return `${drDateExpr} >= (${maxDateSubquery} - INTERVAL '${n} ${unit}')`;
     })();
 
     if (validFilters.length > 0) {
@@ -1183,13 +1207,7 @@ export async function POST(req: NextRequest) {
             op === "YEAR_MONTH" ||
             useDateExprForYearLike
           ) {
-            fieldExpression = `(
-              CASE
-                WHEN ${col}::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(${col}::text, 'DD/MM/YYYY')
-                WHEN ${col}::text LIKE '%, % de % de %' THEN to_date(${col}::text, 'Day, DD "de" Month "de" YYYY')
-                ELSE ${col}::date
-              END
-            )`;
+            fieldExpression = safeDateCast(col);
           } else {
             fieldExpression =
               f.cast === "numeric"
@@ -1422,7 +1440,7 @@ export async function POST(req: NextRequest) {
 
     // 6b. Comparación temporal: segundo query período anterior y merge
     if (body.comparePeriod && dimList.length > 0 && body.dateDimension) {
-      const dateCol = body.dateDimension.replace(/"/g, '""');
+      const dateColExpr = safeDateCast(quotedColumn(body.dateDimension));
       const now = new Date();
       let prevStart: string;
       let prevEnd: string;
@@ -1438,7 +1456,7 @@ export async function POST(req: NextRequest) {
         const lastDay = new Date(y, pm, 0).getDate();
         prevEnd = `${y}-${String(pm).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
       }
-      const dateFilter = `"${dateCol}"::date BETWEEN '${prevStart}' AND '${prevEnd}'`;
+      const dateFilter = `${dateColExpr} BETWEEN '${prevStart}' AND '${prevEnd}'`;
       const prevWhere = whereClausesStr ? `${dateFilter} AND (${whereClausesStr})` : dateFilter;
       const simplePrevQuery = `SELECT ${dimensionSelectClause}, ${metricClauses} FROM "${schema}"."${table}" WHERE ${prevWhere} GROUP BY ${dimensionGroupByClause}`;
       try {
@@ -1553,10 +1571,24 @@ export async function POST(req: NextRequest) {
       return newRow;
     });
 
+    const shouldEnrichGeo =
+      requestedChartType === "map" ||
+      /\b(lat|lon|lng|geo|country|pais|ciudad|city|localidad|provincia|estado)\b/i.test(dimList.join(" "));
+    const cacheClient = process.env.SUPABASE_SERVICE_ROLE_KEY ? createServiceRoleClient() : null;
+    const geoReadyRows = shouldEnrichGeo
+      ? await enrichRowsWithGeo({
+          rows: mappedResults as Record<string, unknown>[],
+          dimList,
+          chartXAxis: body.chartXAxis ?? body.dimension ?? body.dimensions?.[0],
+          geoHints: body.geoHints,
+          cacheClient,
+        })
+      : mappedResults;
+
     if (filterWarnings.length > 0) {
-      return NextResponse.json({ rows: mappedResults, filterWarnings });
+      return NextResponse.json({ rows: geoReadyRows, filterWarnings });
     }
-    return NextResponse.json(mappedResults);
+    return NextResponse.json(geoReadyRows);
   } catch (err: any) {
     const message = err?.message ?? String(err);
     console.error("[aggregate-data] Error:", message, err);

@@ -9,9 +9,9 @@ import {
   mergeTheme,
 } from "@/types/dashboard";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./DashboardWidgetRenderer";
-import type { ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { buildChartMetricStyles, buildChartStyleFromAgg, resolveDarkChartTheme } from "@/lib/dashboard/widgetRenderParity";
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -81,7 +81,18 @@ type AggregationConfig = {
   chartScaleMax?: string | number;
   chartAxisStep?: string | number;
   chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
+  chartAxisXVisible?: boolean;
+  chartAxisYVisible?: boolean;
+  chartStackBySeries?: boolean;
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  geoHints?: {
+    countryField?: string;
+    provinceField?: string;
+    cityField?: string;
+    addressField?: string;
+    latField?: string;
+    lonField?: string;
+  };
 };
 
 export type Widget = DashboardWidgetRendererWidget & {
@@ -112,79 +123,6 @@ function computeGridPlacements(
     }
   }
   return placements;
-}
-
-type MetricFormatEntry = { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean };
-
-/** Construye chartStyle desde aggregationConfig para que el renderer aplique formato (tipo + escala + decimales). */
-function buildChartStyleFromAgg(agg: AggregationConfig | undefined): ChartStyleConfig | undefined {
-  if (!agg) return undefined;
-  const valueType = agg.chartValueType as string | undefined;
-  const valueScale = agg.chartValueScale as string | undefined;
-  const legacy = agg.chartNumberFormat as string | undefined;
-  const valueFormat: ValueFormatType =
-    valueType === "currency" || legacy === "currency"
-      ? "currency"
-      : valueType === "percent" || legacy === "percent"
-        ? "percent"
-        : "none";
-  const scale: ValueScaleType =
-    valueScale === "K" || legacy === "K"
-      ? "K"
-      : valueScale === "M" || legacy === "M"
-        ? "M"
-        : valueScale === "BI" || valueScale === "Bi" || valueScale === "B" || legacy === "BI"
-          ? "B"
-          : "none";
-  const decimals = agg.chartDecimals ?? 2;
-  const useGrouping = agg.chartThousandSep !== false;
-  if (valueFormat === "none" && scale === "none" && decimals === 2 && useGrouping) return undefined;
-  return {
-    valueFormat,
-    valueScale: scale,
-    currencySymbol: agg.chartCurrencySymbol ?? "$",
-    decimals,
-    useGrouping,
-  };
-}
-
-/** Construye ChartStyleConfig desde un formato por métrica; si m es undefined usa el formato global de agg. */
-function buildChartStyleFromMetricFormat(m: MetricFormatEntry | undefined, agg: AggregationConfig | undefined): ChartStyleConfig | undefined {
-  const valueType = m?.valueType ?? (agg?.chartValueType as string | undefined);
-  const valueScale = m?.valueScale ?? (agg?.chartValueScale as string | undefined);
-  const legacy = agg?.chartNumberFormat as string | undefined;
-  const valueFormat: ValueFormatType =
-    valueType === "currency" || legacy === "currency"
-      ? "currency"
-      : valueType === "percent" || legacy === "percent"
-        ? "percent"
-        : "none";
-  const scale: ValueScaleType =
-    valueScale === "K" || legacy === "K"
-      ? "K"
-      : valueScale === "M" || legacy === "M"
-        ? "M"
-        : valueScale === "BI" || valueScale === "Bi" || valueScale === "B" || legacy === "BI"
-          ? "B"
-          : "none";
-  const decimals = m?.decimals ?? agg?.chartDecimals ?? 2;
-  const useGrouping = m?.thousandSep !== false && (m?.thousandSep ?? agg?.chartThousandSep !== false);
-  if (valueFormat === "none" && scale === "none" && decimals === 2 && useGrouping && !m) return undefined;
-  return {
-    valueFormat,
-    valueScale: scale,
-    currencySymbol: m?.currencySymbol ?? agg?.chartCurrencySymbol ?? "$",
-    decimals,
-    useGrouping,
-  };
-}
-
-/** Construye array de estilos por dataset cuando hay varias métricas (chartYAxes). El renderer usa chartMetricStyles[i] ?? chartStyle. */
-function buildChartMetricStyles(agg: AggregationConfig | undefined): (ChartStyleConfig | undefined)[] {
-  if (!agg) return [];
-  const yKeys = Array.isArray(agg.chartYAxes) ? agg.chartYAxes : [];
-  if (yKeys.length === 0) return [];
-  return yKeys.map((key) => buildChartStyleFromMetricFormat(agg.chartMetricFormats?.[key], agg));
 }
 
 export interface DashboardViewerProps {
@@ -436,6 +374,7 @@ export function DashboardViewer({
 
       try {
         let dataArray: Record<string, unknown>[] = [];
+        let resolvedChartType = widget.type;
         if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
           const dimensionsArray = (aggConfig as any).dimensions?.length
             ? (aggConfig as any).dimensions
@@ -471,22 +410,22 @@ export function DashboardViewer({
                   };
                 })
             : [];
+          resolvedChartType = String((aggConfig?.chartType as string | undefined) ?? "").trim() || widget.type;
           const bodyPayload: Record<string, unknown> = {
             tableName: fullTableName,
             dimension: aggConfig.dimension,
+            chartType: resolvedChartType,
+            chartXAxis: aggConfig.chartXAxis,
             metrics: aggConfig.metrics.map(({ id, ...rest }) => ({
               ...rest,
               cast: rest.numericCast && rest.numericCast !== "none" ? rest.numericCast : undefined,
             })),
             filters: preparedFilters,
-            orderBy: (aggConfig as any).chartRankingEnabled && (aggConfig as any).chartRankingTop
-              ? { field: (aggConfig as any).chartRankingMetric || aggConfig.metrics[0]?.alias, direction: "DESC" }
-              : aggConfig.orderBy,
-            limit: (aggConfig as any).chartRankingEnabled && (aggConfig as any).chartRankingTop
-              ? (aggConfig as any).chartRankingTop
-              : aggConfig.limit ?? 1000,
+            orderBy: aggConfig.orderBy,
+            limit: aggConfig.limit ?? 1000,
             etlId,
           };
+          if (aggConfig.geoHints) bodyPayload.geoHints = aggConfig.geoHints;
           if (dimensionsArray.length > 0) bodyPayload.dimensions = dimensionsArray;
           if ((aggConfig as any).cumulative) bodyPayload.cumulative = (aggConfig as any).cumulative;
           if ((aggConfig as any).comparePeriod) bodyPayload.comparePeriod = (aggConfig as any).comparePeriod;
@@ -496,7 +435,22 @@ export function DashboardViewer({
           const dateFields = (widgetSource as { fields?: { date?: string[] } })?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
           const isDateDim = primaryDim && dateFields.some((d: string) => (d || "").toLowerCase() === (primaryDim || "").toLowerCase());
           const dateGroupByGranularity = (aggConfig as { dateGroupByGranularity?: string }).dateGroupByGranularity;
-          if (isDateDim && dateGroupByGranularity && primaryDim) bodyPayload.dateGroupBy = { field: primaryDim, granularity: dateGroupByGranularity };
+          const isTemporalAxis =
+            !!dateGroupByGranularity ||
+            !!(primaryDim && (aggConfig as { dateDimension?: string }).dateDimension && String(primaryDim).trim().toLowerCase() === String((aggConfig as { dateDimension?: string }).dateDimension ?? "").trim().toLowerCase()) ||
+            !!isDateDim;
+          const shouldApplyRanking =
+            !!(aggConfig as { chartRankingEnabled?: boolean }).chartRankingEnabled &&
+            Number((aggConfig as { chartRankingTop?: number }).chartRankingTop ?? 0) > 0 &&
+            !isTemporalAxis;
+          if (shouldApplyRanking) {
+            bodyPayload.orderBy = {
+              field: (aggConfig as { chartRankingMetric?: string }).chartRankingMetric || aggConfig.metrics[0]?.alias,
+              direction: "DESC",
+            };
+            bodyPayload.limit = (aggConfig as { chartRankingTop?: number }).chartRankingTop;
+          }
+          if (dateGroupByGranularity && primaryDim) bodyPayload.dateGroupBy = { field: primaryDim, granularity: dateGroupByGranularity };
           const dateRangeFilter = (aggConfig as { dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter;
           if (dateRangeFilter?.field) bodyPayload.dateRangeFilter = dateRangeFilter;
 
@@ -548,7 +502,6 @@ export function DashboardViewer({
         };
         const columnsDetected = Object.keys(sample).map((k) => ({ name: k, type: inferType((sample as any)[k]) }));
         const config = buildChartConfig(dataArray, widget, accentColor);
-        const resolvedChartType = String((aggConfig?.chartType as string | undefined) ?? "").trim() || widget.type;
         const rowsForWidget = resolvedChartType === "table" ? getProcessedRowsForChart(dataArray, widget) : dataArray;
 
         setWidgets((prev) =>
@@ -654,6 +607,7 @@ export function DashboardViewer({
 
   const rootClassName = variant === "admin" ? "admin-dashboard-view gap-5" : "gap-0";
   const useClientTheme = !hideHeader && (variant === "default" && !backHref);
+  const darkChartTheme = useMemo(() => resolveDarkChartTheme(themeMerged, useClientTheme), [themeMerged, useClientTheme]);
   const themeVars = useMemo(() => {
     if (!useClientTheme) return {};
     const bg = themeMerged.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor;
@@ -889,7 +843,7 @@ export function DashboardViewer({
                     filterValue={filterValues[widget.id]}
                     onFilterChange={handleFilterChange}
                     minHeight={widget.minHeight ?? 240}
-                    darkChartTheme={useClientTheme}
+                    darkChartTheme={darkChartTheme}
                   />
                 </div>
               );

@@ -1,35 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bar, Doughnut, Line, Pie, Scatter } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  ArcElement,
-  BarElement,
-  CategoryScale,
-  Filler,
-  Legend,
-  LinearScale,
-  LineElement,
-  PointElement,
-  Tooltip,
-} from "chart.js";
 import { Loader2 } from "lucide-react";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { buildChartConfig, getProcessedRowsForChart, type ChartConfig } from "@/lib/dashboard/buildChartConfig";
-import { buildMiniChartOptions, formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
-
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  ArcElement,
-  Tooltip,
-  Legend,
-  Filler
-);
+import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "@/components/dashboard/DashboardWidgetRenderer";
+import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import { buildChartMetricStyles, buildChartStyleFromAgg, resolveDarkChartTheme } from "@/lib/dashboard/widgetRenderParity";
+import { mergeTheme, type DashboardTheme } from "@/types/dashboard";
 
 type AggregationMetric = {
   id?: string;
@@ -62,6 +39,14 @@ type AggregationConfig = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  geoHints?: {
+    countryField?: string;
+    provinceField?: string;
+    cityField?: string;
+    addressField?: string;
+    latField?: string;
+    lonField?: string;
+  };
 };
 
 type LayoutWidget = {
@@ -80,6 +65,7 @@ type LayoutData = {
   widgets?: LayoutWidget[];
   pages?: Array<{ id: string; name?: string }>;
   activePageId?: string;
+  theme?: Partial<DashboardTheme>;
 };
 
 type DashboardDataSource = {
@@ -100,15 +86,10 @@ type MiniWidgetData = {
   id: string;
   title: string;
   type: string;
-  chartConfig?: ChartConfig;
-  rows: Record<string, unknown>[];
+  rendererWidget: DashboardWidgetRendererWidget;
   hasData: boolean;
   gridSpan: number;
 };
-
-const MINI_CHART_OPTIONS = buildMiniChartOptions();
-const MINI_CHART_OPTIONS_HORIZONTAL = buildMiniChartOptions(true);
-const MINI_PIE_OPTIONS = buildMiniChartOptions();
 
 function pickWidgets(layout: LayoutData): LayoutWidget[] {
   const widgets = Array.isArray(layout.widgets) ? layout.widgets : [];
@@ -119,38 +100,7 @@ function pickWidgets(layout: LayoutData): LayoutWidget[] {
     .slice(0, 4);
 }
 
-function mapField(field: string | undefined, sourceId: string | undefined, datasetDimensions?: Record<string, Record<string, string>>): string | undefined {
-  if (!field || !sourceId || !datasetDimensions) return field;
-  return datasetDimensions[field]?.[sourceId] ?? field;
-}
-
-function buildSavedMetricsPayload(savedMetrics: unknown[] | undefined, metrics: AggregationMetric[] | undefined) {
-  const metricFieldNames = new Set(
-    (metrics ?? [])
-      .filter((m) => (m.func ?? "").toUpperCase() !== "FORMULA" && (m.field ?? "").trim() !== "")
-      .map((m) => String(m.field).trim().toLowerCase())
-  );
-  if (metricFieldNames.size === 0 || !Array.isArray(savedMetrics) || savedMetrics.length === 0) return [];
-
-  return savedMetrics
-    .map((item) => item as { name?: string; metric?: { field?: string; func?: string; alias?: string; expression?: string }; aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> } })
-    .filter((s) => (s.name ?? "").trim() !== "" && metricFieldNames.has(String(s.name).trim().toLowerCase()))
-    .map((s) => {
-      const name = String(s.name).trim();
-      const first = s.aggregationConfig?.metrics?.[0] ?? s.metric;
-      if (!first) return { name, field: name, func: "SUM", alias: name };
-      return {
-        name,
-        field: String(first.field ?? "").trim() || name,
-        func: String(first.func ?? "SUM"),
-        alias: String(first.alias ?? name),
-        ...(first.expression ? { expression: String(first.expression).trim() } : {}),
-      };
-    });
-}
-
 async function loadWidgetData(
-  dashboardId: string,
   widget: LayoutWidget,
   etlData: EtlDataPayload
 ): Promise<MiniWidgetData> {
@@ -163,97 +113,54 @@ async function loadWidgetData(
   const source = sources.find((s) => s.id === sourceId) ?? sources[0];
 
   if (!source) {
-    return { id, title, type, rows: [], hasData: false, gridSpan };
+    return {
+      id,
+      title,
+      type,
+      hasData: false,
+      gridSpan,
+      rendererWidget: {
+        id,
+        title,
+        type: type as DashboardWidgetRendererWidget["type"],
+      },
+    };
   }
 
   const tableName = `${source.schema}.${source.tableName}`;
   const agg = widget.aggregationConfig;
-  const hasAgg = !!(agg?.enabled && (agg.metrics?.length ?? 0) > 0);
-
-  let rows: Record<string, unknown>[] = [];
-  if (hasAgg) {
-    const dimensions = (agg?.dimensions?.length ? agg.dimensions : [agg?.dimension, agg?.dimension2].filter(Boolean)) as string[];
-    const metricsPayload = (agg?.metrics ?? []).map((m) => ({
-      ...m,
-      field: mapField(m.field, sourceId ?? undefined, etlData.datasetDimensions),
-    }));
-    const savedMetrics = buildSavedMetricsPayload(source.savedMetrics, agg?.metrics);
-    const payload = {
-      tableName,
-      etlId: source.etlId,
-      dimension: mapField(agg?.dimension, sourceId ?? undefined, etlData.datasetDimensions),
-      dimensions: dimensions.map((d) => mapField(d, sourceId ?? undefined, etlData.datasetDimensions)),
-      metrics: metricsPayload,
-      filters: agg?.filters ?? [],
-      orderBy: agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0 && agg?.chartRankingMetric
-        ? { field: agg.chartRankingMetric, direction: "DESC" as const }
-        : agg?.orderBy,
-      limit: Math.min(40, Math.max(5, agg?.limit ?? 40)),
-      cumulative: agg?.cumulative ?? "none",
-      comparePeriod: agg?.comparePeriod,
-      dateDimension: mapField(agg?.dateDimension, sourceId ?? undefined, etlData.datasetDimensions),
-      ...(agg?.dateGroupByGranularity && (dimensions[0] || agg?.dimension)
-        ? {
-            dateGroupBy: {
-              field: mapField(dimensions[0] ?? agg?.dimension, sourceId ?? undefined, etlData.datasetDimensions),
-              granularity: agg.dateGroupByGranularity,
-            },
-          }
-        : {}),
-      ...(agg?.dateRangeFilter ? { dateRangeFilter: agg.dateRangeFilter } : {}),
-      ...(savedMetrics.length > 0 ? { savedMetrics } : {}),
-    };
-
-    const response = await fetch("/api/dashboard/aggregate-data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const result = await safeJsonResponse<{ rows?: Record<string, unknown>[] }>(response);
-    if (!response.ok || !result.ok) throw new Error(result.error ?? "Error agregando datos");
-    rows = Array.isArray(result) ? result : Array.isArray(result.rows) ? result.rows : [];
-  } else {
-    const response = await fetch("/api/dashboard/raw-data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tableName, limit: 60 }),
-    });
-    const result = await safeJsonResponse<{ rows?: Record<string, unknown>[] }>(response);
-    if (!response.ok || !result.ok) throw new Error(result.error ?? "Error cargando datos");
-    rows = Array.isArray(result) ? result : Array.isArray(result.rows) ? result.rows : [];
-  }
-
-  if (rows.length === 0) {
-    return { id, title, type, rows: [], hasData: false, gridSpan };
-  }
-
-  const chartConfig = type === "table"
-    ? undefined
-    : buildChartConfig(rows, { type, aggregationConfig: agg, source: widget.source }, "#0ea5e9");
-  const processedRows = type === "table"
-    ? getProcessedRowsForChart(rows, { type, aggregationConfig: agg, source: widget.source })
-    : rows;
-
-  const hasChartData = type === "kpi"
-    ? processedRows.length > 0
-    : type === "table"
-      ? processedRows.length > 0
-      : !!(chartConfig?.labels?.length && (chartConfig.datasets?.length ?? 0) > 0);
+  const loaded = await loadPreviewWidgetData({
+    widget: { type, aggregationConfig: agg, source: widget.source },
+    tableName,
+    etlId: source.etlId,
+    sourceId,
+    datasetDimensions: etlData.datasetDimensions,
+    savedMetrics: source.savedMetrics,
+    rawLimit: 60,
+    accentColor: "#0ea5e9",
+  });
 
   return {
     id,
     title,
     type,
-    chartConfig: chartConfig ?? undefined,
-    rows: processedRows,
-    hasData: hasChartData,
+    rendererWidget: {
+      id,
+      title,
+      type: type as DashboardWidgetRendererWidget["type"],
+      config: loaded.chartConfig,
+      rows: loaded.processedRows,
+      aggregationConfig: agg,
+      chartStyle: buildChartStyleFromAgg(agg),
+      chartMetricStyles: buildChartMetricStyles(agg),
+      labelDisplayMode: "percent",
+    },
+    hasData: loaded.hasData,
     gridSpan,
   };
 }
 
-function MiniWidgetTile({ widget }: { widget: MiniWidgetData }) {
-  const miniType = widget.type === "area" ? "line" : widget.type;
-
+function MiniWidgetTile({ widget, darkChartTheme }: { widget: MiniWidgetData; darkChartTheme: boolean }) {
   if (!widget.hasData) {
     return (
       <div className="flex h-full items-center justify-center rounded-md border text-[10px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
@@ -262,55 +169,16 @@ function MiniWidgetTile({ widget }: { widget: MiniWidgetData }) {
     );
   }
 
-  if (miniType === "kpi") {
-    const firstRow = widget.rows[0] ?? {};
-    const firstNumeric = Object.values(firstRow).find((v) => typeof v === "number") ?? Object.values(firstRow)[0];
-    const style = toChartStyleConfig({ valueType: "none" });
-    const formatted = typeof firstNumeric === "number"
-      ? formatValue(firstNumeric, style.valueFormat, style.currencySymbol, style.valueScale, style.decimals, style.useGrouping)
-      : String(firstNumeric ?? "—");
-    return (
-      <div className="flex h-full items-center justify-center rounded-md border px-2 text-center" style={{ borderColor: "var(--platform-border)" }}>
-        <span className="truncate text-xs font-semibold" style={{ color: "var(--platform-fg)" }}>
-          {formatted}
-        </span>
-      </div>
-    );
-  }
-
-  if (miniType === "table") {
-    const row = widget.rows[0] ?? {};
-    return (
-      <div className="h-full overflow-hidden rounded-md border p-1.5 text-[9px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
-        {Object.entries(row).slice(0, 2).map(([k, v]) => (
-          <p key={k} className="truncate">{k}: {String(v ?? "")}</p>
-        ))}
-      </div>
-    );
-  }
-
-  if (!widget.chartConfig) {
-    return (
-      <div className="flex h-full items-center justify-center rounded-md border text-[10px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
-        Sin preview
-      </div>
-    );
-  }
-
   return (
     <div className="h-full rounded-md border p-1" style={{ borderColor: "var(--platform-border)" }}>
-      {miniType === "bar" && <Bar data={widget.chartConfig as never} options={MINI_CHART_OPTIONS as never} />}
-      {miniType === "horizontalBar" && (
-        <Bar
-          data={widget.chartConfig as never}
-          options={MINI_CHART_OPTIONS_HORIZONTAL as never}
-        />
-      )}
-      {miniType === "line" && <Line data={widget.chartConfig as never} options={MINI_CHART_OPTIONS as never} />}
-      {miniType === "combo" && <Bar data={widget.chartConfig as never} options={MINI_CHART_OPTIONS as never} />}
-      {miniType === "pie" && <Pie data={widget.chartConfig as never} options={MINI_PIE_OPTIONS as never} />}
-      {miniType === "doughnut" && <Doughnut data={widget.chartConfig as never} options={MINI_PIE_OPTIONS as never} />}
-      {miniType === "scatter" && <Scatter data={widget.chartConfig as never} options={MINI_CHART_OPTIONS as never} />}
+      <DashboardWidgetRenderer
+        widget={widget.rendererWidget}
+        isLoading={false}
+        hideHeader
+        minHeight={130}
+        darkChartTheme={darkChartTheme}
+        className="!border-0 !p-0 !shadow-none h-full"
+      />
     </div>
   );
 }
@@ -322,6 +190,7 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
   const [isVisible, setIsVisible] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const selectedWidgets = useMemo(() => pickWidgets(layout), [layout]);
+  const darkChartTheme = useMemo(() => resolveDarkChartTheme(mergeTheme(layout.theme), true), [layout.theme]);
 
   useEffect(() => {
     const node = ref.current;
@@ -362,16 +231,20 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
             const current = queue.shift();
             if (!current) break;
             try {
-              const loaded = await loadWidgetData(dashboardId, current, etlJson.data!);
+              const loaded = await loadWidgetData(current, etlJson.data!);
               partial.push(loaded);
             } catch {
               partial.push({
                 id: current.id ?? `w-${Math.random().toString(36).slice(2)}`,
                 title: current.title ?? "Widget",
                 type: current.type ?? "bar",
-                rows: [],
                 hasData: false,
                 gridSpan: current.gridSpan === 1 ? 1 : 2,
+                rendererWidget: {
+                  id: current.id ?? `w-${Math.random().toString(36).slice(2)}`,
+                  title: current.title ?? "Widget",
+                  type: (current.type ?? "bar") as DashboardWidgetRendererWidget["type"],
+                },
               });
             }
           }
@@ -415,7 +288,7 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
               key={widget.id}
               className={widget.gridSpan === 2 ? "col-span-2 min-h-0" : "col-span-1 min-h-0"}
             >
-              <MiniWidgetTile widget={widget} />
+              <MiniWidgetTile widget={widget} darkChartTheme={darkChartTheme} />
             </div>
           ))}
         </div>

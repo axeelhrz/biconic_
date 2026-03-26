@@ -67,9 +67,13 @@ type MetricBlockProps = {
   chartGridXDisplay?: boolean;
   chartGridYDisplay?: boolean;
   chartGridColor?: string;
+  /** Visibilidad de ejes desde aggregationConfig */
+  chartAxisXVisible?: boolean;
+  chartAxisYVisible?: boolean;
   /** Widget completo para renderizar con el mismo componente que la vista final (editor = vista fiel) */
   widgetForRenderer?: DashboardWidgetRendererWidget;
   showTechnicalPreview?: boolean;
+  darkChartTheme?: boolean;
 };
 
 const STATE_LABELS: Record<MetricBlockState, string> = {
@@ -99,8 +103,11 @@ export function MetricBlock({
   chartGridXDisplay,
   chartGridYDisplay,
   chartGridColor,
+  chartAxisXVisible,
+  chartAxisYVisible,
   widgetForRenderer,
   showTechnicalPreview = false,
+  darkChartTheme = false,
 }: MetricBlockProps) {
   const hasViz = useMemo(() => {
     if (chartType === "kpi") return kpiValue != null;
@@ -125,13 +132,15 @@ export function MetricBlock({
         chartGridXDisplay,
         chartGridYDisplay,
         chartGridColor,
+        chartAxisXVisible,
+        chartAxisYVisible,
       },
       chartStyle: toChartStyleConfig({
         valueType: "none",
       }),
       minHeight,
     };
-  }, [id, chartType, title, chartConfig, tableRows, kpiValue, chartGridXDisplay, chartGridYDisplay, chartGridColor, minHeight]);
+  }, [id, chartType, title, chartConfig, tableRows, kpiValue, chartGridXDisplay, chartGridYDisplay, chartGridColor, chartAxisXVisible, chartAxisYVisible, minHeight]);
 
   return (
     <article
@@ -272,6 +281,7 @@ export function MetricBlock({
               isLoading={false}
               hideHeader
               showTechnicalPreview={showTechnicalPreview}
+              darkChartTheme={darkChartTheme}
               minHeight={220}
               className="!border-0 !p-0 !shadow-none h-full"
             />

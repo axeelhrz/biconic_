@@ -278,6 +278,8 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
     chartGridXDisplay: cfg.chartGridXDisplay,
     chartGridYDisplay: cfg.chartGridYDisplay,
     chartGridColor: cfg.chartGridColor,
+    chartAxisXVisible: cfg.chartAxisXVisible,
+    chartAxisYVisible: cfg.chartAxisYVisible,
     chartScalePerMetric: cfg.chartScalePerMetric,
     chartSortDirection: cfg.chartSortDirection,
     chartSortBy: cfg.chartSortBy,

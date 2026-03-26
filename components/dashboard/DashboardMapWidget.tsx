@@ -49,13 +49,17 @@ export function DashboardMapWidget({
   aggregationConfig,
   height = 280,
 }: DashboardMapWidgetProps) {
-  const { points, valueKey, labelKey, latCol, lonCol } = useMemo(() => {
+  const { markers, valueKey, unresolvedCount } = useMemo(() => {
     if (!Array.isArray(rows) || rows.length === 0) {
-      return { points: [] as [number, number][], valueKey: "", labelKey: "", latCol: "", lonCol: "" };
+      return { markers: [] as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>, valueKey: "", unresolvedCount: 0 };
     }
     const first = rows[0] as Record<string, unknown>;
     const keys = Object.keys(first);
 
+    const geoLatKey = keys.find((k) => /^__geo_lat$/i.test(k));
+    const geoLonKey = keys.find((k) => /^__geo_lon$/i.test(k));
+    const geoLabelKey = keys.find((k) => /^__geo_label$/i.test(k));
+    const geoSourceKey = keys.find((k) => /^__geo_source$/i.test(k));
     const latKey = keys.find(
       (k) => /^lat$|^latitude$/i.test(k) || (typeof first[k] === "number" && /lat/i.test(k))
     );
@@ -63,8 +67,8 @@ export function DashboardMapWidget({
       (k) => /^lon$|^lng$|^longitude$/i.test(k) || (k !== latKey && typeof first[k] === "number" && /lon|lng|long/i.test(k))
     );
 
-    let latColRes = latKey ?? null;
-    let lonColRes = lonKey ?? null;
+    let latColRes = geoLatKey ?? latKey ?? null;
+    let lonColRes = geoLonKey ?? lonKey ?? null;
     if (!latColRes || !lonColRes) {
       const withLat = keys.find((k) => /lat|latitude/i.test(k));
       const withLon = keys.find((k) => /lon|lng|longitude/i.test(k));
@@ -82,24 +86,48 @@ export function DashboardMapWidget({
 
     const xAxis = aggregationConfig?.chartXAxis ?? aggregationConfig?.dimension ?? aggregationConfig?.dimensions?.[0];
     const yAxes = aggregationConfig?.chartYAxes;
-    const labelKeyRes = (xAxis && keys.includes(xAxis)) ? xAxis : (keys.find((k) => typeof first[k] === "string") ?? "");
+    const labelKeyRes = geoLabelKey ?? ((xAxis && keys.includes(xAxis)) ? xAxis : (keys.find((k) => typeof first[k] === "string") ?? ""));
     const valueKeyRes = (Array.isArray(yAxes) && yAxes[0] && keys.includes(yAxes[0])) ? yAxes[0] : (keys.find((k) => typeof first[k] === "number" && k !== latColRes && k !== lonColRes) ?? "");
 
     if (!latColRes || !lonColRes) {
-      return { points: [], valueKey: valueKeyRes ?? "", labelKey: labelKeyRes ?? "", latCol: "", lonCol: "" };
+      const unresolved = rows.length;
+      return { markers: [], valueKey: valueKeyRes ?? "", unresolvedCount: unresolved };
     }
 
-    const pointsRes: [number, number][] = rows.map((row) => {
+    const markersRes = rows.slice(0, 500).map((row) => {
       const r = row as Record<string, unknown>;
       const lat = Number(r[latColRes!]);
       const lon = Number(r[lonColRes!]);
-      return [lat, lon];
-    }).filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon)) as [number, number][];
+      const rawLabel = labelKeyRes ? r[labelKeyRes] : "";
+      const label = rawLabel != null ? String(rawLabel) : "";
+      const valueCandidate = valueKeyRes ? Number(r[valueKeyRes]) : NaN;
+      const sourceValue = geoSourceKey ? String(r[geoSourceKey] ?? "") : "native";
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+      return {
+        lat,
+        lon,
+        value: Number.isFinite(valueCandidate) ? valueCandidate : null,
+        label,
+        source: sourceValue,
+      };
+    }).filter(Boolean) as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>;
 
-    return { points: pointsRes, valueKey: valueKeyRes ?? "", labelKey: labelKeyRes ?? "", latCol: latColRes, lonCol: lonColRes };
+    const unresolvedCountRes = rows.reduce((acc, row) => {
+      const r = row as Record<string, unknown>;
+      const lat = Number(r[latColRes!]);
+      const lon = Number(r[lonColRes!]);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) return acc;
+      const unresolvedFlag = r.__geo_resolved;
+      if (unresolvedFlag === false) return acc + 1;
+      return acc + 1;
+    }, 0);
+
+    return { markers: markersRes, valueKey: valueKeyRes ?? "", unresolvedCount: unresolvedCountRes };
   }, [rows, aggregationConfig]);
 
-  if (points.length === 0) {
+  const points = markers.map((m) => [m.lat, m.lon] as [number, number]);
+
+  if (markers.length === 0) {
     return (
       <div
         className="flex flex-1 flex-col items-center justify-center rounded border text-center text-sm"
@@ -110,15 +138,36 @@ export function DashboardMapWidget({
         }}
       >
         <p className="mb-1">Sin coordenadas para mostrar en el mapa</p>
-        <p className="text-xs">Añadí columnas de latitud y longitud (ej. lat, lon) para ver marcadores.</p>
+        <p className="text-xs">Verificá una dimensión geo (país/provincia/localidad) o columnas de latitud/longitud.</p>
       </div>
     );
   }
 
-  const accentColor = "var(--platform-accent, #0ea5e9)";
+  const numericValues = markers.map((m) => m.value).filter((v): v is number => Number.isFinite(v));
+  const minValue = numericValues.length > 0 ? Math.min(...numericValues) : null;
+  const maxValue = numericValues.length > 0 ? Math.max(...numericValues) : null;
+  const hasRange = minValue != null && maxValue != null && maxValue > minValue;
+  const getIntensity = (value: number | null) => {
+    if (value == null || minValue == null || maxValue == null) return 0.45;
+    if (!hasRange) return 0.6;
+    return Math.max(0, Math.min(1, (value - minValue) / (maxValue - minValue)));
+  };
+  const getRadius = (value: number | null) => {
+    const intensity = getIntensity(value);
+    return 5 + intensity * 9;
+  };
+  const getFillColor = (value: number | null) => {
+    const intensity = getIntensity(value);
+    const lightness = 72 - intensity * 34;
+    return `hsl(199 89% ${lightness}%)`;
+  };
+  const getFillOpacity = (value: number | null) => {
+    const intensity = getIntensity(value);
+    return 0.4 + intensity * 0.45;
+  };
 
   return (
-    <div className="rounded overflow-hidden border" style={{ height: `${height}px`, borderColor: "var(--platform-border, #e2e8f0)" }}>
+    <div className="relative rounded overflow-hidden border" style={{ height: `${height}px`, borderColor: "var(--platform-border, #e2e8f0)" }}>
       <MapContainer
         center={DEFAULT_CENTER}
         zoom={DEFAULT_ZOOM}
@@ -130,32 +179,48 @@ export function DashboardMapWidget({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <FitBounds points={points} />
-        {rows.slice(0, 500).map((row, i) => {
-          const r = row as Record<string, unknown>;
-          const lat = Number(r[latCol]);
-          const lon = Number(r[lonCol]);
-          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-          const label = labelKey ? String(r[labelKey] ?? "") : "";
-          const value = valueKey ? (r[valueKey] != null ? String(r[valueKey]) : "") : "";
-          const popupContent = [label, value].filter(Boolean).join(" — ") || `(${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+        {markers.map((marker, i) => {
+          const value = marker.value != null ? String(marker.value) : "";
+          const popupLabel = marker.label || `(${marker.lat.toFixed(4)}, ${marker.lon.toFixed(4)})`;
+          const popupContent = [popupLabel, value].filter(Boolean).join(" — ");
+          const radius = getRadius(marker.value);
+          const fillColor = getFillColor(marker.value);
+          const fillOpacity = getFillOpacity(marker.value);
           return (
             <CircleMarker
               key={i}
-              center={[lat, lon]}
-              radius={6}
+              center={[marker.lat, marker.lon]}
+              radius={radius}
               pathOptions={{
-                fillColor: accentColor,
-                color: accentColor,
+                fillColor,
+                color: fillColor,
                 weight: 1.5,
                 opacity: 0.9,
-                fillOpacity: 0.6,
+                fillOpacity,
               }}
             >
-              <Popup>{popupContent}</Popup>
+              <Popup>
+                <div className="space-y-1 text-xs">
+                  <div>{popupContent}</div>
+                  {valueKey ? <div>Valor: {value}</div> : null}
+                  <div>Fuente: {marker.source || "native"}</div>
+                </div>
+              </Popup>
             </CircleMarker>
           );
         })}
       </MapContainer>
+      {unresolvedCount > 0 ? (
+        <div
+          className="pointer-events-none absolute bottom-2 left-2 rounded px-2 py-1 text-[11px]"
+          style={{
+            background: "rgba(15,23,42,0.75)",
+            color: "#f8fafc",
+          }}
+        >
+          {unresolvedCount} ubicaciones sin resolver
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -5,21 +5,6 @@ import type { ComponentType } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight, Plus, LayoutDashboard, Pencil, Trash2, Loader2, RefreshCw, BarChart2, LineChart, PieChart, Donut, Hash, Table2, Sparkles, AreaChart, ScatterChart, MapPin, TrendingUp, HelpCircle } from "lucide-react";
-import { Bar, Line, Pie, Doughnut, Scatter } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  RadialLinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  ArcElement,
-  Tooltip,
-  Legend,
-  Filler,
-} from "chart.js";
-import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,20 +28,6 @@ import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget
 import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
-
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  RadialLinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  ArcElement,
-  Tooltip,
-  Legend,
-  Filler,
-  ChartDataLabels
-);
 
 // Reserved for future UI (e.g. aggregate function selector)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -311,6 +282,14 @@ const EXCEL_FORMULAS_REFERENCIA: { categoria: string; funciones: { nombre: strin
 
 type ColumnRole = "key" | "time" | "dimension" | "measure" | "geo";
 type GeoType = "country" | "province" | "city" | "address" | "lat_lon";
+type GeoHints = {
+  countryField?: string;
+  provinceField?: string;
+  cityField?: string;
+  addressField?: string;
+  latField?: string;
+  lonField?: string;
+};
 
 const GEO_TYPE_LABELS: Record<GeoType, string> = {
   country: "País",
@@ -517,6 +496,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartGridXDisplay, setChartGridXDisplay] = useState(true);
   const [chartGridYDisplay, setChartGridYDisplay] = useState(true);
   const [chartGridColor, setChartGridColor] = useState<string>("");
+  const [chartAxisXVisible, setChartAxisXVisible] = useState(true);
+  const [chartAxisYVisible, setChartAxisYVisible] = useState(true);
   const [chartScalePerMetric, setChartScalePerMetric] = useState<Record<string, { min?: number; max?: number; step?: number }>>({});
   const [interCrossFilter, setInterCrossFilter] = useState(true);
   const [interCrossFilterFields, setInterCrossFilterFields] = useState<string[]>([]);
@@ -1392,6 +1373,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartGridXDisplay(cfg.chartGridXDisplay !== false);
       setChartGridYDisplay(cfg.chartGridYDisplay !== false);
       setChartGridColor(typeof cfg.chartGridColor === "string" ? cfg.chartGridColor : "");
+      setChartAxisXVisible(cfg.chartAxisXVisible !== false);
+      setChartAxisYVisible(cfg.chartAxisYVisible !== false);
       setChartScalePerMetric(cfg.chartScalePerMetric && typeof cfg.chartScalePerMetric === "object" ? cfg.chartScalePerMetric : {});
       setShowDataLabels(!!cfg.showDataLabels);
       setLabelVisibilityMode(
@@ -1475,6 +1458,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartSeriesColors({});
       setChartLabelOverrides({});
       setChartMetricFormats({});
+      setChartAxisXVisible(true);
+      setChartAxisYVisible(true);
       setShowDataLabels(true);
       setLabelVisibilityMode("auto");
       setTransformCompare("none");
@@ -1794,6 +1779,32 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return { hasDimension: hasDim, hasGeo };
   }, [formDimensions, columnRoles]);
 
+  const geoHints = useMemo<GeoHints | undefined>(() => {
+    const keys = Object.keys(columnRoles);
+    if (keys.length === 0) return undefined;
+    const prioritized = Array.from(new Set([...formDimensions, ...keys]));
+    const pickByGeoType = (geoType: GeoType) =>
+      prioritized.find((k) => columnRoles[k]?.role === "geo" && columnRoles[k]?.geoType === geoType);
+    const pickByRegex = (re: RegExp) => prioritized.find((k) => re.test(k));
+
+    const countryField = pickByGeoType("country") ?? pickByRegex(/pais|country|nation|naci[oó]n/i);
+    const provinceField = pickByGeoType("province") ?? pickByRegex(/provincia|estado|state|region|departamento/i);
+    const cityField = pickByGeoType("city") ?? pickByRegex(/ciudad|city|localidad|municipio|town/i);
+    const addressField = pickByGeoType("address") ?? pickByRegex(/direccion|domicilio|address|calle|street/i);
+    const latField = pickByRegex(/^lat$|latitud|latitude/i);
+    const lonField = pickByRegex(/^lon$|^lng$|longitud|longitude/i);
+
+    const hints: GeoHints = {
+      ...(countryField ? { countryField } : {}),
+      ...(provinceField ? { provinceField } : {}),
+      ...(cityField ? { cityField } : {}),
+      ...(addressField ? { addressField } : {}),
+      ...(latField ? { latField } : {}),
+      ...(lonField ? { lonField } : {}),
+    };
+    return Object.keys(hints).length > 0 ? hints : undefined;
+  }, [columnRoles, formDimensions]);
+
   const chartAutoSelectedRef = useRef(false);
   useEffect(() => {
     if (editingId) return;
@@ -1831,6 +1842,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         enabled: true,
         dimension: chartXAxis || formDimensions[0],
         dimensions: formDimensions,
+        geoHints,
         metrics,
         chartType: formChartType,
         chartXAxis,
@@ -1869,6 +1881,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartSortByMetric,
     chartAxisOrder,
     labelVisibilityMode,
+    geoHints,
   ]);
 
   /** Filas de vista previa con orden y Top N aplicados desde el pipeline compartido. */
@@ -1917,7 +1930,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     ) as DateGranularity | undefined;
     return {
       id: "metric-preview",
-      type: formChartType as "bar" | "horizontalBar" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter",
+      type: formChartType as "bar" | "horizontalBar" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter" | "map",
       title: formName?.trim() || "Vista previa",
       config: previewChartConfig ?? undefined,
       rows:
@@ -1928,6 +1941,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartType: formChartType,
         chartXAxis,
         chartYAxes,
+        geoHints,
         chartSeriesField,
         dateDimension: timeColumn || undefined,
         dateGroupByGranularity: normalizedGranularity,
@@ -1941,6 +1955,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartGridXDisplay,
         chartGridYDisplay,
         chartGridColor,
+        chartAxisXVisible,
+        chartAxisYVisible,
         chartScaleMode,
         chartScaleMin,
         chartScaleMax,
@@ -1976,6 +1992,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     formChartType,
     formName,
     chartXAxis,
+    geoHints,
     chartSeriesField,
     chartRankingEnabled,
     chartRankingTop,
@@ -1987,6 +2004,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartGridXDisplay,
     chartGridYDisplay,
     chartGridColor,
+    chartAxisXVisible,
+    chartAxisYVisible,
     chartScaleMode,
     chartScaleMin,
     chartScaleMax,
@@ -2089,6 +2108,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     if (wizard !== "D" || wizardStep !== 1) return;
     const dims = chartDimensionColumns;
     const nums = chartNumericColumns;
+    const formulaResultKey = (() => {
+      for (let i = effectiveFormMetrics.length - 1; i >= 0; i--) {
+        const metric = effectiveFormMetrics[i];
+        if (String(metric?.func ?? "").trim().toUpperCase() !== "FORMULA") continue;
+        const alias = String(metric?.alias ?? metric?.field ?? "").trim();
+        if (alias) {
+          const byAlias = nums.find((col) => col.key === alias);
+          if (byAlias) return byAlias.key;
+        }
+        const byInternal = nums.find((col) => col.key === `metric_${i}`);
+        if (byInternal) return byInternal.key;
+      }
+      return undefined;
+    })();
     const chartTypeChanged = lastChartTypeForMappingRef.current !== formChartType;
     lastChartTypeForMappingRef.current = formChartType;
     const emptyMapping = !chartXAxis && chartYAxes.length === 0;
@@ -2098,19 +2131,31 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
     if (formChartType === "kpi") {
       setChartXAxis("");
-      setChartYAxes(nums.length ? [nums[0]!.key] : []);
+      setChartYAxes(formulaResultKey ? [formulaResultKey] : nums.length ? [nums[0]!.key] : []);
       setChartSeriesField("");
     } else if (formChartType === "map") {
       const geoCol = dims.find((c) => columnRoles[c.key]?.role === "geo") ?? dims[0];
       setChartXAxis(geoCol?.key ?? "");
-      setChartYAxes(nums.length ? nums.slice(0, 2).map((c) => c.key) : []);
+      setChartYAxes(
+        formulaResultKey
+          ? [formulaResultKey]
+          : nums.length
+            ? nums.slice(0, 2).map((c) => c.key)
+            : []
+      );
       setChartSeriesField("");
     } else {
       if (!chartXAxis && dims.length > 0) setChartXAxis(dims[0]!.key);
-      if (chartYAxes.length === 0 && nums.length > 0) setChartYAxes(nums.slice(0, Math.min(3, nums.length)).map((c) => c.key));
+      if (chartYAxes.length === 0 && nums.length > 0) {
+        setChartYAxes(
+          formulaResultKey
+            ? [formulaResultKey]
+            : nums.slice(0, Math.min(3, nums.length)).map((c) => c.key)
+        );
+      }
       if (dims.length >= 2 && !chartSeriesField) setChartSeriesField(dims[1]!.key);
     }
-  }, [wizard, wizardStep, formChartType, chartDimensionColumns, chartNumericColumns, chartXAxis, chartYAxes.length, chartSeriesField, columnRoles, editingId]);
+  }, [wizard, wizardStep, formChartType, chartDimensionColumns, chartNumericColumns, chartXAxis, chartYAxes.length, chartSeriesField, columnRoles, editingId, effectiveFormMetrics]);
 
   /** Encabezados para la tabla de previsualización: metric_0 → alias de la métrica (estilo Excel). */
   const previewDisplayHeaders = useMemo(() => {
@@ -2310,6 +2355,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       dimension: formDimensions[0] || undefined,
       dimension2: formDimensions[1] || undefined,
       dimensions: formDimensions.length > 0 ? formDimensions : undefined,
+      geoHints,
       metrics: effectiveFormMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` })),
       filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
       orderBy: formOrderBy ?? undefined,
@@ -2383,6 +2429,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
       chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
       chartGridColor: chartGridColor.trim() || undefined,
+      chartAxisXVisible: chartAxisXVisible === false ? false : undefined,
+      chartAxisYVisible: chartAxisYVisible === false ? false : undefined,
       chartScalePerMetric: Object.keys(chartScalePerMetric).length > 0 ? chartScalePerMetric : undefined,
       showDataLabels: showDataLabels || undefined,
       labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
@@ -2582,6 +2630,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       dimension: formDimensions[0] || undefined,
       dimension2: formDimensions[1] || undefined,
       dimensions: formDimensions.length > 0 ? formDimensions : undefined,
+      geoHints,
       metrics: metricsToStore,
       filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
       orderBy: formOrderBy ?? undefined,
@@ -2655,6 +2704,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
       chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
       chartGridColor: chartGridColor.trim() || undefined,
+      chartAxisXVisible: chartAxisXVisible === false ? false : undefined,
+      chartAxisYVisible: chartAxisYVisible === false ? false : undefined,
       chartScalePerMetric: Object.keys(chartScalePerMetric).length > 0 ? chartScalePerMetric : undefined,
       showDataLabels: showDataLabels || undefined,
       labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
@@ -2740,6 +2791,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartType: formChartType || undefined,
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
+      geoHints,
       chartSeriesField: chartSeriesField || undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
       labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
@@ -2752,6 +2804,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
       chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
       chartGridColor: chartGridColor.trim() || undefined,
+      chartAxisXVisible: chartAxisXVisible === false ? false : undefined,
+      chartAxisYVisible: chartAxisYVisible === false ? false : undefined,
       chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
       chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
       chartSortByMetric: chartSortByMetric || undefined,
@@ -5143,6 +5197,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         </div>
                       </div>
                     </div>
+                    <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Visibilidad de ejes</Label>
+                      <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Ocultá o mostrá cada eje sin perder la configuración del gráfico.</p>
+                      <div className="flex flex-wrap items-center gap-4">
+                        <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                          <input type="checkbox" checked={chartAxisXVisible} onChange={(e) => setChartAxisXVisible(e.target.checked)} className="rounded" />
+                          Mostrar eje X
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                          <input type="checkbox" checked={chartAxisYVisible} onChange={(e) => setChartAxisYVisible(e.target.checked)} className="rounded" />
+                          Mostrar eje Y
+                        </label>
+                      </div>
+                    </div>
 
                     {/* 6.3.3 Ranking */}
                     <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
@@ -5366,243 +5434,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                             </table>
                           </div>
                         )}
-                        {previewChartConfig && formChartType !== "kpi" && formChartType !== "table" && formChartType !== "map" && (() => {
-                          if (previewWidgetForRenderer) {
-                            return (
-                              <div className="h-[320px] w-full">
-                                <DashboardWidgetRenderer
-                                  widget={previewWidgetForRenderer}
-                                  isLoading={false}
-                                  hideHeader
-                                  minHeight={320}
-                                  className="!border-0 !p-0 !shadow-none h-full"
-                                />
-                              </div>
-                            );
-                          }
-                          const yValues = previewChartConfig.datasets?.flatMap((d: { data?: number[] }) => d.data ?? []) ?? [];
-                          const dataMin = yValues.length ? Math.min(...yValues) : 0;
-                          const dataMax = yValues.length ? Math.max(...yValues) : 100;
-                          const yMinGlobal = chartScaleMode === "custom" && chartScaleMin !== "" && !isNaN(Number(chartScaleMin)) ? Number(chartScaleMin) : chartScaleMode === "dataset" ? dataMin : undefined;
-                          const yMaxGlobal = chartScaleMode === "custom" && chartScaleMax !== "" && !isNaN(Number(chartScaleMax)) ? Number(chartScaleMax) : chartScaleMode === "dataset" ? dataMax : undefined;
-                          const stepSizeGlobal = chartAxisStep !== "" && !isNaN(Number(chartAxisStep)) ? Number(chartAxisStep) : undefined;
-                          const scaleForMetric = (key: string) => {
-                            const per = key ? chartScalePerMetric[key] : undefined;
-                            return {
-                              min: per?.min ?? yMinGlobal,
-                              max: per?.max ?? yMaxGlobal,
-                              step: per?.step ?? stepSizeGlobal,
-                            };
-                          };
-                          const key0 = chartYAxes[0];
-                          const s0 = scaleForMetric(key0 ?? "");
-                          const axisColor = "#64748b";
-                          const gridColor = chartGridColor.trim() || "#e2e8f0";
-                          const gridX = { display: chartGridXDisplay, color: gridColor };
-                          const gridY = { display: chartGridYDisplay, color: gridColor };
-                          const axisScales = {
-                            x: {
-                              display: true,
-                              grid: gridX,
-                              ticks: { color: axisColor, maxTicksLimit: 8, font: { size: 11 } },
-                              title: { display: false },
-                            },
-                            y: {
-                              display: true,
-                              grid: gridY,
-                              ticks: { color: axisColor, font: { size: 11 }, ...(s0.step != null ? { stepSize: s0.step } : {}) },
-                              ...(s0.min != null ? { min: s0.min } : {}),
-                              ...(s0.max != null ? { max: s0.max } : {}),
-                              title: { display: false },
-                            },
-                          };
-                          const isComboTwo = formChartType === "combo" && previewChartConfig.datasets?.length >= 2;
-                          let comboScales: Record<string, unknown> = axisScales;
-                          let comboPreviewData: typeof previewChartConfig = previewChartConfig;
-                          if (isComboTwo && previewChartConfig.datasets?.[0]?.data && previewChartConfig.datasets?.[1]?.data) {
-                            const d0 = previewChartConfig.datasets[0].data as number[];
-                            const d1 = previewChartConfig.datasets[1].data as number[];
-                            const min0 = Math.min(...d0);
-                            const max0 = Math.max(...d0);
-                            const min1 = Math.min(...d1);
-                            const max1 = Math.max(...d1);
-                            const range0 = max0 - min0 || 1;
-                            const range1 = max1 - min1 || 1;
-                            const cfg0 = chartYAxes[0] ? (chartMetricFormats[chartYAxes[0]] ?? { valueType: chartValueType, valueScale: chartValueScale, currencySymbol: chartCurrencySymbol, decimals: chartDecimals, thousandSep: chartThousandSep }) : {};
-                            const cfg1 = chartYAxes[1] ? (chartMetricFormats[chartYAxes[1]] ?? { valueType: chartValueType, valueScale: chartValueScale, currencySymbol: chartCurrencySymbol, decimals: chartDecimals, thousandSep: chartThousandSep }) : {};
-                            if (chartComboSyncAxes) {
-                              comboPreviewData = {
-                                ...previewChartConfig,
-                                datasets: [
-                                  { ...previewChartConfig.datasets[0], data: d0.map((v) => (v - min0) / range0) },
-                                  { ...previewChartConfig.datasets[1], data: d1.map((v) => (v - min1) / range1) },
-                                ],
-                              };
-                              comboScales = {
-                                ...axisScales,
-                                y: {
-                                  ...axisScales.y,
-                                  min: 0,
-                                  max: 1,
-                                  ticks: {
-                                    ...axisScales.y.ticks,
-                                    callback: (value: number) => formatWithConfig(value * range0 + min0, cfg0),
-                                  },
-                                },
-                                y1: {
-                                  display: true,
-                                  position: "right",
-                                  grid: { drawOnChartArea: false, display: chartGridYDisplay, color: gridColor },
-                                  min: 0,
-                                  max: 1,
-                                  ticks: { color: axisColor, font: { size: 11 }, callback: (value: number) => formatWithConfig(value * range1 + min1, cfg1) },
-                                  title: { display: false },
-                                },
-                              };
-                            } else {
-                              const s1 = scaleForMetric(chartYAxes[1] ?? "");
-                              comboScales = {
-                                ...axisScales,
-                                y: {
-                                  ...axisScales.y,
-                                  ticks: { color: axisColor, font: { size: 11 }, ...(s0.step != null ? { stepSize: s0.step } : {}) },
-                                  ...(s0.min != null ? { min: s0.min } : {}),
-                                  ...(s0.max != null ? { max: s0.max } : {}),
-                                  title: { display: false },
-                                },
-                                y1: {
-                                  display: true,
-                                  position: "right",
-                                  grid: { drawOnChartArea: false, display: chartGridYDisplay, color: gridColor },
-                                  ticks: { color: axisColor, font: { size: 11 }, ...(s1.step != null ? { stepSize: s1.step } : {}) },
-                                  ...(s1.min != null ? { min: s1.min } : {}),
-                                  ...(s1.max != null ? { max: s1.max } : {}),
-                                  title: { display: false },
-                                },
-                              };
-                            }
-                          }
-                          let legendTextColor = "#334155";
-                          if (typeof document !== "undefined") {
-                            const v = getComputedStyle(document.documentElement).getPropertyValue("--platform-fg")?.trim() || "";
-                            if (v && (v.startsWith("#") || v.startsWith("rgb"))) legendTextColor = v;
-                          }
-                          const legendOpts = {
-                            display: true,
-                            position: "top" as const,
-                            align: "center" as const,
-                            labels: {
-                              color: legendTextColor,
-                              font: { size: 12 },
-                              padding: 16,
-                              usePointStyle: true,
-                              pointStyle: "circle",
-                            },
-                          };
-                          const formatWithConfig = (n: number, cfg: { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }) => {
-                            const valueType = cfg.valueType ?? chartValueType;
-                            const valueScale = (cfg.valueScale ?? chartValueScale) as "none" | "K" | "M" | "BI";
-                            const decimals = cfg.decimals ?? chartDecimals;
-                            const useGrouping = cfg.thousandSep !== false && (cfg.thousandSep ?? chartThousandSep);
-                            const symbol = cfg.currencySymbol ?? chartCurrencySymbol;
-                            let val = n;
-                            let suffix = "";
-                            if (valueScale === "K" && Math.abs(n) >= 1000) { val = n / 1_000; suffix = "K"; }
-                            else if (valueScale === "M" && Math.abs(n) >= 1_000_000) { val = n / 1_000_000; suffix = "M"; }
-                            else if (valueScale === "M" && Math.abs(n) >= 1000) { val = n / 1_000; suffix = "K"; }
-                            else if (valueScale === "BI" && Math.abs(n) >= 1_000_000_000) { val = n / 1_000_000_000; suffix = "BI"; }
-                            else if (valueScale === "BI" && Math.abs(n) >= 1_000_000) { val = n / 1_000_000; suffix = "M"; }
-                            else if (valueScale === "BI" && Math.abs(n) >= 1000) { val = n / 1_000; suffix = "K"; }
-                            const formatted = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: decimals, useGrouping }).format(val);
-                            if (valueType === "percent") return `${formatted}${suffix}%`;
-                            if (valueType === "currency") return `${symbol}${formatted}${suffix}`;
-                            return `${formatted}${suffix}`;
-                          };
-                          const dataLabelsPluginOpts = showDataLabels
-                            ? {
-                                display: true,
-                                color: legendTextColor || "#334155",
-                                font: { size: 11, weight: "bold" as const },
-                                formatter: (value: unknown, ctx: { datasetIndex?: number; chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
-                                  const n = Number(value);
-                                  if (formChartType === "pie" || formChartType === "doughnut") {
-                                    const data = ctx?.chart?.data?.datasets?.[0]?.data;
-                                    if (Array.isArray(data)) {
-                                      const total = data.reduce((a: number, b: unknown) => a + Number(b), 0);
-                                      const pct = total ? (n / total) * 100 : 0;
-                                      return `${pct.toFixed(1)}%`;
-                                    }
-                                  }
-                                  if (chartYAxes.length > 1 && ctx?.datasetIndex != null && chartYAxes[ctx.datasetIndex]) {
-                                    const key = chartYAxes[ctx.datasetIndex];
-                                    const cfg = chartMetricFormats[key] ?? { valueType: chartValueType, valueScale: chartValueScale, currencySymbol: chartCurrencySymbol, decimals: chartDecimals, thousandSep: chartThousandSep };
-                                    return formatWithConfig(n, cfg);
-                                  }
-                                  return formatNumber(n);
-                                },
-                              }
-                            : { display: false };
-                          const baseOpts = {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            layout: { padding: showDataLabels ? 8 : 0 },
-                            plugins: { legend: legendOpts, datalabels: dataLabelsPluginOpts },
-                          };
-                          const areaData = { ...previewChartConfig, datasets: previewChartConfig.datasets.map((ds: Record<string, unknown>) => ({ ...ds, fill: true })) } as unknown as typeof previewChartConfig;
-                          const scatterData = previewChartConfig.datasets.length >= 1 ? {
-                            datasets: [{
-                              label: previewChartConfig.datasets[0].label,
-                              data: previewChartConfig.labels.map((_: string, i: number) => ({ x: previewChartConfig.datasets[0]?.data[i] ?? 0, y: previewChartConfig.datasets[1]?.data[i] ?? previewChartConfig.datasets[0]?.data[i] ?? 0 })),
-                              backgroundColor: previewChartConfig.datasets[0].backgroundColor,
-                              borderColor: previewChartConfig.datasets[0].borderColor,
-                            }],
-                          } : previewChartConfig;
-                          // eslint-disable-next-line @typescript-eslint/no-unused-vars -- reserved for Radar chart type
-                          const _radarData = { labels: previewChartConfig.labels, datasets: previewChartConfig.datasets.map((ds: Record<string, unknown>) => ({ ...ds, fill: true, backgroundColor: ds.backgroundColor, borderColor: ds.borderColor })) };
-                          const ds0 = previewChartConfig.datasets?.[0];
-                          const pieDoughnutLegendOpts: Record<string, unknown> = (ds0 && Array.isArray(ds0.backgroundColor) && previewChartConfig.labels?.length) ? {
-                            display: true,
-                            position: "right",
-                            labels: {
-                              color: legendTextColor,
-                              font: { size: 12, color: legendTextColor },
-                              padding: 12,
-                              usePointStyle: false,
-                              generateLabels: () =>
-                                (previewChartConfig.labels as string[]).map((label, i) => {
-                                  const bg = (ds0.backgroundColor as string[])[i] ?? ds0.backgroundColor?.[0] ?? "#0ea5e9";
-                                  return {
-                                    text: String(label || ""),
-                                    fillStyle: typeof bg === "string" ? bg : "#0ea5e9",
-                                    strokeStyle: "#fff",
-                                    lineWidth: 1,
-                                    hidden: false,
-                                    index: i,
-                                    datasetIndex: 0,
-                                    fontColor: legendTextColor,
-                                  };
-                                }),
-                            },
-                          } : { display: true, position: "right", labels: { color: legendTextColor, font: { size: 12, color: legendTextColor } } };
-                          return (
-                            <div className="h-[320px] w-full" style={{ color: "var(--platform-fg)" }}>
-                              {formChartType === "bar" && <Bar data={previewChartConfig as never} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "horizontalBar" && <Bar data={previewChartConfig as never} options={{ ...baseOpts, indexAxis: "y" as const, scales: { x: axisScales.x, y: { ...axisScales.y, ticks: { ...axisScales.y.ticks, maxTicksLimit: 12 } } } }} />}
-                              {formChartType === "line" && <Line data={previewChartConfig as never} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "area" && <Line data={areaData as never} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "pie" && <Pie data={previewChartConfig as never} options={{ ...baseOpts, plugins: { ...baseOpts.plugins, legend: pieDoughnutLegendOpts } } as Record<string, unknown>} />}
-                              {formChartType === "doughnut" && <Doughnut data={previewChartConfig as never} options={{ ...baseOpts, plugins: { ...baseOpts.plugins, legend: pieDoughnutLegendOpts } } as Record<string, unknown>} />}
-                              {formChartType === "scatter" && <Scatter data={scatterData as { datasets: { label: string; data: { x: number; y: number }[]; backgroundColor: string; borderColor: string }[] }} options={{ ...baseOpts, scales: axisScales }} />}
-                              {formChartType === "combo" && <Bar data={comboPreviewData as never} options={{ ...baseOpts, scales: comboScales as typeof axisScales }} />}
-                              {!["bar", "horizontalBar", "line", "area", "pie", "doughnut", "scatter", "combo", "kpi", "table", "map"].includes(formChartType) && <Bar data={previewChartConfig as never} options={{ ...baseOpts, scales: axisScales }} />}
-                            </div>
-                          );
-                        })()}
-                        {formChartType === "map" && (
-                          <div className="flex flex-col items-center justify-center min-h-[280px] rounded-lg border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                            <MapPin className="h-10 w-10 mb-3" style={{ color: "var(--platform-accent)" }} />
-                            <p className="text-sm font-medium mb-1" style={{ color: "var(--platform-fg)" }}>Visualización de mapa</p>
-                            <p className="text-xs text-center max-w-sm" style={{ color: "var(--platform-fg-muted)" }}>El mapa se renderizará en el dashboard con los datos geográficos de las dimensiones seleccionadas (país, provincia, ciudad, coordenadas).</p>
+                        {previewWidgetForRenderer && formChartType !== "kpi" && formChartType !== "table" && (
+                          <div className="h-[320px] w-full">
+                            <DashboardWidgetRenderer
+                              widget={previewWidgetForRenderer}
+                              isLoading={false}
+                              hideHeader
+                              minHeight={320}
+                              className="!border-0 !p-0 !shadow-none h-full"
+                            />
                           </div>
                         )}
                         {previewData && previewData.length > 0 && (

@@ -118,20 +118,29 @@ export function getLayoutPadding(style?: ChartStyleConfig | null): number {
 
 export function getValueFormatter(
   style?: ChartStyleConfig | null,
-  labelMode?: "percent" | "value"
+  labelMode?: "percent" | "value" | "both"
 ) {
   const format = (style?.valueFormat ?? "none") as ValueFormatType;
   const symbol = style?.currencySymbol ?? "$";
   const scale = (style?.valueScale ?? "none") as ValueScaleType;
   const decimals = style?.decimals ?? 2;
   const useGrouping = style?.useGrouping !== false;
+  const formatMetricValue = (rawValue: number) =>
+    formatValue(Number(rawValue), format, symbol, scale, decimals, useGrouping);
+  const formatPercent = (rawValue: number, total: number) => {
+    const pct = total ? (Number(rawValue) / total) * 100 : 0;
+    return `${pct.toFixed(Math.min(1, decimals))}%`;
+  };
   return (value: number, ctx?: { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
-    if (labelMode === "percent" && ctx?.chart?.data?.datasets?.[0]?.data) {
-      const total = (ctx.chart.data.datasets[0].data as number[]).reduce((a, b) => Number(a) + Number(b), 0);
-      const pct = total ? (Number(value) / total) * 100 : 0;
-      return `${pct.toFixed(Math.min(1, decimals))}%`;
+    const firstDataset = ctx?.chart?.data?.datasets?.[0]?.data;
+    if ((labelMode === "percent" || labelMode === "both") && Array.isArray(firstDataset)) {
+      const total = firstDataset.reduce((acc, current) => acc + Number(current), 0);
+      if (labelMode === "percent") return formatPercent(Number(value), total);
+      const valueText = formatMetricValue(Number(value));
+      const percentText = formatPercent(Number(value), total);
+      return `${valueText}\n${percentText}`;
     }
-    return formatValue(Number(value), format, symbol, scale, decimals, useGrouping);
+    return formatMetricValue(Number(value));
   };
 }
 
@@ -288,7 +297,7 @@ export function createLegendLabelFilter(params: {
 export function buildChartOptions(
   type: "bar" | "line" | "pie" | "doughnut" | "horizontalBar",
   style?: ChartStyleConfig | null,
-  labelDisplayMode?: "percent" | "value"
+  labelDisplayMode?: "percent" | "value" | "both"
 ): Record<string, unknown> {
   const padding = getLayoutPadding(style);
   const formatter = getValueFormatter(style, type === "pie" || type === "doughnut" ? (labelDisplayMode || "percent") : "value");
@@ -407,16 +416,23 @@ export function buildPieDoughnutLegendShared(
   return {
     display: true,
     position: "right" as const,
+    align: "center" as const,
+    maxWidth: 220,
     labels: {
       color: textColor,
       font: { size: 12, color: textColor },
-      padding: 12,
-      usePointStyle: false,
+      boxWidth: 10,
+      boxHeight: 10,
+      padding: 10,
+      usePointStyle: true,
+      pointStyle: "circle",
       generateLabels: () =>
         chartConfig.labels!.map((label, i) => {
           const bg = (ds0.backgroundColor as string[])[i] ?? (typeof ds0.backgroundColor === "string" ? ds0.backgroundColor : "#0ea5e9");
+          const text = String(label || "");
+          const compactText = text.length > 42 ? `${text.slice(0, 39)}...` : text;
           return {
-            text: String(label || ""),
+            text: compactText,
             fillStyle: typeof bg === "string" ? bg : "#0ea5e9",
             strokeStyle: "#fff",
             lineWidth: 1,

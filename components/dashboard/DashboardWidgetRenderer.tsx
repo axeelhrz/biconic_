@@ -30,7 +30,7 @@ import {
   type ChartLabelVisibilityMode,
   type ChartStyleConfig,
 } from "@/lib/dashboard/chartOptions";
-import { formatDateByGranularity, type DateGranularity } from "@/lib/dashboard/dateFormatting";
+import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 
@@ -98,7 +98,7 @@ export interface DashboardWidgetRendererWidget {
   content?: string;
   filterConfig?: FilterWidgetConfig;
   facetValues?: Record<string, unknown[]>;
-  labelDisplayMode?: "percent" | "value";
+  labelDisplayMode?: "percent" | "value" | "both";
   chartStyle?: ChartStyleConfig;
   /** Un estilo por dataset cuando el gráfico tiene varias métricas (formato por métrica). */
   chartMetricStyles?: (ChartStyleConfig | undefined)[];
@@ -251,10 +251,12 @@ export function DashboardWidgetRenderer({
     return formatKpiValue(sum, widget.chartStyle as ChartStyleConfig | undefined);
   }, [chartType, chartConfig, widget.rows, widget.chartStyle, widget.type, widget.aggregationConfig, widget.source]);
 
-  const isCombo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2;
   const aggConfig = widget.aggregationConfig as {
     chartComboSyncAxes?: boolean;
     chartYAxes?: string[];
+    chartSeriesField?: string;
+    dimension2?: string;
+    chartStackBySeries?: boolean;
     chartScaleMode?: "auto" | "dataset" | "custom";
     chartScaleMin?: string | number;
     chartScaleMax?: string | number;
@@ -263,6 +265,71 @@ export function DashboardWidgetRenderer({
     showDataLabels?: boolean;
     labelVisibilityMode?: ChartLabelVisibilityMode;
   } | undefined;
+  const tableColumnOrder = useMemo(() => {
+    if (!Array.isArray(tableRows) || tableRows.length === 0) return [];
+    const firstRowKeys = Object.keys(tableRows[0] ?? {});
+    if (chartType !== "table") return firstRowKeys;
+    const axis = resolveWidgetAxisKeys(tableRows as Record<string, unknown>[], {
+      type: widget.type,
+      aggregationConfig: widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
+      source: widget.source as BuildChartConfigWidget["source"],
+    });
+    if (!axis) return firstRowKeys;
+    const aggRaw = (widget.aggregationConfig ?? {}) as {
+      dimension?: string;
+      dimensions?: string[];
+      dimension2?: string;
+    };
+    const dimensionCandidates = [
+      axis.xKey,
+      aggRaw.dimension,
+      ...(Array.isArray(aggRaw.dimensions) ? aggRaw.dimensions : []),
+      aggRaw.dimension2,
+      widget.source?.labelField,
+    ]
+      .map((k) => String(k ?? "").trim())
+      .filter(Boolean);
+    const dimensionsOrdered = Array.from(new Set(dimensionCandidates))
+      .filter((k) => !axis.yKeys.includes(k) && firstRowKeys.includes(k));
+    const metricsOrdered = axis.yKeys.filter((k) => firstRowKeys.includes(k));
+    const selected = [...dimensionsOrdered, ...metricsOrdered];
+    return selected.length > 0 ? selected : firstRowKeys;
+  }, [tableRows, chartType, widget.type, widget.aggregationConfig, widget.source]);
+  const tableMetricFormatters = useMemo(() => {
+    const map = new Map<string, (value: number) => string>();
+    const yKeys = Array.isArray(aggConfig?.chartYAxes) ? aggConfig.chartYAxes : [];
+    const metricStyles = Array.isArray(widget.chartMetricStyles) ? widget.chartMetricStyles : [];
+    const fallbackStyle = widget.chartStyle as ChartStyleConfig | undefined;
+    yKeys.forEach((rawKey, index) => {
+      const key = String(rawKey ?? "").trim();
+      if (!key) return;
+      const style = metricStyles[index] ?? fallbackStyle;
+      const formatter = getValueFormatter(style, "value");
+      map.set(key, (value: number) => formatter(value));
+    });
+    return map;
+  }, [aggConfig?.chartYAxes, widget.chartMetricStyles, widget.chartStyle]);
+  const formatTableCellValue = (columnKey: string, rawValue: unknown): string => {
+    if (rawValue == null || rawValue === "") return "";
+    const formatter = tableMetricFormatters.get(columnKey);
+    if (!formatter) return String(rawValue);
+    const numericValue =
+      typeof rawValue === "number"
+        ? rawValue
+        : typeof rawValue === "string"
+          ? Number(rawValue.replace(/\s+/g, ""))
+          : Number(rawValue);
+    if (!Number.isFinite(numericValue)) return String(rawValue);
+    return formatter(numericValue);
+  };
+  const hasSeriesDimension =
+    String(aggConfig?.chartSeriesField ?? "").trim() !== "" ||
+    String(aggConfig?.dimension2 ?? "").trim() !== "";
+  const stackBySeriesEnabled =
+    hasSeriesDimension &&
+    (chartType === "bar" || chartType === "horizontalBar" || chartType === "combo") &&
+    (typeof aggConfig?.chartStackBySeries === "boolean" ? aggConfig.chartStackBySeries : true);
+  const isCombo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2 && !stackBySeriesEnabled;
   const comboSyncAxes = isCombo && aggConfig?.chartComboSyncAxes === true;
 
   const effectiveChartData = useMemo((): ChartConfig | null | undefined => {
@@ -290,8 +357,13 @@ export function DashboardWidgetRenderer({
       chartGridXDisplay?: boolean;
       chartGridYDisplay?: boolean;
       chartGridColor?: string;
+      chartAxisXVisible?: boolean;
+      chartAxisYVisible?: boolean;
       chartXAxis?: string;
       chartYAxes?: string[];
+      chartSeriesField?: string;
+      dimension2?: string;
+      chartStackBySeries?: boolean;
       dateDimension?: string;
       dateGroupByGranularity?: DateGranularity;
       showDataLabels?: boolean;
@@ -308,6 +380,8 @@ export function DashboardWidgetRenderer({
         gridXDisplay: agg.chartGridXDisplay,
         gridYDisplay: agg.chartGridYDisplay,
         gridColor: agg.chartGridColor,
+        axisXVisible: agg.chartAxisXVisible,
+        axisYVisible: agg.chartAxisYVisible,
       }),
     };
     const labelMode = widget.labelDisplayMode ?? "percent";
@@ -354,7 +428,11 @@ export function DashboardWidgetRenderer({
     const xAxisKey = String(agg?.chartXAxis ?? "").trim().toLowerCase();
     const dateDimensionKey = String(agg?.dateDimension ?? "").trim().toLowerCase();
     const dateGranularity = agg?.dateGroupByGranularity;
-    const shouldFormatDateAxis = !!dateGranularity || (xAxisKey !== "" && dateDimensionKey !== "" && xAxisKey === dateDimensionKey);
+    const hasTemporalLabels = (chartConfig?.labels ?? []).some((label) => parseDateLike(label) != null);
+    const shouldFormatDateAxis =
+      !!dateGranularity ||
+      (xAxisKey !== "" && dateDimensionKey !== "" && xAxisKey === dateDimensionKey) ||
+      hasTemporalLabels;
     const formatTemporalLabel = (raw: unknown): string => {
       const base = String(raw ?? "");
       if (!shouldFormatDateAxis) return base;
@@ -372,8 +450,10 @@ export function DashboardWidgetRenderer({
         labels: chartConfig?.labels,
         datasets: chartConfig?.datasets,
       });
+      const optionsBaseNoScales = { ...optionsBase } as Record<string, unknown>;
+      delete optionsBaseNoScales.scales;
       const plugins = {
-        ...optionsBase.plugins,
+        ...optionsBaseNoScales.plugins,
         ...(base.plugins as object),
         legend: {
           ...pieLegend,
@@ -396,7 +476,10 @@ export function DashboardWidgetRenderer({
       };
       return {
         ...base,
-        ...optionsBase,
+        ...optionsBaseNoScales,
+        elements: {
+          arc: { borderWidth: 0 },
+        },
         plugins,
       };
     }
@@ -404,7 +487,14 @@ export function DashboardWidgetRenderer({
       const built = buildChartOptions(type, style, "value") as Record<string, unknown>;
       const builtPlugins = built.plugins as Record<string, unknown> | undefined;
       const builtDatalabels = builtPlugins?.datalabels as Record<string, unknown> | undefined ?? {};
-      const isComboTwo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2;
+      const hasSeriesDimension =
+        String(agg?.chartSeriesField ?? "").trim() !== "" ||
+        String(agg?.dimension2 ?? "").trim() !== "";
+      const stackBySeriesEnabled =
+        hasSeriesDimension &&
+        (chartType === "bar" || chartType === "horizontalBar" || chartType === "combo") &&
+        (typeof agg?.chartStackBySeries === "boolean" ? agg.chartStackBySeries : true);
+      const isComboTwo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2 && !stackBySeriesEnabled;
       const syncAxes = isComboTwo && (widget.aggregationConfig as { chartComboSyncAxes?: boolean } | undefined)?.chartComboSyncAxes === true;
       const axisTickColor = darkChartTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
       const axisTickFont = { size: style?.fontSize ?? 11 };
@@ -465,6 +555,7 @@ export function DashboardWidgetRenderer({
             }),
           },
           y1: {
+            display: style?.axisYVisible ?? true,
             position: "right" as const,
             grid: {
               drawOnChartArea: false,
@@ -559,9 +650,9 @@ export function DashboardWidgetRenderer({
                 const first = items?.[0];
                 return formatTemporalLabel(first?.label ?? "");
               },
-              label: (context: { dataset: { label?: string }; parsed: { y?: number }; datasetIndex?: number }) => {
-                const parsedY = context.parsed?.y ?? 0;
-                const formatted = formatMetricValue(parsedY, context?.datasetIndex, context);
+              label: (context: { dataset: { label?: string }; parsed: { x?: number; y?: number }; datasetIndex?: number }) => {
+                const parsedValue = type === "horizontalBar" ? (context.parsed?.x ?? 0) : (context.parsed?.y ?? 0);
+                const formatted = formatMetricValue(parsedValue, context?.datasetIndex, context);
                 return `${context.dataset?.label ?? ""}: ${formatted}`;
               },
             }
@@ -583,6 +674,7 @@ export function DashboardWidgetRenderer({
       const primaryMetricScale = resolveMetricScale(0);
       const patchedCategoryScale = {
         ...categoryScale,
+        ...(stackBySeriesEnabled ? { stacked: true } : {}),
         ticks: {
           ...categoryTicks,
           ...(labelVisibilityMode === "all" ? { autoSkip: false } : {}),
@@ -602,6 +694,7 @@ export function DashboardWidgetRenderer({
           ? {
               x: {
                 ...valueScale,
+                ...(stackBySeriesEnabled ? { stacked: true } : {}),
                 ...(primaryMetricScale.min != null ? { min: primaryMetricScale.min } : {}),
                 ...(primaryMetricScale.max != null ? { max: primaryMetricScale.max } : {}),
                 ticks: {
@@ -615,6 +708,7 @@ export function DashboardWidgetRenderer({
           ? {
               y: {
                 ...valueScale,
+                ...(stackBySeriesEnabled ? { stacked: true } : {}),
                 ...(primaryMetricScale.min != null ? { min: primaryMetricScale.min } : {}),
                 ...(primaryMetricScale.max != null ? { max: primaryMetricScale.max } : {}),
                 ticks: {
@@ -730,7 +824,7 @@ export function DashboardWidgetRenderer({
                 <table className="w-full">
                   <thead>
                     <tr className="border-b text-left" style={{ borderColor: "var(--platform-border)" }}>
-                      {Object.keys(tableRows[0] || {}).map((k) => (
+                      {tableColumnOrder.map((k) => (
                         <th key={k} className="py-1.5 pr-2 font-medium" style={{ color: "var(--platform-fg-muted)" }}>
                           {k}
                         </th>
@@ -740,9 +834,9 @@ export function DashboardWidgetRenderer({
                   <tbody>
                     {tableRows.slice(0, 10).map((row, i) => (
                       <tr key={i} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
-                        {Object.values(row).map((v, j) => (
-                          <td key={j} className="py-1.5 pr-2" style={{ color: "var(--platform-fg)" }}>
-                            {String(v ?? "")}
+                        {tableColumnOrder.map((columnKey) => (
+                          <td key={columnKey} className="py-1.5 pr-2" style={{ color: "var(--platform-fg)" }}>
+                            {formatTableCellValue(columnKey, row[columnKey])}
                           </td>
                         ))}
                       </tr>

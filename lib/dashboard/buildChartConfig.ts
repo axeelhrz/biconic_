@@ -32,6 +32,7 @@ export type BuildChartConfigWidget = {
     chartXAxis?: string;
     chartYAxes?: string[];
     chartSeriesField?: string;
+    chartStackBySeries?: boolean;
     dateDimension?: string;
     dateGroupByGranularity?: DateGranularity;
     chartType?: string;
@@ -74,16 +75,43 @@ export function resolveWidgetAxisKeys(
     agg?.enabled && agg.metrics?.length
       ? agg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
       : [];
-  const xKey =
-    agg?.chartXAxis && resultKeys.includes(agg.chartXAxis)
+  const formulaMetricAliases =
+    agg?.enabled && agg.metrics?.length
+      ? agg.metrics
+          .filter((m) => String(m?.func ?? "").trim().toUpperCase() === "FORMULA")
+          .map((m) => String(m.alias ?? "").trim())
+          .filter(Boolean)
+      : [];
+  const resolvedType = String(agg?.chartType ?? widget.type ?? "").trim();
+  const isHorizontalBar = resolvedType === "horizontalBar";
+  const chartXAxisKey =
+    typeof agg?.chartXAxis === "string" && resultKeys.includes(agg.chartXAxis)
       ? agg.chartXAxis
-      : (agg?.dimension ||
-          widget.source?.labelField ||
-          resultKeys.find((k) => !metricAliases.includes(k) && typeof (sample as Record<string, unknown>)[k] === "string") ||
-          resultKeys[0]);
+      : undefined;
+  const explicitDimensionCandidates = [
+    agg?.dimension,
+    ...(Array.isArray(agg?.dimensions) ? agg.dimensions : []),
+    agg?.dimension2,
+    widget.source?.labelField,
+  ]
+    .map((k) => String(k ?? "").trim())
+    .filter(Boolean);
+  const explicitDimensionKey = explicitDimensionCandidates.find((k) => resultKeys.includes(k));
+  const inferredDimensionKey = resultKeys.find((k) => {
+    if (metricAliases.includes(k)) return false;
+    const valueType = typeof (sample as Record<string, unknown>)[k];
+    return valueType === "string" || valueType === "number";
+  });
+  const xKey = isHorizontalBar
+    ? chartXAxisKey ?? explicitDimensionKey
+    : chartXAxisKey ?? explicitDimensionKey ?? inferredDimensionKey ?? resultKeys[0];
   let yKeys: string[] = [];
+  const hasExplicitYAxes = Array.isArray(agg?.chartYAxes) && agg.chartYAxes.length > 0;
   if (Array.isArray(agg?.chartYAxes) && agg.chartYAxes.length > 0) {
     yKeys = agg.chartYAxes.filter((k) => resultKeys.includes(k));
+  }
+  if (!hasExplicitYAxes && yKeys.length === 0 && formulaMetricAliases.length > 0) {
+    yKeys = formulaMetricAliases.filter((k) => resultKeys.includes(k));
   }
   if (yKeys.length === 0 && metricAliases.length > 0) {
     yKeys = metricAliases.filter((k) => resultKeys.includes(k));
@@ -92,6 +120,8 @@ export function resolveWidgetAxisKeys(
     const numKeys = resultKeys.filter((k) => typeof (sample as Record<string, unknown>)[k] === "number");
     yKeys = numKeys.length > 0 ? numKeys : resultKeys.filter((k) => k !== xKey).slice(0, 1);
   }
+  yKeys = yKeys.filter((k) => k !== xKey);
+  if (isHorizontalBar && (!xKey || metricAliases.includes(xKey))) return null;
   if (!xKey || yKeys.length === 0) return null;
   return { sample, resultKeys, metricAliases, xKey, yKeys };
 }
@@ -330,7 +360,15 @@ export function buildChartConfig(
   }
 
   const isPieOrDoughnut = resolvedType === "pie" || resolvedType === "doughnut";
-  const seriesField = agg?.chartSeriesField as string | undefined;
+  const configuredSeriesField = String(agg?.chartSeriesField ?? "").trim();
+  const fallbackSeriesField = String(agg?.dimension2 ?? "").trim();
+  const seriesFieldCandidate = [configuredSeriesField, fallbackSeriesField]
+    .find((field) => field && field !== xKey && resultKeys.includes(field));
+  const seriesField = seriesFieldCandidate || undefined;
+  const stackedBySeriesEnabled =
+    !!seriesField &&
+    (resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "combo") &&
+    (typeof agg?.chartStackBySeries === "boolean" ? agg.chartStackBySeries : true);
 
   if (resolvedType === "kpi") {
     const valueField = yKeys[0];
@@ -341,22 +379,55 @@ export function buildChartConfig(
   if (seriesField && resultKeys.includes(seriesField) && !isPieOrDoughnut) {
     const uniqueX = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? "")))];
     const seriesValues = [...new Set(rows.map((r) => String((r as Record<string, unknown>)[seriesField] ?? "")))];
+    const primaryMetricKey = yKeys[0]!;
+    const sumByXSeries = new Map<string, number>();
+    rows.forEach((row) => {
+      const rowX = String((row as Record<string, unknown>)[xKey] ?? "");
+      const rowSeries = String((row as Record<string, unknown>)[seriesField] ?? "");
+      const key = `${rowX}\u0001${rowSeries}`;
+      const current = sumByXSeries.get(key) ?? 0;
+      const next = Number((row as Record<string, unknown>)[primaryMetricKey] ?? 0);
+      sumByXSeries.set(key, current + (Number.isFinite(next) ? next : 0));
+    });
+    const segmentDatasets = seriesValues.map((sv, idx) => ({
+      label: labelOverride(sv),
+      data: uniqueX.map((xv) => sumByXSeries.get(`${xv}\u0001${sv}`) ?? 0),
+      backgroundColor: getColor(sv, idx) + "99",
+      borderColor: getColor(sv, idx),
+      borderWidth: 2,
+      ...(stackedBySeriesEnabled ? { stack: "series" } : {}),
+      ...(resolvedType === "combo" ? { type: "bar" as const, yAxisID: "y" as const } : {}),
+    }));
+    if (resolvedType === "combo" && stackedBySeriesEnabled && yKeys.length >= 2) {
+      const secondaryMetricKey = yKeys[1]!;
+      const sumByXSecondary = new Map<string, number>();
+      rows.forEach((row) => {
+        const rowX = String((row as Record<string, unknown>)[xKey] ?? "");
+        const current = sumByXSecondary.get(rowX) ?? 0;
+        const next = Number((row as Record<string, unknown>)[secondaryMetricKey] ?? 0);
+        sumByXSecondary.set(rowX, current + (Number.isFinite(next) ? next : 0));
+      });
+      const secondaryLabel = aliasForYKey(secondaryMetricKey);
+      return {
+        labels: uniqueX.map((value) => formatXLabel(value)),
+        datasets: [
+          ...segmentDatasets,
+          {
+            label: secondaryLabel,
+            data: uniqueX.map((xv) => sumByXSecondary.get(xv) ?? 0),
+            backgroundColor: getColor(secondaryLabel, seriesValues.length) + "20",
+            borderColor: getColor(secondaryLabel, seriesValues.length),
+            borderWidth: 2,
+            type: "line",
+            fill: false,
+            yAxisID: "y1",
+          },
+        ],
+      };
+    }
     return {
       labels: uniqueX.map((value) => formatXLabel(value)),
-      datasets: seriesValues.map((sv, idx) => ({
-        label: labelOverride(sv),
-        data: uniqueX.map((xv) => {
-          const match = rows.find(
-            (r) =>
-              String((r as Record<string, unknown>)[xKey] ?? "") === xv &&
-              String((r as Record<string, unknown>)[seriesField] ?? "") === sv
-          );
-          return match ? Number((match as Record<string, unknown>)[yKeys[0]!] ?? 0) : 0;
-        }),
-        backgroundColor: getColor(sv, idx) + "99",
-        borderColor: getColor(sv, idx),
-        borderWidth: 2,
-      })),
+      datasets: segmentDatasets,
     };
   }
 

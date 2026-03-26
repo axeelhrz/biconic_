@@ -32,6 +32,8 @@ import type { ChartConfig } from "./MetricBlock";
 import type { SavedMetricForm } from "./AddMetricConfigForm";
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import { buildChartMetricStyles, buildChartStyleFromAgg, resolveDarkChartTheme } from "@/lib/dashboard/widgetRenderParity";
 
 type SavedMetric = SavedMetricForm;
 
@@ -127,10 +129,24 @@ type AggregationConfig = {
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
   chartComboSyncAxes?: boolean;
+  chartGridXDisplay?: boolean;
+  chartGridYDisplay?: boolean;
+  chartGridColor?: string;
+  chartAxisXVisible?: boolean;
+  chartAxisYVisible?: boolean;
+  chartStackBySeries?: boolean;
   /** Si la dimensión es fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
   /** Filtro de rango de fechas (últimos N días/meses o rango custom) para alinear con la vista previa del ETL. */
   dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string };
+  geoHints?: {
+    countryField?: string;
+    provinceField?: string;
+    cityField?: string;
+    addressField?: string;
+    latField?: string;
+    lonField?: string;
+  };
 };
 type StudioWidget = {
   id: string;
@@ -150,7 +166,7 @@ type StudioWidget = {
   source?: { labelField?: string; valueFields?: string[] };
   isLoading?: boolean;
   excludeGlobalFilters?: boolean;
-  labelDisplayMode?: "percent" | "value";
+  labelDisplayMode?: "percent" | "value" | "both";
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
@@ -497,6 +513,7 @@ export function AdminDashboardStudio({
       );
       try {
         const agg = widget.aggregationConfig;
+        const widgetForBuild = { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color };
         if (agg?.enabled && agg.metrics.length > 0) {
           const dimensions = (agg as any).dimensions?.length > 0
             ? (agg as any).dimensions as string[]
@@ -566,7 +583,11 @@ export function AdminDashboardStudio({
           const isDateDimension = primaryDimension && widgetDateFields.some((d: string) => (d || "").toLowerCase() === (primaryDimension || "").toLowerCase());
           const dateGroupByGranularity = (agg as { dateGroupByGranularity?: string }).dateGroupByGranularity;
           const metricAliasesForApi = metricsPayload.map((m: Record<string, unknown>) => m.alias as string).filter(Boolean);
-          const rankingLimit = agg.chartRankingEnabled && agg.chartRankingTop && agg.chartRankingTop > 0
+          const isTemporalAxis =
+            !!dateGroupByGranularity ||
+            !!(primaryDimension && agg.dateDimension && String(primaryDimension).trim().toLowerCase() === String(agg.dateDimension ?? "").trim().toLowerCase()) ||
+            !!isDateDimension;
+          const rankingLimit = agg.chartRankingEnabled && agg.chartRankingTop && agg.chartRankingTop > 0 && !isTemporalAxis
             ? agg.chartRankingTop
             : undefined;
           const rankingOrderBy = rankingLimit && (agg.chartRankingMetric || metricAliasesForApi[0])
@@ -606,6 +627,9 @@ export function AdminDashboardStudio({
             etlId: widgetEtlId || undefined,
             dimension: agg.dimension,
             dimensions: dimensions.length > 0 ? dimensions : undefined,
+            chartType: agg.chartType || widget.type,
+            chartXAxis: agg.chartXAxis || undefined,
+            ...(agg.geoHints ? { geoHints: agg.geoHints } : {}),
             metrics: metricsPayload,
             filters: [...(agg.filters || []), ...filters],
             orderBy: rankingOrderBy || agg.orderBy,
@@ -613,7 +637,7 @@ export function AdminDashboardStudio({
             cumulative: agg.cumulative || "none",
             comparePeriod: agg.comparePeriod || undefined,
             dateDimension: agg.dateDimension || undefined,
-            ...(isDateDimension && dateGroupByGranularity && primaryDimension && { dateGroupBy: { field: primaryDimension, granularity: dateGroupByGranularity } }),
+            ...(dateGroupByGranularity && primaryDimension && { dateGroupBy: { field: primaryDimension, granularity: dateGroupByGranularity } }),
             ...((agg as { dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string } }).dateRangeFilter && {
               dateRangeFilter: (agg as { dateRangeFilter: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter,
             }),
@@ -635,17 +659,21 @@ export function AdminDashboardStudio({
                 : w
             )
           );
-          const res = await fetch("/api/dashboard/aggregate-data", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(aggregatePayload),
+          const loaded = await loadPreviewWidgetData({
+            widget: widgetForBuild,
+            tableName,
+            etlId: widgetEtlId,
+            sourceId,
+            datasetDimensions: etlData.datasetDimensions,
+            savedMetrics: savedMetrics as unknown as Array<{ name?: string; metric?: { field?: string; func?: string; alias?: string; expression?: string }; aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> } }>,
+            globalFilters: [],
+            aggregateEndpoint: "/api/dashboard/aggregate-data",
+            rawEndpoint: "/api/dashboard/raw-data",
+            rawLimit: 500,
+            accentColor: (widget as { color?: string }).color ?? "",
+            aggregateExtraPayload: aggregatePayload,
           });
-          const dataArray = await safeJsonResponse(res);
-          if (!res.ok) {
-            const errMsg = (dataArray && typeof dataArray === "object" && dataArray.error) ? dataArray.error : "Error en agregación";
-            throw new Error(typeof errMsg === "string" ? errMsg : "Error en agregación");
-          }
-          if (!Array.isArray(dataArray) || dataArray.length === 0) {
+          if (!loaded.hasData) {
             setWidgets((prev) =>
               prev.map((w) =>
                 w.id === widgetId ? { ...w, config: { labels: [], datasets: [] }, rows: [], isLoading: false } : w
@@ -653,11 +681,17 @@ export function AdminDashboardStudio({
             );
             return;
           }
-          const widgetForBuild = { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color };
-          const config = buildChartConfig(dataArray, widgetForBuild, "") ?? { labels: [], datasets: [] };
-          const rowsForWidget = widget.type === "table" ? getProcessedRowsForChart(dataArray, widgetForBuild) : dataArray;
           setWidgets((prev) =>
-            prev.map((w) => (w.id === widgetId ? { ...w, config, rows: rowsForWidget, isLoading: false } : w))
+            prev.map((w) =>
+              w.id === widgetId
+                ? {
+                    ...w,
+                    config: loaded.chartConfig ?? { labels: [], datasets: [] },
+                    rows: loaded.processedRows,
+                    isLoading: false,
+                  }
+                : w
+            )
           );
         } else {
           const rawPayload = { tableName, filters, limit: 500 };
@@ -676,14 +710,19 @@ export function AdminDashboardStudio({
                 : w
             )
           );
-          const res = await fetch("/api/dashboard/raw-data", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(rawPayload),
+          const loaded = await loadPreviewWidgetData({
+            widget: widgetForBuild,
+            tableName,
+            sourceId: widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id,
+            datasetDimensions: etlData.datasetDimensions,
+            globalFilters: filters,
+            aggregateEndpoint: "/api/dashboard/aggregate-data",
+            rawEndpoint: "/api/dashboard/raw-data",
+            rawLimit: 500,
+            accentColor: (widget as { color?: string }).color ?? "",
+            rawExtraPayload: rawPayload,
           });
-          if (!res.ok) throw new Error("Error al cargar datos");
-          const dataArray = await safeJsonResponse(res);
-          if (!Array.isArray(dataArray) || dataArray.length === 0) {
+          if (!loaded.hasData) {
             setWidgets((prev) =>
               prev.map((w) =>
                 w.id === widgetId ? { ...w, config: { labels: [], datasets: [] }, rows: [], isLoading: false } : w
@@ -691,26 +730,17 @@ export function AdminDashboardStudio({
             );
             return;
           }
-          const sample = dataArray[0] as Record<string, unknown>;
-          const keys = Object.keys(sample);
-          const labelKey = keys.find((k) => typeof sample[k] === "string") || keys[0];
-          const valueKey = keys.find((k) => typeof sample[k] === "number") || keys[1] || keys[0];
-          const labels = dataArray.map((r: Record<string, unknown>) => String(r[labelKey] ?? ""));
-          const data = dataArray.map((r: Record<string, unknown>) => Number(r[valueKey] ?? 0));
-          const config: ChartConfig = {
-            labels,
-            datasets: [
-              {
-                label: String(valueKey),
-                data,
-                backgroundColor: "#0ea5e980",
-                borderColor: "#0ea5e9",
-                borderWidth: 1,
-              },
-            ],
-          };
           setWidgets((prev) =>
-            prev.map((w) => (w.id === widgetId ? { ...w, config, rows: dataArray, isLoading: false } : w))
+            prev.map((w) =>
+              w.id === widgetId
+                ? {
+                    ...w,
+                    config: loaded.chartConfig ?? { labels: [], datasets: [] },
+                    rows: loaded.processedRows,
+                    isLoading: false,
+                  }
+                : w
+            )
           );
         }
       } catch (err) {
@@ -1108,6 +1138,7 @@ export function AdminDashboardStudio({
   }, []);
 
   const sortedWidgets = [...widgetsForCurrentPage].sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999));
+  const darkChartTheme = resolveDarkChartTheme(mergeTheme(dashboardTheme), true);
 
   const bgStyle = {
     backgroundColor: dashboardTheme.backgroundColor ?? undefined,
@@ -1706,6 +1737,8 @@ export function AdminDashboardStudio({
                       chartGridXDisplay={(w.aggregationConfig as { chartGridXDisplay?: boolean })?.chartGridXDisplay}
                       chartGridYDisplay={(w.aggregationConfig as { chartGridYDisplay?: boolean })?.chartGridYDisplay}
                       chartGridColor={(w.aggregationConfig as { chartGridColor?: string })?.chartGridColor}
+                      chartAxisXVisible={(w.aggregationConfig as { chartAxisXVisible?: boolean })?.chartAxisXVisible}
+                      chartAxisYVisible={(w.aggregationConfig as { chartAxisYVisible?: boolean })?.chartAxisYVisible}
                       widgetForRenderer={{
                         id: w.id,
                         type: chartType,
@@ -1713,13 +1746,17 @@ export function AdminDashboardStudio({
                         config: w.config ?? undefined,
                         rows: w.rows,
                         aggregationConfig: w.aggregationConfig,
-                        chartStyle: w.chartStyle as Record<string, unknown> | undefined,
-                        labelDisplayMode: (w as { labelDisplayMode?: "percent" | "value" }).labelDisplayMode,
-                        chartMetricStyles: (w as { chartMetricStyles?: (ChartStyleConfig | undefined)[] }).chartMetricStyles,
+                        chartStyle: (w.chartStyle as Record<string, unknown> | undefined) ?? buildChartStyleFromAgg(w.aggregationConfig),
+                        labelDisplayMode: (w as { labelDisplayMode?: "percent" | "value" | "both" }).labelDisplayMode,
+                        chartMetricStyles: (() => {
+                          const current = (w as { chartMetricStyles?: (ChartStyleConfig | undefined)[] }).chartMetricStyles;
+                          return Array.isArray(current) && current.length > 0 ? current : buildChartMetricStyles(w.aggregationConfig);
+                        })(),
                         diagnosticPreview: w.diagnosticPreview,
                         minHeight: minH,
                       }}
                       showTechnicalPreview={showDiagnostics}
+                      darkChartTheme={darkChartTheme}
                     />
                   </div>
                 );
