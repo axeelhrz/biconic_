@@ -134,7 +134,7 @@ export function getValueFormatter(
   return (value: number, ctx?: { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
     const firstDataset = ctx?.chart?.data?.datasets?.[0]?.data;
     if ((labelMode === "percent" || labelMode === "both") && Array.isArray(firstDataset)) {
-      const total = firstDataset.reduce((acc, current) => acc + Number(current), 0);
+      const total = firstDataset.reduce<number>((acc, current) => acc + Number(current), 0);
       if (labelMode === "percent") return formatPercent(Number(value), total);
       const valueText = formatMetricValue(Number(value));
       const percentText = formatPercent(Number(value), total);
