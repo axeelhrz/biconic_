@@ -806,7 +806,18 @@ async function executeEtlPipeline(
 
       const joinObj: any = (body as any).join;
       const isJoin = !!joinObj;
+      if (isJoin && Array.isArray(joinObj.joins)) {
+        // Defensivo: algunos ETL legacy pueden persistir joins nulos/incompletos.
+        joinObj.joins = joinObj.joins.filter(
+          (jn: unknown) => !!jn && typeof jn === "object"
+        );
+      }
       const isStarJoin = isJoin && !!joinObj.primaryConnectionId && Array.isArray(joinObj.joins);
+      if (isStarJoin && joinObj.joins.length === 0) {
+        throw new Error(
+          "JOIN estrella inválido: faltan conexiones secundarias configuradas."
+        );
+      }
       const primaryConnId = isStarJoin ? joinObj.primaryConnectionId : isJoin ? joinObj.connectionId : body!.connectionId;
       
       if (!primaryConnId) throw new Error("ID de conexión primario no encontrado.");
