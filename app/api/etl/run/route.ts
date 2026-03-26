@@ -1280,9 +1280,9 @@ async function executeEtlPipeline(
               }
               const pwdPg = (conn2 as any).db_password_encrypted ? decryptConnectionPassword((conn2 as any).db_password_encrypted) : (conn2 as any).db_password ?? "";
               const pgClient = new PgClient({
-                host: conn2.db_host,
-                user: conn2.db_user,
-                database: conn2.db_name,
+                host: conn2.db_host ?? undefined,
+                user: conn2.db_user ?? undefined,
+                database: conn2.db_name ?? undefined,
                 port: conn2.db_port ?? 5432,
                 password: pwdPg || undefined,
                 connectionTimeoutMillis: 15000,
@@ -1330,9 +1330,9 @@ async function executeEtlPipeline(
               } else {
                 const pwdPg = (conn2 as any).db_password_encrypted ? decryptConnectionPassword((conn2 as any).db_password_encrypted) : (conn2 as any).db_password ?? "";
                 const pgClient = new PgClient({
-                  host: conn2.db_host,
-                  user: conn2.db_user,
-                  database: conn2.db_name,
+                  host: conn2.db_host ?? undefined,
+                  user: conn2.db_user ?? undefined,
+                  database: conn2.db_name ?? undefined,
                   port: conn2.db_port ?? 5432,
                   password: pwdPg || undefined,
                   connectionTimeoutMillis: 15000,

@@ -79,11 +79,11 @@ export async function POST(
       if (j.primaryConnectionId != null) j.primaryConnectionId = toStr(j.primaryConnectionId);
       if (j.secondaryConnectionId != null) j.secondaryConnectionId = toStr(j.secondaryConnectionId);
       if (Array.isArray(j.joins)) {
-        const rawJoins = j.joins;
+        const rawJoins = j.joins as unknown[];
         const safeJoins = rawJoins.filter(
           (jn): jn is Record<string, unknown> => !!jn && typeof jn === "object"
         );
-        j.joins = safeJoins
+        const filteredJoins: Record<string, unknown>[] = safeJoins
           .filter((jn: Record<string, unknown>) => {
             const secId = jn.secondaryConnectionId;
             return secId != null && String(secId).trim() !== "";
@@ -92,7 +92,7 @@ export async function POST(
             ...jn,
             secondaryConnectionId: toStr(jn.secondaryConnectionId),
           }));
-        if (j.joins.length === 0) {
+        if (filteredJoins.length === 0) {
           return NextResponse.json(
             {
               ok: false,
@@ -102,6 +102,7 @@ export async function POST(
             { status: 400 }
           );
         }
+        j.joins = filteredJoins;
       }
       normalizedJoin = j;
     }
