@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import postgres from "postgres";
 import { createServiceRoleClient } from "@/lib/supabase/service";
-import { enrichRowsWithGeo, type GeoHints } from "@/lib/geo/geo-enrichment";
+import { enrichRowsWithGeo, type GeoCacheClient, type GeoHints } from "@/lib/geo/geo-enrichment";
 
 // --- Interfaces (Copied from internal route) ---
 interface Metric {
@@ -423,7 +423,7 @@ export async function POST(
           dimList,
           chartXAxis: body.chartXAxis ?? body.dimension ?? body.dimensions?.[0],
           geoHints: body.geoHints,
-          cacheClient: supabase,
+          cacheClient: supabase as unknown as GeoCacheClient,
         })
       : mappedResults;
 

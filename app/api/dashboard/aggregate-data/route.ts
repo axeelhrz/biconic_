@@ -8,7 +8,7 @@ import type { NextRequest } from "next/server";
 import type { Database } from "@/lib/supabase/database.types";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { formatDateByGranularity, type DateGranularity } from "@/lib/dashboard/dateFormatting";
-import { enrichRowsWithGeo, type GeoHints } from "@/lib/geo/geo-enrichment";
+import { enrichRowsWithGeo, type GeoCacheClient, type GeoHints } from "@/lib/geo/geo-enrichment";
 
 // --- Interfaces ---
 interface MetricCondition {
@@ -1574,7 +1574,9 @@ export async function POST(req: NextRequest) {
     const shouldEnrichGeo =
       requestedChartType === "map" ||
       /\b(lat|lon|lng|geo|country|pais|ciudad|city|localidad|provincia|estado)\b/i.test(dimList.join(" "));
-    const cacheClient = process.env.SUPABASE_SERVICE_ROLE_KEY ? createServiceRoleClient() : null;
+    const cacheClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+      ? (createServiceRoleClient() as unknown as GeoCacheClient)
+      : null;
     const geoReadyRows = shouldEnrichGeo
       ? await enrichRowsWithGeo({
           rows: mappedResults as Record<string, unknown>[],
