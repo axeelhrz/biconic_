@@ -404,17 +404,21 @@ export function DashboardWidgetRenderer({
       const built = buildChartOptions(type, style, "value") as Record<string, unknown>;
       const builtPlugins = built.plugins as Record<string, unknown> | undefined;
       const builtDatalabels = builtPlugins?.datalabels as Record<string, unknown> | undefined ?? {};
-      const datalabelFormatter =
-        usePerMetricFormat
-          ? (value: number, ctx?: { datasetIndex?: number }) => {
-              const s = ctx?.datasetIndex != null && metricStyles[ctx.datasetIndex] != null ? metricStyles[ctx.datasetIndex]! : style;
-              return getValueFormatter(s ?? undefined, "value")(value, ctx as { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } });
-            }
-          : (builtDatalabels as { formatter?: (v: number, c?: unknown) => string }).formatter;
-
       const isComboTwo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2;
       const syncAxes = isComboTwo && (widget.aggregationConfig as { chartComboSyncAxes?: boolean } | undefined)?.chartComboSyncAxes === true;
+      const axisTickColor = darkChartTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
+      const axisTickFont = { size: style?.fontSize ?? 11 };
+      const axisTitle0 = String(chartConfig?.datasets?.[0]?.label ?? yAxisKeys[0] ?? "").trim();
+      const axisTitle1 = String(chartConfig?.datasets?.[1]?.label ?? yAxisKeys[1] ?? "").trim();
       let comboScales: Record<string, unknown> | undefined;
+      let comboRanges:
+        | {
+            min0: number;
+            range0: number;
+            min1: number;
+            range1: number;
+          }
+        | undefined;
       if (isComboTwo && chartConfig?.datasets?.[0]?.data && chartConfig?.datasets?.[1]?.data) {
         const d0 = chartConfig.datasets[0].data as number[];
         const d1 = chartConfig.datasets[1].data as number[];
@@ -424,6 +428,7 @@ export function DashboardWidgetRenderer({
         const max1 = Math.max(...d1);
         const range0 = max0 - min0 || 1;
         const range1 = max1 - min1 || 1;
+        comboRanges = { min0, range0, min1, range1 };
         const style0 = (usePerMetricFormat && metricStyles[0]) ? metricStyles[0]! : style;
         const style1 = (usePerMetricFormat && metricStyles[1]) ? metricStyles[1]! : style;
         const fmt0 = getValueFormatter(style0 ?? undefined, "value");
@@ -437,7 +442,25 @@ export function DashboardWidgetRenderer({
               max: 1,
               ticks: {
                 ...(((built.scales as Record<string, unknown>)?.y as Record<string, unknown> | undefined)?.ticks ?? {}),
+                color: axisTickColor,
+                font: axisTickFont,
                 callback: (value: number) => fmt0(value * range0 + min0),
+              },
+            }),
+            ...(!syncAxes && {
+              ticks: {
+                ...(((built.scales as Record<string, unknown>)?.y as Record<string, unknown> | undefined)?.ticks ?? {}),
+                color: axisTickColor,
+                font: axisTickFont,
+                callback: (value: number | string) => fmt0(Number(value)),
+              },
+            }),
+            ...(axisTitle0 && {
+              title: {
+                display: true,
+                text: axisTitle0,
+                color: axisTickColor,
+                font: { size: 11, weight: "600" as const },
               },
             }),
           },
@@ -452,7 +475,24 @@ export function DashboardWidgetRenderer({
               min: 0,
               max: 1,
               ticks: {
+                color: axisTickColor,
+                font: axisTickFont,
                 callback: (value: number) => fmt1(value * range1 + min1),
+              },
+            }),
+            ...(!syncAxes && {
+              ticks: {
+                color: axisTickColor,
+                font: axisTickFont,
+                callback: (value: number | string) => fmt1(Number(value)),
+              },
+            }),
+            ...(axisTitle1 && {
+              title: {
+                display: true,
+                text: axisTitle1,
+                color: axisTickColor,
+                font: { size: 11, weight: "600" as const },
               },
             }),
           },
@@ -484,28 +524,44 @@ export function DashboardWidgetRenderer({
         }
       }
 
+      const toRawComboValue = (value: number, datasetIndex?: number): number => {
+        if (!syncAxes || !comboRanges || datasetIndex == null) return value;
+        if (datasetIndex === 0) return value * comboRanges.range0 + comboRanges.min0;
+        return value * comboRanges.range1 + comboRanges.min1;
+      };
+      const formatMetricValue = (value: number, datasetIndex?: number, ctx?: unknown): string => {
+        const rawValue = toRawComboValue(value, datasetIndex);
+        const datasetStyle = datasetIndex != null && metricStyles?.[datasetIndex] != null
+          ? metricStyles[datasetIndex]!
+          : style;
+        if (datasetStyle != null || usePerMetricFormat || isComboTwo) {
+          return getValueFormatter(datasetStyle ?? undefined, "value")(
+            rawValue,
+            ctx as { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }
+          );
+        }
+        return String(rawValue);
+      };
+      const baseDatalabelFormatter = (builtDatalabels as { formatter?: (v: number, c?: unknown) => string }).formatter;
+      const datalabelFormatter =
+        usePerMetricFormat || (isComboTwo && syncAxes)
+          ? (value: number, ctx?: { datasetIndex?: number }) => {
+              const rawValue = toRawComboValue(value, ctx?.datasetIndex);
+              if (!usePerMetricFormat && baseDatalabelFormatter) return baseDatalabelFormatter(rawValue, ctx);
+              return formatMetricValue(value, ctx?.datasetIndex, ctx);
+            }
+          : baseDatalabelFormatter;
+
       const tooltipCallbacks =
-        usePerMetricFormat || syncAxes
+        isComboTwo || usePerMetricFormat || syncAxes
           ? {
               title: (items: Array<{ label?: unknown }>) => {
                 const first = items?.[0];
                 return formatTemporalLabel(first?.label ?? "");
               },
               label: (context: { dataset: { label?: string }; parsed: { y?: number }; datasetIndex?: number }) => {
-                let rawY = context.parsed?.y ?? 0;
-                if (syncAxes && chartConfig?.datasets?.[0]?.data && chartConfig?.datasets?.[1]?.data && context.datasetIndex != null) {
-                  const d0 = chartConfig.datasets[0].data as number[];
-                  const d1 = chartConfig.datasets[1].data as number[];
-                  const min0 = Math.min(...d0);
-                  const max0 = Math.max(...d0);
-                  const min1 = Math.min(...d1);
-                  const max1 = Math.max(...d1);
-                  const range0 = max0 - min0 || 1;
-                  const range1 = max1 - min1 || 1;
-                  rawY = context.datasetIndex === 0 ? rawY * range0 + min0 : rawY * range1 + min1;
-                }
-                const s = context?.datasetIndex != null && metricStyles?.[context.datasetIndex] != null ? metricStyles[context.datasetIndex]! : style;
-                const formatted = s != null ? getValueFormatter(s, "value")(rawY, context as { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) : String(rawY);
+                const parsedY = context.parsed?.y ?? 0;
+                const formatted = formatMetricValue(parsedY, context?.datasetIndex, context);
                 return `${context.dataset?.label ?? ""}: ${formatted}`;
               },
             }

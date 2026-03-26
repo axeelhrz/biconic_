@@ -349,18 +349,42 @@ export function AddMetricConfigForm({
   const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
   const showLabelOverrides = CHART_TYPES_FOR_LABELS.includes(form.type);
   const labelOverridesEntries = useMemo(() => Object.entries(agg.chartLabelOverrides ?? {}), [agg.chartLabelOverrides]);
+  const [labelOverrideRawDrafts, setLabelOverrideRawDrafts] = useState<Record<string, string>>({});
   const setLabelOverride = (oldRaw: string, newRaw: string, display: string) => {
     const next = { ...(agg.chartLabelOverrides ?? {}) };
-    if (oldRaw !== "") delete next[oldRaw];
-    if (newRaw !== "") next[newRaw] = display;
+    if (Object.prototype.hasOwnProperty.call(next, oldRaw)) delete next[oldRaw];
+    const normalizedNewRaw = String(newRaw ?? "").trim();
+    if (normalizedNewRaw !== "") next[normalizedNewRaw] = display;
+    for (const key of Object.keys(next)) {
+      if (String(key).trim() === "") delete next[key];
+    }
     updateAgg({ chartLabelOverrides: Object.keys(next).length ? next : undefined });
+  };
+  const commitLabelOverrideRawDraft = (raw: string, display: string) => {
+    const draftValue = labelOverrideRawDrafts[raw];
+    if (typeof draftValue !== "string") return;
+    const normalizedDraft = draftValue.trim();
+    setLabelOverrideRawDrafts((prev) => {
+      const next = { ...prev };
+      delete next[raw];
+      return next;
+    });
+    if (normalizedDraft === "" || normalizedDraft === raw) return;
+    setLabelOverride(raw, normalizedDraft, display);
   };
   const removeLabelOverride = (raw: string) => {
     const next = { ...(agg.chartLabelOverrides ?? {}) };
     delete next[raw];
+    setLabelOverrideRawDrafts((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, raw)) return prev;
+      const nextDrafts = { ...prev };
+      delete nextDrafts[raw];
+      return nextDrafts;
+    });
     updateAgg({ chartLabelOverrides: Object.keys(next).length ? next : undefined });
   };
   const addLabelOverride = () => {
+    if (Object.prototype.hasOwnProperty.call(agg.chartLabelOverrides ?? {}, "")) return;
     updateAgg({ chartLabelOverrides: { ...(agg.chartLabelOverrides ?? {}), "": "" } });
   };
 
@@ -497,8 +521,9 @@ export function AddMetricConfigForm({
               {labelOverridesEntries.map(([raw, display], idx) => (
                 <div key={`override-${idx}-${raw}`} className="flex gap-2 items-center">
                   <Input
-                    value={raw}
-                    onChange={(e) => setLabelOverride(raw, e.target.value, display)}
+                    value={labelOverrideRawDrafts[raw] ?? raw}
+                    onChange={(e) => setLabelOverrideRawDrafts((prev) => ({ ...prev, [raw]: e.target.value }))}
+                    onBlur={() => commitLabelOverrideRawDraft(raw, display)}
                     placeholder="Valor original (ej. Q1)"
                     className="h-8 text-xs flex-1"
                   />

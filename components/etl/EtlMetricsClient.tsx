@@ -511,6 +511,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
   const [chartSeriesColors, setChartSeriesColors] = useState<Record<string, string>>({});
   const [chartLabelOverrides, setChartLabelOverrides] = useState<Record<string, string>>({});
+  const [labelOverrideRawDrafts, setLabelOverrideRawDrafts] = useState<Record<string, string>>({});
   const [chartMetricFormats, setChartMetricFormats] = useState<Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>>({});
   const [chartComboSyncAxes, setChartComboSyncAxes] = useState(false);
   const [chartGridXDisplay, setChartGridXDisplay] = useState(true);
@@ -529,10 +530,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const setLabelOverride = (oldRaw: string, newRaw: string, display: string) => {
     setChartLabelOverrides((prev) => {
       const next = { ...prev };
-      if (oldRaw !== "") delete next[oldRaw];
-      if (newRaw !== "") next[newRaw] = display;
+      if (Object.prototype.hasOwnProperty.call(next, oldRaw)) delete next[oldRaw];
+      const normalizedNewRaw = String(newRaw ?? "").trim();
+      if (normalizedNewRaw !== "") next[normalizedNewRaw] = display;
+      for (const key of Object.keys(next)) {
+        if (String(key).trim() === "") delete next[key];
+      }
       return Object.keys(next).length ? next : {};
     });
+  };
+  const commitLabelOverrideRawDraft = (raw: string, display: string) => {
+    const draftValue = labelOverrideRawDrafts[raw];
+    if (typeof draftValue !== "string") return;
+    const normalizedDraft = draftValue.trim();
+    setLabelOverrideRawDrafts((prev) => {
+      const next = { ...prev };
+      delete next[raw];
+      return next;
+    });
+    if (normalizedDraft === "" || normalizedDraft === raw) return;
+    setLabelOverride(raw, normalizedDraft, display);
   };
   const removeLabelOverride = (raw: string) => {
     setChartLabelOverrides((prev) => {
@@ -540,8 +557,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       delete next[raw];
       return next;
     });
+    setLabelOverrideRawDrafts((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, raw)) return prev;
+      const nextDrafts = { ...prev };
+      delete nextDrafts[raw];
+      return nextDrafts;
+    });
   };
   const addLabelOverride = () => {
+    if (Object.prototype.hasOwnProperty.call(chartLabelOverrides, "")) return;
     setChartLabelOverrides((prev) => ({ ...prev, "": "" }));
   };
 
@@ -5238,8 +5262,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                           {Object.entries(chartLabelOverrides).map(([raw, display], idx) => (
                             <div key={`override-${idx}-${raw}`} className="flex gap-2 items-center">
                               <Input
-                                value={raw}
-                                onChange={(e) => setLabelOverride(raw, e.target.value, display)}
+                                value={labelOverrideRawDrafts[raw] ?? raw}
+                                onChange={(e) => setLabelOverrideRawDrafts((prev) => ({ ...prev, [raw]: e.target.value }))}
+                                onBlur={() => commitLabelOverrideRawDraft(raw, display)}
                                 placeholder="Valor original (ej. Q1)"
                                 className="h-8 text-xs flex-1 rounded-lg"
                                 style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
