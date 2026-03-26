@@ -499,6 +499,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartAxisXVisible, setChartAxisXVisible] = useState(true);
   const [chartAxisYVisible, setChartAxisYVisible] = useState(true);
   const [chartScalePerMetric, setChartScalePerMetric] = useState<Record<string, { min?: number; max?: number; step?: number }>>({});
+  const analysisDraftStorageKey = useMemo(
+    () => (etlId ? `etl-analysis-draft:${etlId}` : ""),
+    [etlId]
+  );
+  const analysisDraftHydratedRef = useRef(false);
   const [interCrossFilter, setInterCrossFilter] = useState(true);
   const [interCrossFilterFields, setInterCrossFilterFields] = useState<string[]>([]);
   const [interDrilldown, setInterDrilldown] = useState(false);
@@ -2180,6 +2185,99 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setAfterSaveInB(null);
   };
 
+  const clearAnalysisDraft = useCallback(() => {
+    if (typeof window === "undefined" || !analysisDraftStorageKey) return;
+    window.localStorage.removeItem(analysisDraftStorageKey);
+    analysisDraftHydratedRef.current = false;
+  }, [analysisDraftStorageKey]);
+
+  useEffect(() => {
+    if (!showForm) {
+      analysisDraftHydratedRef.current = false;
+      return;
+    }
+    if (editingId) return;
+    if (!analysisDraftStorageKey) return;
+    if (wizard !== "C" && wizard !== "D") return;
+    if (analysisDraftHydratedRef.current) return;
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(analysisDraftStorageKey);
+      if (!raw) {
+        analysisDraftHydratedRef.current = true;
+        return;
+      }
+      const parsed = JSON.parse(raw) as {
+        analysisSelectedMetricIds?: string[];
+        formDimensions?: string[];
+        timeColumn?: string;
+        analysisTimeRange?: string;
+        analysisDateFrom?: string;
+        analysisDateTo?: string;
+        analysisGranularity?: string;
+        formChartType?: string;
+        chartXAxis?: string;
+        chartYAxes?: string[];
+        chartSeriesField?: string;
+        analysisNameToSave?: string;
+      };
+      if (Array.isArray(parsed.analysisSelectedMetricIds)) setAnalysisSelectedMetricIds(parsed.analysisSelectedMetricIds);
+      if (Array.isArray(parsed.formDimensions)) setFormDimensions(parsed.formDimensions);
+      if (typeof parsed.timeColumn === "string") setTimeColumn(parsed.timeColumn);
+      if (typeof parsed.analysisTimeRange === "string") setAnalysisTimeRange(parsed.analysisTimeRange);
+      if (typeof parsed.analysisDateFrom === "string") setAnalysisDateFrom(parsed.analysisDateFrom);
+      if (typeof parsed.analysisDateTo === "string") setAnalysisDateTo(parsed.analysisDateTo);
+      if (typeof parsed.analysisGranularity === "string") setAnalysisGranularity(parsed.analysisGranularity);
+      if (typeof parsed.formChartType === "string") setFormChartType(parsed.formChartType);
+      if (typeof parsed.chartXAxis === "string") setChartXAxis(parsed.chartXAxis);
+      if (Array.isArray(parsed.chartYAxes)) setChartYAxes(parsed.chartYAxes);
+      if (typeof parsed.chartSeriesField === "string") setChartSeriesField(parsed.chartSeriesField);
+      if (typeof parsed.analysisNameToSave === "string") setAnalysisNameToSave(parsed.analysisNameToSave);
+    } catch {
+      // ignore invalid draft
+    } finally {
+      analysisDraftHydratedRef.current = true;
+    }
+  }, [showForm, editingId, analysisDraftStorageKey, wizard]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !analysisDraftStorageKey) return;
+    if (!showForm || !!editingId) return;
+    if (wizard !== "C" && wizard !== "D") return;
+    const draft = {
+      analysisSelectedMetricIds,
+      formDimensions,
+      timeColumn,
+      analysisTimeRange,
+      analysisDateFrom,
+      analysisDateTo,
+      analysisGranularity,
+      formChartType,
+      chartXAxis,
+      chartYAxes,
+      chartSeriesField,
+      analysisNameToSave,
+    };
+    window.localStorage.setItem(analysisDraftStorageKey, JSON.stringify(draft));
+  }, [
+    analysisDraftStorageKey,
+    showForm,
+    editingId,
+    wizard,
+    analysisSelectedMetricIds,
+    formDimensions,
+    timeColumn,
+    analysisTimeRange,
+    analysisDateFrom,
+    analysisDateTo,
+    analysisGranularity,
+    formChartType,
+    chartXAxis,
+    chartYAxes,
+    chartSeriesField,
+    analysisNameToSave,
+  ]);
+
   const saveDashboardFiltersOnly = useCallback(async () => {
     if (!etlId) return;
     setDashboardSyncing(true);
@@ -2771,17 +2869,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     }
   };
 
-  const saveAnalysisToEtl = async () => {
-    const name = analysisNameToSave.trim();
-    if (!name) {
-      toast.error("Escribí un nombre para el análisis.");
-      return;
-    }
-    if (analysisSelectedMetricIds.length === 0) {
-      toast.error("Seleccioná al menos una métrica para el análisis.");
-      return;
-    }
-    const newAnalysis = {
+  const buildAnalysisPayload = useCallback((name: string) => {
+    return {
       id: `sa-${Date.now()}`,
       name,
       metricIds: [...analysisSelectedMetricIds],
@@ -2831,6 +2920,54 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
               }
             : undefined,
     };
+  }, [
+    analysisSelectedMetricIds,
+    formDimensions,
+    formChartType,
+    chartXAxis,
+    chartYAxes,
+    geoHints,
+    chartSeriesField,
+    chartLabelOverrides,
+    labelVisibilityMode,
+    chartValueType,
+    chartValueScale,
+    chartCurrencySymbol,
+    chartThousandSep,
+    chartDecimals,
+    chartSeriesColors,
+    chartGridXDisplay,
+    chartGridYDisplay,
+    chartGridColor,
+    chartAxisXVisible,
+    chartAxisYVisible,
+    chartSortDirection,
+    chartSortBy,
+    chartSortByMetric,
+    chartRankingEnabled,
+    chartRankingTop,
+    chartRankingMetric,
+    formFilters,
+    formOrderBy,
+    formLimit,
+    timeColumn,
+    analysisGranularity,
+    analysisTimeRange,
+    analysisDateFrom,
+    analysisDateTo,
+  ]);
+
+  const saveAnalysisToEtl = async () => {
+    const name = analysisNameToSave.trim();
+    if (!name) {
+      toast.error("Escribí un nombre para el análisis.");
+      return;
+    }
+    if (analysisSelectedMetricIds.length === 0) {
+      toast.error("Seleccioná al menos una métrica para el análisis.");
+      return;
+    }
+    const newAnalysis = buildAnalysisPayload(name);
     const nextAnalyses = [...(data?.savedAnalyses ?? []), newAnalysis];
     setSavingAnalysis(true);
     try {
@@ -2847,12 +2984,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setData((prev) => (prev ? { ...prev, savedAnalyses: nextAnalyses } : null));
       toast.success(`Análisis «${name}» guardado. Aparecerá al añadir al dashboard.`);
       setAnalysisNameToSave("");
+      clearAnalysisDraft();
     } catch {
       toast.error("Error al guardar el análisis");
     } finally {
       setSavingAnalysis(false);
     }
   };
+
+  const handleFinalizeWizardSave = useCallback(async () => {
+    if (analysisSelectedMetricIds.length > 0) {
+      await saveAnalysisToEtl();
+      return;
+    }
+    await saveMetric();
+  }, [analysisSelectedMetricIds.length, saveAnalysisToEtl, saveMetric]);
 
   const deleteDerivedColumn = async (name: string) => {
     const nextDerived = derivedColumns.filter((d) => d.name !== name);
@@ -3137,7 +3283,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       size="sm"
                       className="rounded-lg"
                       style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-                      onClick={() => void saveMetric()}
+                      onClick={() => void handleFinalizeWizardSave()}
                       disabled={saving}
                     >
                       {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{" "}
@@ -5537,18 +5683,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                   <div className="flex justify-between items-center">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Anterior</Button>
                     <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="rounded-xl px-4 font-semibold"
-                        style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
-                        onClick={() => saveMetric({ publishToDashboard: true, redirectToDashboard: true })}
-                        disabled={saving}
-                      >
-                        {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                        Guardar y subir al dashboard
-                      </Button>
-                      <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={() => saveMetric()} disabled={saving}>
+                      {analysisSelectedMetricIds.length === 0 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-xl px-4 font-semibold"
+                          style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
+                          onClick={() => saveMetric({ publishToDashboard: true, redirectToDashboard: true })}
+                          disabled={saving}
+                        >
+                          {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                          Guardar y subir al dashboard
+                        </Button>
+                      )}
+                      <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={() => void handleFinalizeWizardSave()} disabled={saving}>
                         {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                         {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? "Guardar análisis" : "Crear métrica"}
                       </Button>
