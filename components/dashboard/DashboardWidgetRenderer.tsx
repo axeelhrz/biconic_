@@ -226,47 +226,39 @@ export function DashboardWidgetRenderer({
 
   const kpiValue = useMemo(() => {
     if (chartType !== "kpi" || !Array.isArray(widget.rows) || widget.rows.length === 0) return null;
-    // Prioriza el dataset ya construido para mantener total idéntico al config del widget.
-    const configValues = chartConfig?.datasets?.[0]?.data;
-    if (Array.isArray(configValues) && configValues.length > 0) {
-      const sumFromConfig = configValues.reduce((acc, value) => {
-        const parsed = Number(value);
-        return acc + (Number.isFinite(parsed) ? parsed : 0);
-      }, 0);
-      if (Number.isFinite(sumFromConfig)) {
-        return formatKpiValue(sumFromConfig, widget.chartStyle as ChartStyleConfig | undefined);
-      }
+    const style = widget.chartStyle as ChartStyleConfig | undefined;
+
+    const fromConfig = chartConfig?.datasets?.[0]?.data?.[0];
+    if (fromConfig != null && Number.isFinite(Number(fromConfig))) {
+      return formatKpiValue(Number(fromConfig), style);
     }
 
-    const rows = widget.rows as Record<string, unknown>[];
-    const axis = resolveWidgetAxisKeys(rows, {
-      type: widget.type,
-      aggregationConfig: widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
-      source: widget.source as BuildChartConfigWidget["source"],
-    });
-    const valKey = axis?.yKeys?.[0];
-    if (valKey) {
-      const sum = rows.reduce((acc, row) => {
-        const parsed = Number(row[valKey]);
-        return acc + (Number.isFinite(parsed) ? parsed : 0);
-      }, 0);
-      return formatKpiValue(sum, widget.chartStyle as ChartStyleConfig | undefined);
+    const firstRow = (widget.rows as Record<string, unknown>[])[0] ?? {};
+
+    const explicitY = (widget.aggregationConfig as { chartYAxes?: string[] } | undefined)?.chartYAxes?.[0];
+    if (explicitY && Number.isFinite(Number(firstRow[explicitY]))) {
+      return formatKpiValue(Number(firstRow[explicitY]), style);
     }
 
-    const firstRow = rows[0] ?? {};
+    const metrics = (widget.aggregationConfig as { metrics?: { alias?: string; field?: string }[] } | undefined)?.metrics;
+    const metricAlias = metrics?.[metrics.length - 1]?.alias;
+    if (metricAlias && Number.isFinite(Number(firstRow[metricAlias]))) {
+      return formatKpiValue(Number(firstRow[metricAlias]), style);
+    }
+
     const preferredKeys = ["value", "metric_0"];
     for (const key of preferredKeys) {
       const candidate = Number(firstRow[key]);
       if (Number.isFinite(candidate)) {
-        return formatKpiValue(candidate, widget.chartStyle as ChartStyleConfig | undefined);
+        return formatKpiValue(candidate, style);
       }
     }
     const firstNumeric = Object.values(firstRow).find((value) => Number.isFinite(Number(value)));
     if (firstNumeric != null) {
-      return formatKpiValue(Number(firstNumeric), widget.chartStyle as ChartStyleConfig | undefined);
+      return formatKpiValue(Number(firstNumeric), style);
     }
     return null;
-  }, [chartType, chartConfig, widget.rows, widget.chartStyle, widget.type, widget.aggregationConfig, widget.source]);
+  }, [chartType, chartConfig, widget.rows, widget.chartStyle, widget.aggregationConfig]);
 
   const aggConfig = widget.aggregationConfig as {
     chartComboSyncAxes?: boolean;
@@ -828,7 +820,7 @@ export function DashboardWidgetRenderer({
             {chartType === "kpi" && (
               <div className="flex flex-1 flex-col items-center justify-center gap-1">
                 {kpiValue ? (
-                  <span className="text-3xl font-bold tabular-nums" style={{ color: "var(--platform-fg, #0f172a)" }}>
+                  <span className="text-4xl font-bold tabular-nums" style={{ color: "var(--platform-fg, #0f172a)" }}>
                     {kpiValue}
                   </span>
                 ) : (
@@ -836,11 +828,26 @@ export function DashboardWidgetRenderer({
                     No hay dato unico para KPI. Revisa metrica/ejes o usa Tabla.
                   </div>
                 )}
-                {(widget.kpiSecondaryLabel || widget.kpiSecondaryValue) && (
-                  <span className="text-sm" style={{ color: "var(--platform-fg-muted, #64748b)" }}>
-                    {widget.kpiSecondaryLabel} {widget.kpiSecondaryValue}
-                  </span>
-                )}
+                {(() => {
+                  if (widget.kpiSecondaryLabel || widget.kpiSecondaryValue) {
+                    return (
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted, #64748b)" }}>
+                        {widget.kpiSecondaryLabel} {widget.kpiSecondaryValue}
+                      </span>
+                    );
+                  }
+                  const agg = widget.aggregationConfig as { chartYAxes?: string[]; metrics?: { alias?: string; field?: string }[] } | undefined;
+                  const yKey = agg?.chartYAxes?.[0];
+                  const metricLabel = yKey || agg?.metrics?.[0]?.alias || agg?.metrics?.[0]?.field;
+                  if (metricLabel) {
+                    return (
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted, #64748b)" }}>
+                        {metricLabel}
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
             )}
             {chartType === "table" && Array.isArray(tableRows) && tableRows.length > 0 && (
@@ -930,7 +937,7 @@ export function DashboardWidgetRenderer({
               </div>
             )}
             {chartType !== "kpi" && chartType !== "table" && chartType !== "text" && chartType !== "image" && chartType !== "filter" && chartType !== "map" && chartConfig && (
-              <div className="h-[220px] w-full">
+              <div className="w-full" style={{ height: Math.max(220, (effectiveMinHeight ?? 240) - 72) }}>
                 {(chartType === "bar" || chartType === "combo") && <Bar data={(chartType === "combo" && effectiveChartData ? effectiveChartData : chartConfig) as never} options={chartOptions as never} />}
                 {chartType === "horizontalBar" && (
                   (() => {
