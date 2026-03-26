@@ -73,7 +73,11 @@ type DashboardDataSource = {
   etlId: string;
   schema: string;
   tableName: string;
-  savedMetrics?: unknown[];
+  savedMetrics?: Array<{
+    name?: string;
+    metric?: { field?: string; func?: string; alias?: string; expression?: string };
+    aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> };
+  }>;
 };
 
 type EtlDataPayload = {

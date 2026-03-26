@@ -374,7 +374,7 @@ export function DashboardViewer({
 
       try {
         let dataArray: Record<string, unknown>[] = [];
-        let resolvedChartType = widget.type;
+        let resolvedChartType: string = widget.type;
         if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
           const dimensionsArray = (aggConfig as any).dimensions?.length
             ? (aggConfig as any).dimensions

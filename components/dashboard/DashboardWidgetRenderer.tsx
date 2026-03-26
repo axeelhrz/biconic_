@@ -285,7 +285,7 @@ export function DashboardWidgetRenderer({
       aggRaw.dimension,
       ...(Array.isArray(aggRaw.dimensions) ? aggRaw.dimensions : []),
       aggRaw.dimension2,
-      widget.source?.labelField,
+      (widget.source as { labelField?: string } | undefined)?.labelField,
     ]
       .map((k) => String(k ?? "").trim())
       .filter(Boolean);
@@ -452,8 +452,9 @@ export function DashboardWidgetRenderer({
       });
       const optionsBaseNoScales = { ...optionsBase } as Record<string, unknown>;
       delete optionsBaseNoScales.scales;
+      const optionsBasePlugins = (optionsBaseNoScales.plugins as Record<string, unknown> | undefined) ?? {};
       const plugins = {
-        ...optionsBaseNoScales.plugins,
+        ...optionsBasePlugins,
         ...(base.plugins as object),
         legend: {
           ...pieLegend,
