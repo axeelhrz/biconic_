@@ -416,9 +416,166 @@ async function propagateMetricsToDashboards(
 }
 
 /**
+ * Tras borrar métricas del ETL: quita entradas de layout.savedMetrics y reemplaza referencias en widgets
+ * por la definición inline (para que no dependan de saved_metrics del ETL).
+ */
+async function propagateMetricsDeletionToDashboards(
+  adminClient: Awaited<ReturnType<typeof createServiceRoleClient>>,
+  etlId: string,
+  deletedMetrics: SavedMetricPayload[]
+): Promise<void> {
+  if (deletedMetrics.length === 0) return;
+
+  const deletedIdSet = new Set<string>();
+  const byId = new Map<string, SavedMetricPayload>();
+  const byNameLower = new Map<string, SavedMetricPayload>();
+  for (const m of deletedMetrics) {
+    const id = typeof m.id === "string" ? m.id.trim() : "";
+    const name = typeof m.name === "string" ? String(m.name).trim().toLowerCase() : "";
+    if (id) {
+      deletedIdSet.add(id);
+      byId.set(id, m);
+    }
+    if (name) byNameLower.set(name, m);
+  }
+
+  const dashboardIds = await getDashboardIdsForEtl(adminClient, etlId);
+  if (dashboardIds.length === 0) return;
+
+  for (const dashboardId of dashboardIds) {
+    try {
+      const { data: dashboard, error: fetchErr } = await adminClient
+        .from("dashboard")
+        .select("id, layout")
+        .eq("id", dashboardId)
+        .maybeSingle();
+
+      if (fetchErr || !dashboard?.layout || typeof dashboard.layout !== "object") continue;
+
+      const layout = dashboard.layout as {
+        savedMetrics?: unknown[];
+        widgets?: unknown[];
+        theme?: unknown;
+        pages?: unknown;
+        activePageId?: unknown;
+        datasetConfig?: unknown;
+      };
+      const currentSaved = Array.isArray(layout.savedMetrics) ? layout.savedMetrics : [];
+      const currentWidgets = Array.isArray(layout.widgets) ? layout.widgets : [];
+
+      let savedChanged = false;
+      const nextSavedMetrics = currentSaved.filter((item: unknown) => {
+        const cur = item as { id?: string; name?: string };
+        const curId = typeof cur.id === "string" ? cur.id.trim() : "";
+        const curName = typeof cur.name === "string" ? String(cur.name).trim().toLowerCase() : "";
+        const remove = (curId && deletedIdSet.has(curId)) || (curName && byNameLower.has(curName));
+        if (remove) {
+          savedChanged = true;
+          return false;
+        }
+        return true;
+      });
+
+      let widgetsChanged = false;
+      const nextWidgets = currentWidgets.map((w: unknown) => {
+        const widget = w as {
+          metricId?: string;
+          metricIds?: string[];
+          aggregationConfig?: { metrics?: { field?: string; [k: string]: unknown }[] };
+          id?: string;
+          type?: string;
+          title?: string;
+          x?: number;
+          y?: number;
+          w?: number;
+          h?: number;
+          gridOrder?: number;
+          gridSpan?: number;
+          pageId?: string;
+        };
+        let nextWidget = { ...widget };
+
+        const mid = typeof widget.metricId === "string" ? widget.metricId.trim() : "";
+        if (mid && deletedIdSet.has(mid)) {
+          const deletedMetric = byId.get(mid);
+          if (deletedMetric) {
+            widgetsChanged = true;
+            const newAgg = buildWidgetAggregationConfig(deletedMetric);
+            nextWidget = {
+              ...nextWidget,
+              title: deletedMetric.name ?? nextWidget.title,
+              aggregationConfig: newAgg,
+            };
+            delete (nextWidget as { metricId?: string }).metricId;
+          }
+        }
+
+        if (Array.isArray(widget.metricIds) && widget.metricIds.length > 0) {
+          const filtered = widget.metricIds.filter((id) => !deletedIdSet.has(String(id).trim()));
+          if (filtered.length !== widget.metricIds.length) {
+            widgetsChanged = true;
+            nextWidget = { ...nextWidget, metricIds: filtered };
+          }
+        }
+
+        const agg = nextWidget.aggregationConfig;
+        const metricsArr = Array.isArray(agg?.metrics) ? agg.metrics : [];
+        let metricEntryUpdated = false;
+        const newMetrics = metricsArr.map((met: { field?: string; [k: string]: unknown }) => {
+          const fieldStr = typeof met.field === "string" ? String(met.field).trim().toLowerCase() : "";
+          const byName = fieldStr ? byNameLower.get(fieldStr) : undefined;
+          if (byName?.metric) {
+            metricEntryUpdated = true;
+            const mt = byName.metric as Record<string, unknown>;
+            return {
+              id: met.id ?? mt.id,
+              field: mt.field ?? met.field,
+              func: mt.func ?? met.func,
+              alias: mt.alias ?? met.alias,
+              condition: mt.condition ?? met.condition,
+              formula: mt.formula ?? met.formula,
+              ...(mt.expression != null && { expression: mt.expression }),
+            };
+          }
+          return met;
+        });
+        if (metricEntryUpdated) {
+          widgetsChanged = true;
+          return {
+            ...nextWidget,
+            aggregationConfig: { ...agg, metrics: newMetrics },
+          };
+        }
+
+        return nextWidget;
+      });
+
+      if (!savedChanged && !widgetsChanged) continue;
+
+      const updatedLayout = {
+        ...layout,
+        savedMetrics: nextSavedMetrics,
+        widgets: nextWidgets,
+      };
+
+      const { error: updateErr } = await adminClient
+        .from("dashboard")
+        .update({ layout: updatedLayout as Json })
+        .eq("id", dashboardId);
+
+      if (updateErr) {
+        console.error(`[metrics] No se pudo actualizar dashboard tras borrado ${dashboardId}:`, updateErr.message);
+      }
+    } catch (err) {
+      console.error(`[metrics] Error propagando borrado a dashboard ${dashboardId}:`, err);
+    }
+  }
+}
+
+/**
  * DELETE /api/etl/[etl-id]/metrics
- * Body: { metricId: string }
- * Elimina una métrica del ETL (la quita de layout.saved_metrics).
+ * Body: { metricId: string } o { metricIds: string[] }
+ * Elimina métricas del ETL (layout.saved_metrics), limpia saved_analyses.metricIds y propaga a dashboards.
  * Requiere APP_ADMIN.
  */
 export async function DELETE(
@@ -439,9 +596,20 @@ export async function DELETE(
     }
 
     const body = await request.json().catch(() => ({}));
-    const metricId = typeof body.metricId === "string" ? body.metricId.trim() : "";
-    if (!metricId) {
-      return NextResponse.json({ ok: false, error: "metricId requerido en el body" }, { status: 400 });
+    const singleId = typeof body.metricId === "string" ? body.metricId.trim() : "";
+    const rawIds = Array.isArray(body.metricIds) ? body.metricIds : undefined;
+    const metricIds: string[] =
+      rawIds != null
+        ? rawIds.map((x: unknown) => String(x ?? "").trim()).filter(Boolean)
+        : singleId
+          ? [singleId]
+          : [];
+
+    if (metricIds.length === 0) {
+      return NextResponse.json(
+        { ok: false, error: "Enviá metricId o metricIds (array no vacío) en el body" },
+        { status: 400 }
+      );
     }
 
     const adminClient = createServiceRoleClient();
@@ -455,28 +623,61 @@ export async function DELETE(
       return NextResponse.json({ ok: false, error: "ETL no encontrado" }, { status: 404 });
     }
 
-    const currentLayout = (etlRow as { layout?: { saved_metrics?: { id?: string }[] } })?.layout ?? {};
-    const savedMetrics = Array.isArray(currentLayout.saved_metrics) ? currentLayout.saved_metrics : [];
-    const updated = savedMetrics.filter((m) => (m as { id?: string }).id !== metricId);
-    if (updated.length === savedMetrics.length) {
-      return NextResponse.json({ ok: false, error: "Métrica no encontrada" }, { status: 404 });
+    const currentLayout = (etlRow as {
+      layout?: {
+        saved_metrics?: SavedMetricPayload[];
+        saved_analyses?: { id?: string; metricIds?: string[]; [k: string]: unknown }[];
+      };
+    })?.layout ?? {};
+
+    const savedMetricsList = Array.isArray(currentLayout.saved_metrics) ? currentLayout.saved_metrics : [];
+    const savedAnalysesList = Array.isArray(currentLayout.saved_analyses) ? currentLayout.saved_analyses : [];
+
+    const idSet = new Set(metricIds);
+    const deletedPayloads: SavedMetricPayload[] = [];
+    for (const m of savedMetricsList) {
+      const id = typeof (m as { id?: string }).id === "string" ? String((m as { id?: string }).id).trim() : "";
+      if (id && idSet.has(id)) {
+        deletedPayloads.push(m as SavedMetricPayload);
+      }
     }
+
+    if (deletedPayloads.length === 0) {
+      return NextResponse.json({ ok: false, error: "Ninguna métrica encontrada para eliminar" }, { status: 404 });
+    }
+
+    const deletedIdSet = new Set(deletedPayloads.map((m) => String(m.id ?? "").trim()).filter(Boolean));
+    const nextSavedMetrics = savedMetricsList.filter((m) => {
+      const id = typeof (m as { id?: string }).id === "string" ? String((m as { id?: string }).id).trim() : "";
+      return !id || !deletedIdSet.has(id);
+    });
+
+    const nextSavedAnalyses = savedAnalysesList
+      .map((a) => {
+        const metricIdsArr = Array.isArray(a.metricIds) ? a.metricIds.map((x) => String(x).trim()) : [];
+        const filtered = metricIdsArr.filter((mid) => !deletedIdSet.has(mid));
+        return { ...a, metricIds: filtered };
+      })
+      .filter((a) => (Array.isArray(a.metricIds) ? a.metricIds.length > 0 : false));
 
     const updatedLayout = {
       ...currentLayout,
-      saved_metrics: updated,
+      saved_metrics: nextSavedMetrics,
+      saved_analyses: nextSavedAnalyses,
     };
 
     const { error: updateError } = await adminClient
       .from("etl")
-      .update({ layout: updatedLayout })
+      .update({ layout: updatedLayout as Json })
       .eq("id", etlId);
 
     if (updateError) {
       return NextResponse.json({ ok: false, error: updateError.message }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true });
+    await propagateMetricsDeletionToDashboards(adminClient, etlId, deletedPayloads);
+
+    return NextResponse.json({ ok: true, deletedCount: deletedPayloads.length });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Error al eliminar métrica";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

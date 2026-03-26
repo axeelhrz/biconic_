@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Palette, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,26 @@ const FONT_FAMILY_OPTIONS: { value: string; label: string }[] = [
 ];
 
 const DEFAULT_FONT = FONT_FAMILY_OPTIONS[0]!.value;
+const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+const DEFAULT_TEXT_COLOR = "#ffffff";
+const DEFAULT_TEXT_MUTED_COLOR = "#bfbfbf";
+
+function normalizeHexColor(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const withHash = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+  if (!HEX_COLOR_PATTERN.test(withHash)) return undefined;
+  if (withHash.length === 4) {
+    const [, r, g, b] = withHash;
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return withHash.toLowerCase();
+}
+
+function getColorPickerValue(value: string | undefined, fallback: string): string {
+  const normalized = normalizeHexColor(value ?? "");
+  return normalized ?? fallback;
+}
 
 type StudioAppearanceBarProps = {
   theme: DashboardTheme;
@@ -31,6 +51,27 @@ type StudioAppearanceBarProps = {
 
 export function StudioAppearanceBar({ theme, onThemeChange }: StudioAppearanceBarProps) {
   const [open, setOpen] = useState(true);
+  const [textColorInput, setTextColorInput] = useState(theme.textColor ?? "");
+  const [textMutedColorInput, setTextMutedColorInput] = useState(theme.textMutedColor ?? "");
+
+  useEffect(() => {
+    setTextColorInput(theme.textColor ?? "");
+  }, [theme.textColor]);
+
+  useEffect(() => {
+    setTextMutedColorInput(theme.textMutedColor ?? "");
+  }, [theme.textMutedColor]);
+
+  const commitTextColor = (key: "textColor" | "textMutedColor", rawValue: string) => {
+    const normalized = normalizeHexColor(rawValue);
+    if (!rawValue.trim()) {
+      onThemeChange({ [key]: undefined });
+      return;
+    }
+    if (normalized) {
+      onThemeChange({ [key]: normalized });
+    }
+  };
 
   return (
     <div className="studio-appearance-bar border-b border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]">
@@ -92,6 +133,64 @@ export function StudioAppearanceBar({ theme, onThemeChange }: StudioAppearanceBa
                 onChange={(e) => onThemeChange({ cardBackgroundColor: e.target.value || undefined })}
                 className="studio-appearance-input h-9 flex-1 font-mono text-xs"
                 placeholder="rgba(255,255,255,0.03)"
+              />
+            </div>
+          </div>
+          <div>
+            <Label className="studio-appearance-label">Texto principal</Label>
+            <div className="mt-1 flex gap-2">
+              <input
+                type="color"
+                value={getColorPickerValue(theme.textColor, DEFAULT_TEXT_COLOR)}
+                onChange={(e) => {
+                  const next = normalizeHexColor(e.target.value) ?? DEFAULT_TEXT_COLOR;
+                  setTextColorInput(next);
+                  onThemeChange({ textColor: next });
+                }}
+                className="h-9 w-11 shrink-0 cursor-pointer rounded-lg border border-[var(--studio-border)] bg-transparent"
+              />
+              <Input
+                value={textColorInput}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setTextColorInput(value);
+                  commitTextColor("textColor", value);
+                }}
+                onBlur={(e) => {
+                  const normalized = normalizeHexColor(e.target.value);
+                  setTextColorInput(normalized ?? (e.target.value.trim() ? (theme.textColor ?? "") : ""));
+                }}
+                className="studio-appearance-input h-9 flex-1 font-mono text-xs"
+                placeholder="#ffffff"
+              />
+            </div>
+          </div>
+          <div>
+            <Label className="studio-appearance-label">Texto secundario</Label>
+            <div className="mt-1 flex gap-2">
+              <input
+                type="color"
+                value={getColorPickerValue(theme.textMutedColor, DEFAULT_TEXT_MUTED_COLOR)}
+                onChange={(e) => {
+                  const next = normalizeHexColor(e.target.value) ?? DEFAULT_TEXT_MUTED_COLOR;
+                  setTextMutedColorInput(next);
+                  onThemeChange({ textMutedColor: next });
+                }}
+                className="h-9 w-11 shrink-0 cursor-pointer rounded-lg border border-[var(--studio-border)] bg-transparent"
+              />
+              <Input
+                value={textMutedColorInput}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setTextMutedColorInput(value);
+                  commitTextColor("textMutedColor", value);
+                }}
+                onBlur={(e) => {
+                  const normalized = normalizeHexColor(e.target.value);
+                  setTextMutedColorInput(normalized ?? (e.target.value.trim() ? (theme.textMutedColor ?? "") : ""));
+                }}
+                className="studio-appearance-input h-9 flex-1 font-mono text-xs"
+                placeholder="#bfbfbf"
               />
             </div>
           </div>

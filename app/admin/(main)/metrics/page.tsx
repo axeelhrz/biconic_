@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Plus, Search, Pencil, BarChart3, Loader2, ChevronRight, Database, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -31,6 +32,36 @@ export default function AdminMetricsPage() {
   const [selectedDataset, setSelectedDataset] = useState<DatasetOption | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ etlId: string; metricId: string; metricName: string } | null>(null);
+  /** Claves `${etlId}:::${metricId}` para selección global entre ETLs */
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  const selectionKey = (etlId: string, metricId: string) => `${etlId}:::${metricId}`;
+
+  const toggleMetricSelected = useCallback((etlId: string, metricId: string, checked: boolean) => {
+    const k = selectionKey(etlId, metricId);
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(k);
+      else next.delete(k);
+      return next;
+    });
+  }, []);
+
+  const selectAllVisibleMetrics = useCallback(() => {
+    const next = new Set<string>();
+    for (const e of etls) {
+      for (const m of e.savedMetrics ?? []) {
+        next.add(selectionKey(e.id, m.id));
+      }
+    }
+    setSelectedKeys(next);
+  }, [etls]);
+
+  const clearMetricSelection = useCallback(() => {
+    setSelectedKeys(new Set());
+  }, []);
 
   const fetchMetrics = useCallback(async () => {
     setLoading(true);
@@ -118,6 +149,11 @@ export default function AdminMetricsPage() {
       }
       toast.success("Métrica eliminada");
       setDeleteTarget(null);
+      setSelectedKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(selectionKey(etlId, metricId));
+        return next;
+      });
       await fetchMetrics();
     } catch {
       toast.error("Error al eliminar la métrica.");
@@ -125,6 +161,51 @@ export default function AdminMetricsPage() {
       setDeletingId(null);
     }
   }, [deleteTarget, fetchMetrics]);
+
+  const confirmBulkDelete = useCallback(async () => {
+    if (selectedKeys.size === 0) return;
+    const byEtl = new Map<string, string[]>();
+    for (const k of selectedKeys) {
+      const sep = k.indexOf(":::");
+      if (sep === -1) continue;
+      const etlId = k.slice(0, sep);
+      const metricId = k.slice(sep + 3);
+      if (!etlId || !metricId) continue;
+      if (!byEtl.has(etlId)) byEtl.set(etlId, []);
+      byEtl.get(etlId)!.push(metricId);
+    }
+    if (byEtl.size === 0) {
+      toast.error("Selección inválida");
+      return;
+    }
+    setBulkDeleting(true);
+    try {
+      let totalDeleted = 0;
+      for (const [etlId, metricIds] of byEtl) {
+        const res = await fetch(`/api/etl/${etlId}/metrics`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ metricIds }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) {
+          toast.error(json.error || `Error al eliminar métricas del ETL ${etlId}`);
+          return;
+        }
+        totalDeleted += typeof json.deletedCount === "number" ? json.deletedCount : metricIds.length;
+      }
+      toast.success(
+        totalDeleted === 1 ? "1 métrica eliminada" : `${totalDeleted} métricas eliminadas`
+      );
+      setBulkDeleteOpen(false);
+      setSelectedKeys(new Set());
+      await fetchMetrics();
+    } catch {
+      toast.error("Error al eliminar métricas.");
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [selectedKeys, fetchMetrics]);
 
   const totalMetrics = etls.reduce((acc, e) => acc + (e.savedMetrics?.length ?? 0), 0);
   const etlsWithMetrics = etls.filter((e) => (e.savedMetrics?.length ?? 0) > 0);
@@ -336,6 +417,45 @@ export default function AdminMetricsPage() {
         </div>
       )}
 
+      <Dialog open={bulkDeleteOpen} onOpenChange={(open) => !open && !bulkDeleting && setBulkDeleteOpen(false)}>
+        <DialogContent className="sm:max-w-md" style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: "var(--platform-fg)" }}>Eliminar métricas seleccionadas</DialogTitle>
+            <DialogDescription style={{ color: "var(--platform-fg-muted)" }}>
+              ¿Eliminar <strong style={{ color: "var(--platform-fg)" }}>{selectedKeys.size}</strong>{" "}
+              métrica{selectedKeys.size !== 1 ? "s" : ""}? Se limpiarán referencias en análisis y dashboards vinculados. Esta acción no se puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setBulkDeleteOpen(false)}
+              disabled={bulkDeleting}
+              className="rounded-xl"
+              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmBulkDelete}
+              disabled={bulkDeleting || selectedKeys.size === 0}
+              className="rounded-xl bg-red-600 hover:bg-red-700 text-white"
+            >
+              {bulkDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Eliminando...
+                </>
+              ) : (
+                "Eliminar"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && closeDeleteModal()}>
         <DialogContent className="sm:max-w-md" style={{ background: "var(--platform-surface)", borderColor: "var(--platform-border)" }}>
           <DialogHeader>
@@ -404,9 +524,50 @@ export default function AdminMetricsPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-6">
-          <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-            {totalMetrics} métrica{totalMetrics !== 1 ? "s" : ""} en {etlsWithMetrics.length} ETL{etlsWithMetrics.length !== 1 ? "s" : ""}.
-          </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+            <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+              {totalMetrics} métrica{totalMetrics !== 1 ? "s" : ""} en {etlsWithMetrics.length} ETL{etlsWithMetrics.length !== 1 ? "s" : ""}.
+              {selectedKeys.size > 0 ? (
+                <span className="ml-1 font-medium" style={{ color: "var(--platform-fg)" }}>
+                  ({selectedKeys.size} seleccionada{selectedKeys.size !== 1 ? "s" : ""})
+                </span>
+              ) : null}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-xl"
+                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+                onClick={selectAllVisibleMetrics}
+                disabled={totalMetrics === 0}
+              >
+                Seleccionar todas
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-xl"
+                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}
+                onClick={clearMetricSelection}
+                disabled={selectedKeys.size === 0}
+              >
+                Limpiar selección
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="rounded-xl bg-red-600 hover:bg-red-700 text-white"
+                disabled={selectedKeys.size === 0}
+                onClick={() => setBulkDeleteOpen(true)}
+              >
+                <Trash2 className="h-4 w-4 mr-1.5" />
+                Eliminar seleccionadas
+              </Button>
+            </div>
+          </div>
           {etlsWithMetrics.map((etl) => (
             <section
               key={etl.id}
@@ -439,9 +600,17 @@ export default function AdminMetricsPage() {
                     key={m.id}
                     className="flex items-center justify-between gap-4 px-4 py-3"
                   >
-                    <span className="font-medium text-sm" style={{ color: "var(--platform-fg)" }}>
-                      {m.name}
-                    </span>
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <Checkbox
+                        checked={selectedKeys.has(selectionKey(etl.id, m.id))}
+                        onCheckedChange={(c) => toggleMetricSelected(etl.id, m.id, c === true)}
+                        aria-label={`Seleccionar ${m.name}`}
+                        className="shrink-0 border-[var(--platform-border)] data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:border-[var(--platform-accent)]"
+                      />
+                      <span className="font-medium text-sm truncate" style={{ color: "var(--platform-fg)" }}>
+                        {m.name}
+                      </span>
+                    </div>
                     <span className="text-xs truncate max-w-[40%]" style={{ color: "var(--platform-fg-muted)" }}>
                       {m.metric?.func}({m.metric?.field ?? "—"}) {m.metric?.alias ? `as ${m.metric.alias}` : ""}
                     </span>
