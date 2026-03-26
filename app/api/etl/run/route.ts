@@ -1523,7 +1523,11 @@ async function executeEtlPipeline(
       }
 
       // JOIN entre dos conexiones distintas (cross-DB): ejecutar en memoria
-      const secondaryConnIdForCrossDb = isStarJoin ? (joinObj.joins?.[0] as any)?.secondaryConnectionId : joinObj.secondaryConnectionId;
+      const secondaryConnIdForCrossDb = isJoin
+        ? (isStarJoin
+            ? (joinObj.joins?.[0] as any)?.secondaryConnectionId
+            : joinObj.secondaryConnectionId)
+        : undefined;
       if (isJoin && secondaryConnIdForCrossDb && String(primaryConnId) !== String(secondaryConnIdForCrossDb)) {
         const { data: conn2 } = await supabaseService.from("connections").select("*").eq("id", secondaryConnIdForCrossDb).single();
         if (!conn2) throw new Error(`Conexión secundaria ${secondaryConnIdForCrossDb} no encontrada.`);
