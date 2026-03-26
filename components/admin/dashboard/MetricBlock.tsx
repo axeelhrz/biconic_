@@ -69,6 +69,7 @@ type MetricBlockProps = {
   chartGridColor?: string;
   /** Widget completo para renderizar con el mismo componente que la vista final (editor = vista fiel) */
   widgetForRenderer?: DashboardWidgetRendererWidget;
+  showTechnicalPreview?: boolean;
 };
 
 const STATE_LABELS: Record<MetricBlockState, string> = {
@@ -99,6 +100,7 @@ export function MetricBlock({
   chartGridYDisplay,
   chartGridColor,
   widgetForRenderer,
+  showTechnicalPreview = false,
 }: MetricBlockProps) {
   const hasViz = useMemo(() => {
     if (chartType === "kpi") return kpiValue != null;
@@ -269,6 +271,7 @@ export function MetricBlock({
               widget={widgetForRenderer ?? fallbackWidget}
               isLoading={false}
               hideHeader
+              showTechnicalPreview={showTechnicalPreview}
               minHeight={220}
               className="!border-0 !p-0 !shadow-none h-full"
             />

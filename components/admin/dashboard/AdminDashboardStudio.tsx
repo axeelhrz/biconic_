@@ -153,6 +153,12 @@ type StudioWidget = {
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
+  diagnosticPreview?: {
+    endpoint: string;
+    payload: Record<string, unknown>;
+    source: "aggregate" | "raw";
+    capturedAt?: string;
+  };
   /** ID de la fuente de datos (dashboard_data_sources) cuando el dashboard tiene múltiples ETLs */
   dataSourceId?: string | null;
   [key: string]: unknown;
@@ -233,6 +239,7 @@ export function AdminDashboardStudio({
   const [activePageId, setActivePageId] = useState<string | null>("page-1");
   const [savedMetrics, setSavedMetrics] = useState<SavedMetric[]>([]);
   const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalysis[]>([]);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [derivedColumnsFromLayout, setDerivedColumnsFromLayout] = useState<{ name: string; expression: string; defaultAggregation: string }[]>([]);
   const [layoutLoaded, setLayoutLoaded] = useState(false);
   const loadedOnce = useRef(false);
@@ -387,7 +394,7 @@ export function AdminDashboardStudio({
     setIsSaving(true);
     try {
       const widgetsToSave = overrides?.widgets ?? widgets;
-      const cleanWidgets = widgetsToSave.map(({ rows, config, columns, facetValues, ...rest }) => rest);
+      const cleanWidgets = widgetsToSave.map(({ rows, config, columns, facetValues, diagnosticPreview, ...rest }) => rest);
       let datasetConfig: { derivedColumns: { name: string; expression: string; defaultAggregation: string }[] } | undefined;
       const etlId = etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId;
       if (etlId) {
@@ -593,28 +600,44 @@ export function AdminDashboardStudio({
             ? savedByLinkedIds
             : savedMetrics.filter((s) => (s.name || "").trim() && metricFieldNames.has((s.name || "").trim().toLowerCase()))
           ).map(toSavedMetricPayload);
+          const aggregatePayload = {
+            tableName,
+            etlId: widgetEtlId || undefined,
+            dimension: agg.dimension,
+            dimensions: dimensions.length > 0 ? dimensions : undefined,
+            metrics: metricsPayload,
+            filters: [...(agg.filters || []), ...filters],
+            orderBy: rankingOrderBy || agg.orderBy,
+            limit: rankingLimit ?? agg.limit ?? 100,
+            cumulative: agg.cumulative || "none",
+            comparePeriod: agg.comparePeriod || undefined,
+            dateDimension: agg.dateDimension || undefined,
+            ...(isDateDimension && dateGroupByGranularity && primaryDimension && { dateGroupBy: { field: primaryDimension, granularity: dateGroupByGranularity } }),
+            ...((agg as { dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string } }).dateRangeFilter && {
+              dateRangeFilter: (agg as { dateRangeFilter: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter,
+            }),
+            ...(derivedColumnsFromLayout.length > 0 && { derivedColumns: derivedColumnsFromLayout }),
+            ...(savedMetricsForBody.length > 0 && { savedMetrics: savedMetricsForBody }),
+          };
+          setWidgets((prev) =>
+            prev.map((w) =>
+              w.id === widgetId
+                ? {
+                    ...w,
+                    diagnosticPreview: {
+                      endpoint: "/api/dashboard/aggregate-data",
+                      payload: aggregatePayload,
+                      source: "aggregate",
+                      capturedAt: new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+                    },
+                  }
+                : w
+            )
+          );
           const res = await fetch("/api/dashboard/aggregate-data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              tableName,
-              etlId: widgetEtlId || undefined,
-              dimension: agg.dimension,
-              dimensions: dimensions.length > 0 ? dimensions : undefined,
-              metrics: metricsPayload,
-              filters: [...(agg.filters || []), ...filters],
-              orderBy: rankingOrderBy || agg.orderBy,
-              limit: rankingLimit ?? agg.limit ?? 100,
-              cumulative: agg.cumulative || "none",
-              comparePeriod: agg.comparePeriod || undefined,
-              dateDimension: agg.dateDimension || undefined,
-              ...(isDateDimension && dateGroupByGranularity && primaryDimension && { dateGroupBy: { field: primaryDimension, granularity: dateGroupByGranularity } }),
-              ...((agg as { dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string } }).dateRangeFilter && {
-                dateRangeFilter: (agg as { dateRangeFilter: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter,
-              }),
-              ...(derivedColumnsFromLayout.length > 0 && { derivedColumns: derivedColumnsFromLayout }),
-              ...(savedMetricsForBody.length > 0 && { savedMetrics: savedMetricsForBody }),
-            }),
+            body: JSON.stringify(aggregatePayload),
           });
           const dataArray = await safeJsonResponse(res);
           if (!res.ok) {
@@ -636,10 +659,26 @@ export function AdminDashboardStudio({
             prev.map((w) => (w.id === widgetId ? { ...w, config, rows: rowsForWidget, isLoading: false } : w))
           );
         } else {
+          const rawPayload = { tableName, filters, limit: 500 };
+          setWidgets((prev) =>
+            prev.map((w) =>
+              w.id === widgetId
+                ? {
+                    ...w,
+                    diagnosticPreview: {
+                      endpoint: "/api/dashboard/raw-data",
+                      payload: rawPayload,
+                      source: "raw",
+                      capturedAt: new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+                    },
+                  }
+                : w
+            )
+          );
           const res = await fetch("/api/dashboard/raw-data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tableName, filters, limit: 500 }),
+            body: JSON.stringify(rawPayload),
           });
           if (!res.ok) throw new Error("Error al cargar datos");
           const dataArray = await safeJsonResponse(res);
@@ -1223,6 +1262,18 @@ export function AdminDashboardStudio({
               ));
             })()}
           </select>
+          <button
+            type="button"
+            onClick={() => setShowDiagnostics((prev) => !prev)}
+            className={cn(
+              "ml-auto rounded-md border px-2 py-1 text-xs font-medium transition-colors",
+              showDiagnostics
+                ? "border-[var(--studio-accent)] text-[var(--studio-accent)] bg-[var(--studio-accent-dim)]"
+                : "border-[var(--studio-border)] text-[var(--studio-fg-muted)] hover:text-[var(--studio-fg)]"
+            )}
+          >
+            {showDiagnostics ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
+          </button>
         </div>
       )}
       <Dialog
@@ -1664,8 +1715,10 @@ export function AdminDashboardStudio({
                         chartStyle: w.chartStyle as Record<string, unknown> | undefined,
                         labelDisplayMode: (w as { labelDisplayMode?: "percent" | "value" }).labelDisplayMode,
                         chartMetricStyles: (w as { chartMetricStyles?: (ChartStyleConfig | undefined)[] }).chartMetricStyles,
+                        diagnosticPreview: w.diagnosticPreview,
                         minHeight: minH,
                       }}
+                      showTechnicalPreview={showDiagnostics}
                     />
                   </div>
                 );

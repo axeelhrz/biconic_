@@ -20,6 +20,7 @@ import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Card } from "@/components/ui/card";
 import { buildChartOptions, buildPieDoughnutLegendShared, formatValue, getValueFormatter, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { formatDateByGranularity, type DateGranularity } from "@/lib/dashboard/dateFormatting";
+import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 
 const DashboardMapWidget = dynamic(
@@ -101,6 +102,12 @@ export interface DashboardWidgetRendererWidget {
   };
   imageUrl?: string;
   aggregationConfig?: { chartType?: string; [key: string]: unknown };
+  diagnosticPreview?: {
+    endpoint: string;
+    payload: Record<string, unknown>;
+    source: "aggregate" | "raw";
+    capturedAt?: string;
+  };
   [key: string]: unknown;
 }
 
@@ -173,6 +180,8 @@ interface DashboardWidgetRendererProps {
   darkChartTheme?: boolean;
   /** Ocultar cabecera del card (p. ej. cuando se usa dentro del editor) */
   hideHeader?: boolean;
+  /** Muestra vista técnica del payload efectivo (editor/admin). */
+  showTechnicalPreview?: boolean;
 }
 
 export function DashboardWidgetRenderer({
@@ -184,6 +193,7 @@ export function DashboardWidgetRenderer({
   className = "",
   darkChartTheme = false,
   hideHeader = false,
+  showTechnicalPreview = false,
 }: DashboardWidgetRendererProps) {
   const effectiveMinHeight = widget.minHeight ?? minHeight;
   const chartType = useMemo(() => {
@@ -205,13 +215,30 @@ export function DashboardWidgetRenderer({
 
   const kpiValue = useMemo(() => {
     if (chartType !== "kpi" || !Array.isArray(widget.rows) || widget.rows.length === 0) return null;
-    const firstRow = widget.rows[0] as Record<string, unknown>;
-    const keys = Object.keys(firstRow || {}).filter((k) => typeof firstRow[k] === "number" || typeof firstRow[k] === "string");
-    const valKey = keys[0];
+    // Prioriza el dataset ya construido para mantener total idéntico al config del widget.
+    const configValues = chartConfig?.datasets?.[0]?.data;
+    if (Array.isArray(configValues) && configValues.length > 0) {
+      const sumFromConfig = configValues.reduce((acc, value) => {
+        const parsed = Number(value);
+        return acc + (Number.isFinite(parsed) ? parsed : 0);
+      }, 0);
+      return formatKpiValue(sumFromConfig, widget.chartStyle as ChartStyleConfig | undefined);
+    }
+
+    const rows = widget.rows as Record<string, unknown>[];
+    const axis = resolveWidgetAxisKeys(rows, {
+      type: widget.type,
+      aggregationConfig: widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
+      source: widget.source as BuildChartConfigWidget["source"],
+    });
+    const valKey = axis?.yKeys?.[0];
     if (!valKey) return null;
-    const sum = (widget.rows as Record<string, unknown>[]).reduce((acc, row) => acc + Number(row[valKey] ?? 0), 0);
+    const sum = rows.reduce((acc, row) => {
+      const parsed = Number(row[valKey] ?? 0);
+      return acc + (Number.isFinite(parsed) ? parsed : 0);
+    }, 0);
     return formatKpiValue(sum, widget.chartStyle as ChartStyleConfig | undefined);
-  }, [chartType, widget.rows, widget.chartStyle]);
+  }, [chartType, chartConfig, widget.rows, widget.chartStyle, widget.type, widget.aggregationConfig, widget.source]);
 
   const isCombo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2;
   const aggConfig = widget.aggregationConfig as {
@@ -685,6 +712,45 @@ export function DashboardWidgetRenderer({
                 {chartType === "doughnut" && <Doughnut data={chartConfig as never} options={chartOptions as never} />}
                 {chartType === "scatter" && <Scatter data={chartConfig as never} options={chartOptions as never} />}
               </div>
+            )}
+            {showTechnicalPreview && widget.diagnosticPreview && (
+              <details className="mt-3 rounded-md border border-[var(--platform-border)] bg-[var(--platform-bg-elevated,transparent)]">
+                <summary className="cursor-pointer px-3 py-2 text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                  Vista previa técnica
+                </summary>
+                <div className="space-y-2 border-t border-[var(--platform-border)] px-3 py-2">
+                  <div className="text-[11px] leading-5" style={{ color: "var(--platform-fg-muted)" }}>
+                    <span className="font-semibold">endpoint:</span> {widget.diagnosticPreview.endpoint}
+                    {" · "}
+                    <span className="font-semibold">tipo:</span> {widget.diagnosticPreview.source}
+                    {widget.diagnosticPreview.capturedAt ? (
+                      <>
+                        {" · "}
+                        <span className="font-semibold">capturado:</span> {widget.diagnosticPreview.capturedAt}
+                      </>
+                    ) : null}
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      className="rounded border border-[var(--platform-border)] px-2 py-1 text-[11px]"
+                      style={{ color: "var(--platform-fg-muted)" }}
+                      onClick={() => {
+                        if (typeof navigator === "undefined" || !navigator.clipboard) return;
+                        void navigator.clipboard.writeText(JSON.stringify(widget.diagnosticPreview, null, 2));
+                      }}
+                    >
+                      Copiar JSON
+                    </button>
+                  </div>
+                  <pre
+                    className="max-h-52 overflow-auto rounded bg-black/10 p-2 text-[11px] leading-4"
+                    style={{ color: "var(--platform-fg)" }}
+                  >
+                    {JSON.stringify(widget.diagnosticPreview.payload, null, 2)}
+                  </pre>
+                </div>
+              </details>
             )}
           </>
         )}

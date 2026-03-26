@@ -50,29 +50,23 @@ export type BuildChartConfigWidget = {
   color?: string;
 };
 
-function shouldApplyTemporalRankingRule(
-  rows: Record<string, unknown>[],
-  xKey: string,
-  agg?: BuildChartConfigWidget["aggregationConfig"]
-): boolean {
-  const normalizedDateDim = String(agg?.dateDimension ?? "").trim().toLowerCase();
-  const normalizedXKey = String(xKey ?? "").trim().toLowerCase();
-  return (
-    !!agg?.dateGroupByGranularity ||
-    (normalizedDateDim !== "" && normalizedDateDim === normalizedXKey) ||
-    rows.some((r) => parseDateLike((r as Record<string, unknown>)[xKey]) != null)
-  );
-}
+export type ResolvedWidgetAxisKeys = {
+  sample: Record<string, unknown>;
+  resultKeys: string[];
+  metricAliases: string[];
+  xKey: string;
+  yKeys: string[];
+};
 
 /**
- * Aplica el mismo orden y ranking que buildChartConfig y devuelve las filas procesadas.
- * Usar para widgets tipo "table" para que la tabla muestre el mismo orden y Top N que los gráficos.
+ * Resuelve las claves de eje (X/Y) desde la configuración del widget y las columnas reales devueltas.
+ * Es la fuente de verdad compartida para renderer y generación de chart config.
  */
-export function getProcessedRowsForChart(
+export function resolveWidgetAxisKeys(
   dataArray: Record<string, unknown>[],
   widget: BuildChartConfigWidget
-): Record<string, unknown>[] {
-  if (!Array.isArray(dataArray) || dataArray.length === 0) return [];
+): ResolvedWidgetAxisKeys | null {
+  if (!Array.isArray(dataArray) || dataArray.length === 0) return null;
   const sample = dataArray[0] || {};
   const resultKeys = Object.keys(sample);
   const agg = widget.aggregationConfig;
@@ -98,7 +92,37 @@ export function getProcessedRowsForChart(
     const numKeys = resultKeys.filter((k) => typeof (sample as Record<string, unknown>)[k] === "number");
     yKeys = numKeys.length > 0 ? numKeys : resultKeys.filter((k) => k !== xKey).slice(0, 1);
   }
-  if (!xKey || yKeys.length === 0) return [...dataArray];
+  if (!xKey || yKeys.length === 0) return null;
+  return { sample, resultKeys, metricAliases, xKey, yKeys };
+}
+
+function shouldApplyTemporalRankingRule(
+  rows: Record<string, unknown>[],
+  xKey: string,
+  agg?: BuildChartConfigWidget["aggregationConfig"]
+): boolean {
+  const normalizedDateDim = String(agg?.dateDimension ?? "").trim().toLowerCase();
+  const normalizedXKey = String(xKey ?? "").trim().toLowerCase();
+  return (
+    !!agg?.dateGroupByGranularity ||
+    (normalizedDateDim !== "" && normalizedDateDim === normalizedXKey) ||
+    rows.some((r) => parseDateLike((r as Record<string, unknown>)[xKey]) != null)
+  );
+}
+
+/**
+ * Aplica el mismo orden y ranking que buildChartConfig y devuelve las filas procesadas.
+ * Usar para widgets tipo "table" para que la tabla muestre el mismo orden y Top N que los gráficos.
+ */
+export function getProcessedRowsForChart(
+  dataArray: Record<string, unknown>[],
+  widget: BuildChartConfigWidget
+): Record<string, unknown>[] {
+  if (!Array.isArray(dataArray) || dataArray.length === 0) return [];
+  const agg = widget.aggregationConfig;
+  const axis = resolveWidgetAxisKeys(dataArray, widget);
+  if (!axis) return [...dataArray];
+  const { xKey, yKeys, resultKeys } = axis;
 
   let rows = [...dataArray];
 
@@ -177,32 +201,10 @@ export function buildChartConfig(
   accentColor: string = ""
 ): ChartConfig | undefined {
   if (!Array.isArray(dataArray) || dataArray.length === 0) return undefined;
-  const sample = dataArray[0] || {};
-  const resultKeys = Object.keys(sample);
   const agg = widget.aggregationConfig;
-  const metricAliases =
-    agg?.enabled && agg.metrics?.length
-      ? agg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
-      : [];
-  const xKey =
-    agg?.chartXAxis && resultKeys.includes(agg.chartXAxis)
-      ? agg.chartXAxis
-      : (agg?.dimension ||
-          widget.source?.labelField ||
-          resultKeys.find((k) => !metricAliases.includes(k) && typeof (sample as Record<string, unknown>)[k] === "string") ||
-          resultKeys[0]);
-  let yKeys: string[] = [];
-  if (Array.isArray(agg?.chartYAxes) && agg.chartYAxes.length > 0) {
-    yKeys = agg.chartYAxes.filter((k) => resultKeys.includes(k));
-  }
-  if (yKeys.length === 0 && metricAliases.length > 0) {
-    yKeys = metricAliases.filter((k) => resultKeys.includes(k));
-  }
-  if (yKeys.length === 0) {
-    const numKeys = resultKeys.filter((k) => typeof (sample as Record<string, unknown>)[k] === "number");
-    yKeys = numKeys.length > 0 ? numKeys : resultKeys.filter((k) => k !== xKey).slice(0, 1);
-  }
-  if (!xKey || yKeys.length === 0) return undefined;
+  const axis = resolveWidgetAxisKeys(dataArray, widget);
+  if (!axis) return undefined;
+  const { xKey, yKeys, resultKeys } = axis;
 
   const overrides = agg?.chartLabelOverrides;
   const labelOverride = (v: string): string => {
