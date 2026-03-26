@@ -165,6 +165,31 @@ type RunBody = {
   _resumeAttempt?: number;
 };
 
+function createHttpError(message: string, status: number): Error & { status: number } {
+  const err = new Error(message) as Error & { status: number };
+  err.status = status;
+  return err;
+}
+
+function getStarJoinPairs(jn: {
+  conditions?: Array<{ primaryColumn?: string; secondaryColumn?: string }>;
+  primaryColumn?: string;
+  secondaryColumn?: string;
+}): Array<{ primaryColumn: string; secondaryColumn: string }> {
+  if (Array.isArray(jn.conditions) && jn.conditions.length > 0) {
+    return jn.conditions
+      .map((c) => ({
+        primaryColumn: String(c?.primaryColumn ?? "").trim(),
+        secondaryColumn: String(c?.secondaryColumn ?? "").trim(),
+      }))
+      .filter((p) => p.primaryColumn || p.secondaryColumn);
+  }
+  const primaryColumn = String(jn.primaryColumn ?? "").trim();
+  const secondaryColumn = String(jn.secondaryColumn ?? "").trim();
+  if (primaryColumn || secondaryColumn) return [{ primaryColumn, secondaryColumn }];
+  return [];
+}
+
 
 // ===================================================================
 // FUNCIONES AUXILIARES PARA QUERIES Y TIPOS
@@ -808,19 +833,55 @@ async function executeEtlPipeline(
       const isJoin = !!joinObj;
       if (isJoin && Array.isArray(joinObj.joins)) {
         // Defensivo: algunos ETL legacy pueden persistir joins nulos/incompletos.
+        const providedJoinsCount = joinObj.joins.length;
         joinObj.joins = joinObj.joins.filter(
           (jn: unknown) => !!jn && typeof jn === "object"
         );
+        if (joinObj.joins.length !== providedJoinsCount) {
+          throw createHttpError(
+            "JOIN estrella inválido: se detectaron joins vacíos o corruptos. Edita el ETL y vuelve a guardarlo.",
+            400
+          );
+        }
       }
       const isStarJoin = isJoin && !!joinObj.primaryConnectionId && Array.isArray(joinObj.joins);
       if (isStarJoin && joinObj.joins.length === 0) {
-        throw new Error(
-          "JOIN estrella inválido: faltan conexiones secundarias configuradas."
+        throw createHttpError(
+          "JOIN estrella inválido: faltan conexiones secundarias configuradas.",
+          400
         );
+      }
+      if (isStarJoin) {
+        for (let idx = 0; idx < joinObj.joins.length; idx++) {
+          const jn = joinObj.joins[idx];
+          if (jn.secondaryConnectionId == null || String(jn.secondaryConnectionId).trim() === "") {
+            throw createHttpError(`Join ${idx}: secondaryConnectionId es obligatorio.`, 400);
+          }
+          if (!String(jn.secondaryTable ?? "").trim()) {
+            throw createHttpError(`Join ${idx}: secondaryTable es obligatorio.`, 400);
+          }
+          const pairs = getStarJoinPairs(jn);
+          if (pairs.length === 0 || pairs.some((p) => !p.primaryColumn || !p.secondaryColumn)) {
+            throw createHttpError(`Join ${idx}: se requiere al menos una condición válida de enlace.`, 400);
+          }
+        }
+      } else if (isJoin) {
+        if (!joinObj.secondaryConnectionId) {
+          throw createHttpError(
+            "JOIN inválido: secondaryConnectionId es obligatorio para join simple.",
+            400
+          );
+        }
+        if (!String(joinObj.leftTable ?? "").trim() || !String(joinObj.rightTable ?? "").trim()) {
+          throw createHttpError(
+            "JOIN inválido: leftTable y rightTable son obligatorias.",
+            400
+          );
+        }
       }
       const primaryConnId = isStarJoin ? joinObj.primaryConnectionId : isJoin ? joinObj.connectionId : body!.connectionId;
       
-      if (!primaryConnId) throw new Error("ID de conexión primario no encontrado.");
+      if (!primaryConnId) throw createHttpError("ID de conexión primario no encontrado.", 400);
 
       const { data: conn } = await supabaseAdmin
         .from("connections")
@@ -2241,9 +2302,13 @@ export async function POST(req: NextRequest) {
          console.error("Error marking failed run during initialization:", logErr);
        }
      }
+     const statusCode =
+       typeof err?.status === "number" && err.status >= 400 && err.status < 600
+         ? err.status
+         : 500;
      return NextResponse.json(
         { ok: false, error: err?.message || "Error al iniciar ETL" },
-        { status: 500 }
+        { status: statusCode }
      );
   }
 }

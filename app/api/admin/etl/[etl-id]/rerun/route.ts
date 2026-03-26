@@ -79,10 +79,27 @@ export async function POST(
       const j = JSON.parse(JSON.stringify(guidedConfig.join)) as Record<string, unknown>;
       if (j.primaryConnectionId != null) j.primaryConnectionId = toStr(j.primaryConnectionId);
       if (Array.isArray(j.joins)) {
-        j.joins = j.joins.map((jn: Record<string, unknown>) => ({
+        const rawJoins = j.joins;
+        const safeJoins = rawJoins.filter(
+          (jn): jn is Record<string, unknown> => !!jn && typeof jn === "object"
+        );
+        j.joins = safeJoins.map((jn: Record<string, unknown>) => ({
           ...jn,
-          secondaryConnectionId: jn.secondaryConnectionId != null ? toStr(jn.secondaryConnectionId) : jn.secondaryConnectionId,
+          secondaryConnectionId:
+            jn.secondaryConnectionId != null
+              ? toStr(jn.secondaryConnectionId)
+              : jn.secondaryConnectionId,
         }));
+        if (rawJoins.length !== safeJoins.length) {
+          return NextResponse.json(
+            {
+              ok: false,
+              error:
+                "Configuración JOIN inválida: se detectaron entradas vacías en joins. Edita el ETL y vuelve a guardarlo.",
+            },
+            { status: 400 }
+          );
+        }
       }
       normalizedJoin = j;
     }

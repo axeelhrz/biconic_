@@ -571,12 +571,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const {
         primaryConnectionId,
         primaryTable,
-        joins,
+        joins: joinsRaw,
         primaryColumns,
         conditions,
         count,
         ssl,
       } = body;
+      const joins = Array.isArray(joinsRaw)
+        ? joinsRaw.filter((jn): jn is NonNullable<StarJoin["joins"]>[number] => !!jn && typeof jn === "object")
+        : [];
 
       log("Iniciando flujo de JOIN 'star-schema'.", {
         primaryConnectionId,
@@ -587,7 +590,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         conditionsCount: Array.isArray(conditions) ? conditions.length : 0,
       });
 
-      if (!primaryTable || !joins || joins.length === 0) {
+      if (!primaryTable || joins.length === 0) {
         log("Error de validación: Falta tabla principal o joins.");
         return NextResponse.json(
           {
@@ -596,6 +599,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           },
           { status: 400 }
         );
+      }
+      if (Array.isArray(joinsRaw) && joinsRaw.length !== joins.length) {
+        log("Se descartaron joins inválidos del payload.", {
+          providedJoins: joinsRaw.length,
+          validJoins: joins.length,
+        });
+      }
+      for (let idx = 0; idx < joins.length; idx++) {
+        const jn = joins[idx];
+        if (jn.secondaryConnectionId == null || String(jn.secondaryConnectionId).trim() === "") {
+          return NextResponse.json(
+            { ok: false, error: `Join ${idx}: secondaryConnectionId es obligatorio.` },
+            { status: 400 }
+          );
+        }
+        if (!String(jn.secondaryTable ?? "").trim()) {
+          return NextResponse.json(
+            { ok: false, error: `Join ${idx}: secondaryTable es obligatorio.` },
+            { status: 400 }
+          );
+        }
+        const pairs = getJoinConditionPairs(jn);
+        if (pairs.length === 0 || pairs.some((p) => !p.leftColumn || !p.rightColumn)) {
+          return NextResponse.json(
+            { ok: false, error: `Join ${idx}: se requiere al menos una condición válida de enlace.` },
+            { status: 400 }
+          );
+        }
       }
 
       log("Cargando metadatos de conexiones en paralelo...");
