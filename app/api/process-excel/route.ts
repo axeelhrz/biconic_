@@ -22,6 +22,9 @@ const MAX_WARNINGS = 20;
 const CHUNK_MAX_INSERTED_ROWS = 50000;
 const CHUNK_MAX_DURATION_MS = 120000;
 const IMPORT_CURSOR_KEY = "__import_cursor_v1";
+const DEBUG_INGEST_URL =
+  "http://127.0.0.1:7710/ingest/20cf47c8-0473-4ba0-9564-fc0b0bf73d37";
+const DEBUG_SESSION_ID = "ccff04";
 
 // --- UTILIDADES ---
 const sanitizeColumnName = (name: any) =>
@@ -447,10 +450,16 @@ async function processDataImport(
     const baseCandidates = Array.from(
       new Set(baseCandidatesRaw.map(normalizeBaseUrl).filter(Boolean))
     ) as string[];
+    // #region agent log
+    fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H1",location:"app/api/process-excel/route.ts:452",message:"enqueueNextChunk start",data:{connectionId,dataTableId,sheetToContinue,parseModeToContinue,requestOrigin,baseCandidates},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
 
     let lastErrorDetails = "Sin detalle";
     for (const baseUrl of baseCandidates) {
       try {
+        // #region agent log
+        fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H1",location:"app/api/process-excel/route.ts:459",message:"enqueueNextChunk attempt",data:{baseUrl,sheetToContinue,parseModeToContinue},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
         const res = await fetch(`${baseUrl}/api/process-excel`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -464,10 +473,19 @@ async function processDataImport(
         });
         if (res.ok) return;
         lastErrorDetails = await res.text().catch(() => `HTTP ${res.status}`);
+        // #region agent log
+        fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H2",location:"app/api/process-excel/route.ts:474",message:"enqueueNextChunk non-ok response",data:{baseUrl,status:res.status,lastErrorDetailsSnippet:String(lastErrorDetails).slice(0,500)},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
       } catch (err) {
         lastErrorDetails = err instanceof Error ? err.message : String(err);
+        // #region agent log
+        fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H3",location:"app/api/process-excel/route.ts:479",message:"enqueueNextChunk fetch threw",data:{baseUrl,errorMessage:lastErrorDetails},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
       }
     }
+    // #region agent log
+    fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H1",location:"app/api/process-excel/route.ts:484",message:"enqueueNextChunk exhausted bases",data:{lastErrorDetails,baseCandidatesCount:baseCandidates.length},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
 
     throw new StageError(
       "resume_enqueue",
@@ -915,6 +933,9 @@ async function processDataImport(
         parseMode: parseModeToUse,
         updatedAt: new Date().toISOString(),
       };
+      // #region agent log
+      fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H4",location:"app/api/process-excel/route.ts:935",message:"chunk pause requesting resume enqueue",data:{insertedRows,resumeInsertedRows,selectedSheetToUse,parseModeToUse,cursorUpdatedAt:cursor.updatedAt},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       try {
         await supabaseAdmin
           .from("data_tables")
@@ -992,6 +1013,9 @@ async function processDataImport(
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+    // #region agent log
+    fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(body?.dataTableId || "unknown"),hypothesisId:"H5",location:"app/api/process-excel/route.ts:1010",message:"POST /api/process-excel received",data:{url:req.url,hasConnectionId:Boolean(body?.connectionId),hasDataTableId:Boolean(body?.dataTableId),parseMode:body?.parseMode,resumeOrigin:body?.resumeOrigin || null,selectedSheet:body?.selectedSheet || null},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (!body?.connectionId || !body?.dataTableId) {
       return NextResponse.json(
         {
@@ -1071,6 +1095,9 @@ export async function POST(req: Request) {
       .update({ import_status: "processing" })
       .eq("id", dataTableId);
     if (queueError) {
+      // #region agent log
+      fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H2",location:"app/api/process-excel/route.ts:1085",message:"queue update failed on POST",data:{queueError:queueError.message},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       return NextResponse.json(
         {
           error: "No se pudo encolar la importación.",
