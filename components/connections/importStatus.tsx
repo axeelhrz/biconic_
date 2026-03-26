@@ -66,7 +66,10 @@ export default function ImportStatus({
           case "downloading_file": setProgress(10); break;
           case "creating_table": setProgress(30); break;
           case "inserting_rows": setProgress(60); break;
-          case "processing": setProgress(35); break;
+          case "processing":
+            // En importación resumible evitamos "retroceder" visualmente cuando se re-encola el siguiente tramo.
+            setProgress((prev) => (data.total_rows && data.total_rows > 0 ? Math.max(prev, 60) : 35));
+            break;
           case "completed": setProgress(100); break;
           case "failed": setProgress(100); break;
         }
@@ -140,7 +143,9 @@ export default function ImportStatus({
       case "pending":
         return "Conectando...";
       case "processing":
-        return "Preparando...";
+        return status.total_rows && status.total_rows > 0
+          ? `Reanudando importación... (${status.total_rows} procesadas)`
+          : "Preparando...";
       case "downloading_file":
         return "Descargando archivo...";
       case "creating_table":

@@ -19,6 +19,9 @@ const INSERT_BATCH_SIZE = 2000;
 const SAMPLE_SIZE = 1000;
 const PROGRESS_UPDATE_INTERVAL = 2000; // Actualizar DB cada X filas
 const MAX_WARNINGS = 20;
+const CHUNK_MAX_INSERTED_ROWS = 50000;
+const CHUNK_MAX_DURATION_MS = 120000;
+const IMPORT_CURSOR_KEY = "__import_cursor_v1";
 
 // --- UTILIDADES ---
 const sanitizeColumnName = (name: any) =>
@@ -130,6 +133,13 @@ type SheetSelection = {
   sheetIndex: number; // 1-based index
 };
 
+type ImportCursor = {
+  insertedRows: number;
+  selectedSheet: string | null;
+  parseMode: ParseMode;
+  updatedAt: string;
+};
+
 class StageError extends Error {
   stage: string;
   details?: string;
@@ -143,6 +153,46 @@ class StageError extends Error {
 
 const getExtensionFromPath = (filePath: string) =>
   path.extname(filePath || "").replace(".", "").toLowerCase();
+
+const parseImportCursor = (columns: unknown): ImportCursor | null => {
+  if (!columns || typeof columns !== "object" || Array.isArray(columns)) return null;
+  const raw = (columns as Record<string, unknown>)[IMPORT_CURSOR_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const insertedRows = Number((raw as Record<string, unknown>).insertedRows ?? 0);
+  const selectedSheetRaw = (raw as Record<string, unknown>).selectedSheet;
+  const parseModeRaw = (raw as Record<string, unknown>).parseMode;
+  if (!Number.isFinite(insertedRows) || insertedRows < 0) return null;
+  const selectedSheet =
+    typeof selectedSheetRaw === "string" && selectedSheetRaw.trim() !== ""
+      ? selectedSheetRaw
+      : null;
+  const parseMode: ParseMode =
+    parseModeRaw === "strict" || parseModeRaw === "tolerant" || parseModeRaw === "mixed"
+      ? parseModeRaw
+      : "mixed";
+
+  return {
+    insertedRows,
+    selectedSheet,
+    parseMode,
+    updatedAt:
+      typeof (raw as Record<string, unknown>).updatedAt === "string"
+        ? String((raw as Record<string, unknown>).updatedAt)
+        : new Date().toISOString(),
+  };
+};
+
+const mergeCursorIntoColumns = (
+  existingColumns: unknown,
+  cursor: ImportCursor
+): Record<string, unknown> => {
+  const base =
+    existingColumns && typeof existingColumns === "object" && !Array.isArray(existingColumns)
+      ? { ...(existingColumns as Record<string, unknown>) }
+      : {};
+  base[IMPORT_CURSOR_KEY] = cursor;
+  return base;
+};
 
 const detectFileFormat = (
   filePath: string,
@@ -356,6 +406,7 @@ async function processDataImport(
   let tempFilePath: string | null = null;
   let sql: any = null;
   let terminalStatus = false; // true cuando ya pusimos "completed" o "failed"
+  const runStartedAt = Date.now();
 
   const markFailed = async (message: string) => {
     if (terminalStatus) return;
@@ -366,6 +417,35 @@ async function processDataImport(
         .update({ import_status: "failed", error_message: message })
         .eq("id", dataTableId);
     } catch (_) {}
+  };
+
+  const enqueueNextChunk = async (
+    sheetToContinue: string | null,
+    parseModeToContinue: ParseMode
+  ) => {
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL
+      ? process.env.NEXT_PUBLIC_SITE_URL.replace(/\/$/, "")
+      : process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : "http://localhost:3000";
+    const res = await fetch(`${baseUrl}/api/process-excel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        connectionId,
+        dataTableId,
+        parseMode: parseModeToContinue,
+        selectedSheet: sheetToContinue,
+      }),
+    });
+    if (!res.ok) {
+      const details = await res.text().catch(() => "Sin detalle");
+      throw new StageError(
+        "resume_enqueue",
+        "No se pudo encolar la continuación del procesamiento.",
+        details
+      );
+    }
   };
 
   console.log(
@@ -386,6 +466,30 @@ async function processDataImport(
         await markFailed("SUPABASE_DB_URL no está configurada. Configurala en .env.local (Supabase → Settings → Database → Connection string).");
         return;
       }
+
+      const { data: tableState } = await supabaseAdmin
+        .from("data_tables")
+        .select("import_status, columns, total_rows")
+        .eq("id", dataTableId)
+        .single();
+      if (!tableState) {
+        await markFailed("No se encontró el estado de importación.");
+        return;
+      }
+      if (tableState.import_status === "completed") {
+        terminalStatus = true;
+        return;
+      }
+      const resumeCursor = parseImportCursor(tableState.columns);
+      const selectedSheetToUse =
+        resumeCursor?.selectedSheet !== null && resumeCursor?.selectedSheet !== undefined
+          ? resumeCursor.selectedSheet
+          : selectedSheet ?? null;
+      const parseModeToUse = resumeCursor?.parseMode || parseMode;
+      let resumeInsertedRows = Math.max(
+        resumeCursor?.insertedRows || 0,
+        Number(tableState.total_rows || 0)
+      );
 
       // 1. DESCARGA EFICIENTE -------------------------------------
       await supabaseAdmin
@@ -474,7 +578,7 @@ async function processDataImport(
     };
 
     const preWarnings: string[] = [];
-    const isAllSheets = selectedSheet === "__ALL__";
+    const isAllSheets = selectedSheetToUse === "__ALL__";
     tempFilePath = await downloadToTempFile();
     // -----------------------------------------------------------------------
 
@@ -497,11 +601,13 @@ async function processDataImport(
     let headersSanitized: string[] = [];
     let inferredTypes: string[] = [];
     let buffer: any[][] = [];
-    let isTableCreated = false;
+    let isTableCreated = resumeInsertedRows > 0;
     let hasMarkedInserting = false;
     let rowCount = 0;
-    let insertedRows = 0;
-    let lastReportedInsertedRows = 0;
+    let sourceDataRowsProcessed = 0;
+    let insertedRows = resumeInsertedRows;
+    let lastReportedInsertedRows = resumeInsertedRows;
+    let shouldPauseForResume = false;
     let currentBatchSize = INSERT_BATCH_SIZE;
 
     const ensureTempFileReadable = async () => {
@@ -535,7 +641,7 @@ async function processDataImport(
     await ensureTempFileReadable();
     assertNotTimedOut();
     const fileFormat = detectFileFormat(tempFilePath!, preferredExtension);
-    let finalSelectedSheet = isAllSheets ? undefined : (selectedSheet || undefined);
+    let finalSelectedSheet = isAllSheets ? undefined : (selectedSheetToUse || undefined);
     let finalSelectedSheetIndex: number | undefined = undefined;
 
     if (!isAllSheets && fileFormat !== "csv") {
@@ -573,7 +679,7 @@ async function processDataImport(
         const selection = resolveSheetSelection(
           sheetNames,
           finalSelectedSheet,
-          parseMode,
+          parseModeToUse,
           warnings
         );
         finalSelectedSheet = selection.sheetName;
@@ -618,7 +724,7 @@ async function processDataImport(
         }
 
         if (values.length !== headers.length) {
-          if (parseMode === "strict") {
+          if (parseModeToUse === "strict") {
             throw new Error(
               `La fila ${rowCount + 1} tiene ${values.length} columnas y se esperaban ${headers.length}.`
             );
@@ -635,6 +741,12 @@ async function processDataImport(
             : values.length < headers.length
               ? [...values, ...Array(headers.length - values.length).fill(null)]
               : values;
+
+        sourceDataRowsProcessed++;
+        if (sourceDataRowsProcessed <= resumeInsertedRows) {
+          rowCount++;
+          continue;
+        }
 
         if (!hasMarkedInserting) {
           hasMarkedInserting = true;
@@ -687,6 +799,18 @@ async function processDataImport(
                 console.warn("[WARN] Error actualizando progreso:", progressError);
               }
             }
+
+            const runElapsed = Date.now() - runStartedAt;
+            if (
+              insertedRows - resumeInsertedRows >= CHUNK_MAX_INSERTED_ROWS ||
+              runElapsed >= CHUNK_MAX_DURATION_MS
+            ) {
+              shouldPauseForResume = true;
+              break;
+            }
+          }
+          if (shouldPauseForResume) {
+            break;
           }
         }
         rowCount++;
@@ -754,6 +878,36 @@ async function processDataImport(
       } catch (progressError) {
         console.warn("[WARN] Error actualizando progreso final:", progressError);
       }
+    }
+
+    if (shouldPauseForResume) {
+      const cursor: ImportCursor = {
+        insertedRows,
+        selectedSheet: selectedSheetToUse,
+        parseMode: parseModeToUse,
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        await supabaseAdmin
+          .from("data_tables")
+          .update({
+            import_status: "inserting_rows",
+            total_rows: insertedRows,
+            columns: mergeCursorIntoColumns(tableState.columns, cursor),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", dataTableId);
+        await enqueueNextChunk(selectedSheetToUse, parseModeToUse);
+      } catch (resumeErr) {
+        const details =
+          resumeErr instanceof Error ? resumeErr.message : String(resumeErr);
+        throw new StageError(
+          "resume_enqueue",
+          "No se pudo continuar automáticamente la importación por tramos.",
+          details
+        );
+      }
+      return;
     }
 
     const columnMetadata = headers.map((h, i) => ({

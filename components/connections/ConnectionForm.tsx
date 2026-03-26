@@ -173,8 +173,9 @@ export default function ConnectionForm({
         }
 
         if (file.size > LARGE_FILE_SHEET_INSPECTION_LIMIT_BYTES) {
+          setSelectedSheet("__ALL__");
           setSheetInspectWarning(
-            "Archivo grande: se omite inspección de hojas para evitar bloqueos. Se usará la hoja por defecto al importar."
+            "Archivo grande: se omite inspección de hojas para evitar bloqueos. Se importarán todas las hojas automáticamente."
           );
           return;
         }
