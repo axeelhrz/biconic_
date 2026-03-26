@@ -218,9 +218,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         conditions,
         ssl,
       } = body as any;
-      if (!primaryConnectionId || !primaryTable || !joins?.length) {
+      const sanitizedJoins = Array.isArray(joins)
+        ? joins.filter(
+            (jn: any) =>
+              !!jn &&
+              typeof jn === "object" &&
+              jn.secondaryConnectionId != null &&
+              String(jn.secondaryConnectionId).trim() !== ""
+          )
+        : [];
+      if (!primaryConnectionId || !primaryTable || sanitizedJoins.length === 0) {
         return NextResponse.json(
           { ok: false, error: "Configuración de JOIN (star) incompleta" },
+          { status: 400 }
+        );
+      }
+      if (Array.isArray(joins) && joins.length !== sanitizedJoins.length) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Configuración JOIN inválida: se detectaron joins vacíos o sin secondaryConnectionId.",
+          },
           { status: 400 }
         );
       }
@@ -228,7 +247,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // Cargar metadatos de conexiones involucradas
       const allConnIds = [
         primaryConnectionId,
-        ...joins.map((j: any) => j.secondaryConnectionId),
+        ...sanitizedJoins.map((j: any) => j.secondaryConnectionId),
       ].filter((x) => x != null);
       const uniqueConnIds = [...new Set(allConnIds)];
       const connResults = await Promise.all(
@@ -346,7 +365,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           };
           const pPhysical = await resolvePhysical(primaryConnectionId);
           const jPhysicals = await Promise.all(
-            joins.map((jn: any) => resolvePhysical(jn.secondaryConnectionId))
+            sanitizedJoins.map((jn: any) => resolvePhysical(jn.secondaryConnectionId))
           );
           const pQualified = quoteQualified(pPhysical, "postgres");
           const jQualified = jPhysicals.map((q) =>
@@ -364,7 +383,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               )
             );
           else selectParts.push("p.*");
-          joins.forEach((jn: any, idx: number) => {
+          sanitizedJoins.forEach((jn: any, idx: number) => {
             if (jn.secondaryColumns && jn.secondaryColumns.length > 0)
               jn.secondaryColumns.forEach((col: string) =>
                 selectParts.push(
@@ -378,7 +397,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           });
 
           let fromJoin = `FROM ${pQualified} AS p`;
-          joins.forEach((jn: any, idx: number) => {
+          sanitizedJoins.forEach((jn: any, idx: number) => {
             const jt = (jn.joinType || "INNER").toUpperCase();
             const on = `p.${quoteIdent(
               jn.primaryColumn || "",
@@ -389,7 +408,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
           const { clause, params } = buildWhereClausePgStar(
             conditions || [],
-            joins.length
+            sanitizedJoins.length
           );
 
           const batchSize = 5000;
@@ -416,7 +435,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           }
           const headerKeys = [
             ...(primaryColumns || []).map((c: string) => `primary_${c}`),
-            ...joins.flatMap((jn: any, idx: number) =>
+            ...sanitizedJoins.flatMap((jn: any, idx: number) =>
               (jn.secondaryColumns || []).map((c: string) => `join_${idx}_${c}`)
             ),
           ];
@@ -461,7 +480,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         try {
           await client.connect();
           const pQualified = quoteQualified(primaryTable as string, "postgres");
-          const jQualified = (joins as any[]).map((jn) =>
+          const jQualified = (sanitizedJoins as any[]).map((jn) =>
             quoteQualified(jn.secondaryTable || "", "postgres")
           );
           const selectParts: string[] = [];
@@ -475,7 +494,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               )
             );
           else selectParts.push("p.*");
-          (joins as any[]).forEach((jn: any, idx: number) => {
+          (sanitizedJoins as any[]).forEach((jn: any, idx: number) => {
             if (jn.secondaryColumns && jn.secondaryColumns.length > 0)
               jn.secondaryColumns.forEach((col: string) =>
                 selectParts.push(
@@ -488,7 +507,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             else selectParts.push(`j${idx}.*`);
           });
           let fromJoin = `FROM ${pQualified} AS p`;
-          (joins as any[]).forEach((jn: any, idx: number) => {
+          (sanitizedJoins as any[]).forEach((jn: any, idx: number) => {
             const jt = (jn.joinType || "INNER").toUpperCase();
             const on = `p.${quoteIdent(
               jn.primaryColumn || "",
@@ -498,7 +517,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           });
           const { clause, params } = buildWhereClausePgStar(
             conditions || [],
-            (joins as any[]).length
+            (sanitizedJoins as any[]).length
           );
           const batchSize = 5000;
           async function* generator() {
@@ -524,7 +543,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           }
           const headerKeys = [
             ...(primaryColumns || []).map((c: string) => `primary_${c}`),
-            ...(joins as any[]).flatMap((jn: any, idx: number) =>
+            ...(sanitizedJoins as any[]).flatMap((jn: any, idx: number) =>
               (jn.secondaryColumns || []).map((c: string) => `join_${idx}_${c}`)
             ),
           ];

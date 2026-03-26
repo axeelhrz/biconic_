@@ -485,13 +485,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (body.join) {
         console.log("[ARITHMETIC_QUERY] Detected JOIN configuration");
         const { primaryConnectionId, primaryTable, joins } = body.join;
+        const sanitizedJoins = Array.isArray(joins)
+          ? joins.filter(
+              (jn) =>
+                !!jn &&
+                typeof jn === "object" &&
+                jn.secondaryConnectionId != null &&
+                String(jn.secondaryConnectionId).trim() !== ""
+            )
+          : [];
         
-        if (!primaryConnectionId || !primaryTable || !joins || joins.length === 0) {
+        if (!primaryConnectionId || !primaryTable || sanitizedJoins.length === 0) {
            return NextResponse.json({ ok: false, error: "Configuración de JOIN inválida" }, { status: 400 });
         }
 
         // Load connections
-        const allConnectionIds = [primaryConnectionId, ...joins.map(j => j.secondaryConnectionId)].filter(x => x != null);
+        const allConnectionIds = [primaryConnectionId, ...sanitizedJoins.map(j => j.secondaryConnectionId)].filter(x => x != null);
         const uniqueIds = [...new Set(allConnectionIds)];
         const { data: connsData, error: connsErr } = await supabase
             .from("connections")
@@ -587,7 +596,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             }
 
             let fromClause = `FROM ${quoteQualified(primaryTable, "postgres")} AS p`;
-            joins.forEach((j, idx) => {
+            sanitizedJoins.forEach((j, idx) => {
                 const jt = (j.joinType || "INNER").toUpperCase();
                 const secTable = quoteQualified(j.secondaryTable, "postgres");
                 const on = `p.${q(j.primaryColumn)} = j${idx}.${q(j.secondaryColumn)}`;

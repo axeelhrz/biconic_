@@ -332,6 +332,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
       let client: PgClient;
       const aliases: Record<string, string> = { primary: "t1" };
+      const sanitizedJoins = Array.isArray(join.joins)
+        ? join.joins.filter(
+            (jn: any) =>
+              !!jn &&
+              typeof jn === "object" &&
+              jn.secondaryConnectionId != null &&
+              String(jn.secondaryConnectionId).trim() !== ""
+          )
+        : [];
+      if (sanitizedJoins.length === 0) {
+        return NextResponse.json(
+          { ok: false, error: "Configuración JOIN inválida: faltan joins válidos." },
+          { status: 400 }
+        );
+      }
 
       if (isExcel) {
         const dbUrl = process.env.SUPABASE_DB_URL;
@@ -370,8 +385,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         let sqlFrom = `${primaryTableSQL} AS t1`;
 
         // Resolver Joins
-        for (let i = 0; i < (join.joins || []).length; i++) {
-          const j = join.joins[i];
+        for (let i = 0; i < sanitizedJoins.length; i++) {
+          const j = sanitizedJoins[i];
           const alias = `j${i}`;
           aliases[`join_${i}`] = alias;
 

@@ -578,7 +578,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         ssl,
       } = body;
       const joins = Array.isArray(joinsRaw)
-        ? joinsRaw.filter((jn): jn is NonNullable<StarJoin["joins"]>[number] => !!jn && typeof jn === "object")
+        ? joinsRaw.filter(
+            (jn): jn is NonNullable<StarJoin["joins"]>[number] =>
+              !!jn &&
+              typeof jn === "object" &&
+              (jn as Record<string, unknown>).secondaryConnectionId != null &&
+              String((jn as Record<string, unknown>).secondaryConnectionId).trim() !== ""
+          )
         : [];
 
       log("Iniciando flujo de JOIN 'star-schema'.", {
@@ -601,10 +607,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         );
       }
       if (Array.isArray(joinsRaw) && joinsRaw.length !== joins.length) {
-        log("Se descartaron joins inválidos del payload.", {
+        log("Se detectaron joins inválidos en el payload.", {
           providedJoins: joinsRaw.length,
           validJoins: joins.length,
         });
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Configuración JOIN inválida: se detectaron joins vacíos o sin secondaryConnectionId.",
+          },
+          { status: 400 }
+        );
       }
       for (let idx = 0; idx < joins.length; idx++) {
         const jn = joins[idx];
