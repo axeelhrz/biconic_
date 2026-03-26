@@ -233,7 +233,9 @@ export function DashboardWidgetRenderer({
         const parsed = Number(value);
         return acc + (Number.isFinite(parsed) ? parsed : 0);
       }, 0);
-      return formatKpiValue(sumFromConfig, widget.chartStyle as ChartStyleConfig | undefined);
+      if (Number.isFinite(sumFromConfig)) {
+        return formatKpiValue(sumFromConfig, widget.chartStyle as ChartStyleConfig | undefined);
+      }
     }
 
     const rows = widget.rows as Record<string, unknown>[];
@@ -243,12 +245,27 @@ export function DashboardWidgetRenderer({
       source: widget.source as BuildChartConfigWidget["source"],
     });
     const valKey = axis?.yKeys?.[0];
-    if (!valKey) return null;
-    const sum = rows.reduce((acc, row) => {
-      const parsed = Number(row[valKey] ?? 0);
-      return acc + (Number.isFinite(parsed) ? parsed : 0);
-    }, 0);
-    return formatKpiValue(sum, widget.chartStyle as ChartStyleConfig | undefined);
+    if (valKey) {
+      const sum = rows.reduce((acc, row) => {
+        const parsed = Number(row[valKey]);
+        return acc + (Number.isFinite(parsed) ? parsed : 0);
+      }, 0);
+      return formatKpiValue(sum, widget.chartStyle as ChartStyleConfig | undefined);
+    }
+
+    const firstRow = rows[0] ?? {};
+    const preferredKeys = ["value", "metric_0"];
+    for (const key of preferredKeys) {
+      const candidate = Number(firstRow[key]);
+      if (Number.isFinite(candidate)) {
+        return formatKpiValue(candidate, widget.chartStyle as ChartStyleConfig | undefined);
+      }
+    }
+    const firstNumeric = Object.values(firstRow).find((value) => Number.isFinite(Number(value)));
+    if (firstNumeric != null) {
+      return formatKpiValue(Number(firstNumeric), widget.chartStyle as ChartStyleConfig | undefined);
+    }
+    return null;
   }, [chartType, chartConfig, widget.rows, widget.chartStyle, widget.type, widget.aggregationConfig, widget.source]);
 
   const aggConfig = widget.aggregationConfig as {
@@ -810,9 +827,15 @@ export function DashboardWidgetRenderer({
           <>
             {chartType === "kpi" && (
               <div className="flex flex-1 flex-col items-center justify-center gap-1">
-                <span className="text-3xl font-bold tabular-nums" style={{ color: "var(--platform-fg, #0f172a)" }}>
-                  {kpiValue ?? "—"}
-                </span>
+                {kpiValue ? (
+                  <span className="text-3xl font-bold tabular-nums" style={{ color: "var(--platform-fg, #0f172a)" }}>
+                    {kpiValue}
+                  </span>
+                ) : (
+                  <div className="max-w-sm rounded-lg border px-4 py-3 text-center text-sm" style={{ borderColor: "var(--platform-border, #e2e8f0)", color: "var(--platform-fg-muted, #64748b)", background: "var(--platform-surface, #fff)" }}>
+                    No hay dato unico para KPI. Revisa metrica/ejes o usa Tabla.
+                  </div>
+                )}
                 {(widget.kpiSecondaryLabel || widget.kpiSecondaryValue) && (
                   <span className="text-sm" style={{ color: "var(--platform-fg-muted, #64748b)" }}>
                     {widget.kpiSecondaryLabel} {widget.kpiSecondaryValue}

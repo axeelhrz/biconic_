@@ -1776,12 +1776,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return { recommendationText: "Seleccioná el tipo de gráfico que mejor represente tu análisis.", suggestedChartType: "bar" };
   }, [formDimensions, effectiveFormMetrics, timeColumn, analysisGranularity, transformCompare, previewData, dateFields]);
 
-  /** Restricciones por datos: sin rol Geo no permitir Mapa; con dimensión no permitir KPI. */
+  /** Restricciones por datos: sin rol Geo no permitir Mapa. */
   const chartTypeRestrictions = useMemo(() => {
-    const hasDim = formDimensions.filter(Boolean).length > 0;
     const geoKeywords = /lat|lng|lon|geo|country|pais|ciudad|city|region|provincia|estado|state|zip|postal|coord/i;
     const hasGeo = formDimensions.some((d) => columnRoles[d]?.role === "geo" || geoKeywords.test(d));
-    return { hasDimension: hasDim, hasGeo };
+    return { hasGeo };
   }, [formDimensions, columnRoles]);
 
   const geoHints = useMemo<GeoHints | undefined>(() => {
@@ -1823,8 +1822,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   useEffect(() => {
     if (editingId) return;
     if (wizard !== "D" || wizardStep !== 0) return;
-    const { hasDimension, hasGeo } = chartTypeRestrictions;
-    if (formChartType === "kpi" && hasDimension) setFormChartType(suggestedChartType);
+    const { hasGeo } = chartTypeRestrictions;
     if (formChartType === "map" && !hasGeo) setFormChartType(suggestedChartType);
   }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType, editingId]);
 
@@ -1909,10 +1907,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   ]);
 
   const previewKpiValue = useMemo(() => {
-    if (!previewData || previewData.length === 0 || !previewChartConfig) return undefined;
-    const firstNum = previewChartConfig.datasets[0]?.data?.[0];
-    return firstNum != null ? firstNum : undefined;
-  }, [previewData, previewChartConfig]);
+    if (!previewData || previewData.length === 0) return undefined;
+    const fromConfig = previewChartConfig?.datasets?.[0]?.data?.[0];
+    if (fromConfig != null && Number.isFinite(Number(fromConfig))) return Number(fromConfig);
+    const firstRow = previewData[0] as Record<string, unknown>;
+    const explicitY = Array.isArray(chartYAxes) && chartYAxes.length > 0 ? chartYAxes[0] : undefined;
+    if (explicitY && Number.isFinite(Number(firstRow[explicitY]))) return Number(firstRow[explicitY]);
+    const metricAlias = effectiveFormMetrics[effectiveFormMetrics.length - 1]?.alias;
+    if (metricAlias && Number.isFinite(Number(firstRow[metricAlias]))) return Number(firstRow[metricAlias]);
+    const metricInternal = `metric_${Math.max(0, effectiveFormMetrics.length - 1)}`;
+    if (Number.isFinite(Number(firstRow[metricInternal]))) return Number(firstRow[metricInternal]);
+    const firstNumeric = Object.values(firstRow).find((v) => Number.isFinite(Number(v)));
+    return firstNumeric != null ? Number(firstNumeric) : undefined;
+  }, [previewData, previewChartConfig, chartYAxes, effectiveFormMetrics]);
 
   const previewWidgetForRenderer = useMemo(() => {
     if (!previewData || previewData.length === 0) return null;
@@ -4983,9 +4990,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       const isSelected = formChartType === value;
                       const isSuggested = suggestedChartType === value && !isSelected;
                       const noMap = value === "map" && !chartTypeRestrictions.hasGeo;
-                      const noKpi = value === "kpi" && chartTypeRestrictions.hasDimension;
-                      const disabled = noMap || noKpi;
-                      const reason = noMap ? "Requiere dimensión con rol Geo" : noKpi ? "KPI no admite dimensiones" : null;
+                      const disabled = noMap;
+                      const reason = noMap ? "Requiere dimensión con rol Geo" : null;
                       return (
                         <button key={value} type="button" onClick={() => !disabled && setFormChartType(value)} disabled={disabled} title={reason ?? undefined} className="relative flex flex-col items-center gap-1 rounded-xl px-3 py-3 text-sm font-medium transition-all border" style={{ background: disabled ? "var(--platform-surface)" : isSelected ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: disabled ? "var(--platform-fg-muted)" : isSelected ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: isSuggested ? "var(--platform-accent)" : isSelected ? "transparent" : "var(--platform-border)", opacity: disabled ? 0.7 : 1, cursor: disabled ? "not-allowed" : "pointer" }}>
                           {isSuggested && !disabled && <span className="absolute -top-2 right-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}>Sugerido</span>}
