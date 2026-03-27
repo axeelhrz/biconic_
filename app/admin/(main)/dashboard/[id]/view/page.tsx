@@ -1,13 +1,11 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { AdminDashboardStudio } from "@/components/admin/dashboard/AdminDashboardStudio";
+import DashboardViewer from "@/components/dashboard/DashboardViewer";
 import { verifyDashboardEditAccess } from "@/lib/admin/dashboard-security";
 import { ArrowLeft } from "lucide-react";
 
-import "../admin-dashboard-editor.css";
-import "../studio.css";
-import "./admin-dashboard-view.css";
+import "./client-dashboard-view.css";
 
 type PageProps = {
   params: Promise<{ [key: string]: string }>;
@@ -70,31 +68,27 @@ export default async function AdminDashboardViewPage({ params }: PageProps) {
   }
 
   const title = (dashboard && (dashboard as { title?: string }).title) || dashboardId;
-  const etlInfo = dashboard?.etl as { id: string; title?: string; name?: string } | null;
-  const etlName = etlInfo?.title || etlInfo?.name || null;
-  const createdAt = (dashboard as { created_at?: string })?.created_at ?? null;
 
   return (
     <div className="admin-view-page w-full">
       <div className="admin-view-page__accent" aria-hidden />
       <div className="admin-view-preview-bar">
-        <span className="admin-view-preview-bar__label">Vista previa</span>
+        <div className="admin-view-preview-bar__left flex min-w-0 items-center gap-3">
+          <span className="admin-view-preview-bar__label shrink-0">Vista previa</span>
+          <span className="admin-view-preview-bar__title truncate font-medium text-white/90" title={title}>
+            {title}
+          </span>
+        </div>
         <Link
           href={`/admin/dashboard/${dashboardId}`}
-          className="admin-view-preview-bar__link"
+          className="admin-view-preview-bar__link shrink-0"
         >
           <ArrowLeft className="admin-view-preview-bar__icon" />
           Editar dashboard
         </Link>
       </div>
-      <div className="studio-page flex min-h-[calc(100vh-4rem)] min-w-0 flex-col flex-1 w-full">
-        <AdminDashboardStudio
-          dashboardId={dashboardId}
-          title={title}
-          etlName={etlName}
-          createdAt={createdAt}
-          embeddedPreview
-        />
+      <div className="admin-view-page__main flex min-h-0 min-w-0 flex-1 flex-col">
+        <DashboardViewer dashboardId={dashboardId} hideHeader />
       </div>
     </div>
   );

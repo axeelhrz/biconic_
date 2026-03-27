@@ -538,9 +538,6 @@ export function AdminDashboardStudio({
         return;
       }
       setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: true } : w)));
-      const filters = (widget.excludeGlobalFilters ? [] : globalFilters).filter(
-        (f) => f.value !== "" && f.value != null
-      );
       try {
         const agg = widget.aggregationConfig;
         const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
@@ -549,7 +546,43 @@ export function AdminDashboardStudio({
           if (!field || !sourceId) return field;
           return etlData?.datasetDimensions?.[field]?.[sourceId] ?? field;
         };
-        const mappedGlobalFilters = filters.map((f) => ({ ...f, field: mapDatasetField(f.field) }));
+        const datasetDimensions = etlData?.datasetDimensions;
+        const pageOf = (w: StudioWidget) => w.pageId ?? activePageId ?? "page-1";
+        const targetPage = pageOf(widget);
+        const fieldsWithWidgets = new Set(
+          widgets
+            .filter(
+              (w) =>
+                w.type === "filter" &&
+                (w as { filterConfig?: { field?: string } }).filterConfig?.field &&
+                pageOf(w) === targetPage
+            )
+            .map((w) => String((w as { filterConfig?: { field?: string } }).filterConfig?.field ?? ""))
+        );
+        const mappedGlobalFilters: GlobalFilter[] = [];
+        if (!widget.excludeGlobalFilters) {
+          for (const f of globalFilters) {
+            if (f.applyTo === "selected" && Array.isArray(f.applyToWidgetIds) && f.applyToWidgetIds.length > 0) {
+              if (!f.applyToWidgetIds.includes(widgetId)) continue;
+            }
+            if (fieldsWithWidgets.has(f.field)) continue;
+            const v = f.value;
+            if (v === "" || v == null) continue;
+            if (Array.isArray(v) && v.length === 0) continue;
+            const isSemantic = datasetDimensions && f.field in datasetDimensions;
+            if (isSemantic && sourceId && !datasetDimensions![f.field]?.[sourceId]) continue;
+            const physicalField = mapDatasetField(f.field);
+            const rawOp = f.operator || "=";
+            const inputT = f.inputType;
+            const useIn =
+              rawOp === "IN" ||
+              (inputT === "multi" && Array.isArray(v) && v.length > 0);
+            const op = useIn ? "IN" : rawOp;
+            const value: unknown =
+              op === "IN" ? (Array.isArray(v) ? v : [v]) : v;
+            mappedGlobalFilters.push({ ...f, field: physicalField, operator: op, value });
+          }
+        }
         if (agg?.enabled && agg.metrics.length > 0) {
           const mappedWidgetFilters = (agg.filters || []).map((f) => ({
             ...f,
@@ -803,7 +836,7 @@ export function AdminDashboardStudio({
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout, savedMetrics]
+    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout, savedMetrics, activePageId]
   );
 
   useEffect(() => {

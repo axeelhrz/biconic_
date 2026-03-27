@@ -20,6 +20,14 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
 }
+.admin-view-page:has([data-theme="client"]) .admin-view-preview-bar__left {
+  min-width: 0;
+}
+.admin-view-page:has([data-theme="client"]) .admin-view-preview-bar__title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
 .admin-view-page:has([data-theme="client"]) .admin-view-preview-bar__label {
   font-size: 0.75rem;
   font-weight: 500;

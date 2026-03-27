@@ -136,7 +136,7 @@ export type Widget = DashboardWidgetRendererWidget & {
 function sameWidgetPage(
   a: Widget,
   b: Widget,
-  pageLayout: { firstPageId: string; activePageId: string } | null
+  pageLayout: { firstPageId: string; activePageId: string; pagesMeta?: { id: string; name: string }[] } | null
 ): boolean {
   if (!pageLayout) return true;
   const pa = a.pageId ?? pageLayout.firstPageId;
@@ -199,7 +199,11 @@ export function DashboardViewer({
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
   const [globalFilterDistinctValues, setGlobalFilterDistinctValues] = useState<Record<string, unknown[]>>({});
   /** Si viene del layout guardado: misma página activa que AdminDashboardStudio (vista previa = lienzo). */
-  const [pageLayout, setPageLayout] = useState<{ firstPageId: string; activePageId: string } | null>(null);
+  const [pageLayout, setPageLayout] = useState<{
+    firstPageId: string;
+    activePageId: string;
+    pagesMeta?: { id: string; name: string }[];
+  } | null>(null);
   const stateRef = useRef({ widgets, setWidgets });
 
   const { data: etlData, error: etlDataError } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
@@ -216,7 +220,17 @@ export function DashboardViewer({
       setPageLayout(null);
       setWidgets(initialWidgets);
       if (initialTitle) setTitle(initialTitle);
-      if (initialGlobalFilters) setGlobalFilters(initialGlobalFilters);
+      if (initialGlobalFilters) {
+        setGlobalFilters(initialGlobalFilters);
+        const initialFv: Record<string, unknown> = {};
+        for (const gf of initialGlobalFilters) {
+          const v = (gf as AggregationFilter & { value?: unknown }).value;
+          if (v === "" || v === null || v === undefined) continue;
+          if (Array.isArray(v) && v.length === 0) continue;
+          initialFv[gf.id] = v;
+        }
+        setFilterValues(initialFv);
+      }
       return;
     }
     const dashboard = (etlData as any)?.dashboard;
@@ -224,7 +238,7 @@ export function DashboardViewer({
     const layout = dashboard.layout as {
       widgets?: Widget[];
       theme?: Partial<DashboardTheme>;
-      pages?: { id: string }[];
+      pages?: { id: string; name?: string }[];
       activePageId?: string;
     } | undefined;
     const pages =
@@ -233,7 +247,11 @@ export function DashboardViewer({
         : [{ id: "page-1" }];
     const firstPageId = String(pages[0]?.id ?? "page-1");
     const activePageId = String(layout?.activePageId ?? firstPageId);
-    setPageLayout({ firstPageId, activePageId });
+    const pagesMeta = pages.map((p, i) => ({
+      id: String((p as { id?: string }).id ?? `page-${i}`),
+      name: String((p as { name?: string }).name ?? "").trim() || `Página ${i + 1}`,
+    }));
+    setPageLayout({ firstPageId, activePageId, pagesMeta });
     const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
     const loadedWidgets = rawWidgets.map((w, i) => {
       const base = w as Widget;
@@ -247,7 +265,18 @@ export function DashboardViewer({
     setWidgets(loadedWidgets);
     setTitle((dashboard.title as string) || "Dashboard");
     setDashboardTheme((prev) => ({ ...DEFAULT_DASHBOARD_THEME, ...prev, ...loadedTheme }));
-    setGlobalFilters(Array.isArray(dashboard.global_filters_config) ? (dashboard.global_filters_config as AggregationFilter[]) : []);
+    const gfs = Array.isArray(dashboard.global_filters_config)
+      ? (dashboard.global_filters_config as AggregationFilter[])
+      : [];
+    setGlobalFilters(gfs);
+    const initialFv: Record<string, unknown> = {};
+    for (const gf of gfs) {
+      const v = (gf as AggregationFilter & { value?: unknown }).value;
+      if (v === "" || v === null || v === undefined) continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      initialFv[gf.id] = v;
+    }
+    setFilterValues(initialFv);
   }, [etlData, initialWidgets, initialTitle, initialGlobalFilters]);
 
   // Cargar distinct values para cada filtro global; si el campo es dimensión semántica, usar tabla y columna física de la fuente primaria
@@ -425,7 +454,12 @@ export function DashboardViewer({
               const isSemantic = datasetDimensions && f.field in datasetDimensions;
               if (isSemantic && !datasetDimensions[f.field]?.[widgetSourceId!]) return null;
               const physicalField = resolvePhysicalField(f.field);
-              const op = f.operator || "=";
+              const rawOp = f.operator || "=";
+              const inputT = (f as AggregationFilter & { inputType?: string }).inputType;
+              const useIn =
+                rawOp === "IN" ||
+                (inputT === "multi" && Array.isArray(userValue) && userValue.length > 0);
+              const op = useIn ? "IN" : rawOp;
               const value: unknown =
                 op === "IN"
                   ? Array.isArray(userValue)
@@ -772,7 +806,8 @@ export function DashboardViewer({
   }, [etlData, orderedWidgets, globalFilters, filterValues]);
 
   const rootClassName = variant === "admin" ? "admin-dashboard-view gap-5" : "gap-0";
-  const useClientTheme = !hideHeader && (variant === "default" && !backHref);
+  /** Tema cliente: no depende de hideHeader (vista previa admin oculta el h1 pero mantiene branding). */
+  const useClientTheme = variant === "default" && !backHref;
   // Mismo criterio que AdminDashboardStudio (MetricBlock): fallback true para paridad del lienzo.
   const darkChartTheme = useMemo(() => resolveDarkChartTheme(themeMerged, true), [themeMerged]);
   const themeVars = useMemo(() => {
@@ -856,6 +891,39 @@ export function DashboardViewer({
       )}
 
       <div className={useClientTheme ? "client-view-body flex flex-1 flex-col min-h-0" : "flex flex-1 flex-col min-h-0"}>
+      {pageLayout?.pagesMeta && pageLayout.pagesMeta.length > 1 && (
+        <div
+          role="tablist"
+          aria-label="Páginas del dashboard"
+          className={`flex flex-shrink-0 flex-wrap gap-1 border-b px-4 py-2${useClientTheme ? " client-view-page-tabs" : ""}`}
+          style={{
+            borderColor: "var(--platform-border, var(--client-border, #e2e8f0))",
+            background: "var(--platform-bg-elevated, rgba(255,255,255,0.03))",
+          }}
+        >
+          {pageLayout.pagesMeta.map((p) => {
+            const active = pageLayout.activePageId === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                  active
+                    ? "bg-[var(--client-accent-soft,rgba(45,212,191,0.12))] text-[var(--client-accent,#2dd4bf)]"
+                    : "text-[var(--platform-fg-muted,var(--client-text-muted))] hover:bg-white/5 hover:text-[var(--platform-fg,var(--client-text))]"
+                }`}
+                onClick={() =>
+                  setPageLayout((prev) => (prev ? { ...prev, activePageId: p.id } : null))
+                }
+              >
+                {p.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {globalFilters.length > 0 && (
         <div
           className="flex flex-shrink-0 flex-wrap items-center gap-4 px-4 py-2"
@@ -864,7 +932,8 @@ export function DashboardViewer({
           {globalFilters.map((gf) => {
             const label = (gf as any).label || gf.field;
             const options = (globalFilterDistinctValues[gf.id] ?? (gf as any).distinctValues) as unknown[] | undefined;
-            const isMulti = (gf.operator || "=") === "IN";
+            const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
+            const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
             const selectedArray = isMulti
               ? (Array.isArray(filterValues[gf.id]) ? filterValues[gf.id] : filterValues[gf.id] != null && filterValues[gf.id] !== "" ? [filterValues[gf.id]] : []) as string[]
               : [];
