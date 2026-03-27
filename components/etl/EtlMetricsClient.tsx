@@ -1597,6 +1597,28 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return formMetrics;
   }, [wizard, analysisSelectedMetricIds, savedMetrics, formMetrics, formulaFromSavedMetricIds, formulaFromReuseExpr, formName]);
 
+  const ratioReuseDisplayMode = useMemo(() => {
+    if (effectiveFormMetrics.length < 3) return false;
+    const formulaIndex = effectiveFormMetrics.findIndex((m) => String(m?.func ?? "").trim().toUpperCase() === "FORMULA");
+    if (formulaIndex < 2) return false;
+    const formulaMetric = effectiveFormMetrics[formulaIndex];
+    const formulaExpr = String((formulaMetric as { formula?: string }).formula ?? "").trim();
+    if (!formulaExpr) return false;
+    return /metric_0\b/i.test(formulaExpr) && /metric_1\b/i.test(formulaExpr);
+  }, [effectiveFormMetrics]);
+  const ratioReuseResultMetricIndex = useMemo(() => {
+    if (!ratioReuseDisplayMode) return -1;
+    for (let i = effectiveFormMetrics.length - 1; i >= 0; i--) {
+      if (String(effectiveFormMetrics[i]?.func ?? "").trim().toUpperCase() === "FORMULA") return i;
+    }
+    return -1;
+  }, [ratioReuseDisplayMode, effectiveFormMetrics]);
+  const ratioReuseResultMetricAlias = useMemo(() => {
+    if (ratioReuseResultMetricIndex < 0) return "";
+    const metric = effectiveFormMetrics[ratioReuseResultMetricIndex];
+    return String(metric?.alias ?? metric?.field ?? "").trim();
+  }, [ratioReuseResultMetricIndex, effectiveFormMetrics]);
+
   /** En wizard C/D: un alias de columna a mostrar por cada métrica guardada seleccionada (nombre de la tarjeta o alias del resultado). */
   const analysisDisplayMetricAliases = useMemo((): string[] => {
     if ((wizard !== "C" && wizard !== "D") || analysisSelectedMetricIds.length === 0) return [];
@@ -1887,6 +1909,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         dimension: chartXAxis || formDimensions[0],
         dimensions: formDimensions,
         geoHints,
+        ratioReuseMode: ratioReuseDisplayMode || undefined,
         metrics,
         chartType: formChartType,
         chartXAxis,
@@ -1926,6 +1949,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartAxisOrder,
     labelVisibilityMode,
     geoHints,
+    ratioReuseDisplayMode,
   ]);
 
   /** Filas de vista previa con orden y Top N aplicados desde el pipeline compartido. */
@@ -2122,7 +2146,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (d && rowKeysSet.has(d)) requested.push(d);
     }
     const metricAliases =
-      (wizard === "C" || wizard === "D") && analysisDisplayMetricAliases.length > 0
+      ratioReuseDisplayMode
+        ? [ratioReuseResultMetricAlias || `metric_${Math.max(0, ratioReuseResultMetricIndex)}`].filter(Boolean)
+        : (wizard === "C" || wizard === "D") && analysisDisplayMetricAliases.length > 0
         ? analysisDisplayMetricAliases
         : effectiveFormMetrics.map((m) => (m.alias || m.field || "valor").trim()).filter(Boolean);
     for (const alias of metricAliases) {
@@ -2143,7 +2169,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       }
     }
     return requested;
-  }, [previewData, formDimensions, wizard, analysisDisplayMetricAliases, effectiveFormMetrics, transformCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum]);
+  }, [previewData, formDimensions, wizard, analysisDisplayMetricAliases, effectiveFormMetrics, transformCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum, ratioReuseDisplayMode, ratioReuseResultMetricAlias, ratioReuseResultMetricIndex]);
 
   const chartAvailableColumns = useMemo(() => {
     if (!previewData?.[0]) return [];
@@ -2236,6 +2262,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (dims.length >= 2 && !chartSeriesField) setChartSeriesField(dims[1]!.key);
     }
   }, [wizard, wizardStep, formChartType, chartDimensionColumns, chartNumericColumns, chartXAxis, chartYAxes.length, chartSeriesField, columnRoles, editingId, effectiveFormMetrics]);
+
+  useEffect(() => {
+    if (!ratioReuseDisplayMode) return;
+    if (ratioReuseResultMetricIndex < 0) return;
+    const internalKey = `metric_${ratioReuseResultMetricIndex}`;
+    const targetY =
+      chartAvailableColumns.find((c) => c.key === ratioReuseResultMetricAlias)?.key
+      ?? chartAvailableColumns.find((c) => c.key === internalKey)?.key
+      ?? "";
+    if (!targetY) return;
+    if (chartYAxes.length === 1 && chartYAxes[0] === targetY) return;
+    setChartYAxes([targetY]);
+  }, [ratioReuseDisplayMode, ratioReuseResultMetricIndex, ratioReuseResultMetricAlias, chartAvailableColumns, chartYAxes]);
 
   /** Encabezados para la tabla de previsualización: metric_0 → alias de la métrica (estilo Excel). */
   const previewDisplayHeaders = useMemo(() => {
@@ -2541,6 +2580,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       transformShowDelta,
       transformShowDeltaPct,
       transformShowAccum,
+      ratioReuseMode: ratioReuseDisplayMode || undefined,
       chartType: formChartType || undefined,
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
@@ -2809,6 +2849,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       transformShowDelta,
       transformShowDeltaPct,
       transformShowAccum,
+      ratioReuseMode: useReuseFlow ? true : undefined,
       chartType: formChartType || undefined,
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,

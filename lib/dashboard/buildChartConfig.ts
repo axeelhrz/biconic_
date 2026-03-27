@@ -45,6 +45,7 @@ export type BuildChartConfigWidget = {
     chartSortBy?: string;
     chartSortByMetric?: string;
     chartAxisOrder?: string;
+    ratioReuseMode?: boolean;
     [key: string]: unknown;
   };
   source?: { labelField?: string };
@@ -114,7 +115,7 @@ export function resolveWidgetAxisKeys(
       .filter((k) => k !== "" && resultKeys.includes(k));
     yKeys = Array.from(new Set(explicitKeys));
   }
-  if (hasExplicitYAxes && metricAliases.length > 0) {
+  if (hasExplicitYAxes && metricAliases.length > 0 && agg?.ratioReuseMode !== true) {
     // Si chartYAxes quedó incompleto, completa con aliases de métricas presentes.
     const missingMetricAliases = metricAliases
       .map((k) => String(k ?? "").trim())
