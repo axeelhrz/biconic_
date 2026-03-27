@@ -70,6 +70,16 @@ const DATE_LEVEL_OPTIONS = [
   { value: "year", label: "Año", operator: "YEAR" as const },
 ];
 
+/** Clave de columna en filas de `/api/dashboard/aggregate-data` tras el mapeo `metric_i` → alias (igual que en route.ts). */
+function aggregationResultColumnKey(m: { alias?: string; func?: string; field?: string } | undefined, idx: number): string {
+  if (!m) return `metric_${idx}`;
+  const a = String(m.alias ?? "").trim();
+  if (a) return a;
+  const fn = String(m.func ?? "SUM").trim();
+  const fd = m.field != null ? String(m.field) : "";
+  return `${fn}(${fd})`;
+}
+
 const CHART_TYPES: { value: string; label: string; icon: ComponentType<{ className?: string }>; description: string }[] = [
   { value: "bar", label: "Barras", icon: BarChart2, description: "Comparar valores por categoría" },
   { value: "horizontalBar", label: "Barras horiz.", icon: BarChart2, description: "Ideal para muchas categorías o nombres largos" },
@@ -2139,19 +2149,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     analysisGranularity,
   ]);
 
-  /** Resultado principal del cálculo (paso Cálculo): valor de la última métrica = fórmula o métrica principal. La API devuelve metric_0, metric_1, ... */
+  /** Resultado principal del cálculo (paso Cálculo): última métrica; la API renombra metric_N al alias o a func(campo). */
   const previewCalculationResult = useMemo(() => {
     if (!previewData || previewData.length === 0 || effectiveFormMetrics.length === 0) return undefined;
     const row = previewData[0] as Record<string, unknown>;
-    const lastKey = `metric_${effectiveFormMetrics.length - 1}`;
-    const val = row[lastKey];
-    if (val != null && typeof val === "number" && !Number.isNaN(val)) return val;
-    for (let i = effectiveFormMetrics.length - 1; i >= 0; i--) {
-      const v = row[`metric_${i}`];
-      if (v != null && typeof v === "number" && !Number.isNaN(v)) return v;
-    }
-    return undefined;
-  }, [previewData, effectiveFormMetrics.length]);
+    const lastIdx = effectiveFormMetrics.length - 1;
+    const lastM = effectiveFormMetrics[lastIdx];
+    const primaryKey = aggregationResultColumnKey(lastM, lastIdx);
+    const internalKey = `metric_${lastIdx}`;
+    const raw = row[primaryKey] ?? row[internalKey];
+    if (raw == null) return undefined;
+    const n = typeof raw === "number" && !Number.isNaN(raw) ? raw : Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+  }, [previewData, effectiveFormMetrics]);
 
   /** Solo columnas solicitadas: dimensiones + métricas elegidas (+ columnas de comparación si aplica). En C/D usamos un alias por tarjeta (analysisDisplayMetricAliases). */
   const previewVisibleKeys = useMemo(() => {
@@ -2164,9 +2174,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     }
     let metricAliases: string[];
     if (ratioReuseDisplayMode) {
-      const internalKey = ratioReuseResultMetricIndex >= 0 ? `metric_${ratioReuseResultMetricIndex}` : "";
-      const candidates = [ratioReuseResultMetricAlias, internalKey].filter((k) => typeof k === "string" && String(k).trim() !== "");
-      const resolved = candidates.find((k) => rowKeysSet.has(k));
+      const idx = ratioReuseResultMetricIndex >= 0 ? ratioReuseResultMetricIndex : effectiveFormMetrics.length - 1;
+      const m = effectiveFormMetrics[idx];
+      const mappedKey = aggregationResultColumnKey(m, idx);
+      const internalKey = `metric_${idx}`;
+      const candidates = [mappedKey, ratioReuseResultMetricAlias, internalKey].filter(
+        (k) => typeof k === "string" && String(k).trim() !== ""
+      );
+      const unique = [...new Set(candidates)];
+      const resolved = unique.find((k) => rowKeysSet.has(k));
       metricAliases = resolved != null ? [resolved] : [];
     } else if ((wizard === "C" || wizard === "D") && analysisDisplayMetricAliases.length > 0) {
       metricAliases = analysisDisplayMetricAliases;
