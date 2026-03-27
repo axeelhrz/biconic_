@@ -4949,7 +4949,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     </Button>
                     <Button type="button" variant="ghost" size="sm" className="rounded-xl text-xs" style={{ color: "var(--platform-fg-muted)" }} onClick={() => fetchData()} disabled={loading}>Recargar datos del ETL</Button>
                   </div>
-                  {previewData && previewData.length > 0 && (
+                  {previewProcessedRows && previewProcessedRows.length > 0 && (
                     <div className="overflow-hidden rounded-xl border shadow-sm mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                       <div className="overflow-auto max-h-[360px]">
                         <table className="w-full text-sm" style={{ color: "var(--platform-fg)" }}>
@@ -4961,7 +4961,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                             })}</tr>
                           </thead>
                           <tbody style={{ background: "var(--platform-bg-elevated)" }}>
-                            {previewData.map((row, idx) => (
+                            {previewProcessedRows.map((row, idx) => (
                               <tr key={idx} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
                                 {previewVisibleKeys.map((k, i) => { const v = (row as Record<string, unknown>)[k]; const dc = deltaColor(k, v); return (<td key={i} className="px-4 py-2 whitespace-nowrap" style={dc ? { color: dc, fontWeight: 500 } : undefined}>{formatCell(k, v)}</td>); })}
                               </tr>
@@ -4969,7 +4969,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                           </tbody>
                         </table>
                       </div>
-                      <p className="text-xs px-4 py-2 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-surface)" }}>{previewData.length} filas · {previewVisibleKeys.length} columnas</p>
+                      <p className="text-xs px-4 py-2 border-t" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)", background: "var(--platform-surface)" }}>{previewProcessedRows.length} filas · {previewVisibleKeys.length} columnas</p>
                     </div>
                   )}
                   {previewData && previewData.length === 0 && !previewLoading && (

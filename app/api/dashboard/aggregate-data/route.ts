@@ -1362,10 +1362,18 @@ export async function POST(req: NextRequest) {
       const safeDir = dir === "ASC" ? "ASC" : "DESC";
       let orderByField = `"${body.orderBy.field.replace(/"/g, '""')}"`;
       const requestedSortNormalized = normalizeStr(body.orderBy.field);
+      const temporalSortRequested =
+        !!dateGroupByExpr &&
+        !!body.dateGroupBy?.field &&
+        requestedSortNormalized === normalizeStr(body.dateGroupBy.field);
+      if (temporalSortRequested) {
+        // Evita ordenar por alias display (MM/YYYY) y fuerza orden cronológico real.
+        orderByField = dateGroupByExpr;
+      }
       const dimMatch = dimList.find((d) => normalizeStr(d) === requestedSortNormalized);
-      if (dimMatch) {
+      if (!temporalSortRequested && dimMatch) {
         orderByField = `"${dimMatch.replace(/"/g, '""')}"`;
-      } else {
+      } else if (!temporalSortRequested) {
         const matchedMetric = body.metrics.find((m) => {
           const sig = `${m.func}(${m.field})`;
           return (
