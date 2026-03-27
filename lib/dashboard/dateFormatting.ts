@@ -24,6 +24,14 @@ export function parseDateLike(value: unknown): Date | null {
   const raw = value.trim();
   if (!raw) return null;
 
+  // MM/yyyy
+  const my = raw.match(/^(\d{1,2})\/(\d{4})$/);
+  if (my) {
+    const month = Number(my[1]);
+    const year = Number(my[2]);
+    return safeDateFromParts(year, month, 1);
+  }
+
   // dd/MM/yyyy
   const dmy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (dmy) {
