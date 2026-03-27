@@ -4354,7 +4354,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       const hasPeriodo =
                         previewChronologicalRows.length > 1 &&
                         (previewChronologicalRows[0] as Record<string, unknown>)["periodo"] != null;
-                      const metricKey = `metric_${formMetrics.length - 1}`;
+                      const resultMetricIdx =
+                        ratioReuseDisplayMode && ratioReuseResultMetricIndex >= 0
+                          ? ratioReuseResultMetricIndex
+                          : Math.max(0, effectiveFormMetrics.length - 1);
+                      const metricKey = `metric_${resultMetricIdx}`;
                       const totalValue = hasPeriodo
                         ? previewChronologicalRows.reduce((sum, row) => sum + (Number((row as Record<string, unknown>)[metricKey]) || 0), 0)
                         : previewCalculationResult;
@@ -4370,13 +4374,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                               <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)" }}><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewDisplayHeaders.map((label, i) => (<th key={i} className="text-left py-1.5 px-2 font-medium">{label}</th>))}</tr></thead>
                               <tbody>{previewChronologicalRows.map((row, idx) => {
                                 const raw = row as Record<string, unknown>;
-                                const keys = Object.keys(raw);
-                                return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{keys.map((k, i) => {
-                                  const v = raw[k];
-                                  const dateDisplay = formatPreviewDateValue(v, k);
-                                  const display = dateDisplay ?? (typeof v === "number" ? formatNumber(v) : String(v ?? ""));
-                                  return (<td key={i} className="py-1.5 px-2 tabular-nums">{display}</td>);
-                                })}</tr>);
+                                return (
+                                  <tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>
+                                    {previewVisibleKeys.map((k, i) => {
+                                      const v = raw[k];
+                                      const dateDisplay = formatPreviewDateValue(v, k);
+                                      const display = dateDisplay ?? (typeof v === "number" ? formatNumber(v) : String(v ?? ""));
+                                      return (
+                                        <td key={i} className="py-1.5 px-2 tabular-nums">
+                                          {display}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
                               })}</tbody>
                             </table>
                           </div>
