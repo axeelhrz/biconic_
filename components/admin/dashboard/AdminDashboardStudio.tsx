@@ -548,7 +548,11 @@ export function AdminDashboardStudio({
         };
         const mappedGlobalFilters = filters.map((f) => ({ ...f, field: mapDatasetField(f.field) }));
         if (agg?.enabled && agg.metrics.length > 0) {
-          const mappedWidgetFilters = (agg.filters || []).map((f) => ({ ...f, field: mapDatasetField(f.field) }));
+          const mappedWidgetFilters = (agg.filters || []).map((f) => ({
+            ...f,
+            field: mapDatasetField(f.field),
+            operator: Array.isArray(f.value) && String(f.operator ?? "").toUpperCase() !== "IN" ? "IN" : f.operator,
+          }));
           const normalizedAgg = {
             ...agg,
             filters: mappedWidgetFilters,

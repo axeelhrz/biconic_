@@ -2908,7 +2908,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingEnabled: chartRankingEnabled || undefined,
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
-      filters: formFilters.length ? formFilters : undefined,
+      filters: formFilters.length
+        ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator }))
+        : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
       dateDimension: timeColumn || undefined,
