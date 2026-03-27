@@ -540,9 +540,20 @@ export function AdminDashboardStudio({
       );
       try {
         const agg = widget.aggregationConfig;
-        const widgetForBuild = { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color };
+        const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
+        const mapDatasetField = (rawField: unknown): string => {
+          const field = String(rawField ?? "").trim();
+          if (!field || !sourceId) return field;
+          return etlData?.datasetDimensions?.[field]?.[sourceId] ?? field;
+        };
+        const mappedGlobalFilters = filters.map((f) => ({ ...f, field: mapDatasetField(f.field) }));
         if (agg?.enabled && agg.metrics.length > 0) {
-          const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
+          const mappedWidgetFilters = (agg.filters || []).map((f) => ({ ...f, field: mapDatasetField(f.field) }));
+          const normalizedAgg = {
+            ...agg,
+            filters: mappedWidgetFilters,
+          };
+          const widgetForBuild = { type: widget.type, aggregationConfig: normalizedAgg, source: widget.source, color: (widget as { color?: string }).color };
           const sourceAllFields = sourceId
             ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.all ?? etlData?.fields?.all ?? [])
             : (etlData?.fields?.all ?? []);
@@ -668,7 +679,7 @@ export function AdminDashboardStudio({
             chartXAxis: isInvalidIdentifierValue(agg.chartXAxis) ? undefined : agg.chartXAxis || undefined,
             ...(agg.geoHints ? { geoHints: agg.geoHints } : {}),
             metrics: metricsPayload,
-            filters: [...(agg.filters || []), ...filters],
+            filters: [...mappedWidgetFilters, ...mappedGlobalFilters],
             orderBy: rankingOrderBy || agg.orderBy,
             limit: rankingLimit ?? agg.limit ?? 100,
             cumulative: agg.cumulative || "none",
@@ -703,12 +714,11 @@ export function AdminDashboardStudio({
             sourceId,
             datasetDimensions: etlData.datasetDimensions,
             savedMetrics: savedMetrics as unknown as Array<{ name?: string; metric?: { field?: string; func?: string; alias?: string; expression?: string }; aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> } }>,
-            globalFilters: [],
+            globalFilters: mappedGlobalFilters,
             aggregateEndpoint: "/api/dashboard/aggregate-data",
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,
             accentColor: (widget as { color?: string }).color ?? "",
-            aggregateExtraPayload: aggregatePayload,
           });
           if (!loaded.hasData) {
             setWidgets((prev) =>
@@ -731,7 +741,8 @@ export function AdminDashboardStudio({
             )
           );
         } else {
-          const rawPayload = { tableName, filters, limit: 500 };
+          const widgetForBuild = { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color };
+          const rawPayload = { tableName, filters: mappedGlobalFilters, limit: 500 };
           setWidgets((prev) =>
             prev.map((w) =>
               w.id === widgetId
@@ -750,9 +761,9 @@ export function AdminDashboardStudio({
           const loaded = await loadPreviewWidgetData({
             widget: widgetForBuild,
             tableName,
-            sourceId: widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id,
+            sourceId,
             datasetDimensions: etlData.datasetDimensions,
-            globalFilters: filters,
+            globalFilters: mappedGlobalFilters,
             aggregateEndpoint: "/api/dashboard/aggregate-data",
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,
