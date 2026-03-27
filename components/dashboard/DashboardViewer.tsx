@@ -11,7 +11,12 @@ import {
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./DashboardWidgetRenderer";
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { buildChartMetricStyles, buildChartStyleFromAgg, resolveDarkChartTheme } from "@/lib/dashboard/widgetRenderParity";
+import {
+  buildChartMetricStyles,
+  buildChartStyleFromAgg,
+  resolveDarkChartTheme,
+  resolveWidgetAggregationForDisplay,
+} from "@/lib/dashboard/widgetRenderParity";
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -710,14 +715,18 @@ export function DashboardViewer({
           return "unknown";
         };
         const columnsDetected = Object.keys(sample).map((k) => ({ name: k, type: inferType((sample as any)[k]) }));
-        const config = buildChartConfig(dataArray, widget, accentColor);
-        const rowsForWidget = resolvedChartType === "table" ? getProcessedRowsForChart(dataArray, widget) : dataArray;
+        const dd = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
+        const widgetResolved = resolveWidgetAggregationForDisplay(widget, dd, widgetSourceId ?? undefined);
+        const config = buildChartConfig(dataArray, widgetResolved, accentColor);
+        const rowsForWidget =
+          resolvedChartType === "table" ? getProcessedRowsForChart(dataArray, widgetResolved) : dataArray;
 
         setWidgets((prev) =>
           prev.map((w) =>
             w.id === widgetId
               ? {
                   ...w,
+                  aggregationConfig: widgetResolved.aggregationConfig ?? w.aggregationConfig,
                   config: config ?? { labels: [], datasets: [] },
                   rows: rowsForWidget,
                   columns: columnsDetected,

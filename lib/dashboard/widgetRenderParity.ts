@@ -141,3 +141,44 @@ export function resolveDarkChartTheme(theme: Partial<DashboardTheme> | undefined
   if (!rgb) return fallback;
   return relativeLuminance(rgb) < DARK_LUMA_THRESHOLD;
 }
+
+type DatasetDimensionsMap = Record<string, Record<string, string>>;
+
+/**
+ * El aggregate API devuelve filas con nombres de columna físicos; el layout guardado suele tener
+ * ejes/dimensiones semánticas (dataset del dashboard). Sin esto, resolveWidgetAxisKeys no alinea
+ * con resultKeys y los gráficos/KPI quedan vacíos en DashboardViewer.
+ */
+export function resolveWidgetAggregationForDisplay<
+  W extends { aggregationConfig?: Record<string, unknown> | null },
+>(widget: W, datasetDimensions: DatasetDimensionsMap | undefined, sourceId: string | undefined): W {
+  if (!datasetDimensions || !sourceId || !widget.aggregationConfig) return widget;
+  const mapKey = (k: unknown): string | undefined => {
+    if (k == null || k === "") return undefined;
+    const t = String(k).trim();
+    if (!t) return undefined;
+    const mapped = datasetDimensions[t]?.[sourceId];
+    return mapped ?? t;
+  };
+  const agg = widget.aggregationConfig;
+  const next: Record<string, unknown> = { ...agg };
+  if (typeof agg.chartXAxis === "string") {
+    const m = mapKey(agg.chartXAxis);
+    if (m) next.chartXAxis = m;
+  }
+  if (Array.isArray(agg.chartYAxes)) {
+    next.chartYAxes = agg.chartYAxes.map((y) => mapKey(y) ?? y);
+  }
+  if (typeof agg.dimension === "string") {
+    const m = mapKey(agg.dimension);
+    if (m) next.dimension = m;
+  }
+  if (Array.isArray(agg.dimensions)) {
+    next.dimensions = agg.dimensions.map((d) => mapKey(d) ?? d);
+  }
+  if (typeof agg.dateDimension === "string") {
+    const m = mapKey(agg.dateDimension);
+    if (m) next.dateDimension = m;
+  }
+  return { ...widget, aggregationConfig: next as W["aggregationConfig"] };
+}
