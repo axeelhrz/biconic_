@@ -510,6 +510,7 @@ export function AdminDashboardStudio({
       if (!widget || !etlData) return;
       const tableName = await getTableName(widget);
       if (!tableName) {
+        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
         toast.warning("No hay ejecución completada del ETL");
         return;
       }
@@ -940,6 +941,7 @@ export function AdminDashboardStudio({
   const addSavedMetricToDashboard = useCallback(
     (saved: SavedMetricForm) => {
       const newWidget = buildWidgetFromSavedMetric(saved);
+      const shouldLoadImmediately = Boolean(etlData);
       const existing = widgets.find((w) => String((w as { metricId?: unknown }).metricId ?? "").trim() === String(saved.id).trim());
       const targetWidgetId = existing?.id ?? newWidget.id;
       const newWidgets = existing
@@ -954,11 +956,11 @@ export function AdminDashboardStudio({
                   dataSourceId: newWidget.dataSourceId,
                   config: undefined,
                   rows: undefined,
-                  isLoading: true,
+                  isLoading: shouldLoadImmediately,
                 }
               : w
           )
-        : [...widgets, { ...newWidget, isLoading: true }];
+        : [...widgets, { ...newWidget, isLoading: shouldLoadImmediately }];
       setWidgets((prev) =>
         existing
           ? prev.map((w) =>
@@ -972,11 +974,11 @@ export function AdminDashboardStudio({
                     dataSourceId: newWidget.dataSourceId,
                     config: undefined,
                     rows: undefined,
-                    isLoading: true,
+                    isLoading: shouldLoadImmediately,
                   }
                 : w
             )
-          : [...prev, { ...newWidget, isLoading: true }]
+          : [...prev, { ...newWidget, isLoading: shouldLoadImmediately }]
       );
       setSelectedId(null);
       setIsDirty(true);
@@ -994,6 +996,7 @@ export function AdminDashboardStudio({
   const addSavedAnalysisToDashboard = useCallback(
     (analysis: SavedAnalysis) => {
       const newWidget = buildWidgetFromSavedAnalysis(analysis);
+      const shouldLoadImmediately = Boolean(etlData);
       const existing = widgets.find((w) => String((w as { analysisId?: unknown }).analysisId ?? "").trim() === String(analysis.id).trim());
       const targetWidgetId = existing?.id ?? newWidget.id;
       const newWidgets = existing
@@ -1009,11 +1012,11 @@ export function AdminDashboardStudio({
                   dataSourceId: newWidget.dataSourceId,
                   config: undefined,
                   rows: undefined,
-                  isLoading: true,
+                  isLoading: shouldLoadImmediately,
                 }
               : w
           )
-        : [...widgets, { ...newWidget, isLoading: true }];
+        : [...widgets, { ...newWidget, isLoading: shouldLoadImmediately }];
       setWidgets((prev) =>
         existing
           ? prev.map((w) =>
@@ -1028,11 +1031,11 @@ export function AdminDashboardStudio({
                     dataSourceId: newWidget.dataSourceId,
                     config: undefined,
                     rows: undefined,
-                    isLoading: true,
+                    isLoading: shouldLoadImmediately,
                   }
                 : w
             )
-          : [...prev, { ...newWidget, isLoading: true }]
+          : [...prev, { ...newWidget, isLoading: shouldLoadImmediately }]
       );
       setSelectedId(null);
       setIsDirty(true);
