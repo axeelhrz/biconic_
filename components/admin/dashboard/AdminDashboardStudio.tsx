@@ -232,6 +232,26 @@ function toAggregationMetricList(input: unknown, fallbackMetric?: SavedMetricFor
   return [{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" }];
 }
 
+function sanitizeMetricsFromSavedReference(
+  metrics: AggregationMetric[],
+  savedName?: string,
+  savedMetric?: { field?: string; expression?: string }
+): AggregationMetric[] {
+  const nameKey = String(savedName ?? "").trim().toLowerCase();
+  const savedField = String(savedMetric?.field ?? "").trim();
+  const savedExpr = String(savedMetric?.expression ?? "").trim();
+  if (!nameKey) return metrics;
+  return metrics.map((metric) => {
+    const field = String(metric.field ?? "").trim();
+    if (field.toLowerCase() !== nameKey) return metric;
+    return {
+      ...metric,
+      ...(savedField ? { field: savedField } : {}),
+      ...(savedExpr ? { expression: savedExpr } : {}),
+    };
+  });
+}
+
 export function AdminDashboardStudio({
   dashboardId,
   title,
@@ -522,6 +542,11 @@ export function AdminDashboardStudio({
         const agg = widget.aggregationConfig;
         const widgetForBuild = { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color };
         if (agg?.enabled && agg.metrics.length > 0) {
+          const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
+          const sourceAllFields = sourceId
+            ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.all ?? etlData?.fields?.all ?? [])
+            : (etlData?.fields?.all ?? []);
+          const sourceFieldSet = new Set(sourceAllFields.map((field) => String(field).trim().toLowerCase()));
           const dimensionsRaw = (agg as any).dimensions?.length > 0
             ? (agg as any).dimensions as string[]
             : [agg.dimension, agg.dimension2].filter(Boolean) as string[];
@@ -538,6 +563,8 @@ export function AdminDashboardStudio({
           const savedById = widgetMetricId
             ? savedMetrics.find((s) => String(s.id).trim() === widgetMetricId)
             : undefined;
+          const firstSavedByIdMetric = (savedById as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } } | undefined)?.aggregationConfig?.metrics?.[0]
+            ?? (savedById as { metric?: { field?: string; func?: string; alias?: string; expression?: string } } | undefined)?.metric;
           const metricsPayload = agg.metrics
             .map(({ id, ...m }) => {
               if (m.func === "FORMULA")
@@ -545,15 +572,15 @@ export function AdminDashboardStudio({
               let expr = (m as { expression?: string }).expression;
               let fieldStr = m.field != null ? String(m.field).trim() : "";
               if (isInvalidIdentifierValue(fieldStr)) fieldStr = "";
-              if (savedById && !expr && !fieldStr) {
-                const first = (savedById as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
-                  ?? (savedById as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric;
-                if (first) {
-                  const ex = (first as { expression?: string }).expression;
-                  if (ex && String(ex).trim()) expr = String(ex).trim();
-                  const f = String((first as { field?: string }).field ?? "").trim();
-                  if (f) fieldStr = f;
-                }
+              const savedByIdName = String((savedById as { name?: string } | undefined)?.name ?? "").trim().toLowerCase();
+              const fieldKey = fieldStr.toLowerCase();
+              const fieldMatchesSavedName = fieldKey !== "" && savedByIdName !== "" && fieldKey === savedByIdName;
+              const fieldMissingInSource = fieldKey !== "" && sourceFieldSet.size > 0 && !sourceFieldSet.has(fieldKey);
+              if (firstSavedByIdMetric && ((!expr && !fieldStr) || fieldMatchesSavedName || fieldMissingInSource)) {
+                const ex = String((firstSavedByIdMetric as { expression?: string }).expression ?? "").trim();
+                if (ex) expr = ex;
+                const f = String((firstSavedByIdMetric as { field?: string }).field ?? "").trim();
+                if (f) fieldStr = f;
               }
               // Fallback legacy por nombre: solo cuando no hay vínculo por ID y falta definición explícita.
               if (!savedById && !expr && fieldStr) {
@@ -587,7 +614,6 @@ export function AdminDashboardStudio({
             setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
             return;
           }
-          const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
           const widgetEtlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
           const widgetDateFields = sourceId ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.date ?? etlData?.fields?.date ?? []) : (etlData?.fields?.date ?? []);
           const primaryDimension = dimensions[0] ?? agg.dimension;
@@ -840,7 +866,11 @@ export function AdminDashboardStudio({
       const cfg = ((saved.aggregationConfig ?? {}) as Record<string, unknown>);
       const chartType = normalizeChartType((cfg.chartType as string | undefined) ?? saved.chartType ?? "bar");
       const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions.map((d) => String(d)) : [cfg.dimension, cfg.dimension2].filter(Boolean).map((d) => String(d));
-      const metrics = toAggregationMetricList(cfg.metrics, saved.metric);
+      const metrics = sanitizeMetricsFromSavedReference(
+        toAggregationMetricList(cfg.metrics, saved.metric),
+        saved.name,
+        saved.metric
+      );
       const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
       const sources = etlData?.dataSources;
       const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
@@ -904,6 +934,25 @@ export function AdminDashboardStudio({
         metricsFromLinked.length > 0
           ? metricsFromLinked
           : toAggregationMetricList(mergedCfg.metrics);
+      const linkedByName = new Map(
+        linkedSavedMetrics.map((saved) => [
+          String(saved.name ?? "").trim().toLowerCase(),
+          saved.metric,
+        ])
+      );
+      const sanitizedMetrics = metrics.map((metric) => {
+        const fieldKey = String(metric.field ?? "").trim().toLowerCase();
+        if (!fieldKey) return metric;
+        const linkedMetric = linkedByName.get(fieldKey);
+        const linkedField = String(linkedMetric?.field ?? "").trim();
+        const linkedExpr = String(linkedMetric?.expression ?? "").trim();
+        if (!linkedMetric || (!linkedField && !linkedExpr)) return metric;
+        return {
+          ...metric,
+          ...(linkedField ? { field: linkedField } : {}),
+          ...(linkedExpr ? { expression: linkedExpr } : {}),
+        };
+      });
       const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
       const sources = etlData?.dataSources;
       const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
@@ -913,7 +962,7 @@ export function AdminDashboardStudio({
         dimension: dims[0] || (typeof mergedCfg.dimension === "string" ? mergedCfg.dimension : undefined),
         dimension2: dims[1] || (typeof mergedCfg.dimension2 === "string" ? mergedCfg.dimension2 : undefined),
         dimensions: dims.length > 0 ? dims : undefined,
-        metrics,
+        metrics: sanitizedMetrics,
         chartType,
       };
       return {
@@ -1681,12 +1730,25 @@ export function AdminDashboardStudio({
                 let kpiValue: string | number | undefined;
                 if (chartType === "kpi") {
                   const fromConfig = w.config?.datasets?.[0]?.data?.[0];
-                  if (fromConfig != null) {
-                    kpiValue = fromConfig;
-                  } else if (Array.isArray(w.rows) && w.rows.length > 0) {
+                  const fallbackFromRows = (() => {
+                    if (!Array.isArray(w.rows) || w.rows.length === 0) return undefined;
                     const firstRow = w.rows[0] as Record<string, unknown>;
-                    const numVal = Object.values(firstRow).find((v) => Number.isFinite(Number(v)));
-                    if (numVal != null) kpiValue = Number(numVal);
+                    const yKey = (w.aggregationConfig as { chartYAxes?: string[] } | undefined)?.chartYAxes?.[0];
+                    if (yKey && Number.isFinite(Number(firstRow[yKey]))) return Number(firstRow[yKey]);
+                    const firstNonZero = Object.values(firstRow).find((v) => Number.isFinite(Number(v)) && Number(v) !== 0);
+                    if (firstNonZero != null) return Number(firstNonZero);
+                    const firstNumeric = Object.values(firstRow).find((v) => Number.isFinite(Number(v)));
+                    return firstNumeric != null ? Number(firstNumeric) : undefined;
+                  })();
+                  if (fromConfig != null) {
+                    const configNumeric = Number(fromConfig);
+                    if (Number.isFinite(configNumeric)) {
+                      kpiValue = configNumeric === 0 && fallbackFromRows != null ? fallbackFromRows : configNumeric;
+                    } else {
+                      kpiValue = fromConfig;
+                    }
+                  } else if (fallbackFromRows != null) {
+                    kpiValue = fallbackFromRows;
                   }
                 }
                 const span = Math.min(4, Math.max(1, w.gridSpan ?? 2));
