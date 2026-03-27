@@ -70,14 +70,18 @@ const DATE_LEVEL_OPTIONS = [
   { value: "year", label: "Año", operator: "YEAR" as const },
 ];
 
-/** Clave de columna en filas de `/api/dashboard/aggregate-data` tras el mapeo `metric_i` → alias (igual que en route.ts). */
+/**
+ * Clave de columna en filas de `/api/dashboard/aggregate-data` tras el mapeo `metric_i` → alias.
+ * Debe coincidir con el `alias` enviado en `metricsPayload` (fetchPreview): `m.alias || m.field || fieldStr || "valor"`.
+ * Sin alias ni campo, el payload usa "valor", no `FORMULA()`.
+ */
 function aggregationResultColumnKey(m: { alias?: string; func?: string; field?: string } | undefined, idx: number): string {
   if (!m) return `metric_${idx}`;
   const a = String(m.alias ?? "").trim();
-  if (a) return a;
-  const fn = String(m.func ?? "SUM").trim();
-  const fd = m.field != null ? String(m.field) : "";
-  return `${fn}(${fd})`;
+  const mf = m.field != null ? String(m.field).trim() : "";
+  const fromMetric = a || mf;
+  if (fromMetric) return fromMetric;
+  return "valor";
 }
 
 const CHART_TYPES: { value: string; label: string; icon: ComponentType<{ className?: string }>; description: string }[] = [
@@ -1799,7 +1803,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         toast.error(msg);
         return;
       }
-      setPreviewData(Array.isArray(json) ? json : []);
+      const rows = Array.isArray(json)
+        ? json
+        : json && typeof json === "object" && Array.isArray((json as { rows?: unknown }).rows)
+          ? ((json as { rows: Record<string, unknown>[] }).rows)
+          : [];
+      setPreviewData(rows);
     } catch {
       toast.error("Error al cargar vista previa");
     } finally {
