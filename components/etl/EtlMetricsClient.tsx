@@ -488,6 +488,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartRankingTop, setChartRankingTop] = useState(5);
   const [chartRankingMetric, setChartRankingMetric] = useState("");
   const [chartSortByMetric, setChartSortByMetric] = useState("");
+  const [previewDateOrder, setPreviewDateOrder] = useState<"asc" | "desc">("asc");
   const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
   const [chartSeriesColors, setChartSeriesColors] = useState<Record<string, string>>({});
   const [chartLabelOverrides, setChartLabelOverrides] = useState<Record<string, string>>({});
@@ -1918,20 +1919,31 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   }, [previewData, previewPipelineWidget]);
   const previewChronologicalRows = useMemo(() => {
     if (!previewProcessedRows || previewProcessedRows.length === 0) return [];
-    if (!timeColumn || !analysisGranularity) return previewProcessedRows;
-    const normalizedTimeColumn = String(timeColumn).trim().toLowerCase();
     const first = previewProcessedRows[0] as Record<string, unknown>;
-    const temporalKey =
-      Object.keys(first).find((k) => String(k).trim().toLowerCase() === normalizedTimeColumn) ?? timeColumn;
+    const keys = Object.keys(first);
+    const normalizedTimeColumn = String(timeColumn ?? "").trim().toLowerCase();
+    const explicitTemporalKey = normalizedTimeColumn
+      ? keys.find((k) => String(k).trim().toLowerCase() === normalizedTimeColumn)
+      : undefined;
+    const sampledRows = previewProcessedRows.slice(0, 80);
+    const inferredTemporalKey = keys
+      .map((key) => ({
+        key,
+        score: sampledRows.reduce((acc, row) => (parseDateLike((row as Record<string, unknown>)[key]) ? acc + 1 : acc), 0),
+      }))
+      .sort((a, b) => b.score - a.score)[0];
+    const temporalKey = explicitTemporalKey ?? (inferredTemporalKey && inferredTemporalKey.score >= 2 ? inferredTemporalKey.key : undefined);
+    if (!temporalKey) return previewProcessedRows;
+    const direction = previewDateOrder === "desc" ? -1 : 1;
     return [...previewProcessedRows].sort((a, b) => {
       const va = (a as Record<string, unknown>)[temporalKey];
       const vb = (b as Record<string, unknown>)[temporalKey];
       const ta = parseDateLike(va)?.getTime() ?? NaN;
       const tb = parseDateLike(vb)?.getTime() ?? NaN;
-      if (!Number.isNaN(ta) && !Number.isNaN(tb)) return ta - tb;
-      return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true });
+      if (!Number.isNaN(ta) && !Number.isNaN(tb)) return (ta - tb) * direction;
+      return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true }) * direction;
     });
-  }, [previewProcessedRows, timeColumn, analysisGranularity]);
+  }, [previewProcessedRows, timeColumn, previewDateOrder]);
 
   const previewChartConfig = useMemo(() => {
     if (!previewData || previewData.length === 0) return null;
@@ -4966,6 +4978,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       Actualizar vista previa
                     </Button>
                     <Button type="button" variant="ghost" size="sm" className="rounded-xl text-xs" style={{ color: "var(--platform-fg-muted)" }} onClick={() => fetchData()} disabled={loading}>Recargar datos del ETL</Button>
+                    {timeColumn && (
+                      <div className="ml-auto flex items-center gap-1 rounded-lg border px-1 py-1" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewDateOrder("asc")}
+                          className="rounded-md px-2 py-1 text-[11px] font-medium"
+                          style={{ background: previewDateOrder === "asc" ? "var(--platform-accent)" : "transparent", color: previewDateOrder === "asc" ? "var(--platform-bg)" : "var(--platform-fg-muted)" }}
+                        >
+                          Fecha asc
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewDateOrder("desc")}
+                          className="rounded-md px-2 py-1 text-[11px] font-medium"
+                          style={{ background: previewDateOrder === "desc" ? "var(--platform-accent)" : "transparent", color: previewDateOrder === "desc" ? "var(--platform-bg)" : "var(--platform-fg-muted)" }}
+                        >
+                          Fecha desc
+                        </button>
+                      </div>
+                    )}
                   </div>
                   {previewChronologicalRows && previewChronologicalRows.length > 0 && (
                     <div className="overflow-hidden rounded-xl border shadow-sm mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
