@@ -1616,6 +1616,12 @@ export async function POST(req: NextRequest) {
 
     const requestedSortNormalized = normalizeStr(body.orderBy?.field || "");
     const dateFieldNormalized = normalizeStr(body.dateGroupBy?.field || "");
+    const temporalKey =
+      body.dateGroupBy?.field
+        ? (mappedResults[0]
+            ? Object.keys(mappedResults[0]).find((k) => normalizeStr(k) === normalizeStr(body.dateGroupBy?.field || ""))
+            : undefined) ?? body.dateGroupBy.field
+        : undefined;
     const requestedTemporalSort =
       !!body.dateGroupBy?.field &&
       (
@@ -1626,12 +1632,6 @@ export async function POST(req: NextRequest) {
         requestedSortNormalized.includes(normalizeStr(temporalKey || "")) ||
         dateFieldNormalized.includes(requestedSortNormalized)
       );
-    const temporalKey =
-      body.dateGroupBy?.field
-        ? (mappedResults[0]
-            ? Object.keys(mappedResults[0]).find((k) => normalizeStr(k) === normalizeStr(body.dateGroupBy?.field || ""))
-            : undefined) ?? body.dateGroupBy.field
-        : undefined;
     const directionMultiplier =
       (body.orderBy?.direction || "ASC").toString().toUpperCase() === "DESC" ? -1 : 1;
 
