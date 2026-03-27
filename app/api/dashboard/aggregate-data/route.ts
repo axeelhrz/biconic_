@@ -1421,7 +1421,34 @@ export async function POST(req: NextRequest) {
       if (!/^[metric_0-9\s\-+*/().,NULLIFROUNDCOALESCE]+$/i.test(s)) return null;
       return s;
     };
+    const findMetricRefsInFormula = (expr: string): number[] => {
+      const refs: number[] = [];
+      const re = /metric_(\d+)\b/gi;
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(expr)) != null) {
+        const idx = Number.parseInt(match[1] ?? "", 10);
+        if (Number.isFinite(idx)) refs.push(idx);
+      }
+      return refs;
+    };
     if (metricsFormula.length > 0) {
+      const maxMetricIndex = body.metrics.length - 1;
+      for (const m of metricsFormula) {
+        const expr = safeFormula(m.formula!);
+        if (!expr) {
+          return NextResponse.json(
+            { error: `Fórmula inválida en la métrica «${m.alias || "sin nombre"}». Revisá la sintaxis.` },
+            { status: 400 }
+          );
+        }
+        const outOfRangeRef = findMetricRefsInFormula(expr).find((idx) => idx < 0 || idx > maxMetricIndex);
+        if (outOfRangeRef != null) {
+          return NextResponse.json(
+            { error: `La fórmula de «${m.alias || "sin nombre"}» referencia metric_${outOfRangeRef}, pero solo existen métricas hasta metric_${maxMetricIndex}.` },
+            { status: 400 }
+          );
+        }
+      }
       const formulaSelects = metricsFormula
         .map((m) => {
           const i = body.metrics.indexOf(m);

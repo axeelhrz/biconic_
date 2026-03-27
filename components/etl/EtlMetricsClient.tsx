@@ -377,6 +377,54 @@ type DatasetRelation = {
   joinType: "INNER" | "LEFT";
 };
 
+type ExpandSavedMetricsOptions = {
+  setDisplayAliasToSavedName?: boolean;
+};
+
+function rewriteFormulaMetricRefs(formula: string, localCount: number, globalStartIndex: number): string {
+  return formula.replace(/metric_(\d+)\b/gi, (match, rawIndex: string) => {
+    const localIndex = Number.parseInt(rawIndex, 10);
+    if (!Number.isFinite(localIndex) || localIndex < 0 || localIndex >= localCount) return match;
+    return `metric_${globalStartIndex + localIndex}`;
+  });
+}
+
+function expandSavedMetricsWithGlobalRefs(
+  selectedMetricIds: string[],
+  savedMetrics: SavedMetricForm[],
+  options?: ExpandSavedMetricsOptions
+): AggregationMetricEdit[] {
+  const selected = selectedMetricIds
+    .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
+    .filter((s): s is SavedMetricForm => s != null);
+  const out: AggregationMetricEdit[] = [];
+  const norm = (value: string) => (value || "").trim().toLowerCase();
+
+  for (const saved of selected) {
+    const cfg = saved.aggregationConfig;
+    const list = cfg?.metrics?.length ? cfg.metrics : (saved.metric ? [saved.metric] : []);
+    if (list.length === 0) continue;
+    const globalStart = out.length;
+    const savedName = String(saved.name || "").trim();
+    const resultIdx = list.findIndex((m) => norm((m as { alias?: string }).alias ?? "") === norm(savedName));
+    const displayIdx = resultIdx >= 0 ? resultIdx : list.length - 1;
+
+    for (let i = 0; i < list.length; i++) {
+      const metric = { ...list[i], id: (list[i] as { id?: string }).id ?? `${saved.id}-${i}` } as AggregationMetricEdit;
+      if (options?.setDisplayAliasToSavedName && i === displayIdx && savedName) {
+        metric.alias = savedName;
+      }
+      const formula = (metric as { formula?: string }).formula?.trim();
+      if (formula) {
+        (metric as { formula?: string }).formula = rewriteFormulaMetricRefs(formula, list.length, globalStart);
+      }
+      out.push(metric);
+    }
+  }
+
+  return out;
+}
+
 export type EtlMetricsClientProps = {
   etlId: string;
   etlTitle: string;
@@ -1536,45 +1584,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   /** En Análisis (C) o Gráfico (D): envía todas las métricas de cada tarjeta (bases + fórmula) para que las fórmulas tengan metric_0, metric_1, etc. disponibles. Fórmulas se reescriben con índices globales. */
   const effectiveFormMetrics = useMemo((): AggregationMetricEdit[] => {
     if ((wizard === "C" || wizard === "D") && analysisSelectedMetricIds.length > 0) {
-      const selected = analysisSelectedMetricIds
-        .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
-        .filter((s): s is SavedMetricForm => s != null);
-      const out: AggregationMetricEdit[] = [];
-      const norm = (a: string) => (a || "").trim().toLowerCase();
-      let globalIndex = 0;
-      for (const s of selected) {
-        const cfg = s.aggregationConfig;
-        const list = cfg?.metrics?.length ? cfg.metrics : (s.metric ? [s.metric] : []);
-        const start = globalIndex;
-        const savedName = (s.name || "").trim();
-        const resultIdx = list.findIndex((m) => norm((m as { alias?: string }).alias ?? "") === norm(savedName));
-        const displayIdx = resultIdx >= 0 ? resultIdx : list.length - 1;
-        for (let i = 0; i < list.length; i++) {
-          const m = { ...list[i], id: (list[i] as { id?: string }).id ?? `${s.id}-${i}` } as AggregationMetricEdit;
-          if (i === displayIdx && savedName) m.alias = savedName;
-          const formula = (m as { formula?: string }).formula?.trim();
-          if (formula) {
-            let rewritten = formula;
-            for (let k = list.length - 1; k >= 0; k--)
-              rewritten = rewritten.replace(new RegExp(`metric_${k}\\b`, "gi"), `metric_${start + k}`);
-            (m as { formula?: string }).formula = rewritten;
-          }
-          out.push(m);
-          globalIndex++;
-        }
-      }
-      return out;
+      return expandSavedMetricsWithGlobalRefs(analysisSelectedMetricIds, savedMetrics, {
+        setDisplayAliasToSavedName: true,
+      });
     }
     if (wizard === "B" && formulaFromSavedMetricIds.length >= 2) {
-      const ordered = formulaFromSavedMetricIds
-        .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
-        .filter((s): s is SavedMetricForm => s != null);
-      if (ordered.length >= 2) {
-        const baseMetrics = ordered.flatMap((s) => {
-          const cfg = s.aggregationConfig;
-          const list = cfg?.metrics?.length ? cfg.metrics : (s.metric ? [s.metric] : []);
-          return list.map((m, i) => ({ ...(m as object), id: (m as { id?: string }).id || `${s.id}-${i}` }));
-        }) as AggregationMetricEdit[];
+      const baseMetrics = expandSavedMetricsWithGlobalRefs(formulaFromSavedMetricIds, savedMetrics);
+      if (baseMetrics.length >= 2) {
         return [...baseMetrics, { formula: formulaFromReuseExpr, func: "FORMULA", alias: formName } as AggregationMetricEdit];
       }
     }
@@ -2742,18 +2758,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     let metricsToStore: AggregationMetricEdit[];
     let metricToSave: AggregationMetricEdit & { id?: string };
     if (useReuseFlow) {
-      const ordered = formulaFromSavedMetricIds
-        .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
-        .filter((s): s is SavedMetricForm => s != null);
-      if (ordered.length < 2) {
+      const baseMetrics = expandSavedMetricsWithGlobalRefs(formulaFromSavedMetricIds, savedMetrics);
+      if (baseMetrics.length < 2) {
         toast.error("Seleccioná al menos dos métricas guardadas para el ratio.");
         return;
       }
-      const baseMetrics = ordered.flatMap((s) => {
-        const cfg = s.aggregationConfig;
-        const list = cfg?.metrics?.length ? cfg.metrics : (s.metric ? [s.metric] : []);
-        return list.map((m, i) => ({ ...(m as object), id: (m as { id?: string }).id || `m-${Date.now()}-${i}` }));
-      }) as AggregationMetricEdit[];
       const formulaMetric: AggregationMetricEdit = { id: `m-formula-${Date.now()}`, field: "", func: "FORMULA", alias: name, formula: formulaFromReuseExpr.trim() };
       metricsToStore = [...baseMetrics, formulaMetric];
       metricToSave = formulaMetric;
