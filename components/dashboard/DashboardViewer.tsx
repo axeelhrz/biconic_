@@ -355,7 +355,9 @@ export function DashboardViewer({
 
   const loadDataForWidget = useCallback(
     async (widgetId: string) => {
-      const widget = widgets.find((w) => w.id === widgetId);
+      // Leer widgets desde ref: si dependemos de `widgets`, cada setWidgets tras cargar datos
+      // recrea el callback y el efecto [filterValues, loadDataForWidget, …] vuelve a disparar todo en bucle.
+      const widget = stateRef.current.widgets.find((w) => w.id === widgetId);
       if (!widget || !etlData) return;
       const etlId = (etlData as any)?.etl?.id;
       let fullTableName = getTableNameForWidget(widget);
@@ -406,7 +408,7 @@ export function DashboardViewer({
           w.pageId ?? pageLayout?.activePageId ?? pageLayout?.firstPageId ?? "page-1";
         const targetPage = pageOf(widget);
         const fieldsWithWidgets = new Set(
-          widgets
+          stateRef.current.widgets
             .filter(
               (w) =>
                 w.type === "filter" &&
@@ -576,16 +578,16 @@ export function DashboardViewer({
         clearTimeout(safetyTimeout);
       }
     },
-    [widgets, etlData, globalFilters, filterValues, apiEndpoints, getTableNameForWidget, isPublic, accentColor, pageLayout]
+    [etlData, globalFilters, filterValues, apiEndpoints, getTableNameForWidget, isPublic, accentColor, pageLayout]
   );
 
   const reloadAll = useCallback(() => {
-    widgets.forEach((w) => {
+    stateRef.current.widgets.forEach((w) => {
       if (w.type === "filter") return;
       if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
       loadDataForWidget(w.id);
     });
-  }, [widgets, loadDataForWidget, pageLayout]);
+  }, [loadDataForWidget, pageLayout]);
 
   useEffect(() => {
     if (!etlData || widgets.length === 0) return;
