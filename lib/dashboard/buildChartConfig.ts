@@ -83,6 +83,7 @@ export function resolveWidgetAxisKeys(
           .map((m) => String(m.alias ?? "").trim())
           .filter(Boolean)
       : [];
+  const formulaMetricAliasSet = new Set(formulaMetricAliases);
   const resolvedType = String(agg?.chartType ?? widget.type ?? "").trim();
   const isHorizontalBar = resolvedType === "horizontalBar";
   const chartXAxisKey =
@@ -116,12 +117,22 @@ export function resolveWidgetAxisKeys(
     yKeys = Array.from(new Set(explicitKeys));
   }
   if (hasExplicitYAxes && metricAliases.length > 0 && agg?.ratioReuseMode !== true) {
-    // Si chartYAxes quedó incompleto, completa con aliases de métricas presentes.
-    const missingMetricAliases = metricAliases
-      .map((k) => String(k ?? "").trim())
-      .filter((k) => k !== "" && resultKeys.includes(k) && !yKeys.includes(k));
-    if (missingMetricAliases.length > 0) {
-      yKeys = [...yKeys, ...missingMetricAliases];
+    // Si chartYAxes ya define 2+ series válidas, respétalo tal cual para mantener
+    // consistencia con el preview ETL y evitar añadir una tercera serie inesperada.
+    if (yKeys.length === 1) {
+      // Solo completar si el eje explícito quedó realmente incompleto.
+      const missingMetricAliases = metricAliases
+        .map((k) => String(k ?? "").trim())
+        .filter(
+          (k) =>
+            k !== "" &&
+            resultKeys.includes(k) &&
+            !yKeys.includes(k) &&
+            !formulaMetricAliasSet.has(k)
+        );
+      if (missingMetricAliases.length > 0) {
+        yKeys = [...yKeys, ...missingMetricAliases];
+      }
     }
   }
   if (!hasExplicitYAxes && yKeys.length === 0 && formulaMetricAliases.length > 0) {
