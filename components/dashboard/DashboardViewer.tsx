@@ -441,7 +441,11 @@ export function DashboardViewer({
               };
             })
             .filter((f): f is AggregationFilter => f != null));
-      const rawFilters = [...effectiveGlobalFilters, ...widgetFilters, ...(aggConfig?.filters || [])];
+      const mappedAggFilters: AggregationFilter[] = (aggConfig?.filters ?? []).map((f) => ({
+        ...f,
+        field: (resolvePhysicalField(f.field) ?? f.field) as string,
+      }));
+      const rawFilters = [...effectiveGlobalFilters, ...widgetFilters, ...mappedAggFilters];
       const preparedFilters = rawFilters.map((f) => ({
         field: f.field,
         operator: f.operator || "=",
@@ -453,23 +457,39 @@ export function DashboardViewer({
         let dataArray: Record<string, unknown>[] = [];
         let resolvedChartType: string = widget.type;
         if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
-          const dimensionsArrayRaw = (aggConfig as any).dimensions?.length
-            ? (aggConfig as any).dimensions
-            : [aggConfig.dimension, (aggConfig as any).dimension2].filter(Boolean);
-          const dimensionsArray = sanitizeDimensionList(dimensionsArrayRaw);
-          // Métricas guardadas del ETL del widget para que el backend resuelva por nombre
           const dataSources = (etlData as any)?.dataSources as { id: string; etlId: string; savedMetrics?: unknown[] }[] | undefined;
           const widgetSource = widget.dataSourceId && dataSources?.length
             ? dataSources.find((s) => s.id === widget.dataSourceId)
             : dataSources?.[0];
+          const widgetEtlId = widgetSource?.etlId ?? (etlData as any)?.etl?.id ?? etlId;
           const savedMetricsList = widgetSource?.savedMetrics ?? (etlData as any)?.savedMetrics ?? [];
+          const dimensionsArrayRaw = (aggConfig as any).dimensions?.length
+            ? (aggConfig as any).dimensions
+            : [aggConfig.dimension, (aggConfig as any).dimension2].filter(Boolean);
+          const dimensionsArray = sanitizeDimensionList(
+            dimensionsArrayRaw.map((d: unknown) => {
+              const s = String(d ?? "").trim();
+              if (!s) return "";
+              return resolvePhysicalField(s) ?? s;
+            })
+          );
           const safeMetrics = aggConfig.metrics
-            .map(({ id, ...rest }) => ({
-              ...rest,
-              field: isInvalidIdentifierValue(rest.field) ? undefined : String(rest.field).trim(),
-              alias: String(rest.alias ?? "").trim() || undefined,
-              cast: rest.numericCast && rest.numericCast !== "none" ? rest.numericCast : undefined,
-            }))
+            .map(({ id, ...rest }) => {
+              const isFormula = String(rest.func ?? "").toUpperCase() === "FORMULA";
+              let fieldOut: string | undefined;
+              if (isFormula) {
+                fieldOut = isInvalidIdentifierValue(rest.field) ? undefined : String(rest.field).trim();
+              } else {
+                const raw = isInvalidIdentifierValue(rest.field) ? undefined : String(rest.field).trim();
+                fieldOut = raw ? (resolvePhysicalField(raw) ?? raw) : undefined;
+              }
+              return {
+                ...rest,
+                field: fieldOut,
+                alias: String(rest.alias ?? "").trim() || undefined,
+                cast: rest.numericCast && rest.numericCast !== "none" ? rest.numericCast : undefined,
+              };
+            })
             .filter((metric) => String(metric.func ?? "").toUpperCase() === "FORMULA" || !isInvalidIdentifierValue(metric.field));
           if (safeMetrics.length === 0) {
             setWidgets((prev) =>
@@ -484,45 +504,76 @@ export function DashboardViewer({
               .filter((m) => (m as any).func !== "FORMULA" && m.field != null && String(m.field).trim() !== "")
               .map((m) => String(m.field).trim().toLowerCase())
           );
-          const savedMetricsForBody = Array.isArray(savedMetricsList)
-            ? savedMetricsList
-                .filter((s: any) => (s?.name ?? "").trim() && metricFieldNames.has(String(s.name).trim().toLowerCase()))
-                .map((s: any) => {
-                  const first = s?.aggregationConfig?.metrics?.[0] ?? s?.metric;
-                  const name = String(s?.name ?? "").trim();
-                  if (!first) return { name, field: name, func: "SUM", alias: name };
-                  const field = String(first?.field ?? "").trim() || name;
-                  const func = String(first?.func ?? "SUM");
-                  const alias = String(first?.alias ?? name);
-                  const expression = first?.expression;
-                  return {
-                    name,
-                    field,
-                    func,
-                    alias,
-                    ...(expression && String(expression).trim() ? { expression: String(expression).trim() } : {}),
-                  };
-                })
+          const widgetMetricId = String((widget as { metricId?: unknown }).metricId ?? "").trim();
+          const widgetMetricIds = Array.isArray((widget as { metricIds?: unknown }).metricIds)
+            ? ((widget as { metricIds?: unknown[] }).metricIds ?? []).map((mid) => String(mid ?? "").trim()).filter(Boolean)
             : [];
+          const idSet = new Set([widgetMetricId, ...widgetMetricIds].filter(Boolean));
+          const savedByLinkedIds = Array.isArray(savedMetricsList)
+            ? savedMetricsList.filter((s: any) => idSet.has(String(s.id ?? "").trim()))
+            : [];
+          const savedMetricsForBody = (savedByLinkedIds.length > 0
+            ? savedByLinkedIds
+            : Array.isArray(savedMetricsList)
+              ? savedMetricsList.filter(
+                  (s: any) => (s?.name ?? "").trim() && metricFieldNames.has(String(s.name).trim().toLowerCase())
+                )
+              : []
+          ).map((s: any) => {
+            const first = s?.aggregationConfig?.metrics?.[0] ?? s?.metric;
+            const name = String(s?.name ?? "").trim();
+            if (!first) return { name, field: name, func: "SUM", alias: name };
+            const field = String(first?.field ?? "").trim() || name;
+            const func = String(first?.func ?? "SUM");
+            const alias = String(first?.alias ?? name);
+            const expression = first?.expression;
+            return {
+              name,
+              field,
+              func,
+              alias,
+              ...(expression && String(expression).trim() ? { expression: String(expression).trim() } : {}),
+            };
+          });
           resolvedChartType = String((aggConfig?.chartType as string | undefined) ?? "").trim() || widget.type;
+          const dimForBody = isInvalidIdentifierValue(aggConfig.dimension)
+            ? undefined
+            : (resolvePhysicalField(aggConfig.dimension!) ?? aggConfig.dimension);
+          const chartXForBody = isInvalidIdentifierValue(aggConfig.chartXAxis)
+            ? undefined
+            : (resolvePhysicalField(aggConfig.chartXAxis!) ?? aggConfig.chartXAxis);
+          const dateDimForBody = (aggConfig as { dateDimension?: string }).dateDimension
+            ? (resolvePhysicalField((aggConfig as { dateDimension?: string }).dateDimension!) ??
+              (aggConfig as { dateDimension?: string }).dateDimension)
+            : undefined;
+          const dashLayout = (etlData as any)?.dashboard?.layout as
+            | { datasetConfig?: { derivedColumns?: unknown[] } }
+            | undefined;
+          const derivedFromDash = Array.isArray(dashLayout?.datasetConfig?.derivedColumns)
+            ? dashLayout!.datasetConfig!.derivedColumns!
+            : [];
+
           const bodyPayload: Record<string, unknown> = {
             tableName: fullTableName,
-            dimension: isInvalidIdentifierValue(aggConfig.dimension) ? undefined : aggConfig.dimension,
+            dimension: dimForBody,
             chartType: resolvedChartType,
-            chartXAxis: isInvalidIdentifierValue(aggConfig.chartXAxis) ? undefined : aggConfig.chartXAxis,
+            chartXAxis: chartXForBody,
             metrics: safeMetrics,
             filters: preparedFilters,
             orderBy: aggConfig.orderBy,
             limit: aggConfig.limit ?? 1000,
-            etlId,
+            etlId: widgetEtlId,
+            cumulative: (aggConfig as { cumulative?: string }).cumulative ?? "none",
           };
           if (aggConfig.geoHints) bodyPayload.geoHints = aggConfig.geoHints;
           if (dimensionsArray.length > 0) bodyPayload.dimensions = dimensionsArray;
-          if ((aggConfig as any).cumulative) bodyPayload.cumulative = (aggConfig as any).cumulative;
           if ((aggConfig as any).comparePeriod) bodyPayload.comparePeriod = (aggConfig as any).comparePeriod;
-          if ((aggConfig as any).dateDimension) bodyPayload.dateDimension = (aggConfig as any).dateDimension;
+          if (dateDimForBody) bodyPayload.dateDimension = dateDimForBody;
           if (savedMetricsForBody.length > 0) bodyPayload.savedMetrics = savedMetricsForBody;
-          const primaryDim = dimensionsArray[0] ?? (isInvalidIdentifierValue(aggConfig.dimension) ? undefined : aggConfig.dimension);
+          if (derivedFromDash.length > 0) bodyPayload.derivedColumns = derivedFromDash;
+          const primaryDim =
+            dimensionsArray[0] ??
+            (isInvalidIdentifierValue(aggConfig.dimension) ? undefined : dimForBody);
           const dateFields = (widgetSource as { fields?: { date?: string[] } })?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
           const isDateDim = primaryDim && dateFields.some((d: string) => (d || "").toLowerCase() === (primaryDim || "").toLowerCase());
           const dateGroupByGranularity = (aggConfig as { dateGroupByGranularity?: string }).dateGroupByGranularity;
@@ -543,7 +594,12 @@ export function DashboardViewer({
           }
           if (dateGroupByGranularity && primaryDim) bodyPayload.dateGroupBy = { field: primaryDim, granularity: dateGroupByGranularity };
           const dateRangeFilter = (aggConfig as { dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter;
-          if (dateRangeFilter?.field) bodyPayload.dateRangeFilter = dateRangeFilter;
+          if (dateRangeFilter?.field) {
+            bodyPayload.dateRangeFilter = {
+              ...dateRangeFilter,
+              field: resolvePhysicalField(dateRangeFilter.field) ?? dateRangeFilter.field,
+            };
+          }
 
           const url = apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data";
           const res = await fetchWithTimeout(url, {
