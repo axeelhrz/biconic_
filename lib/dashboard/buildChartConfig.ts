@@ -199,10 +199,14 @@ export function getProcessedRowsForChart(
       if (sortField === xKey && axisOrder && ["alpha", "date_asc", "date_desc"].includes(axisOrder)) {
         const va = (a as Record<string, unknown>)[xKey];
         const vb = (b as Record<string, unknown>)[xKey];
-        if (axisOrder === "date_asc" || axisOrder === "date_desc") {
-          const ta = typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : 0;
-          const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : 0;
-          return axisOrder === "date_asc" ? ta - tb : tb - ta;
+        const sortAsDate = axisOrder === "date_asc" || axisOrder === "date_desc" || (axisOrder === "alpha" && isTemporalXAxis);
+        if (sortAsDate) {
+          const ta = parseDateLike(va)?.getTime() ?? (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
+          const tb = parseDateLike(vb)?.getTime() ?? (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
+          if (!Number.isNaN(ta) && !Number.isNaN(tb)) {
+            const dirDate = axisOrder === "date_desc" ? -1 : 1;
+            return (ta - tb) * dirDate;
+          }
         }
         const sa = String(va ?? "");
         const sb = String(vb ?? "");
@@ -361,10 +365,14 @@ export function buildChartConfig(
       if (sortField === xKey && axisOrder && ["alpha", "date_asc", "date_desc"].includes(axisOrder)) {
         const va = (a as Record<string, unknown>)[xKey];
         const vb = (b as Record<string, unknown>)[xKey];
-        if (axisOrder === "date_asc" || axisOrder === "date_desc") {
-          const ta = typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : 0;
-          const tb = typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : 0;
-          return axisOrder === "date_asc" ? ta - tb : tb - ta;
+        const sortAsDate = axisOrder === "date_asc" || axisOrder === "date_desc" || (axisOrder === "alpha" && shouldTreatXAsDate);
+        if (sortAsDate) {
+          const ta = parseDateLike(va)?.getTime() ?? (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
+          const tb = parseDateLike(vb)?.getTime() ?? (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
+          if (!Number.isNaN(ta) && !Number.isNaN(tb)) {
+            const dirDate = axisOrder === "date_desc" ? -1 : 1;
+            return (ta - tb) * dirDate;
+          }
         }
         const sa = String(va ?? "");
         const sb = String(vb ?? "");

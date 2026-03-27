@@ -479,6 +479,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartSortDirection, setChartSortDirection] = useState<"none" | "asc" | "desc">("none");
   const [chartSortBy, setChartSortBy] = useState<"series" | "axis">("series");
   const [chartAxisOrder, setChartAxisOrder] = useState<"alpha" | "date_asc" | "date_desc">("alpha");
+  const [chartAxisOrderTouched, setChartAxisOrderTouched] = useState(false);
   const [chartScaleMode, setChartScaleMode] = useState<"auto" | "dataset" | "custom">("auto");
   const [chartScaleMin, setChartScaleMin] = useState<string>("");
   const [chartScaleMax, setChartScaleMax] = useState<string>("");
@@ -1277,6 +1278,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setEditingId(null);
     setFormName("");
     setFormChartType("bar");
+    setChartAxisOrder("alpha");
+    setChartAxisOrderTouched(false);
     setFormDimensions([]);
     setFormMetrics([{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado", expression: "" } as AggregationMetricEdit]);
     setFormFilters([]);
@@ -1361,7 +1364,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       );
       setChartSortBy((["series", "axis"] as const).includes(cfg.chartSortBy as "series" | "axis") ? (cfg.chartSortBy as "series" | "axis") : "series");
       setChartSortByMetric(typeof (cfg as Record<string, unknown>).chartSortByMetric === "string" ? (cfg as Record<string, unknown>).chartSortByMetric as string : "");
-      setChartAxisOrder((["alpha", "date_asc", "date_desc"] as const).includes(cfg.chartAxisOrder as "alpha" | "date_asc" | "date_desc") ? (cfg.chartAxisOrder as "alpha" | "date_asc" | "date_desc") : "alpha");
+      const hasExplicitAxisOrder = (["alpha", "date_asc", "date_desc"] as const).includes(cfg.chartAxisOrder as "alpha" | "date_asc" | "date_desc");
+      const dateColForAxis = (cfg as { dateDimension?: string; timeColumn?: string }).dateDimension ?? (cfg as { timeColumn?: string }).timeColumn;
+      const granForAxis = (cfg as { dateGroupByGranularity?: string }).dateGroupByGranularity;
+      const hasTemporalConfig = typeof dateColForAxis === "string" && dateColForAxis !== "" && !!granForAxis && ["day", "week", "month", "quarter", "semester", "year"].includes(granForAxis);
+      setChartAxisOrder(
+        hasExplicitAxisOrder
+          ? (cfg.chartAxisOrder as "alpha" | "date_asc" | "date_desc")
+          : hasTemporalConfig
+            ? "date_asc"
+            : "alpha"
+      );
+      setChartAxisOrderTouched(hasExplicitAxisOrder);
       setChartScaleMode((["auto", "dataset", "custom"] as const).includes(cfg.chartScaleMode as "auto" | "dataset" | "custom") ? (cfg.chartScaleMode as "auto" | "dataset" | "custom") : "auto");
       setChartScaleMin(typeof cfg.chartScaleMin === "string" || typeof cfg.chartScaleMin === "number" ? String(cfg.chartScaleMin) : "");
       setChartScaleMax(typeof cfg.chartScaleMax === "string" || typeof cfg.chartScaleMax === "number" ? String(cfg.chartScaleMax) : "");
@@ -1454,6 +1468,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartDecimals(2);
       setChartSortDirection("none");
       setChartSortBy("series");
+      setChartAxisOrder("alpha");
+      setChartAxisOrderTouched(false);
       setChartRankingEnabled(false);
       setChartRankingTop(5);
       setChartRankingMetric("");
@@ -1485,6 +1501,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setPreviewData(null);
     setShowForm(true);
   };
+
+  useEffect(() => {
+    if (chartAxisOrderTouched) return;
+    if (!timeColumn || !analysisGranularity) return;
+    if (chartAxisOrder === "alpha") {
+      setChartAxisOrder("date_asc");
+    }
+  }, [chartAxisOrderTouched, timeColumn, analysisGranularity, chartAxisOrder]);
   const openEditRef = useRef(openEdit);
   openEditRef.current = openEdit;
 
@@ -5257,7 +5281,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       {chartSortBy === "axis" && (
                         <div className="flex gap-2">
                           {([["alpha", "Alfabético"], ["date_asc", "Fecha ascendente"], ["date_desc", "Fecha descendente"]] as [string, string][]).map(([val, lbl]) => (
-                            <button key={val} type="button" onClick={() => setChartAxisOrder(val as "alpha" | "date_asc" | "date_desc")} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartAxisOrder === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartAxisOrder === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartAxisOrder === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
+                            <button key={val} type="button" onClick={() => { setChartAxisOrderTouched(true); setChartAxisOrder(val as "alpha" | "date_asc" | "date_desc"); }} className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all border" style={{ background: chartAxisOrder === val ? "var(--platform-accent)" : "var(--platform-surface-hover)", color: chartAxisOrder === val ? "var(--platform-bg)" : "var(--platform-fg-muted)", borderColor: chartAxisOrder === val ? "transparent" : "var(--platform-border)" }}>{lbl}</button>
                           ))}
                         </div>
                       )}
