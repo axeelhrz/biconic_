@@ -129,7 +129,20 @@ export type Widget = DashboardWidgetRendererWidget & {
   dataSourceId?: string | null;
   excludeGlobalFilters?: boolean;
   gridOrder?: number;
+  /** Misma semántica que AdminDashboardStudio: pestaña del lienzo */
+  pageId?: string;
 };
+
+function sameWidgetPage(
+  a: Widget,
+  b: Widget,
+  pageLayout: { firstPageId: string; activePageId: string } | null
+): boolean {
+  if (!pageLayout) return true;
+  const pa = a.pageId ?? pageLayout.firstPageId;
+  const pb = b.pageId ?? pageLayout.firstPageId;
+  return pa === pb;
+}
 
 function computeGridPlacements(
   ordered: Widget[]
@@ -185,6 +198,8 @@ export function DashboardViewer({
   const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>(() => ({ ...DEFAULT_DASHBOARD_THEME }));
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
   const [globalFilterDistinctValues, setGlobalFilterDistinctValues] = useState<Record<string, unknown[]>>({});
+  /** Si viene del layout guardado: misma página activa que AdminDashboardStudio (vista previa = lienzo). */
+  const [pageLayout, setPageLayout] = useState<{ firstPageId: string; activePageId: string } | null>(null);
   const stateRef = useRef({ widgets, setWidgets });
 
   const { data: etlData, error: etlDataError } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
@@ -198,6 +213,7 @@ export function DashboardViewer({
 
   useEffect(() => {
     if (initialWidgets?.length) {
+      setPageLayout(null);
       setWidgets(initialWidgets);
       if (initialTitle) setTitle(initialTitle);
       if (initialGlobalFilters) setGlobalFilters(initialGlobalFilters);
@@ -205,8 +221,28 @@ export function DashboardViewer({
     }
     const dashboard = (etlData as any)?.dashboard;
     if (!dashboard) return;
-    const layout = dashboard.layout as { widgets?: Widget[]; theme?: Partial<DashboardTheme> } | undefined;
-    const loadedWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
+    const layout = dashboard.layout as {
+      widgets?: Widget[];
+      theme?: Partial<DashboardTheme>;
+      pages?: { id: string }[];
+      activePageId?: string;
+    } | undefined;
+    const pages =
+      Array.isArray(layout?.pages) && layout!.pages!.length > 0
+        ? layout!.pages!
+        : [{ id: "page-1" }];
+    const firstPageId = String(pages[0]?.id ?? "page-1");
+    const activePageId = String(layout?.activePageId ?? firstPageId);
+    setPageLayout({ firstPageId, activePageId });
+    const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
+    const loadedWidgets = rawWidgets.map((w, i) => {
+      const base = w as Widget;
+      return {
+        ...base,
+        gridOrder: base.gridOrder ?? i,
+        pageId: base.pageId ?? firstPageId,
+      };
+    });
     const loadedTheme = layout?.theme && typeof layout.theme === "object" ? layout.theme : {};
     setWidgets(loadedWidgets);
     setTitle((dashboard.title as string) || "Dashboard");
@@ -332,13 +368,21 @@ export function DashboardViewer({
       try {
       const aggConfig = widget.aggregationConfig;
       const fieldsWithWidgets = new Set(
-        widgets.filter((w) => w.type === "filter" && (w as any).filterConfig?.field).map((w) => (w as any).filterConfig!.field)
+        widgets
+          .filter(
+            (w) =>
+              w.type === "filter" &&
+              (w as any).filterConfig?.field &&
+              sameWidgetPage(w, widget, pageLayout)
+          )
+          .map((w) => (w as any).filterConfig!.field)
       );
       const widgetFilters: AggregationFilter[] = widgets
         .filter(
           (w) =>
             w.type === "filter" &&
             (w as any).filterConfig &&
+            sameWidgetPage(w, widget, pageLayout) &&
             filterValues[w.id] !== undefined &&
             filterValues[w.id] !== "" &&
             filterValues[w.id] !== null
@@ -570,22 +614,34 @@ export function DashboardViewer({
         clearTimeout(safetyTimeout);
       }
     },
-    [widgets, etlData, globalFilters, filterValues, apiEndpoints, getTableNameForWidget, isPublic, accentColor]
+    [widgets, etlData, globalFilters, filterValues, apiEndpoints, getTableNameForWidget, isPublic, accentColor, pageLayout]
   );
 
   const reloadAll = useCallback(() => {
-    widgets.forEach((w) => { if (w.type !== "filter") loadDataForWidget(w.id); });
-  }, [widgets, loadDataForWidget]);
+    widgets.forEach((w) => {
+      if (w.type === "filter") return;
+      if (pageLayout) {
+        const pid = w.pageId ?? pageLayout.firstPageId;
+        if (pid !== pageLayout.activePageId) return;
+      }
+      loadDataForWidget(w.id);
+    });
+  }, [widgets, loadDataForWidget, pageLayout]);
 
   useEffect(() => {
     if (!etlData || widgets.length === 0) return;
     const timer = setTimeout(() => {
       stateRef.current.widgets.forEach((w) => {
-        if (w.type !== "filter") loadDataForWidget(w.id);
+        if (w.type === "filter") return;
+        if (pageLayout) {
+          const pid = w.pageId ?? pageLayout.firstPageId;
+          if (pid !== pageLayout.activePageId) return;
+        }
+        loadDataForWidget(w.id);
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [filterValues, loadDataForWidget, etlData]);
+  }, [filterValues, loadDataForWidget, etlData, pageLayout]);
 
   const initialLoadedRef = useRef(false);
   useEffect(() => {
@@ -597,6 +653,7 @@ export function DashboardViewer({
 
   useEffect(() => {
     initialLoadedRef.current = false;
+    setPageLayout(null);
   }, [dashboardId]);
 
   const handleFilterChange = useCallback((widgetId: string, value: unknown) => {
@@ -604,10 +661,14 @@ export function DashboardViewer({
   }, []);
 
   const orderedWidgets = useMemo(() => {
-    const hasOrder = widgets.some((w) => typeof w.gridOrder === "number");
-    if (hasOrder) return [...widgets].sort((a, b) => (a.gridOrder ?? 0) - (b.gridOrder ?? 0));
-    return widgets;
-  }, [widgets]);
+    let list = widgets;
+    if (pageLayout) {
+      list = widgets.filter((w) => (w.pageId ?? pageLayout.firstPageId) === pageLayout.activePageId);
+    }
+    const hasOrder = list.some((w) => typeof w.gridOrder === "number");
+    if (hasOrder) return [...list].sort((a, b) => (a.gridOrder ?? 0) - (b.gridOrder ?? 0));
+    return list;
+  }, [widgets, pageLayout]);
   const placements = useMemo(() => computeGridPlacements(orderedWidgets), [orderedWidgets]);
 
   // Filtros dinámicos: por cada widget, etiquetas de filtros globales que tienen valor pero no aplican a este gráfico (no contiene esa columna)
@@ -617,7 +678,7 @@ export function DashboardViewer({
     const primarySourceId = (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
     const out: Record<string, string[]> = {};
     if (!dataSources?.length || !globalFilters.length) return out;
-    for (const widget of widgets) {
+    for (const widget of orderedWidgets) {
       if (widget.type === "filter" || (widget as Widget).excludeGlobalFilters) continue;
       const widgetSourceId = widget.dataSourceId ?? primarySourceId ?? dataSources[0]?.id;
       const source = dataSources.find((s) => s.id === widgetSourceId) ?? dataSources[0];
@@ -652,11 +713,12 @@ export function DashboardViewer({
       if (labels.length > 0) out[widget.id] = labels;
     }
     return out;
-  }, [etlData, widgets, globalFilters, filterValues]);
+  }, [etlData, orderedWidgets, globalFilters, filterValues]);
 
   const rootClassName = variant === "admin" ? "admin-dashboard-view gap-5" : "gap-0";
   const useClientTheme = !hideHeader && (variant === "default" && !backHref);
-  const darkChartTheme = useMemo(() => resolveDarkChartTheme(themeMerged, useClientTheme), [themeMerged, useClientTheme]);
+  // Mismo criterio que AdminDashboardStudio (MetricBlock): fallback true para paridad del lienzo.
+  const darkChartTheme = useMemo(() => resolveDarkChartTheme(themeMerged, true), [themeMerged]);
   const themeVars = useMemo(() => {
     if (!useClientTheme) return {};
     const bg = themeMerged.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor;
@@ -897,7 +959,7 @@ export function DashboardViewer({
                     isLoading={widget.isLoading === true}
                     filterValue={filterValues[widget.id]}
                     onFilterChange={handleFilterChange}
-                    minHeight={widget.minHeight ?? 240}
+                    minHeight={widget.minHeight ?? 280}
                     darkChartTheme={darkChartTheme}
                   />
                 </div>
