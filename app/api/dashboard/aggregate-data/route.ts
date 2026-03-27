@@ -1362,10 +1362,15 @@ export async function POST(req: NextRequest) {
       const safeDir = dir === "ASC" ? "ASC" : "DESC";
       let orderByField = `"${body.orderBy.field.replace(/"/g, '""')}"`;
       const requestedSortNormalized = normalizeStr(body.orderBy.field);
+      const dateFieldNormalized = normalizeStr(body.dateGroupBy?.field || "");
       const temporalSortRequested =
         !!dateGroupByExpr &&
-        !!body.dateGroupBy?.field &&
-        requestedSortNormalized === normalizeStr(body.dateGroupBy.field);
+        !!dateFieldNormalized &&
+        (
+          requestedSortNormalized === dateFieldNormalized ||
+          requestedSortNormalized.includes(dateFieldNormalized) ||
+          dateFieldNormalized.includes(requestedSortNormalized)
+        );
       if (temporalSortRequested) {
         // Evita ordenar por alias display (MM/YYYY) y fuerza orden cronológico real.
         orderByField = dateGroupByExpr;
@@ -1610,10 +1615,17 @@ export async function POST(req: NextRequest) {
     });
 
     const requestedSortNormalized = normalizeStr(body.orderBy?.field || "");
+    const dateFieldNormalized = normalizeStr(body.dateGroupBy?.field || "");
     const requestedTemporalSort =
       !!body.dateGroupBy?.field &&
-      requestedSortNormalized !== "" &&
-      requestedSortNormalized === normalizeStr(body.dateGroupBy.field);
+      (
+        requestedSortNormalized === "" ||
+        requestedSortNormalized === dateFieldNormalized ||
+        requestedSortNormalized === normalizeStr(temporalKey || "") ||
+        requestedSortNormalized.includes(dateFieldNormalized) ||
+        requestedSortNormalized.includes(normalizeStr(temporalKey || "")) ||
+        dateFieldNormalized.includes(requestedSortNormalized)
+      );
     const temporalKey =
       body.dateGroupBy?.field
         ? (mappedResults[0]
