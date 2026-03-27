@@ -4247,23 +4247,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         Actualizar previsualización
                       </Button>
                     </div>
-                    {previewData && previewData.length > 0 && (() => {
-                      const hasPeriodo = previewData.length > 1 && (previewData[0] as Record<string, unknown>)["periodo"] != null;
+                    {previewProcessedRows && previewProcessedRows.length > 0 && (() => {
+                      const hasPeriodo =
+                        previewProcessedRows.length > 1 &&
+                        (previewProcessedRows[0] as Record<string, unknown>)["periodo"] != null;
                       const metricKey = `metric_${formMetrics.length - 1}`;
                       const totalValue = hasPeriodo
-                        ? previewData.reduce((sum, row) => sum + (Number((row as Record<string, unknown>)[metricKey]) || 0), 0)
+                        ? previewProcessedRows.reduce((sum, row) => sum + (Number((row as Record<string, unknown>)[metricKey]) || 0), 0)
                         : previewCalculationResult;
                       return (
                       <div className="space-y-3">
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                           <div className="rounded-xl border p-4 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                             <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{totalValue != null ? formatNumber(totalValue) : "—"}</p>
-                            <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>{hasPeriodo ? `Total (${previewData.length} períodos)` : "Resultado"}</p>
+                            <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>{hasPeriodo ? `Total (${previewProcessedRows.length} períodos)` : "Resultado"}</p>
                           </div>
                           <div className="rounded-xl border col-span-2 overflow-auto max-h-[240px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                             <table className="w-full text-xs" style={{ color: "var(--platform-fg)" }}>
                               <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)" }}><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewDisplayHeaders.map((label, i) => (<th key={i} className="text-left py-1.5 px-2 font-medium">{label}</th>))}</tr></thead>
-                              <tbody>{previewData.map((row, idx) => {
+                              <tbody>{previewProcessedRows.map((row, idx) => {
                                 const raw = row as Record<string, unknown>;
                                 const keys = Object.keys(raw);
                                 return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{keys.map((k, i) => {
@@ -4506,7 +4508,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       Actualizar preview
                     </Button>
                   </div>
-                  {previewData && previewData.length > 0 && (
+                  {previewProcessedRows && previewProcessedRows.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                       <div className="rounded-xl border p-4 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{previewKpiValue != null ? formatNumber(previewKpiValue) : "—"}</p>
@@ -4514,8 +4516,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       </div>
                       <div className="rounded-xl border p-4 col-span-2 overflow-auto max-h-[180px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <table className="w-full text-xs" style={{ color: "var(--platform-fg)" }}>
-                          <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewData[0] && Object.keys(previewData[0]).map((k) => (<th key={k} className="text-left py-1 px-2">{k}</th>))}</tr></thead>
-                          <tbody>{previewData.slice(0, 5).map((row, idx) => {
+                          <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewProcessedRows[0] && Object.keys(previewProcessedRows[0]).map((k) => (<th key={k} className="text-left py-1 px-2">{k}</th>))}</tr></thead>
+                          <tbody>{previewProcessedRows.slice(0, 5).map((row, idx) => {
                             const raw = row as Record<string, unknown>;
                             const keys = Object.keys(raw);
                             return (

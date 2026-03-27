@@ -7,7 +7,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { Database } from "@/lib/supabase/database.types";
 import { createServiceRoleClient } from "@/lib/supabase/service";
-import { formatDateByGranularity, type DateGranularity } from "@/lib/dashboard/dateFormatting";
+import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { enrichRowsWithGeo, type GeoCacheClient, type GeoHints } from "@/lib/geo/geo-enrichment";
 
 // --- Interfaces ---
@@ -1609,6 +1609,33 @@ export async function POST(req: NextRequest) {
       return newRow;
     });
 
+    const requestedSortNormalized = normalizeStr(body.orderBy?.field || "");
+    const requestedTemporalSort =
+      !!body.dateGroupBy?.field &&
+      requestedSortNormalized !== "" &&
+      requestedSortNormalized === normalizeStr(body.dateGroupBy.field);
+    const temporalKey =
+      body.dateGroupBy?.field
+        ? (mappedResults[0]
+            ? Object.keys(mappedResults[0]).find((k) => normalizeStr(k) === normalizeStr(body.dateGroupBy?.field || ""))
+            : undefined) ?? body.dateGroupBy.field
+        : undefined;
+    const directionMultiplier =
+      (body.orderBy?.direction || "ASC").toString().toUpperCase() === "DESC" ? -1 : 1;
+
+    // Defensa final: evita que el preview quede en orden lexicográfico MM/YYYY por configuraciones heredadas.
+    const sortedResults =
+      body.dateGroupBy?.field && requestedTemporalSort && temporalKey
+        ? [...mappedResults].sort((a, b) => {
+            const va = (a as Record<string, unknown>)[temporalKey];
+            const vb = (b as Record<string, unknown>)[temporalKey];
+            const ta = parseDateLike(va)?.getTime() ?? NaN;
+            const tb = parseDateLike(vb)?.getTime() ?? NaN;
+            if (!Number.isNaN(ta) && !Number.isNaN(tb)) return (ta - tb) * directionMultiplier;
+            return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true }) * directionMultiplier;
+          })
+        : mappedResults;
+
     const shouldEnrichGeo =
       requestedChartType === "map" ||
       /\b(lat|lon|lng|geo|country|pais|ciudad|city|localidad|provincia|estado)\b/i.test(dimList.join(" "));
@@ -1617,13 +1644,13 @@ export async function POST(req: NextRequest) {
       : null;
     const geoReadyRows = shouldEnrichGeo
       ? await enrichRowsWithGeo({
-          rows: mappedResults as Record<string, unknown>[],
+          rows: sortedResults as Record<string, unknown>[],
           dimList,
           chartXAxis: body.chartXAxis ?? body.dimension ?? body.dimensions?.[0],
           geoHints: body.geoHints,
           cacheClient,
         })
-      : mappedResults;
+      : sortedResults;
 
     if (filterWarnings.length > 0) {
       return NextResponse.json({ rows: geoReadyRows, filterWarnings });
