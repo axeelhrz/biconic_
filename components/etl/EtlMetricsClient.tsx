@@ -1597,15 +1597,32 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return formMetrics;
   }, [wizard, analysisSelectedMetricIds, savedMetrics, formMetrics, formulaFromSavedMetricIds, formulaFromReuseExpr, formName]);
 
+  /** Al reabrir una métrica guardada, ratioReuseMode en config fuerza el mismo modo visual que al guardar. */
+  const editingSavedAggregationConfig = useMemo(() => {
+    if (!editingId) return null;
+    const s = savedMetrics.find((m) => String(m.id) === String(editingId));
+    return (s?.aggregationConfig as { ratioReuseMode?: boolean } | undefined) ?? null;
+  }, [editingId, savedMetrics]);
+
   const ratioReuseDisplayMode = useMemo(() => {
+    if (editingSavedAggregationConfig?.ratioReuseMode === true) return true;
+    if (wizard === "B" && formulaFromSavedMetricIds.length >= 2) {
+      const expr = formulaFromReuseExpr.trim();
+      if (expr && /metric_0\b/i.test(expr) && /metric_1\b/i.test(expr)) return true;
+    }
     if (effectiveFormMetrics.length < 3) return false;
-    const formulaIndex = effectiveFormMetrics.findIndex((m) => String(m?.func ?? "").trim().toUpperCase() === "FORMULA");
-    if (formulaIndex < 2) return false;
-    const formulaMetric = effectiveFormMetrics[formulaIndex];
-    const formulaExpr = String((formulaMetric as { formula?: string }).formula ?? "").trim();
+    let lastFormulaIdx = -1;
+    for (let i = effectiveFormMetrics.length - 1; i >= 0; i--) {
+      if (String(effectiveFormMetrics[i]?.func ?? "").trim().toUpperCase() === "FORMULA") {
+        lastFormulaIdx = i;
+        break;
+      }
+    }
+    if (lastFormulaIdx < 2) return false;
+    const formulaExpr = String((effectiveFormMetrics[lastFormulaIdx] as { formula?: string }).formula ?? "").trim();
     if (!formulaExpr) return false;
     return /metric_0\b/i.test(formulaExpr) && /metric_1\b/i.test(formulaExpr);
-  }, [effectiveFormMetrics]);
+  }, [editingSavedAggregationConfig, wizard, formulaFromSavedMetricIds, formulaFromReuseExpr, effectiveFormMetrics]);
   const ratioReuseResultMetricIndex = useMemo(() => {
     if (!ratioReuseDisplayMode) return -1;
     for (let i = effectiveFormMetrics.length - 1; i >= 0; i--) {
@@ -2145,13 +2162,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     for (const d of formDimensions) {
       if (d && rowKeysSet.has(d)) requested.push(d);
     }
-    const metricAliases =
-      ratioReuseDisplayMode
-        ? [ratioReuseResultMetricAlias || `metric_${Math.max(0, ratioReuseResultMetricIndex)}`].filter(Boolean)
-        : (wizard === "C" || wizard === "D") && analysisDisplayMetricAliases.length > 0
-        ? analysisDisplayMetricAliases
-        : effectiveFormMetrics.map((m) => (m.alias || m.field || "valor").trim()).filter(Boolean);
+    let metricAliases: string[];
+    if (ratioReuseDisplayMode) {
+      const internalKey = ratioReuseResultMetricIndex >= 0 ? `metric_${ratioReuseResultMetricIndex}` : "";
+      const candidates = [ratioReuseResultMetricAlias, internalKey].filter((k) => typeof k === "string" && String(k).trim() !== "");
+      const resolved = candidates.find((k) => rowKeysSet.has(k));
+      metricAliases = resolved != null ? [resolved] : [];
+    } else if ((wizard === "C" || wizard === "D") && analysisDisplayMetricAliases.length > 0) {
+      metricAliases = analysisDisplayMetricAliases;
+    } else {
+      metricAliases = effectiveFormMetrics.map((m) => (m.alias || m.field || "valor").trim()).filter(Boolean);
+    }
+    const seenMetricCol = new Set<string>();
     for (const alias of metricAliases) {
+      if (seenMetricCol.has(alias)) continue;
+      seenMetricCol.add(alias);
       if (rowKeysSet.has(alias)) requested.push(alias);
     }
     if (transformCompare === "mom" || transformCompare === "yoy") {
