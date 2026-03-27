@@ -9,13 +9,12 @@ import {
   mergeTheme,
 } from "@/types/dashboard";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./DashboardWidgetRenderer";
-import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
 import {
   buildChartMetricStyles,
   buildChartStyleFromAgg,
   resolveDarkChartTheme,
-  resolveWidgetAggregationForDisplay,
 } from "@/lib/dashboard/widgetRenderParity";
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -100,30 +99,6 @@ type AggregationConfig = {
   };
 };
 
-function isInvalidIdentifierValue(value: unknown): boolean {
-  if (value == null) return true;
-  const normalized = String(value).trim().toLowerCase();
-  return normalized === "" || normalized === "undefined" || normalized === "null";
-}
-
-function sanitizeDimensionList(values: unknown[]): string[] {
-  return values
-    .map((value) => String(value ?? "").trim())
-    .filter((value) => !isInvalidIdentifierValue(value));
-}
-
-const WIDGET_FETCH_TIMEOUT_MS = 25000;
-
-async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs = WIDGET_FETCH_TIMEOUT_MS): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
 export type Widget = DashboardWidgetRendererWidget & {
   x: number;
   y: number;
@@ -137,17 +112,6 @@ export type Widget = DashboardWidgetRendererWidget & {
   /** Misma semántica que AdminDashboardStudio: pestaña del lienzo */
   pageId?: string;
 };
-
-function sameWidgetPage(
-  a: Widget,
-  b: Widget,
-  pageLayout: { firstPageId: string; activePageId: string; pagesMeta?: { id: string; name: string }[] } | null
-): boolean {
-  if (!pageLayout) return true;
-  const pa = a.pageId ?? pageLayout.firstPageId;
-  const pb = b.pageId ?? pageLayout.firstPageId;
-  return pa === pb;
-}
 
 /** Coincide con la página activa; corrige legado "page-1" vs id real de la primera página. */
 function widgetMatchesActivePage(
@@ -428,281 +392,65 @@ export function DashboardViewer({
       }, 30000);
 
       try {
-      const aggConfig = widget.aggregationConfig;
-      const fieldsWithWidgets = new Set(
-        widgets
-          .filter(
-            (w) =>
-              w.type === "filter" &&
-              (w as any).filterConfig?.field &&
-              sameWidgetPage(w, widget, pageLayout)
-          )
-          .map((w) => (w as any).filterConfig!.field)
-      );
-      const widgetFilters: AggregationFilter[] = widgets
-        .filter(
-          (w) =>
-            w.type === "filter" &&
-            (w as any).filterConfig &&
-            sameWidgetPage(w, widget, pageLayout) &&
-            filterValues[w.id] !== undefined &&
-            filterValues[w.id] !== "" &&
-            filterValues[w.id] !== null
-        )
-        .map((w) => ({
-          id: `wf-${w.id}`,
-          field: (w as any).filterConfig!.field,
-          operator: Array.isArray(filterValues[w.id]) && !["MONTH", "YEAR", "DAY"].includes((w as any).filterConfig!.operator) ? "IN" : (w as any).filterConfig!.operator,
-          value: filterValues[w.id],
-          convertToNumber: (w as any).filterConfig!.inputType === "number",
-        }));
-      // Dataset del Dashboard: traducir dimensión semántica a columna física por fuente del widget; si no hay mapeo para esta fuente, no aplicar el filtro
-      const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
-      const dataSourcesList = (etlData as { dataSources?: { id: string }[]; primarySourceId?: string })?.dataSources;
-      const widgetSourceId = widget.dataSourceId ?? (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSourcesList?.[0]?.id;
-      const resolvePhysicalField = (semanticOrPhysicalField: string): string | null => {
-        if (!semanticOrPhysicalField) return null;
-        const bySource = datasetDimensions?.[semanticOrPhysicalField];
-        if (bySource && widgetSourceId && bySource[widgetSourceId]) return bySource[widgetSourceId];
-        return semanticOrPhysicalField;
-      };
-      // Filtros globales efectivos: usar filterValues[gf.id]; respetar applyTo/applyToWidgetIds; si el campo es semántico y esta fuente no tiene mapeo, omitir el filtro
-      const effectiveGlobalFilters: AggregationFilter[] = (widget as any).excludeGlobalFilters
-        ? []
-        : (globalFilters
-            .filter((f) => {
-              if ((f as AggregationFilter).applyTo === "selected" && Array.isArray((f as AggregationFilter).applyToWidgetIds) && (f as AggregationFilter).applyToWidgetIds!.length > 0)
-                return (f as AggregationFilter).applyToWidgetIds!.includes(widgetId);
-              return true;
-            })
-            .filter((f) => !fieldsWithWidgets.has(f.field))
-            .map((f): AggregationFilter | null => {
-              const userValue = filterValues[f.id];
-              const isEmpty =
-                userValue === "" ||
-                userValue === null ||
-                userValue === undefined ||
-                (Array.isArray(userValue) && userValue.length === 0);
-              if (isEmpty) return null;
-              const isSemantic = datasetDimensions && f.field in datasetDimensions;
-              if (isSemantic && !datasetDimensions[f.field]?.[widgetSourceId!]) return null;
-              const physicalField = resolvePhysicalField(f.field);
-              const rawOp = f.operator || "=";
-              const inputT = (f as AggregationFilter & { inputType?: string }).inputType;
-              const useIn =
-                rawOp === "IN" ||
-                (inputT === "multi" && Array.isArray(userValue) && userValue.length > 0);
-              const op = useIn ? "IN" : rawOp;
-              const value: unknown =
-                op === "IN"
-                  ? Array.isArray(userValue)
-                    ? userValue
-                    : [userValue]
-                  : userValue;
-              return {
-                id: f.id,
-                field: physicalField ?? f.field,
-                operator: op,
-                value,
-                convertToNumber: f.convertToNumber,
-              };
-            })
-            .filter((f): f is AggregationFilter => f != null));
-      const mappedAggFilters: AggregationFilter[] = (aggConfig?.filters ?? []).map((f) => ({
-        ...f,
-        field: (resolvePhysicalField(f.field) ?? f.field) as string,
-      }));
-      const rawFilters = [...effectiveGlobalFilters, ...widgetFilters, ...mappedAggFilters];
-      const preparedFilters = rawFilters.map((f) => ({
-        field: f.field,
-        operator: f.operator || "=",
-        value: f.value,
-        cast: f.convertToNumber ? "numeric" : undefined,
-        ...(f.id != null && { id: f.id }),
-      }));
+        const aggConfig = widget.aggregationConfig;
+        const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
+        const dataSourcesList = (etlData as { dataSources?: { id: string; etlId?: string }[]; primarySourceId?: string })?.dataSources;
+        const widgetSourceId = widget.dataSourceId ?? (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSourcesList?.[0]?.id;
+        const mapDatasetField = (rawField: unknown): string => {
+          const field = String(rawField ?? "").trim();
+          if (!field || !widgetSourceId) return field;
+          return datasetDimensions?.[field]?.[widgetSourceId] ?? field;
+        };
 
-        let dataArray: Record<string, unknown>[] = [];
-        let resolvedChartType: string = widget.type;
-        if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
-          const dataSources = (etlData as any)?.dataSources as { id: string; etlId: string; savedMetrics?: unknown[] }[] | undefined;
-          const widgetSource = widget.dataSourceId && dataSources?.length
-            ? dataSources.find((s) => s.id === widget.dataSourceId)
-            : dataSources?.[0];
-          const widgetEtlId = widgetSource?.etlId ?? (etlData as any)?.etl?.id ?? etlId;
-          const savedMetricsList = widgetSource?.savedMetrics ?? (etlData as any)?.savedMetrics ?? [];
-          const dimensionsArrayRaw = (aggConfig as any).dimensions?.length
-            ? (aggConfig as any).dimensions
-            : [aggConfig.dimension, (aggConfig as any).dimension2].filter(Boolean);
-          const dimensionsArray = sanitizeDimensionList(
-            dimensionsArrayRaw.map((d: unknown) => {
-              const s = String(d ?? "").trim();
-              if (!s) return "";
-              return resolvePhysicalField(s) ?? s;
-            })
-          );
-          const safeMetrics = aggConfig.metrics
-            .map(({ id, ...rest }) => {
-              const isFormula = String(rest.func ?? "").toUpperCase() === "FORMULA";
-              let fieldOut: string | undefined;
-              if (isFormula) {
-                fieldOut = isInvalidIdentifierValue(rest.field) ? undefined : String(rest.field).trim();
-              } else {
-                const raw = isInvalidIdentifierValue(rest.field) ? undefined : String(rest.field).trim();
-                fieldOut = raw ? (resolvePhysicalField(raw) ?? raw) : undefined;
-              }
-              return {
-                ...rest,
-                field: fieldOut,
-                alias: String(rest.alias ?? "").trim() || undefined,
-                cast: rest.numericCast && rest.numericCast !== "none" ? rest.numericCast : undefined,
-              };
-            })
-            .filter((metric) => String(metric.func ?? "").toUpperCase() === "FORMULA" || !isInvalidIdentifierValue(metric.field));
-          if (safeMetrics.length === 0) {
-            setWidgets((prev) =>
-              prev.map((w) =>
-                w.id === widgetId ? { ...w, rows: [], config: { labels: [], datasets: [] }, isLoading: false } : w
-              )
-            );
-            return;
-          }
-          const metricFieldNames = new Set(
-            safeMetrics
-              .filter((m) => (m as any).func !== "FORMULA" && m.field != null && String(m.field).trim() !== "")
-              .map((m) => String(m.field).trim().toLowerCase())
-          );
-          const widgetMetricId = String((widget as { metricId?: unknown }).metricId ?? "").trim();
-          const widgetMetricIds = Array.isArray((widget as { metricIds?: unknown }).metricIds)
-            ? ((widget as { metricIds?: unknown[] }).metricIds ?? []).map((mid) => String(mid ?? "").trim()).filter(Boolean)
-            : [];
-          const idSet = new Set([widgetMetricId, ...widgetMetricIds].filter(Boolean));
-          const savedByLinkedIds = Array.isArray(savedMetricsList)
-            ? savedMetricsList.filter((s: any) => idSet.has(String(s.id ?? "").trim()))
-            : [];
-          const savedMetricsForBody = (savedByLinkedIds.length > 0
-            ? savedByLinkedIds
-            : Array.isArray(savedMetricsList)
-              ? savedMetricsList.filter(
-                  (s: any) => (s?.name ?? "").trim() && metricFieldNames.has(String(s.name).trim().toLowerCase())
-                )
-              : []
-          ).map((s: any) => {
-            const first = s?.aggregationConfig?.metrics?.[0] ?? s?.metric;
-            const name = String(s?.name ?? "").trim();
-            if (!first) return { name, field: name, func: "SUM", alias: name };
-            const field = String(first?.field ?? "").trim() || name;
-            const func = String(first?.func ?? "SUM");
-            const alias = String(first?.alias ?? name);
-            const expression = first?.expression;
-            return {
-              name,
-              field,
-              func,
-              alias,
-              ...(expression && String(expression).trim() ? { expression: String(expression).trim() } : {}),
-            };
-          });
-          resolvedChartType = String((aggConfig?.chartType as string | undefined) ?? "").trim() || widget.type;
-          const dimForBody = isInvalidIdentifierValue(aggConfig.dimension)
-            ? undefined
-            : (resolvePhysicalField(aggConfig.dimension!) ?? aggConfig.dimension);
-          const chartXForBody = isInvalidIdentifierValue(aggConfig.chartXAxis)
-            ? undefined
-            : (resolvePhysicalField(aggConfig.chartXAxis!) ?? aggConfig.chartXAxis);
-          const dateDimForBody = (aggConfig as { dateDimension?: string }).dateDimension
-            ? (resolvePhysicalField((aggConfig as { dateDimension?: string }).dateDimension!) ??
-              (aggConfig as { dateDimension?: string }).dateDimension)
-            : undefined;
-          const dashLayout = (etlData as any)?.dashboard?.layout as
-            | { datasetConfig?: { derivedColumns?: unknown[] } }
-            | undefined;
-          const derivedFromDash = Array.isArray(dashLayout?.datasetConfig?.derivedColumns)
-            ? dashLayout!.datasetConfig!.derivedColumns!
-            : [];
-
-          const bodyPayload: Record<string, unknown> = {
-            tableName: fullTableName,
-            dimension: dimForBody,
-            chartType: resolvedChartType,
-            chartXAxis: chartXForBody,
-            metrics: safeMetrics,
-            filters: preparedFilters,
-            orderBy: aggConfig.orderBy,
-            limit: aggConfig.limit ?? 1000,
-            etlId: widgetEtlId,
-            cumulative: (aggConfig as { cumulative?: string }).cumulative ?? "none",
-          };
-          if (aggConfig.geoHints) bodyPayload.geoHints = aggConfig.geoHints;
-          if (dimensionsArray.length > 0) bodyPayload.dimensions = dimensionsArray;
-          if ((aggConfig as any).comparePeriod) bodyPayload.comparePeriod = (aggConfig as any).comparePeriod;
-          if (dateDimForBody) bodyPayload.dateDimension = dateDimForBody;
-          if (savedMetricsForBody.length > 0) bodyPayload.savedMetrics = savedMetricsForBody;
-          if (derivedFromDash.length > 0) bodyPayload.derivedColumns = derivedFromDash;
-          const primaryDim =
-            dimensionsArray[0] ??
-            (isInvalidIdentifierValue(aggConfig.dimension) ? undefined : dimForBody);
-          const dateFields = (widgetSource as { fields?: { date?: string[] } })?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
-          const isDateDim = primaryDim && dateFields.some((d: string) => (d || "").toLowerCase() === (primaryDim || "").toLowerCase());
-          const dateGroupByGranularity = (aggConfig as { dateGroupByGranularity?: string }).dateGroupByGranularity;
-          const isTemporalAxis =
-            !!dateGroupByGranularity ||
-            !!(primaryDim && (aggConfig as { dateDimension?: string }).dateDimension && String(primaryDim).trim().toLowerCase() === String((aggConfig as { dateDimension?: string }).dateDimension ?? "").trim().toLowerCase()) ||
-            !!isDateDim;
-          const shouldApplyRanking =
-            !!(aggConfig as { chartRankingEnabled?: boolean }).chartRankingEnabled &&
-            Number((aggConfig as { chartRankingTop?: number }).chartRankingTop ?? 0) > 0 &&
-            !isTemporalAxis;
-          if (shouldApplyRanking) {
-            bodyPayload.orderBy = {
-              field: (aggConfig as { chartRankingMetric?: string }).chartRankingMetric || (safeMetrics[0] as { alias?: string } | undefined)?.alias,
-              direction: "DESC",
-            };
-            bodyPayload.limit = (aggConfig as { chartRankingTop?: number }).chartRankingTop;
-          }
-          if (dateGroupByGranularity && primaryDim) bodyPayload.dateGroupBy = { field: primaryDim, granularity: dateGroupByGranularity };
-          const dateRangeFilter = (aggConfig as { dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter;
-          if (dateRangeFilter?.field) {
-            bodyPayload.dateRangeFilter = {
-              ...dateRangeFilter,
-              field: resolvePhysicalField(dateRangeFilter.field) ?? dateRangeFilter.field,
-            };
-          }
-
-          const url = apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data";
-          const res = await fetchWithTimeout(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(bodyPayload),
-          });
-          const aggData = await safeJsonResponse(res);
-          if (!res.ok) throw new Error(aggData.error || "Error aggregate");
-          dataArray = (Array.isArray(aggData) ? aggData : (aggData as { rows?: Record<string, unknown>[] })?.rows ?? []) as Record<string, unknown>[];
-        } else {
-          const url = apiEndpoints?.rawData ?? "/api/dashboard/raw-data";
-          const res = await fetchWithTimeout(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              tableName: fullTableName,
-              filters: preparedFilters,
-              limit: aggConfig?.limit ?? 5000,
-            }),
-          });
-          const rawData = await safeJsonResponse(res);
-          if (!res.ok) throw new Error(rawData.error || "Error raw");
-          dataArray = (Array.isArray(rawData) ? rawData : (rawData as { rows?: Record<string, unknown>[] })?.rows ?? []) as Record<string, unknown>[];
-        }
-
-        if (!Array.isArray(dataArray) || dataArray.length === 0) {
-          setWidgets((prev) =>
-            prev.map((w) =>
-              w.id === widgetId ? { ...w, rows: [], config: { labels: [], datasets: [] }, isLoading: false } : w
+        const pageOf = (w: Widget) =>
+          w.pageId ?? pageLayout?.activePageId ?? pageLayout?.firstPageId ?? "page-1";
+        const targetPage = pageOf(widget);
+        const fieldsWithWidgets = new Set(
+          widgets
+            .filter(
+              (w) =>
+                w.type === "filter" &&
+                (w as { filterConfig?: { field?: string } }).filterConfig?.field &&
+                pageOf(w) === targetPage
             )
-          );
-          return;
+            .map((w) => String((w as { filterConfig?: { field?: string } }).filterConfig?.field ?? ""))
+        );
+
+        const mappedGlobalFilters: AggregationFilter[] = [];
+        if (!(widget as Widget & { excludeGlobalFilters?: boolean }).excludeGlobalFilters) {
+          for (const f of globalFilters) {
+            if (f.applyTo === "selected" && Array.isArray(f.applyToWidgetIds) && f.applyToWidgetIds.length > 0) {
+              if (!f.applyToWidgetIds.includes(widgetId)) continue;
+            }
+            if (fieldsWithWidgets.has(f.field)) continue;
+            const v =
+              filterValues[f.id] !== undefined ? filterValues[f.id] : (f as AggregationFilter & { value?: unknown }).value;
+            if (v === "" || v == null) continue;
+            if (Array.isArray(v) && v.length === 0) continue;
+            const isSemantic = datasetDimensions && f.field in datasetDimensions;
+            if (isSemantic && widgetSourceId && !datasetDimensions![f.field]?.[widgetSourceId]) continue;
+            const physicalField = mapDatasetField(f.field);
+            const rawOp = f.operator || "=";
+            const inputT = f.inputType;
+            const useIn =
+              rawOp === "IN" || (inputT === "multi" && Array.isArray(v) && v.length > 0);
+            const op = useIn ? "IN" : rawOp;
+            const value: unknown = op === "IN" ? (Array.isArray(v) ? v : [v]) : v;
+            mappedGlobalFilters.push({ ...f, field: physicalField, operator: op, value });
+          }
         }
 
-        const sample = dataArray[0] || {};
+        const dashLayoutSaved = (etlData as { dashboard?: { layout?: { savedMetrics?: unknown[] } } })?.dashboard?.layout?.savedMetrics;
+        const layoutSavedMetrics = (Array.isArray(dashLayoutSaved) ? dashLayoutSaved : []) as NonNullable<
+          Parameters<typeof loadPreviewWidgetData>[0]["savedMetrics"]
+        >;
+
+        const widgetEtlId = widgetSourceId
+          ? dataSourcesList?.find((s) => s.id === widgetSourceId)?.etlId ?? (etlData as { etl?: { id?: string } })?.etl?.id
+          : (etlData as { etl?: { id?: string } })?.etl?.id;
+
+        const chartAccent = (widget as { color?: string }).color || accentColor;
+
         const inferType = (val: unknown): "string" | "number" | "boolean" | "date" | "unknown" => {
           const t = typeof val;
           if (t === "number") return "number";
@@ -714,27 +462,114 @@ export function DashboardViewer({
           if (val instanceof Date) return "date";
           return "unknown";
         };
-        const columnsDetected = Object.keys(sample).map((k) => ({ name: k, type: inferType((sample as any)[k]) }));
-        const dd = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
-        const widgetResolved = resolveWidgetAggregationForDisplay(widget, dd, widgetSourceId ?? undefined);
-        const config = buildChartConfig(dataArray, widgetResolved, accentColor);
-        const rowsForWidget =
-          resolvedChartType === "table" ? getProcessedRowsForChart(dataArray, widgetResolved) : dataArray;
 
-        setWidgets((prev) =>
-          prev.map((w) =>
-            w.id === widgetId
-              ? {
-                  ...w,
-                  aggregationConfig: widgetResolved.aggregationConfig ?? w.aggregationConfig,
-                  config: config ?? { labels: [], datasets: [] },
-                  rows: rowsForWidget,
-                  columns: columnsDetected,
-                  isLoading: false,
-                }
-              : w
-          )
-        );
+        if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
+          const mappedWidgetFilters = (aggConfig.filters || []).map((f) => ({
+            ...f,
+            field: mapDatasetField(f.field),
+            operator:
+              Array.isArray(f.value) && String(f.operator ?? "").toUpperCase() !== "IN" ? "IN" : f.operator,
+          }));
+          const normalizedAgg = { ...aggConfig, filters: mappedWidgetFilters };
+          const widgetForBuild = {
+            type: widget.type,
+            aggregationConfig: normalizedAgg,
+            source: widget.source,
+            color: (widget as { color?: string }).color,
+          };
+
+          const loaded = await loadPreviewWidgetData({
+            widget: widgetForBuild as Parameters<typeof loadPreviewWidgetData>[0]["widget"],
+            tableName: fullTableName,
+            etlId: widgetEtlId,
+            sourceId: widgetSourceId,
+            datasetDimensions,
+            savedMetrics: layoutSavedMetrics,
+            globalFilters: mappedGlobalFilters,
+            aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
+            rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
+            rawLimit: 500,
+            accentColor: chartAccent,
+          });
+
+          if (!loaded.hasData) {
+            setWidgets((prev) =>
+              prev.map((w) =>
+                w.id === widgetId ? { ...w, rows: [], config: { labels: [], datasets: [] }, isLoading: false } : w
+              )
+            );
+            return;
+          }
+
+          const sample = loaded.processedRows[0] || {};
+          const columnsDetected = Object.keys(sample).map((k) => ({
+            name: k,
+            type: inferType((sample as Record<string, unknown>)[k]),
+          }));
+
+          setWidgets((prev) =>
+            prev.map((w) =>
+              w.id === widgetId
+                ? {
+                    ...w,
+                    config: loaded.chartConfig ?? { labels: [], datasets: [] },
+                    rows: loaded.processedRows,
+                    columns: columnsDetected,
+                    isLoading: false,
+                  }
+                : w
+            )
+          );
+        } else {
+          const widgetForBuild = {
+            type: widget.type,
+            aggregationConfig: aggConfig,
+            source: widget.source,
+            color: (widget as { color?: string }).color,
+          };
+          const rawPayload = { tableName: fullTableName, filters: mappedGlobalFilters, limit: 500 };
+          const loaded = await loadPreviewWidgetData({
+            widget: widgetForBuild as Parameters<typeof loadPreviewWidgetData>[0]["widget"],
+            tableName: fullTableName,
+            sourceId: widgetSourceId,
+            datasetDimensions,
+            globalFilters: mappedGlobalFilters,
+            aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
+            rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
+            rawLimit: 500,
+            accentColor: chartAccent,
+            rawExtraPayload: rawPayload,
+          });
+
+          if (!loaded.hasData) {
+            setWidgets((prev) =>
+              prev.map((w) =>
+                w.id === widgetId ? { ...w, rows: [], config: { labels: [], datasets: [] }, isLoading: false } : w
+              )
+            );
+            return;
+          }
+
+          const sample = loaded.processedRows[0] || {};
+          const columnsDetected = Object.keys(sample).map((k) => ({
+            name: k,
+            type: inferType((sample as Record<string, unknown>)[k]),
+          }));
+
+          setWidgets((prev) =>
+            prev.map((w) =>
+              w.id === widgetId
+                ? {
+                    ...w,
+                    config: loaded.chartConfig ?? { labels: [], datasets: [] },
+                    rows: loaded.processedRows,
+                    columns: columnsDetected,
+                    isLoading: false,
+                  }
+                : w
+            )
+          );
+        }
       } catch {
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       } finally {
