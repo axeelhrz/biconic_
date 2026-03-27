@@ -20,6 +20,8 @@ type StudioPageTabsProps = {
   onAddPage: () => void;
   onRenamePage: (pageId: string, name: string) => void;
   onDeletePage: (pageId: string) => void;
+  /** Solo cambiar de pestaña; sin renombrar, eliminar ni nueva página (vista previa admin). */
+  readOnly?: boolean;
 };
 
 export function StudioPageTabs({
@@ -29,6 +31,7 @@ export function StudioPageTabs({
   onAddPage,
   onRenamePage,
   onDeletePage,
+  readOnly = false,
 }: StudioPageTabsProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -83,6 +86,7 @@ export function StudioPageTabs({
                 >
                   {page.name}
                 </button>
+                {!readOnly && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -119,11 +123,13 @@ export function StudioPageTabs({
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
+                )}
               </>
             )}
           </div>
         ))}
       </div>
+      {!readOnly && (
       <Button
         type="button"
         variant="ghost"
@@ -135,6 +141,7 @@ export function StudioPageTabs({
         <Plus className="mr-1.5 h-4 w-4" />
         Nueva página
       </Button>
+      )}
     </div>
   );
 }

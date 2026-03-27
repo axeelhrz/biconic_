@@ -198,6 +198,8 @@ interface AdminDashboardStudioProps {
   title: string;
   etlName?: string | null;
   createdAt?: string | null;
+  /** Vista previa admin: mismo lienzo (MetricBlock) que el editor, sin barras de edición */
+  embeddedPreview?: boolean;
 }
 
 const SUPPORTED_CHART_TYPES = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "kpi", "table", "combo", "scatter"] as const;
@@ -257,6 +259,7 @@ export function AdminDashboardStudio({
   title,
   etlName,
   createdAt,
+  embeddedPreview = false,
 }: AdminDashboardStudioProps) {
   const [widgets, setWidgets] = useState<StudioWidget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<GlobalFilter[]>([]);
@@ -1235,24 +1238,28 @@ export function AdminDashboardStudio({
 
   return (
     <div className="admin-dashboard-studio flex h-full flex-col min-h-0 text-[var(--studio-fg)]" style={bgStyle}>
-      <StudioAppearanceBar theme={dashboardTheme} onThemeChange={updateTheme} />
-      <StudioHeader
-        dashboardId={dashboardId}
-        title={title}
-        etlId={etlData?.etl?.id ?? null}
-        etlName={etlName}
-        onEtlChange={refetchEtlData}
-        status={status}
-        lastUpdateLabel={lastUpdateLabel}
-        mode={mode}
-        onModeChange={setMode}
-        isDirty={isDirty}
-        isSaving={isSaving}
-        onSave={handleSave}
-        onRun={runAllMetrics}
-        hideRunButton
-      />
-      {etlData?.etl?.id && widgetsForCurrentPage.length > 0 && (
+      {!embeddedPreview && (
+        <StudioAppearanceBar theme={dashboardTheme} onThemeChange={updateTheme} />
+      )}
+      {!embeddedPreview && (
+        <StudioHeader
+          dashboardId={dashboardId}
+          title={title}
+          etlId={etlData?.etl?.id ?? null}
+          etlName={etlName}
+          onEtlChange={refetchEtlData}
+          status={status}
+          lastUpdateLabel={lastUpdateLabel}
+          mode={mode}
+          onModeChange={setMode}
+          isDirty={isDirty}
+          isSaving={isSaving}
+          onSave={handleSave}
+          onRun={runAllMetrics}
+          hideRunButton
+        />
+      )}
+      {!embeddedPreview && etlData?.etl?.id && widgetsForCurrentPage.length > 0 && (
         <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-accent-dim)]/50">
           <span className="text-xs font-medium text-[var(--studio-fg-muted)]">
             Este dashboard se sincroniza desde las métricas del ETL. Para añadir o editar métricas, usá la página de métricas.
@@ -1265,7 +1272,7 @@ export function AdminDashboardStudio({
           </Link>
         </div>
       )}
-      {etlData?.dataSources && etlData.dataSources.length > 0 && (
+      {!embeddedPreview && etlData?.dataSources && etlData.dataSources.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]">
           <span className="text-xs font-medium text-[var(--studio-fg-muted)]">Fuentes de datos:</span>
           <div className="flex flex-wrap items-center gap-2">
@@ -1295,7 +1302,7 @@ export function AdminDashboardStudio({
           </div>
         </div>
       )}
-      {etlData && (
+      {!embeddedPreview && etlData && (
         <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]/80">
           <span className="text-xs font-medium text-[var(--studio-fg-muted)]">Filtros globales:</span>
           {globalFilters.map((gf) => (
@@ -1718,6 +1725,7 @@ export function AdminDashboardStudio({
         onAddPage={addPage}
         onRenamePage={renamePage}
         onDeletePage={deletePage}
+        readOnly={embeddedPreview}
       />
       <main className="studio-main flex flex-1 min-h-0 overflow-hidden">
         <div className="flex flex-1 min-h-0 overflow-auto min-w-0">
@@ -1794,7 +1802,7 @@ export function AdminDashboardStudio({
                       ...cardStyle,
                     }}
                   >
-                    {isSelected && (
+                    {isSelected && !embeddedPreview && (
                       <>
                         <div
                           role="presentation"
@@ -1822,15 +1830,16 @@ export function AdminDashboardStudio({
                       chartConfig={w.config ?? undefined}
                       chartType={chartType}
                       isLoading={w.isLoading}
-                      isSelected={isSelected}
-                      onSelect={() => setSelectedId(w.id)}
-                      onRun={() => loadMetricData(w.id)}
-                      onDelete={() => deleteMetric(w.id)}
+                      isSelected={embeddedPreview ? false : isSelected}
+                      readOnly={embeddedPreview}
+                      onSelect={embeddedPreview ? undefined : () => setSelectedId(w.id)}
+                      onRun={embeddedPreview ? undefined : () => loadMetricData(w.id)}
+                      onDelete={embeddedPreview ? undefined : () => deleteMetric(w.id)}
                       kpiValue={kpiValue}
                       tableRows={w.rows as Record<string, unknown>[] | undefined}
                       gridSpan={span}
                       minHeight={minH}
-                      onSizeChange={(patch) => updateWidgetSize(w.id, patch)}
+                      onSizeChange={embeddedPreview ? undefined : (patch) => updateWidgetSize(w.id, patch)}
                       chartGridXDisplay={(w.aggregationConfig as { chartGridXDisplay?: boolean })?.chartGridXDisplay}
                       chartGridYDisplay={(w.aggregationConfig as { chartGridYDisplay?: boolean })?.chartGridYDisplay}
                       chartGridColor={(w.aggregationConfig as { chartGridColor?: string })?.chartGridColor}
@@ -1852,12 +1861,13 @@ export function AdminDashboardStudio({
                         diagnosticPreview: w.diagnosticPreview,
                         minHeight: minH,
                       }}
-                      showTechnicalPreview={showDiagnostics}
+                      showTechnicalPreview={embeddedPreview ? false : showDiagnostics}
                       darkChartTheme={darkChartTheme}
                     />
                   </div>
                 );
               })}
+              {!embeddedPreview && (
               <div className="studio-block-cell studio-add-metric-cell" style={cardStyle}>
                 <button
                   type="button"
@@ -1872,6 +1882,7 @@ export function AdminDashboardStudio({
                   <span className="studio-add-metric-hint">¿Qué querés entender?</span>
                 </button>
               </div>
+              )}
             </div>
           </div>
         )}

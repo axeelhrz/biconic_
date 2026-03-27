@@ -74,6 +74,8 @@ type MetricBlockProps = {
   widgetForRenderer?: DashboardWidgetRendererWidget;
   showTechnicalPreview?: boolean;
   darkChartTheme?: boolean;
+  /** Vista previa admin: sin menú, sin selección, mismo aspecto del lienzo */
+  readOnly?: boolean;
 };
 
 const STATE_LABELS: Record<MetricBlockState, string> = {
@@ -108,6 +110,7 @@ export function MetricBlock({
   widgetForRenderer,
   showTechnicalPreview = false,
   darkChartTheme = false,
+  readOnly = false,
 }: MetricBlockProps) {
   const hasViz = useMemo(() => {
     if (chartType === "kpi") {
@@ -147,12 +150,16 @@ export function MetricBlock({
 
   return (
     <article
-      role="button"
-      tabIndex={0}
+      role={readOnly ? undefined : "button"}
+      tabIndex={readOnly ? undefined : 0}
       data-selected={isSelected ? "true" : undefined}
-      className="metric-block group relative flex flex-col transition-all cursor-pointer"
-      onClick={onSelect}
-      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onSelect?.()}
+      className={`metric-block group relative flex flex-col transition-all ${readOnly ? "cursor-default" : "cursor-pointer"}`}
+      onClick={readOnly ? undefined : onSelect}
+      onKeyDown={
+        readOnly
+          ? undefined
+          : (e) => (e.key === "Enter" || e.key === " ") && onSelect?.()
+      }
     >
       <header className="metric-block-header flex flex-shrink-0 items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -168,6 +175,7 @@ export function MetricBlock({
           >
             {STATE_LABELS[state]}
           </span>
+          {!readOnly && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
               <Button
@@ -251,6 +259,7 @@ export function MetricBlock({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
         </div>
       </header>
 
@@ -265,7 +274,8 @@ export function MetricBlock({
         )}
         {!hasViz && !isLoading && (
           <div className="studio-viz-placeholder flex flex-1 flex-col items-center justify-center rounded-[var(--studio-radius-sm)] py-10 text-center">
-            <p className="text-[13px]">Ejecutá para ver datos</p>
+            <p className="text-[13px]">{readOnly ? "Sin datos" : "Ejecutá para ver datos"}</p>
+            {!readOnly && (
             <Button
               variant="ghost"
               size="sm"
@@ -275,6 +285,7 @@ export function MetricBlock({
               <Play className="mr-1.5 h-4 w-4" />
               Actualizar
             </Button>
+            )}
           </div>
         )}
         {hasViz && !isLoading && (
