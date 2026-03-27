@@ -2036,18 +2036,40 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
   const previewKpiValue = useMemo(() => {
     if (!previewData || previewData.length === 0) return undefined;
+    const firstRow = previewData[0] as Record<string, unknown>;
+    const lastIdx =
+      ratioReuseDisplayMode && ratioReuseResultMetricIndex >= 0
+        ? ratioReuseResultMetricIndex
+        : Math.max(0, effectiveFormMetrics.length - 1);
+    const lastM = effectiveFormMetrics[lastIdx];
+    const primaryKey = lastM ? aggregationResultColumnKey(lastM, lastIdx) : `metric_${lastIdx}`;
+    const internalKey = `metric_${lastIdx}`;
+    const direct = firstRow[primaryKey] ?? firstRow[internalKey];
+    if (direct != null) {
+      const n = typeof direct === "number" && !Number.isNaN(direct) ? direct : Number(direct);
+      if (Number.isFinite(n)) return n;
+    }
     const fromConfig = previewChartConfig?.datasets?.[0]?.data?.[0];
     if (fromConfig != null && Number.isFinite(Number(fromConfig))) return Number(fromConfig);
-    const firstRow = previewData[0] as Record<string, unknown>;
     const explicitY = Array.isArray(chartYAxes) && chartYAxes.length > 0 ? chartYAxes[0] : undefined;
     if (explicitY && Number.isFinite(Number(firstRow[explicitY]))) return Number(firstRow[explicitY]);
     const metricAlias = effectiveFormMetrics[effectiveFormMetrics.length - 1]?.alias;
     if (metricAlias && Number.isFinite(Number(firstRow[metricAlias]))) return Number(firstRow[metricAlias]);
     const metricInternal = `metric_${Math.max(0, effectiveFormMetrics.length - 1)}`;
     if (Number.isFinite(Number(firstRow[metricInternal]))) return Number(firstRow[metricInternal]);
-    const firstNumeric = Object.values(firstRow).find((v) => Number.isFinite(Number(v)));
-    return firstNumeric != null ? Number(firstNumeric) : undefined;
-  }, [previewData, previewChartConfig, chartYAxes, effectiveFormMetrics]);
+    if (!ratioReuseDisplayMode) {
+      const firstNumeric = Object.values(firstRow).find((v) => Number.isFinite(Number(v)));
+      return firstNumeric != null ? Number(firstNumeric) : undefined;
+    }
+    return undefined;
+  }, [
+    previewData,
+    previewChartConfig,
+    chartYAxes,
+    effectiveFormMetrics,
+    ratioReuseDisplayMode,
+    ratioReuseResultMetricIndex,
+  ]);
 
   const previewWidgetForRenderer = useMemo(() => {
     if (!previewData || previewData.length === 0) return null;
@@ -4651,25 +4673,47 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                       <div className="rounded-xl border p-4 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--platform-accent)" }}>{previewKpiValue != null ? formatNumber(previewKpiValue) : "—"}</p>
-                        <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Total {metricNameToSave || formMetrics[0]?.alias || formMetrics[0]?.field || "métrica"}</p>
+                        <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                          Total{" "}
+                          {metricNameToSave ||
+                            formName ||
+                            effectiveFormMetrics[effectiveFormMetrics.length - 1]?.alias ||
+                            formMetrics[0]?.alias ||
+                            formMetrics[0]?.field ||
+                            "métrica"}
+                        </p>
                       </div>
                       <div className="rounded-xl border p-4 col-span-2 overflow-auto max-h-[180px]" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <table className="w-full text-xs" style={{ color: "var(--platform-fg)" }}>
-                          <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewChronologicalRows[0] && Object.keys(previewChronologicalRows[0]).map((k) => (<th key={k} className="text-left py-1 px-2">{k}</th>))}</tr></thead>
-                          <tbody>{previewChronologicalRows.slice(0, 5).map((row, idx) => {
-                            const raw = row as Record<string, unknown>;
-                            const keys = Object.keys(raw);
-                            return (
-                            <tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>
-                              {keys.map((k, i) => {
-                                const v = raw[k];
-                                const dateDisplay = formatPreviewDateValue(v, k);
-                                const num = typeof v === "number" ? v : (v != null && v !== "" ? Number(v) : NaN);
-                                const display = dateDisplay ?? (!isNaN(num) ? formatNumber(num) : String(v ?? ""));
-                                return (<td key={i} className="py-1 px-2 tabular-nums">{display}</td>);
-                              })}
+                          <thead>
+                            <tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                              {previewDisplayHeaders.map((h, i) => (
+                                <th key={i} className="text-left py-1 px-2">
+                                  {h}
+                                </th>
+                              ))}
                             </tr>
-                          ); })}</tbody>
+                          </thead>
+                          <tbody>
+                            {previewChronologicalRows.slice(0, 5).map((row, idx) => {
+                              const raw = row as Record<string, unknown>;
+                              return (
+                                <tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>
+                                  {previewVisibleKeys.map((k, i) => {
+                                    const v = raw[k];
+                                    const dateDisplay = formatPreviewDateValue(v, k);
+                                    const num = typeof v === "number" ? v : v != null && v !== "" ? Number(v) : NaN;
+                                    const display = dateDisplay ?? (!isNaN(num) ? formatNumber(num) : String(v ?? ""));
+                                    return (
+                                      <td key={i} className="py-1 px-2 tabular-nums">
+                                        {display}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
                         </table>
                       </div>
                     </div>
