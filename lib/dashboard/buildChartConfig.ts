@@ -108,7 +108,20 @@ export function resolveWidgetAxisKeys(
   let yKeys: string[] = [];
   const hasExplicitYAxes = Array.isArray(agg?.chartYAxes) && agg.chartYAxes.length > 0;
   if (Array.isArray(agg?.chartYAxes) && agg.chartYAxes.length > 0) {
-    yKeys = agg.chartYAxes.filter((k) => resultKeys.includes(k));
+    // Prioriza ejes explícitos, pero evita entradas vacías/duplicadas.
+    const explicitKeys = agg.chartYAxes
+      .map((k) => String(k ?? "").trim())
+      .filter((k) => k !== "" && resultKeys.includes(k));
+    yKeys = Array.from(new Set(explicitKeys));
+  }
+  if (hasExplicitYAxes && metricAliases.length > 0) {
+    // Si chartYAxes quedó incompleto, completa con aliases de métricas presentes.
+    const missingMetricAliases = metricAliases
+      .map((k) => String(k ?? "").trim())
+      .filter((k) => k !== "" && resultKeys.includes(k) && !yKeys.includes(k));
+    if (missingMetricAliases.length > 0) {
+      yKeys = [...yKeys, ...missingMetricAliases];
+    }
   }
   if (!hasExplicitYAxes && yKeys.length === 0 && formulaMetricAliases.length > 0) {
     yKeys = formulaMetricAliases.filter((k) => resultKeys.includes(k));
