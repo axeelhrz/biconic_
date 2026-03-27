@@ -70,7 +70,7 @@ export default async function AdminDashboardViewPage({ params }: PageProps) {
   const title = (dashboard && (dashboard as { title?: string }).title) || dashboardId;
 
   return (
-    <div className="admin-view-page w-full">
+    <div className="admin-view-page flex w-full min-h-0 flex-1 flex-col">
       <div className="admin-view-page__accent" aria-hidden />
       <div className="admin-view-preview-bar">
         <div className="admin-view-preview-bar__left flex min-w-0 items-center gap-3">

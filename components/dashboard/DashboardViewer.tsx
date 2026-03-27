@@ -144,6 +144,23 @@ function sameWidgetPage(
   return pa === pb;
 }
 
+/** Coincide con la página activa; corrige legado "page-1" vs id real de la primera página. */
+function widgetMatchesActivePage(
+  w: Widget,
+  pl: { firstPageId: string; activePageId: string }
+): boolean {
+  const pid = w.pageId ?? pl.firstPageId;
+  if (pid === pl.activePageId) return true;
+  if (
+    pid === "page-1" &&
+    pl.firstPageId !== "page-1" &&
+    pl.activePageId === pl.firstPageId
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function computeGridPlacements(
   ordered: Widget[]
 ): { widget: Widget; row: number; col: number; span: number }[] {
@@ -246,11 +263,22 @@ export function DashboardViewer({
         ? layout!.pages!
         : [{ id: "page-1" }];
     const firstPageId = String(pages[0]?.id ?? "page-1");
-    const activePageId = String(layout?.activePageId ?? firstPageId);
     const pagesMeta = pages.map((p, i) => ({
       id: String((p as { id?: string }).id ?? `page-${i}`),
       name: String((p as { name?: string }).name ?? "").trim() || `Página ${i + 1}`,
     }));
+    const pageIds = new Set(pagesMeta.map((p) => p.id));
+    let activePageId = String(layout?.activePageId ?? firstPageId);
+    if (!pageIds.has(activePageId)) activePageId = firstPageId;
+
+    const normalizeWidgetPageId = (raw: string | undefined): string => {
+      const fallback = firstPageId;
+      const r = raw ?? fallback;
+      if (pageIds.has(r)) return r;
+      if (r === "page-1" && !pageIds.has("page-1")) return firstPageId;
+      return fallback;
+    };
+
     setPageLayout({ firstPageId, activePageId, pagesMeta });
     const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
     const loadedWidgets = rawWidgets.map((w, i) => {
@@ -258,7 +286,7 @@ export function DashboardViewer({
       return {
         ...base,
         gridOrder: base.gridOrder ?? i,
-        pageId: base.pageId ?? firstPageId,
+        pageId: normalizeWidgetPageId(base.pageId),
       };
     });
     const loadedTheme = layout?.theme && typeof layout.theme === "object" ? layout.theme : {};
@@ -710,10 +738,7 @@ export function DashboardViewer({
   const reloadAll = useCallback(() => {
     widgets.forEach((w) => {
       if (w.type === "filter") return;
-      if (pageLayout) {
-        const pid = w.pageId ?? pageLayout.firstPageId;
-        if (pid !== pageLayout.activePageId) return;
-      }
+      if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
       loadDataForWidget(w.id);
     });
   }, [widgets, loadDataForWidget, pageLayout]);
@@ -723,10 +748,7 @@ export function DashboardViewer({
     const timer = setTimeout(() => {
       stateRef.current.widgets.forEach((w) => {
         if (w.type === "filter") return;
-        if (pageLayout) {
-          const pid = w.pageId ?? pageLayout.firstPageId;
-          if (pid !== pageLayout.activePageId) return;
-        }
+        if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
         loadDataForWidget(w.id);
       });
     }, 300);
@@ -753,7 +775,13 @@ export function DashboardViewer({
   const orderedWidgets = useMemo(() => {
     let list = widgets;
     if (pageLayout) {
-      list = widgets.filter((w) => (w.pageId ?? pageLayout.firstPageId) === pageLayout.activePageId);
+      list = widgets.filter((w) => widgetMatchesActivePage(w, pageLayout));
+      if (
+        list.length === 0 &&
+        widgets.some((w) => w.type !== "filter" && w.type !== "text" && w.type !== "image")
+      ) {
+        list = widgets;
+      }
     }
     const hasOrder = list.some((w) => typeof w.gridOrder === "number");
     if (hasOrder) return [...list].sort((a, b) => (a.gridOrder ?? 0) - (b.gridOrder ?? 0));

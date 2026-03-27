@@ -6,8 +6,9 @@
   background: #111318;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  min-height: 100dvh;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-height: min(100dvh, 100%);
 }
 .admin-view-page:has([data-theme="client"]) .admin-view-preview-bar {
   flex-shrink: 0;
