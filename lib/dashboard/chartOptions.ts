@@ -236,10 +236,17 @@ export function createCategoryTickCallback(params: {
     values: labels,
     maxVisible: params.maxVisible,
   });
-  return (value: unknown, index: number) => {
-    if (labels.length > 0 && !visible.has(index)) return "";
-    const raw = labels[index] ?? value;
-    const text = params.formatter ? params.formatter(raw, index) : String(raw ?? "");
+  // Chart.js eje categoría: el 1er argumento es el índice en data.labels; el 2º es la posición en el array de ticks (p. ej. tras autoSkip).
+  // https://www.chartjs.org/docs/latest/axes/labelling.html#creating-custom-tick-formats
+  return (value: unknown, _tickIndex: number) => {
+    const dataIndex = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(dataIndex)) {
+      return params.formatter ? params.formatter(value, -1) : String(value ?? "");
+    }
+    const safeIndex = Math.trunc(dataIndex);
+    if (labels.length > 0 && !visible.has(safeIndex)) return "";
+    const raw = labels[safeIndex] ?? value;
+    const text = params.formatter ? params.formatter(raw, safeIndex) : String(raw ?? "");
     return text;
   };
 }
