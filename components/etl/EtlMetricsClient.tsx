@@ -2218,7 +2218,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     } else if ((wizard === "C" || wizard === "D") && analysisDisplayMetricAliases.length > 0) {
       metricAliases = analysisDisplayMetricAliases;
     } else {
-      metricAliases = effectiveFormMetrics.map((m) => (m.alias || m.field || "valor").trim()).filter(Boolean);
+      let lastFormulaIdx = -1;
+      for (let i = effectiveFormMetrics.length - 1; i >= 0; i--) {
+        if (String(effectiveFormMetrics[i]?.func ?? "").trim().toUpperCase() === "FORMULA") {
+          lastFormulaIdx = i;
+          break;
+        }
+      }
+      if (lastFormulaIdx >= 0) {
+        const keys: string[] = [];
+        for (let i = lastFormulaIdx; i < effectiveFormMetrics.length; i++) {
+          keys.push(aggregationResultColumnKey(effectiveFormMetrics[i], i));
+        }
+        metricAliases = [...new Set(keys.map((k) => String(k).trim()).filter(Boolean))];
+      } else {
+        metricAliases = effectiveFormMetrics.map((m) => (m.alias || m.field || "valor").trim()).filter(Boolean);
+      }
     }
     const seenMetricCol = new Set<string>();
     for (const alias of metricAliases) {
@@ -2268,18 +2283,49 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   }), [chartAvailableColumns, formDimensions, timeColumn, dateFields]);
 
   const chartNumericColumns = useMemo(() => {
-    const isDimensionKey = (key: string) => chartDimensionColumns.some((d) => d.key === key);
-    const isTransformCol = (key: string) =>
-      key.endsWith("_prev") || key.endsWith("_delta") || key.endsWith("_delta_pct") || key.endsWith("_acumulado") || key.endsWith("_vs_fijo") || key.endsWith("_var_pct_fijo");
-    return chartAvailableColumns.filter((c) => {
-      if (/^metric_\d+/.test(c.key)) return true;
-      const metricAliases = effectiveFormMetrics.map((m) => m.alias || m.field || "").filter(Boolean);
-      if (metricAliases.includes(c.key)) return true;
-      if (isTransformCol(c.key)) return true;
-      if (!isDimensionKey(c.key)) return true;
-      return false;
+    const dimKeys = new Set(chartDimensionColumns.map((d) => d.key));
+    return chartAvailableColumns.filter((c) => !dimKeys.has(c.key));
+  }, [chartAvailableColumns, chartDimensionColumns]);
+
+  /** Quita ejes Y que ya no existen en el preview; si queda vacío, aplica el mismo criterio que el autocompletado del paso Mapeo. */
+  useEffect(() => {
+    const allowed = new Set(chartNumericColumns.map((c) => c.key));
+    if (allowed.size === 0) return;
+
+    const formulaResultKey = (() => {
+      for (let i = effectiveFormMetrics.length - 1; i >= 0; i--) {
+        const metric = effectiveFormMetrics[i];
+        if (String(metric?.func ?? "").trim().toUpperCase() !== "FORMULA") continue;
+        const alias = String(metric?.alias ?? metric?.field ?? "").trim();
+        if (alias) {
+          const byAlias = chartNumericColumns.find((col) => col.key === alias);
+          if (byAlias) return byAlias.key;
+        }
+        const byInternal = chartNumericColumns.find((col) => col.key === `metric_${i}`);
+        if (byInternal) return byInternal.key;
+      }
+      return undefined;
+    })();
+
+    setChartYAxes((prev) => {
+      const next = prev.filter((k) => allowed.has(k));
+      const unchanged =
+        next.length === prev.length && next.length > 0 && next.every((k, i) => k === prev[i]);
+      if (unchanged) return prev;
+      if (next.length > 0) return next;
+      const nums = chartNumericColumns;
+      if (nums.length === 0) return prev;
+      if (formChartType === "kpi") {
+        return formulaResultKey ? [formulaResultKey] : [nums[0]!.key];
+      }
+      if (formChartType === "map") {
+        return formulaResultKey ? [formulaResultKey] : nums.slice(0, 2).map((c) => c.key);
+      }
+      return formulaResultKey
+        ? [formulaResultKey]
+        : nums.slice(0, Math.min(3, nums.length)).map((c) => c.key);
     });
-  }, [chartAvailableColumns, effectiveFormMetrics, chartDimensionColumns]);
+  }, [chartNumericColumns, effectiveFormMetrics, formChartType]);
 
   const lastChartTypeForMappingRef = useRef<string | null>(null);
   useEffect(() => {
