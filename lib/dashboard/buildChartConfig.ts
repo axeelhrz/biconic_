@@ -66,6 +66,37 @@ export type ResolvedWidgetAxisKeys = {
   yKeys: string[];
 };
 
+type AggMetricLike = { alias?: string; func?: string; field?: string };
+
+/** Igual que `metricAliases` y `externalKey` en aggregate-data: `alias` o `func(campo)`. */
+function metricExternalColumnKey(m: AggMetricLike | undefined): string {
+  if (!m) return "";
+  const raw = m.alias || `${m.func}(${m.field})`;
+  return String(raw ?? "").trim();
+}
+
+/**
+ * Convierte una entrada de chartYAxes (alias, metric_N, etc.) a la clave presente en las filas.
+ */
+function resolveChartYAxisEntryToResultKey(
+  trimmed: string,
+  metrics: AggMetricLike[] | undefined,
+  resultKeys: string[]
+): string | null {
+  if (!trimmed) return null;
+  const match = /^metric_(\d+)$/i.exec(trimmed);
+  if (match && Array.isArray(metrics) && metrics.length > 0) {
+    const idx = parseInt(match[1]!, 10);
+    if (Number.isFinite(idx) && idx >= 0 && idx < metrics.length) {
+      const ext = metricExternalColumnKey(metrics[idx]);
+      if (ext && resultKeys.includes(ext)) return ext;
+    }
+    if (resultKeys.includes(trimmed)) return trimmed;
+    return null;
+  }
+  return resultKeys.includes(trimmed) ? trimmed : null;
+}
+
 /**
  * Resuelve las claves de eje (X/Y) desde la configuración del widget y las columnas reales devueltas.
  * Es la fuente de verdad compartida para renderer y generación de chart config.
@@ -89,7 +120,6 @@ export function resolveWidgetAxisKeys(
           .map((m) => String(m.alias ?? "").trim())
           .filter(Boolean)
       : [];
-  const formulaMetricAliasSet = new Set(formulaMetricAliases);
   const resolvedType = String(agg?.chartType ?? widget.type ?? "").trim();
   const isHorizontalBar = resolvedType === "horizontalBar";
   const chartXAxisKey =
@@ -115,39 +145,27 @@ export function resolveWidgetAxisKeys(
     : chartXAxisKey ?? explicitDimensionKey ?? inferredDimensionKey ?? resultKeys[0];
   let yKeys: string[] = [];
   const hasExplicitYAxes = Array.isArray(agg?.chartYAxes) && agg.chartYAxes.length > 0;
-  if (Array.isArray(agg?.chartYAxes) && agg.chartYAxes.length > 0) {
-    // Prioriza ejes explícitos, pero evita entradas vacías/duplicadas.
-    const explicitKeys = agg.chartYAxes
-      .map((k) => String(k ?? "").trim())
-      .filter((k) => k !== "" && resultKeys.includes(k));
-    yKeys = Array.from(new Set(explicitKeys));
-  }
-  if (hasExplicitYAxes && metricAliases.length > 0 && agg?.ratioReuseMode !== true) {
-    // Si chartYAxes ya define 2+ series válidas, respétalo tal cual para mantener
-    // consistencia con el preview ETL y evitar añadir una tercera serie inesperada.
-    if (yKeys.length === 1) {
-      // Solo completar si el eje explícito quedó realmente incompleto.
-      const missingMetricAliases = metricAliases
-        .map((k) => String(k ?? "").trim())
-        .filter(
-          (k) =>
-            k !== "" &&
-            resultKeys.includes(k) &&
-            !yKeys.includes(k) &&
-            !formulaMetricAliasSet.has(k)
-        );
-      if (missingMetricAliases.length > 0) {
-        yKeys = [...yKeys, ...missingMetricAliases];
+  const metricsForY = (agg?.metrics ?? []) as AggMetricLike[];
+  if (hasExplicitYAxes) {
+    const ordered: string[] = [];
+    const seenY = new Set<string>();
+    for (const raw of agg!.chartYAxes!) {
+      const trimmed = String(raw ?? "").trim();
+      const resolved = resolveChartYAxisEntryToResultKey(trimmed, metricsForY, resultKeys);
+      if (resolved != null && !seenY.has(resolved)) {
+        seenY.add(resolved);
+        ordered.push(resolved);
       }
     }
+    yKeys = ordered;
   }
   if (!hasExplicitYAxes && yKeys.length === 0 && formulaMetricAliases.length > 0) {
     yKeys = formulaMetricAliases.filter((k) => resultKeys.includes(k));
   }
-  if (yKeys.length === 0 && metricAliases.length > 0) {
+  if (!hasExplicitYAxes && yKeys.length === 0 && metricAliases.length > 0) {
     yKeys = metricAliases.filter((k) => resultKeys.includes(k));
   }
-  if (yKeys.length === 0) {
+  if (!hasExplicitYAxes && yKeys.length === 0) {
     const numKeys = resultKeys.filter((k) => typeof (sample as Record<string, unknown>)[k] === "number");
     yKeys = numKeys.length > 0 ? numKeys : resultKeys.filter((k) => k !== xKey).slice(0, 1);
   }
@@ -278,9 +296,13 @@ export function buildChartConfig(
       agg?.enabled && agg.metrics?.length
         ? agg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
         : [];
+    const metricsKpi = (agg?.metrics ?? []) as AggMetricLike[];
+    const rawKpiY =
+      Array.isArray(agg?.chartYAxes) && agg.chartYAxes[0] != null ? String(agg.chartYAxes[0]).trim() : "";
+    const resolvedKpiY = rawKpiY ? resolveChartYAxisEntryToResultKey(rawKpiY, metricsKpi, resultKeys) : null;
     const yKey =
-      (Array.isArray(agg?.chartYAxes) && agg.chartYAxes[0] && resultKeys.includes(agg.chartYAxes[0]) ? agg.chartYAxes[0] : undefined)
-      ?? metricAliases.find((k) => resultKeys.includes(k))
+      resolvedKpiY ??
+      metricAliases.find((k) => resultKeys.includes(k))
       ?? resultKeys.find((k) => typeof sample[k] === "number")
       ?? resultKeys[0];
     if (!yKey) return undefined;
