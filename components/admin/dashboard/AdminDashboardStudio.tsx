@@ -49,6 +49,7 @@ export type SavedAnalysis = {
   chartYAxes?: string[];
   chartSeriesField?: string;
   chartLabelOverrides?: Record<string, string>;
+  chartDatasetLabelOverrides?: Record<string, string>;
   chartValueType?: string;
   chartValueScale?: string;
   chartCurrencySymbol?: string;
@@ -125,6 +126,7 @@ type AggregationConfig = {
   chartScaleMax?: string | number;
   /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico. */
   chartLabelOverrides?: Record<string, string>;
+  chartDatasetLabelOverrides?: Record<string, string>;
   /** Formato por métrica (clave = chartYAxes key). */
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */

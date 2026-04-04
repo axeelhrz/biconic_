@@ -44,6 +44,8 @@ export type BuildChartConfigWidget = {
     chartType?: string;
     chartSeriesColors?: Record<string, string>;
     chartLabelOverrides?: Record<string, string>;
+    /** Texto en leyenda por clave de métrica (misma clave que chartYAxes / columna en filas). */
+    chartDatasetLabelOverrides?: Record<string, string>;
     chartRankingEnabled?: boolean;
     chartRankingTop?: number;
     chartRankingMetric?: string;
@@ -306,8 +308,16 @@ export function buildChartConfig(
       ?? resultKeys.find((k) => typeof sample[k] === "number")
       ?? resultKeys[0];
     if (!yKey) return undefined;
+    const dsKpi = agg?.chartDatasetLabelOverrides as Record<string, string> | undefined;
+    const kpiMatch = yKey.match(/^metric_(\d+)$/);
+    const kpiDefaultLabel =
+      kpiMatch && metricsKpi[Number(kpiMatch[1])]
+        ? String(metricsKpi[Number(kpiMatch[1])].alias ?? "").trim() || yKey
+        : yKey;
+    const kpiLegend =
+      typeof dsKpi?.[yKey] === "string" && dsKpi[yKey]!.trim() !== "" ? dsKpi[yKey]!.trim() : kpiDefaultLabel;
     const sum = dataArray.reduce((acc, row) => acc + Number((row as Record<string, unknown>)[yKey] ?? 0), 0);
-    return { labels: ["Total"], datasets: [{ label: yKey, data: [sum] }] };
+    return { labels: ["Total"], datasets: [{ label: kpiLegend, data: [sum] }] };
   }
 
   const axis = resolveWidgetAxisKeys(dataArray, widget);
@@ -352,6 +362,12 @@ export function buildChartConfig(
       return agg.metrics[Number(match[1])].alias || yKey;
     }
     return yKey;
+  };
+  const datasetLabelOverrides = (agg?.chartDatasetLabelOverrides as Record<string, string> | undefined) ?? undefined;
+  const datasetDisplayLabel = (yKey: string): string => {
+    const o = datasetLabelOverrides?.[yKey];
+    if (typeof o === "string" && o.trim() !== "") return o.trim();
+    return aliasForYKey(yKey);
   };
   const resolveColor = (key: string): string | undefined => {
     if (!cfgSeriesColors) return undefined;
@@ -487,7 +503,7 @@ export function buildChartConfig(
         const next = Number((row as Record<string, unknown>)[secondaryMetricKey] ?? 0);
         sumByXSecondary.set(rowX, current + (Number.isFinite(next) ? next : 0));
       });
-      const secondaryLabel = aliasForYKey(secondaryMetricKey);
+      const secondaryLabel = datasetDisplayLabel(secondaryMetricKey);
       return {
         labels: uniqueX.map((value) => formatXLabel(value)),
         datasets: [
@@ -495,8 +511,8 @@ export function buildChartConfig(
           {
             label: secondaryLabel,
             data: uniqueX.map((xv) => sumByXSecondary.get(xv) ?? 0),
-            backgroundColor: getColor(secondaryLabel, seriesValues.length) + "20",
-            borderColor: getColor(secondaryLabel, seriesValues.length),
+            backgroundColor: getColor(secondaryMetricKey, seriesValues.length) + "20",
+            borderColor: getColor(secondaryMetricKey, seriesValues.length),
             borderWidth: 2,
             type: "line",
             fill: false,
@@ -518,7 +534,7 @@ export function buildChartConfig(
       labels,
       datasets: [
         {
-          label: aliasForYKey(firstYKey!),
+          label: datasetDisplayLabel(firstYKey!),
           data: rows.map((r) => Number((r as Record<string, unknown>)[firstYKey!] ?? 0)),
           backgroundColor: labels.map((l) => getColorStable(l)),
           borderColor: "#fff",
@@ -530,25 +546,27 @@ export function buildChartConfig(
 
   if (resolvedType === "combo" && yKeys.length >= 2) {
     const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
-    const label0 = aliasForYKey(yKeys[0]!);
-    const label1 = aliasForYKey(yKeys[1]!);
+    const y0 = yKeys[0]!;
+    const y1 = yKeys[1]!;
+    const label0 = datasetDisplayLabel(y0);
+    const label1 = datasetDisplayLabel(y1);
     return {
       labels,
       datasets: [
         {
           label: label0,
-          data: rows.map((r) => Number((r as Record<string, unknown>)[yKeys[0]!] ?? 0)),
-          backgroundColor: getColor(label0, 0) + "80",
-          borderColor: getColor(label0, 0),
+          data: rows.map((r) => Number((r as Record<string, unknown>)[y0] ?? 0)),
+          backgroundColor: getColor(y0, 0) + "80",
+          borderColor: getColor(y0, 0),
           borderWidth: 2,
           type: "bar",
           yAxisID: "y",
         },
         {
           label: label1,
-          data: rows.map((r) => Number((r as Record<string, unknown>)[yKeys[1]!] ?? 0)),
-          backgroundColor: getColor(label1, 1) + "20",
-          borderColor: getColor(label1, 1),
+          data: rows.map((r) => Number((r as Record<string, unknown>)[y1] ?? 0)),
+          backgroundColor: getColor(y1, 1) + "20",
+          borderColor: getColor(y1, 1),
           borderWidth: 2,
           type: "line",
           fill: false,
@@ -564,7 +582,7 @@ export function buildChartConfig(
   const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
   if (oneMetricManyCategories) {
     const yKey = yKeys[0]!;
-    const displayLabel = aliasForYKey(yKey);
+    const displayLabel = datasetDisplayLabel(yKey);
     const barColors = labels.map((l) => getColorStable(l));
     return {
       labels,
@@ -582,12 +600,12 @@ export function buildChartConfig(
   return {
     labels,
     datasets: yKeys.map((yKey, idx) => {
-      const displayLabel = aliasForYKey(yKey);
+      const displayLabel = datasetDisplayLabel(yKey);
       return {
         label: displayLabel,
         data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
-        backgroundColor: (resolvedType === "area" ? getColor(displayLabel, idx) + "40" : getColor(displayLabel, idx) + "99"),
-        borderColor: getColor(displayLabel, idx),
+        backgroundColor: (resolvedType === "area" ? getColor(yKey, idx) + "40" : getColor(yKey, idx) + "99"),
+        borderColor: getColor(yKey, idx),
         borderWidth: resolvedType === "line" || resolvedType === "area" ? 2 : 1,
         ...(resolvedType === "area" ? { fill: true } : {}),
       };

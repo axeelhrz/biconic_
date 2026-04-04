@@ -73,6 +73,8 @@ export type AggregationConfigEdit = {
   labelVisibilityMode?: "all" | "auto" | "min_max";
   /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
   chartLabelOverrides?: Record<string, string>;
+  /** Texto en leyenda por clave de métrica (chartYAxes). */
+  chartDatasetLabelOverrides?: Record<string, string>;
   /** Formato por métrica (clave = chartYAxes key). Si existe, se usa en lugar del formato global para esa serie. */
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
@@ -159,6 +161,7 @@ export type SavedMetricAggregationConfig = {
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";
   chartLabelOverrides?: Record<string, string>;
+  chartDatasetLabelOverrides?: Record<string, string>;
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   chartComboSyncAxes?: boolean;
   chartGridXDisplay?: boolean;
@@ -330,6 +333,7 @@ export function AddMetricConfigForm({
         showDataLabels: cfg.showDataLabels,
         labelVisibilityMode: cfg.labelVisibilityMode,
         chartLabelOverrides: cfg.chartLabelOverrides,
+        chartDatasetLabelOverrides: (cfg as { chartDatasetLabelOverrides?: Record<string, string> }).chartDatasetLabelOverrides,
         chartMetricFormats: cfg.chartMetricFormats,
         chartComboSyncAxes: (cfg as { chartComboSyncAxes?: boolean }).chartComboSyncAxes,
         chartStackBySeries: (cfg as { chartStackBySeries?: boolean }).chartStackBySeries,

@@ -562,6 +562,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
   const [chartSeriesColors, setChartSeriesColors] = useState<Record<string, string>>({});
   const [chartLabelOverrides, setChartLabelOverrides] = useState<Record<string, string>>({});
+  /** Texto en leyenda por clave de columna métrica (chartYAxes). */
+  const [chartDatasetLabelOverrides, setChartDatasetLabelOverrides] = useState<Record<string, string>>({});
   const [labelOverrideRawDrafts, setLabelOverrideRawDrafts] = useState<Record<string, string>>({});
   const [chartMetricFormats, setChartMetricFormats] = useState<Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>>({});
   const [chartComboSyncAxes, setChartComboSyncAxes] = useState(false);
@@ -690,6 +692,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartYAxes([]);
     setChartSeriesField("");
     setChartLabelOverrides({});
+    setChartDatasetLabelOverrides({});
     setLabelOverrideRawDrafts({});
     setChartRankingEnabled(false);
     setChartRankingTop(5);
@@ -1535,6 +1538,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartColorScheme(cfg.chartColorScheme ?? "auto");
       setChartSeriesColors(cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? cfg.chartSeriesColors : {});
       setChartLabelOverrides(cfg.chartLabelOverrides && typeof cfg.chartLabelOverrides === "object" ? cfg.chartLabelOverrides : {});
+      setChartDatasetLabelOverrides(
+        cfg.chartDatasetLabelOverrides && typeof cfg.chartDatasetLabelOverrides === "object"
+          ? (cfg.chartDatasetLabelOverrides as Record<string, string>)
+          : {}
+      );
       setChartMetricFormats(cfg.chartMetricFormats && typeof cfg.chartMetricFormats === "object" ? cfg.chartMetricFormats : {});
       setChartComboSyncAxes(!!cfg.chartComboSyncAxes);
       setChartGridXDisplay(cfg.chartGridXDisplay !== false);
@@ -1633,6 +1641,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartColorScheme("auto");
       setChartSeriesColors({});
       setChartLabelOverrides({});
+      setChartDatasetLabelOverrides({});
       setChartMetricFormats({});
       setChartAxisXVisible(true);
       setChartAxisYVisible(true);
@@ -2079,6 +2088,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         dateGroupByGranularity: normalizedGranularity,
         chartSeriesColors,
         chartLabelOverrides,
+        chartDatasetLabelOverrides:
+          Object.keys(chartDatasetLabelOverrides).length > 0 ? chartDatasetLabelOverrides : undefined,
         chartRankingEnabled,
         chartRankingTop,
         chartRankingMetric,
@@ -2100,6 +2111,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     timeColumn,
     chartSeriesColors,
     chartLabelOverrides,
+    chartDatasetLabelOverrides,
     chartRankingEnabled,
     chartRankingTop,
     chartRankingMetric,
@@ -2459,6 +2471,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       const next = Object.fromEntries(Object.entries(prev).filter(([k]) => allowed.has(k)));
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
     });
+    setChartDatasetLabelOverrides((prev) => {
+      const next = Object.fromEntries(Object.entries(prev).filter(([k]) => allowed.has(k)));
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
   }, [chartNumericColumns, wizard]);
 
   useEffect(() => {
@@ -2603,6 +2619,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartYAxes?: string[];
         chartSeriesField?: string;
         analysisNameToSave?: string;
+        chartDatasetLabelOverrides?: Record<string, string>;
       };
       if (Array.isArray(parsed.analysisSelectedMetricIds)) setAnalysisSelectedMetricIds(parsed.analysisSelectedMetricIds);
       if (Array.isArray(parsed.formDimensions)) setFormDimensions(parsed.formDimensions);
@@ -2616,6 +2633,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (Array.isArray(parsed.chartYAxes)) setChartYAxes(parsed.chartYAxes);
       if (typeof parsed.chartSeriesField === "string") setChartSeriesField(parsed.chartSeriesField);
       if (typeof parsed.analysisNameToSave === "string") setAnalysisNameToSave(parsed.analysisNameToSave);
+      if (parsed.chartDatasetLabelOverrides && typeof parsed.chartDatasetLabelOverrides === "object") {
+        setChartDatasetLabelOverrides(parsed.chartDatasetLabelOverrides);
+      }
     } catch {
       // ignore invalid draft
     } finally {
@@ -2640,6 +2660,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartYAxes,
       chartSeriesField,
       analysisNameToSave,
+      chartDatasetLabelOverrides,
     };
     window.localStorage.setItem(analysisDraftStorageKey, JSON.stringify(draft));
   }, [
@@ -2660,6 +2681,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartYAxes,
     chartSeriesField,
     analysisNameToSave,
+    chartDatasetLabelOverrides,
   ]);
 
   const saveDashboardFiltersOnly = useCallback(async () => {
@@ -2876,6 +2898,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
+      chartDatasetLabelOverrides:
+        Object.keys(chartDatasetLabelOverrides).length > 0 ? chartDatasetLabelOverrides : undefined,
       dateDimension: timeColumn || undefined,
       dateGroupByGranularity:
         analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
@@ -3147,6 +3171,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
+      chartDatasetLabelOverrides:
+        Object.keys(chartDatasetLabelOverrides).length > 0 ? chartDatasetLabelOverrides : undefined,
       dateDimension: timeColumn || undefined,
       dateGroupByGranularity:
         analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
@@ -3266,6 +3292,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       geoHints,
       chartSeriesField: chartSeriesField || undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
+      chartDatasetLabelOverrides:
+        Object.keys(chartDatasetLabelOverrides).length > 0 ? chartDatasetLabelOverrides : undefined,
       labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
       chartValueType: chartValueType !== "number" ? chartValueType : undefined,
       chartValueScale: chartValueScale !== "none" ? chartValueScale : undefined,
@@ -3318,6 +3346,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     geoHints,
     chartSeriesField,
     chartLabelOverrides,
+    chartDatasetLabelOverrides,
     labelVisibilityMode,
     chartValueType,
     chartValueScale,
@@ -3443,6 +3472,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartLabelOverrides(
         a.chartLabelOverrides && typeof a.chartLabelOverrides === "object"
           ? (a.chartLabelOverrides as Record<string, string>)
+          : {}
+      );
+      setChartDatasetLabelOverrides(
+        a.chartDatasetLabelOverrides && typeof a.chartDatasetLabelOverrides === "object"
+          ? (a.chartDatasetLabelOverrides as Record<string, string>)
           : {}
       );
       setLabelOverrideRawDrafts({});
@@ -5731,6 +5765,47 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Solo afecta la presentación visual. No cambia filas ni valores del análisis.</p>
 
                   <div className="space-y-5">
+                    {!["kpi", "table", "map", "text", "image", "filter"].includes(formChartType) && (
+                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Etiquetas de datos</Label>
+                        <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Valores numéricos mostrados encima de barras, líneas o porciones (no afecta el eje ni la leyenda).</p>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                          <input type="checkbox" checked={showDataLabels} onChange={(e) => setShowDataLabels(e.target.checked)} className="rounded" />
+                          Mostrar valores en el gráfico
+                        </label>
+                      </div>
+                    )}
+                    {chartYAxes.length > 0 && !["kpi", "table", "map", "text", "image", "filter"].includes(formChartType) && (
+                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Nombres en leyenda (por métrica)</Label>
+                        <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Opcional. Texto que verás al costado del gráfico para cada serie. Si lo dejás vacío se usa el nombre de la columna (ej. Suma_Facturacion).</p>
+                        <div className="space-y-3">
+                          {chartYAxes.map((key) => {
+                            const colLabel = chartAvailableColumns.find((c) => c.key === key)?.label ?? key;
+                            return (
+                              <div key={key}>
+                                <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>{colLabel}</Label>
+                                <Input
+                                  value={chartDatasetLabelOverrides[key] ?? ""}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setChartDatasetLabelOverrides((prev) => {
+                                      const next = { ...prev };
+                                      if (v.trim() === "") delete next[key];
+                                      else next[key] = v;
+                                      return next;
+                                    });
+                                  }}
+                                  placeholder={`Predeterminado: ${colLabel}`}
+                                  className="h-9 text-sm rounded-lg !bg-[var(--platform-bg)]"
+                                  style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                     {/* 6.3.1 Formato numérico (una sola métrica) o Formato por métrica (varias) */}
                     {chartYAxes.length <= 1 ? (
                       <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
@@ -5766,10 +5841,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                             <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Visibilidad de etiquetas</Label>
                             <select
                               value={labelVisibilityMode}
-                              onChange={(e) => {
-                                setLabelVisibilityMode(e.target.value as "all" | "auto" | "min_max");
-                                setShowDataLabels(true);
-                              }}
+                              onChange={(e) => setLabelVisibilityMode(e.target.value as "all" | "auto" | "min_max")}
                               className="h-8 rounded-lg border px-2 text-xs"
                               style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
                             >
@@ -5830,10 +5902,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                           <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Visibilidad de etiquetas</Label>
                           <select
                             value={labelVisibilityMode}
-                            onChange={(e) => {
-                              setLabelVisibilityMode(e.target.value as "all" | "auto" | "min_max");
-                              setShowDataLabels(true);
-                            }}
+                            onChange={(e) => setLabelVisibilityMode(e.target.value as "all" | "auto" | "min_max")}
                             className="h-8 rounded-lg border px-2 text-xs"
                             style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
                           >

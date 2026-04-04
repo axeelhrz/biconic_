@@ -169,6 +169,16 @@ export function resolveWidgetAggregationForDisplay<
   if (Array.isArray(agg.chartYAxes)) {
     next.chartYAxes = agg.chartYAxes.map((y) => mapKey(y) ?? y);
   }
+  const dsOverrides = agg.chartDatasetLabelOverrides as Record<string, string> | undefined;
+  if (dsOverrides && typeof dsOverrides === "object" && !Array.isArray(dsOverrides)) {
+    const remapped: Record<string, string> = {};
+    for (const [k, v] of Object.entries(dsOverrides)) {
+      if (typeof v !== "string" || v.trim() === "") continue;
+      const nk = mapKey(k) ?? k;
+      remapped[nk] = v;
+    }
+    if (Object.keys(remapped).length > 0) next.chartDatasetLabelOverrides = remapped;
+  }
   if (typeof agg.dimension === "string") {
     const m = mapKey(agg.dimension);
     if (m) next.dimension = m;

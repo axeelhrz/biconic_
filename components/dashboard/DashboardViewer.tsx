@@ -80,6 +80,7 @@ type AggregationConfig = {
   chartDecimals?: number;
   /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
   chartLabelOverrides?: Record<string, string>;
+  chartDatasetLabelOverrides?: Record<string, string>;
   /** Formato por métrica (clave = chartYAxes key). */
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
   /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
