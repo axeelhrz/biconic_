@@ -1,5 +1,6 @@
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget, type ChartConfig } from "@/lib/dashboard/buildChartConfig";
+import { resolveWidgetAggregationForDisplay } from "@/lib/dashboard/widgetRenderParity";
 
 type AggregationMetric = {
   id?: string;
@@ -228,8 +229,15 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     return { rows: [], processedRows: [], hasData: false };
   }
 
-  const processedRows = type === "table" ? getProcessedRowsForChart(rows, widget) : rows;
-  const chartConfig = type === "table" ? undefined : buildChartConfig(rows, widget, accentColor);
+  const displayWidget = resolveWidgetAggregationForDisplay(
+    widget as { aggregationConfig?: Record<string, unknown> | null },
+    datasetDimensions,
+    sourceId ?? undefined
+  ) as WidgetLike;
+  const chartWidget = displayWidget as BuildChartConfigWidget;
+
+  const processedRows = type === "table" ? getProcessedRowsForChart(rows, chartWidget) : rows;
+  const chartConfig = type === "table" ? undefined : buildChartConfig(rows, chartWidget, accentColor);
   const hasChartData = type === "kpi"
     ? processedRows.length > 0
     : type === "table"

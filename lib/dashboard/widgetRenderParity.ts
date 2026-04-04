@@ -186,6 +186,14 @@ export function resolveWidgetAggregationForDisplay<
   if (Array.isArray(agg.dimensions)) {
     next.dimensions = agg.dimensions.map((d) => mapKey(d) ?? d);
   }
+  if (typeof agg.dimension2 === "string") {
+    const m = mapKey(agg.dimension2);
+    if (m) next.dimension2 = m;
+  }
+  if (typeof agg.chartSeriesField === "string") {
+    const m = mapKey(agg.chartSeriesField);
+    if (m) next.chartSeriesField = m;
+  }
   if (typeof agg.dateDimension === "string") {
     const m = mapKey(agg.dateDimension);
     if (m) next.dateDimension = m;
