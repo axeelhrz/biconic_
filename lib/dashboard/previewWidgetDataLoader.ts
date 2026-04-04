@@ -160,10 +160,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     }));
     const primaryDim = dimensions[0] ?? agg?.dimension;
     const dateGroupByGranularity = agg?.dateGroupByGranularity;
-    const isTemporalAxis =
-      !!dateGroupByGranularity ||
-      !!(primaryDim && agg?.dateDimension && String(primaryDim).trim().toLowerCase() === String(agg.dateDimension ?? "").trim().toLowerCase());
-    const shouldApplyRanking = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0 && !isTemporalAxis;
+    /** Alineado con buildChartConfig: si el usuario activó Top N, la API aplica orderBy+limit también con eje temporal. */
+    const shouldApplyRanking = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0;
     const rankingMetric = agg?.chartRankingMetric || agg?.metrics?.[0]?.alias;
     const mappedChartX = agg?.chartXAxis ? mapField(agg.chartXAxis, sourceId, datasetDimensions) : undefined;
     const payload = {

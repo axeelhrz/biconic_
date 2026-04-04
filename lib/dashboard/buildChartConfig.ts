@@ -162,6 +162,8 @@ function shouldApplyTemporalRankingRule(
   xKey: string,
   agg?: BuildChartConfigWidget["aggregationConfig"]
 ): boolean {
+  /** Si el usuario activó Top N explícitamente, no bloquear el ranking por eje “temporal” (ej. top fechas por métrica). */
+  if (agg?.chartRankingEnabled) return false;
   const normalizedDateDim = String(agg?.dateDimension ?? "").trim().toLowerCase();
   const normalizedXKey = String(xKey ?? "").trim().toLowerCase();
   /** Solo configuración explícita: evita desactivar Top N por heurística de parseo en categorías mixtas. */
