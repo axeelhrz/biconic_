@@ -147,6 +147,8 @@ type AggregationConfig = {
     latField?: string;
     lonField?: string;
   };
+  analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
+  mapDefaultCountry?: string;
 };
 type StudioWidget = {
   id: string;
@@ -718,6 +720,9 @@ export function AdminDashboardStudio({
             chartType: agg.chartType || widget.type,
             chartXAxis: isInvalidIdentifierValue(agg.chartXAxis) ? undefined : agg.chartXAxis || undefined,
             ...(agg.geoHints ? { geoHints: agg.geoHints } : {}),
+            ...(typeof agg.mapDefaultCountry === "string" && agg.mapDefaultCountry.trim()
+              ? { mapDefaultCountry: agg.mapDefaultCountry.trim() }
+              : {}),
             metrics: metricsPayload,
             filters: [...mappedWidgetFilters, ...mappedGlobalFilters],
             orderBy: rankingOrderBy || agg.orderBy,
@@ -1251,6 +1256,32 @@ export function AdminDashboardStudio({
   }, []);
 
   const sortedWidgets = [...widgetsForCurrentPage].sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999));
+
+  const moveWidgetGridOrder = useCallback(
+    (widgetId: string, direction: -1 | 1) => {
+      setWidgets((prev) => {
+        const pageId = activePageId ?? "page-1";
+        const pageWs = prev.filter((x) => (x.pageId ?? "page-1") === pageId);
+        const sorted = [...pageWs].sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999));
+        const idx = sorted.findIndex((x) => x.id === widgetId);
+        if (idx < 0) return prev;
+        const j = idx + direction;
+        if (j < 0 || j >= sorted.length) return prev;
+        const a = sorted[idx]!;
+        const b = sorted[j]!;
+        const orderA = a.gridOrder ?? idx;
+        const orderB = b.gridOrder ?? j;
+        return prev.map((x) => {
+          if (x.id === a.id) return { ...x, gridOrder: orderB };
+          if (x.id === b.id) return { ...x, gridOrder: orderA };
+          return x;
+        });
+      });
+      setIsDirty(true);
+    },
+    [activePageId]
+  );
+
   const darkChartTheme = resolveDarkChartTheme(mergeTheme(dashboardTheme), true);
 
   const bgStyle = {
@@ -1810,6 +1841,9 @@ export function AdminDashboardStudio({
                 const span = Math.min(4, Math.max(1, w.gridSpan ?? 2));
                 const isSelected = selectedId === w.id;
                 const minH = w.minHeight ?? 280;
+                const orderIdx = sortedWidgets.findIndex((x) => x.id === w.id);
+                const canMoveUpReorder = orderIdx > 0;
+                const canMoveDownReorder = orderIdx >= 0 && orderIdx < sortedWidgets.length - 1;
                 const onResizeStart = (edge: string) => (e: React.PointerEvent) => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -1867,6 +1901,9 @@ export function AdminDashboardStudio({
                       readOnly={embeddedPreview}
                       onSelect={embeddedPreview ? undefined : () => setSelectedId(w.id)}
                       onRun={embeddedPreview ? undefined : () => loadMetricData(w.id)}
+                      onMoveOrder={embeddedPreview ? undefined : (dir) => moveWidgetGridOrder(w.id, dir)}
+                      canMoveUp={canMoveUpReorder}
+                      canMoveDown={canMoveDownReorder}
                       onDelete={embeddedPreview ? undefined : () => deleteMetric(w.id)}
                       kpiValue={kpiValue}
                       tableRows={w.rows as Record<string, unknown>[] | undefined}

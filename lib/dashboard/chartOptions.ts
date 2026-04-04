@@ -251,14 +251,56 @@ export function createCategoryTickCallback(params: {
   };
 }
 
+/** Para gráficos con eje de categorías compartido y varias series: magnitud por índice para alinear min/max entre métricas. */
+function combinedCategoryMagnitudes(datasets: Array<{ data?: unknown[] }>, categoryCount: number): unknown[] {
+  const out: unknown[] = [];
+  for (let i = 0; i < categoryCount; i += 1) {
+    let maxAbs = 0;
+    let any = false;
+    for (const ds of datasets) {
+      const arr = Array.isArray(ds.data) ? ds.data : [];
+      const n = toFiniteNumber(arr[i]);
+      if (n != null) {
+        any = true;
+        maxAbs = Math.max(maxAbs, Math.abs(n));
+      }
+    }
+    out.push(any ? maxAbs : null);
+  }
+  return out;
+}
+
 export function createDataLabelDisplay(params: {
   mode?: ChartLabelVisibilityMode;
+  /** Etiquetas del eje de categorías (misma longitud que cada `dataset.data` en gráficos típicos). */
+  labels?: unknown[];
   datasets?: Array<{ data?: unknown[] }>;
   maxVisible?: number;
 }): boolean | ((ctx: { datasetIndex?: number; dataIndex?: number }) => boolean) {
   const mode = normalizeLabelVisibilityMode(params.mode);
   if (mode === "all") return true;
   const datasets = Array.isArray(params.datasets) ? params.datasets : [];
+  const labelLen = Array.isArray(params.labels) ? params.labels.length : 0;
+  const maxDataLen = datasets.reduce(
+    (m, ds) => Math.max(m, Array.isArray(ds.data) ? ds.data.length : 0),
+    0
+  );
+  const categoryCount = Math.max(labelLen, maxDataLen);
+  const multiSeries = datasets.length > 1 && categoryCount > 0;
+
+  let sharedByCategory: Set<number> | null = null;
+  if (multiSeries && (mode === "auto" || mode === "min_max")) {
+    if (mode === "auto") {
+      sharedByCategory = getSampledIndices(categoryCount, params.maxVisible);
+    } else {
+      const combined = combinedCategoryMagnitudes(datasets, categoryCount);
+      sharedByCategory = getMinMaxValueIndices(combined);
+      if (sharedByCategory.size === 0 && categoryCount > 0) {
+        sharedByCategory = new Set<number>([0, categoryCount - 1]);
+      }
+    }
+  }
+
   const perDataset = datasets.map((dataset) =>
     getVisibleIndices({
       total: Array.isArray(dataset.data) ? dataset.data.length : 0,
@@ -270,8 +312,12 @@ export function createDataLabelDisplay(params: {
   return (ctx: { datasetIndex?: number; dataIndex?: number }) => {
     const datasetIndex = ctx?.datasetIndex ?? 0;
     const dataIndex = ctx?.dataIndex ?? -1;
+    if (dataIndex < 0) return false;
+    if (sharedByCategory) {
+      return sharedByCategory.has(dataIndex);
+    }
     const visible = perDataset[datasetIndex];
-    if (!visible || dataIndex < 0) return false;
+    if (!visible) return false;
     return visible.has(dataIndex);
   };
 }

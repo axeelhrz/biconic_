@@ -4,7 +4,13 @@
  * para que la visualización sea idéntica en ambos contextos.
  */
 
-import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
+import {
+  formatAnalysisDateForChart,
+  formatDateByGranularity,
+  parseDateLike,
+  type AnalysisDateDisplayFormat,
+  type DateGranularity,
+} from "@/lib/dashboard/dateFormatting";
 
 export type ChartConfig = {
   labels: string[];
@@ -152,16 +158,16 @@ export function resolveWidgetAxisKeys(
 }
 
 function shouldApplyTemporalRankingRule(
-  rows: Record<string, unknown>[],
+  _rows: Record<string, unknown>[],
   xKey: string,
   agg?: BuildChartConfigWidget["aggregationConfig"]
 ): boolean {
   const normalizedDateDim = String(agg?.dateDimension ?? "").trim().toLowerCase();
   const normalizedXKey = String(xKey ?? "").trim().toLowerCase();
+  /** Solo configuración explícita: evita desactivar Top N por heurística de parseo en categorías mixtas. */
   return (
     !!agg?.dateGroupByGranularity ||
-    (normalizedDateDim !== "" && normalizedDateDim === normalizedXKey) ||
-    rows.some((r) => parseDateLike((r as Record<string, unknown>)[xKey]) != null)
+    (normalizedDateDim !== "" && normalizedDateDim === normalizedXKey)
   );
 }
 
@@ -302,13 +308,14 @@ export function buildChartConfig(
     !!configuredGranularity ||
     (normalizedDateDim !== "" && normalizedDateDim === normalizedXKey) ||
     dataArray.some((r) => parseDateLike((r as Record<string, unknown>)[xKey]) != null);
+  const dateDisplayFmt = agg?.analysisDateDisplayFormat as AnalysisDateDisplayFormat | undefined;
   const formatXLabel = (value: unknown): string => {
     const raw = String(value ?? "");
     const overridden = labelOverride(raw);
     if (overridden !== raw) return overridden;
     if (!shouldTreatXAsDate) return overridden;
     const granularity = configuredGranularity ?? "day";
-    const formatted = formatDateByGranularity(value, granularity, overridden);
+    const formatted = formatAnalysisDateForChart(value, granularity, dateDisplayFmt, overridden);
     return formatted ?? overridden;
   };
 
@@ -419,7 +426,10 @@ export function buildChartConfig(
   const seriesField = seriesFieldCandidate || undefined;
   const stackedBySeriesEnabled =
     !!seriesField &&
-    (resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "combo") &&
+    (resolvedType === "bar" ||
+      resolvedType === "horizontalBar" ||
+      resolvedType === "combo" ||
+      resolvedType === "stackedColumn") &&
     (typeof agg?.chartStackBySeries === "boolean" ? agg.chartStackBySeries : true);
 
   if (seriesField && resultKeys.includes(seriesField) && !isPieOrDoughnut) {
@@ -525,7 +535,8 @@ export function buildChartConfig(
   }
 
   const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
-  const isBarOrHorizontalBar = resolvedType === "bar" || resolvedType === "horizontalBar";
+  const isBarOrHorizontalBar =
+    resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "stackedColumn";
   const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
   if (oneMetricManyCategories) {
     const yKey = yKeys[0]!;

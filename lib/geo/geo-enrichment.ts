@@ -70,6 +70,8 @@ export type EnrichRowsWithGeoOptions = {
   chartXAxis?: string;
   geoHints?: GeoHints;
   cacheClient?: GeoCacheClient | null;
+  /** Si la fila no trae país, se añade a la consulta de geocodificación (ej. «Argentina»). */
+  mapDefaultCountry?: string;
 };
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -280,7 +282,8 @@ const resolveCoordinates = async (
 };
 
 export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Promise<Record<string, unknown>[]> {
-  const { rows, dimList = [], chartXAxis, geoHints, cacheClient } = options;
+  const { rows, dimList = [], chartXAxis, geoHints, cacheClient, mapDefaultCountry } = options;
+  const defaultCountry = mapDefaultCountry?.trim() || undefined;
   if (!Array.isArray(rows) || rows.length === 0) return rows;
 
   const limitedRows = rows.slice(0, MAX_GEOCODE_ROWS);
@@ -304,17 +307,19 @@ export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Prom
     }
 
     const components = inferGeoComponents(r, keys, dimList, geoHints);
-    const resolved = await resolveCoordinates(components, cacheClient);
+    const withCountry =
+      components.country || !defaultCountry ? components : { ...components, country: defaultCountry };
+    const resolved = await resolveCoordinates(withCountry, cacheClient);
     if (resolved) {
       r.__geo_lat = resolved.lat;
       r.__geo_lon = resolved.lon;
-      r.__geo_label = label ?? resolved.displayName ?? buildGeoQueryCandidates(components)[0] ?? "";
+      r.__geo_label = label ?? resolved.displayName ?? buildGeoQueryCandidates(withCountry)[0] ?? "";
       r.__geo_source = resolved.source;
       r.__geo_resolved = true;
     } else {
       r.__geo_resolved = false;
       r.__geo_source = "unresolved";
-      r.__geo_label = label ?? buildGeoQueryCandidates(components)[0] ?? "";
+      r.__geo_label = label ?? buildGeoQueryCandidates(withCountry)[0] ?? "";
     }
     enriched.push(r);
   }

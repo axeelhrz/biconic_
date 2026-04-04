@@ -28,6 +28,10 @@ type AggregationConfigLike = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  chartType?: string;
+  chartXAxis?: string;
+  analysisDateDisplayFormat?: string;
+  mapDefaultCountry?: string;
   geoHints?: {
     countryField?: string;
     provinceField?: string;
@@ -161,9 +165,12 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       !!(primaryDim && agg?.dateDimension && String(primaryDim).trim().toLowerCase() === String(agg.dateDimension ?? "").trim().toLowerCase());
     const shouldApplyRanking = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0 && !isTemporalAxis;
     const rankingMetric = agg?.chartRankingMetric || agg?.metrics?.[0]?.alias;
+    const mappedChartX = agg?.chartXAxis ? mapField(agg.chartXAxis, sourceId, datasetDimensions) : undefined;
     const payload = {
       tableName,
       etlId: etlId ?? undefined,
+      chartType: type,
+      ...(mappedChartX ? { chartXAxis: mappedChartX } : {}),
       dimension: mapField(agg?.dimension, sourceId, datasetDimensions),
       dimensions: dimensions.map((d) => mapField(d, sourceId, datasetDimensions)),
       metrics: metricsPayload,
@@ -188,6 +195,9 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       ...(agg?.dateRangeFilter ? { dateRangeFilter: agg.dateRangeFilter } : {}),
       ...(savedMetrics?.length ? { savedMetrics: buildSavedMetricsPayload(savedMetrics, agg?.metrics) } : {}),
       ...(agg?.geoHints ? { geoHints: agg.geoHints } : {}),
+      ...(typeof agg?.mapDefaultCountry === "string" && agg.mapDefaultCountry.trim()
+        ? { mapDefaultCountry: agg.mapDefaultCountry.trim() }
+        : {}),
       ...(aggregateExtraPayload ?? {}),
     };
 

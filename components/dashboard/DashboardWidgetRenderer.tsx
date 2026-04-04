@@ -21,16 +21,20 @@ import { Card } from "@/components/ui/card";
 import {
   buildChartOptions,
   buildPieDoughnutLegendShared,
-  createCategoryTickCallback,
   createDataLabelDisplay,
-  createLegendLabelFilter,
   formatValue,
   getValueFormatter,
   normalizeLabelVisibilityMode,
   type ChartLabelVisibilityMode,
   type ChartStyleConfig,
 } from "@/lib/dashboard/chartOptions";
-import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
+import {
+  formatAnalysisDateForChart,
+  formatDateByGranularity,
+  parseDateLike,
+  type AnalysisDateDisplayFormat,
+  type DateGranularity,
+} from "@/lib/dashboard/dateFormatting";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 
@@ -60,6 +64,7 @@ export type WidgetChartType =
   | "pie"
   | "doughnut"
   | "combo"
+  | "stackedColumn"
   | "table"
   | "kpi"
   | "filter"
@@ -86,7 +91,9 @@ export type FilterWidgetConfig = {
   label: string;
   field: string;
   operator: string;
-  inputType: "text" | "select" | "date" | "number";
+  inputType: "text" | "select" | "date" | "number" | "multi";
+  /** Si hay IDs, el filtro del lienzo solo aplica a widgets vinculados a esas métricas guardadas. */
+  scopeMetricIds?: string[];
 };
 
 export interface DashboardWidgetRendererWidget {
@@ -134,6 +141,7 @@ function getChartOptionsBase(darkTheme: boolean) {
   return {
     responsive: true,
     maintainAspectRatio: false,
+    devicePixelRatio: typeof window !== "undefined" ? Math.min(2.25, window.devicePixelRatio || 1) : 1,
     layout: { padding: 8 },
     plugins: {
       legend: {
@@ -309,15 +317,22 @@ export function DashboardWidgetRenderer({
     const yKeys = Array.isArray(aggConfig?.chartYAxes) ? aggConfig.chartYAxes : [];
     const metricStyles = Array.isArray(widget.chartMetricStyles) ? widget.chartMetricStyles : [];
     const fallbackStyle = widget.chartStyle as ChartStyleConfig | undefined;
+    const aggMetrics = (widget.aggregationConfig as { metrics?: { alias?: string }[] } | undefined)?.metrics;
     yKeys.forEach((rawKey, index) => {
       const key = String(rawKey ?? "").trim();
       if (!key) return;
       const style = metricStyles[index] ?? fallbackStyle;
       const formatter = getValueFormatter(style, "value");
-      map.set(key, (value: number) => formatter(value));
+      const fn = (value: number) => formatter(value);
+      map.set(key, fn);
+      const m = key.match(/^metric_(\d+)$/);
+      if (m && aggMetrics?.[Number(m[1])]?.alias) {
+        const al = String(aggMetrics[Number(m[1])]!.alias).trim();
+        if (al) map.set(al, fn);
+      }
     });
     return map;
-  }, [aggConfig?.chartYAxes, widget.chartMetricStyles, widget.chartStyle]);
+  }, [aggConfig?.chartYAxes, widget.chartMetricStyles, widget.chartStyle, widget.aggregationConfig]);
   const formatTableCellValue = (columnKey: string, rawValue: unknown): string => {
     if (rawValue == null || rawValue === "") return "";
     const formatter = tableMetricFormatters.get(columnKey);
@@ -335,9 +350,11 @@ export function DashboardWidgetRenderer({
     String(aggConfig?.chartSeriesField ?? "").trim() !== "" ||
     String(aggConfig?.dimension2 ?? "").trim() !== "";
   const stackBySeriesEnabled =
-    hasSeriesDimension &&
-    (chartType === "bar" || chartType === "horizontalBar" || chartType === "combo") &&
-    (typeof aggConfig?.chartStackBySeries === "boolean" ? aggConfig.chartStackBySeries : true);
+    chartType === "stackedColumn"
+      ? (typeof aggConfig?.chartStackBySeries === "boolean" ? aggConfig.chartStackBySeries : true)
+      : hasSeriesDimension &&
+        (chartType === "bar" || chartType === "horizontalBar" || chartType === "combo") &&
+        (typeof aggConfig?.chartStackBySeries === "boolean" ? aggConfig.chartStackBySeries : true);
   const isCombo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2 && !stackBySeriesEnabled;
   const comboSyncAxes = isCombo && aggConfig?.chartComboSyncAxes === true;
 
@@ -382,6 +399,9 @@ export function DashboardWidgetRenderer({
       chartAxisStep?: string | number;
       chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
       labelVisibilityMode?: ChartLabelVisibilityMode;
+      analysisDateDisplayFormat?: AnalysisDateDisplayFormat;
+      chartDoughnutCutout?: string | number;
+      chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
     } | undefined;
     const style: ChartStyleConfig | undefined = {
       ...(widget.chartStyle as ChartStyleConfig | undefined),
@@ -398,7 +418,7 @@ export function DashboardWidgetRenderer({
       ? "horizontalBar"
       : chartType === "area"
         ? "line"
-        : chartType === "combo"
+        : chartType === "combo" || chartType === "stackedColumn"
           ? "bar"
           : chartType === "scatter"
             ? "line"
@@ -442,10 +462,11 @@ export function DashboardWidgetRenderer({
       !!dateGranularity ||
       (xAxisKey !== "" && dateDimensionKey !== "" && xAxisKey === dateDimensionKey) ||
       hasTemporalLabels;
+    const dateDisplayFmt = agg?.analysisDateDisplayFormat as AnalysisDateDisplayFormat | undefined;
     const formatTemporalLabel = (raw: unknown): string => {
       const base = String(raw ?? "");
       if (!shouldFormatDateAxis) return base;
-      const formatted = formatDateByGranularity(raw, dateGranularity ?? "day", base);
+      const formatted = formatAnalysisDateForChart(raw, dateGranularity ?? "day", dateDisplayFmt, base);
       return formatted ?? base;
     };
     if (type === "pie" || type === "doughnut") {
@@ -454,22 +475,28 @@ export function DashboardWidgetRenderer({
       const legendColor = darkChartTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
       const pieLegend = buildPieDoughnutLegendShared(chartConfig ?? undefined, legendColor) as Record<string, unknown>;
       const pieLegendLabels = (pieLegend.labels as Record<string, unknown> | undefined) ?? {};
-      const pieLegendFilter = createLegendLabelFilter({
-        mode: labelVisibilityMode,
-        labels: chartConfig?.labels,
-        datasets: chartConfig?.datasets,
-      });
       const optionsBaseNoScales = { ...optionsBase } as Record<string, unknown>;
       delete optionsBaseNoScales.scales;
       const optionsBasePlugins = (optionsBaseNoScales.plugins as Record<string, unknown> | undefined) ?? {};
+      const legPos = agg?.chartLegendPosition;
+      const legendPosition =
+        legPos === "top" || legPos === "bottom" || legPos === "left" || legPos === "right" || legPos === "chartArea"
+          ? legPos
+          : undefined;
+      const cutout =
+        type === "doughnut"
+          ? agg?.chartDoughnutCutout != null && agg.chartDoughnutCutout !== ""
+            ? agg.chartDoughnutCutout
+            : "58%"
+          : undefined;
       const plugins = {
         ...optionsBasePlugins,
         ...(base.plugins as object),
         legend: {
           ...pieLegend,
+          ...(legendPosition ? { position: legendPosition } : {}),
           labels: {
             ...pieLegendLabels,
-            ...(pieLegendFilter ? { filter: pieLegendFilter } : {}),
           },
         },
         datalabels: {
@@ -479,6 +506,7 @@ export function DashboardWidgetRenderer({
               ? false
               : createDataLabelDisplay({
                   mode: labelVisibilityMode,
+                  labels: chartConfig?.labels,
                   datasets: chartConfig?.datasets,
                 }),
           ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
@@ -487,13 +515,21 @@ export function DashboardWidgetRenderer({
       return {
         ...base,
         ...optionsBaseNoScales,
+        ...(cutout != null ? { cutout } : {}),
         elements: {
           arc: { borderWidth: 0 },
         },
         plugins,
       };
     }
-    if (type === "bar" || type === "horizontalBar" || type === "line" || chartType === "combo" || chartType === "scatter") {
+    if (
+      type === "bar" ||
+      type === "horizontalBar" ||
+      type === "line" ||
+      chartType === "combo" ||
+      chartType === "stackedColumn" ||
+      chartType === "scatter"
+    ) {
       const built = buildChartOptions(type, style, "value") as Record<string, unknown>;
       const builtPlugins = built.plugins as Record<string, unknown> | undefined;
       const builtDatalabels = builtPlugins?.datalabels as Record<string, unknown> | undefined ?? {};
@@ -501,9 +537,11 @@ export function DashboardWidgetRenderer({
         String(agg?.chartSeriesField ?? "").trim() !== "" ||
         String(agg?.dimension2 ?? "").trim() !== "";
       const stackBySeriesEnabled =
-        hasSeriesDimension &&
-        (chartType === "bar" || chartType === "horizontalBar" || chartType === "combo") &&
-        (typeof agg?.chartStackBySeries === "boolean" ? agg.chartStackBySeries : true);
+        chartType === "stackedColumn"
+          ? (typeof agg?.chartStackBySeries === "boolean" ? agg.chartStackBySeries : true)
+          : hasSeriesDimension &&
+            (chartType === "bar" || chartType === "horizontalBar" || chartType === "combo") &&
+            (typeof agg?.chartStackBySeries === "boolean" ? agg.chartStackBySeries : true);
       const isComboTwo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2 && !stackBySeriesEnabled;
       const syncAxes = isComboTwo && (widget.aggregationConfig as { chartComboSyncAxes?: boolean } | undefined)?.chartComboSyncAxes === true;
       const axisTickColor = darkChartTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
@@ -645,12 +683,8 @@ export function DashboardWidgetRenderer({
       };
       const baseDatalabelFormatter = (builtDatalabels as { formatter?: (v: number, c?: unknown) => string }).formatter;
       const datalabelFormatter =
-        usePerMetricFormat || (isComboTwo && syncAxes)
-          ? (value: number, ctx?: { datasetIndex?: number }) => {
-              const rawValue = toRawComboValue(value, ctx?.datasetIndex);
-              if (!usePerMetricFormat && baseDatalabelFormatter) return baseDatalabelFormatter(rawValue, ctx);
-              return formatMetricValue(value, ctx?.datasetIndex, ctx);
-            }
+        usePerMetricFormat || isComboTwo
+          ? (value: number, ctx?: { datasetIndex?: number }) => formatMetricValue(value, ctx?.datasetIndex, ctx)
           : baseDatalabelFormatter;
 
       const tooltipCallbacks =
@@ -682,19 +716,27 @@ export function DashboardWidgetRenderer({
       const valueScale = (builtScales[valueScaleKey] as Record<string, unknown> | undefined) ?? {};
       const valueTicks = (valueScale.ticks as Record<string, unknown> | undefined) ?? {};
       const primaryMetricScale = resolveMetricScale(0);
+      const categoryLabels = chartConfig?.labels ?? [];
+      const formatCategoryAxisTick = (value: unknown, tickIndex: number): string => {
+        if (categoryLabels.length === 0) return formatTemporalLabel(value);
+        let idx = -1;
+        if (typeof value === "number" && Number.isFinite(value)) idx = Math.trunc(value);
+        else {
+          const n = Number(value);
+          if (Number.isFinite(n)) idx = Math.trunc(n);
+        }
+        if (idx >= 0 && idx < categoryLabels.length) return formatTemporalLabel(categoryLabels[idx]);
+        const s = String(value ?? "");
+        const found = categoryLabels.indexOf(s);
+        if (found >= 0) return formatTemporalLabel(categoryLabels[found]);
+        return formatTemporalLabel(s || value);
+      };
       const patchedCategoryScale = {
         ...categoryScale,
         ...(stackBySeriesEnabled ? { stacked: true } : {}),
         ticks: {
           ...categoryTicks,
-          ...(labelVisibilityMode === "all" ? { autoSkip: false } : {}),
-          ...(labelVisibilityMode === "auto" ? { maxTicksLimit: 8 } : {}),
-          ...(labelVisibilityMode === "min_max" ? { autoSkip: false } : {}),
-          callback: createCategoryTickCallback({
-            labels: chartConfig?.labels,
-            mode: labelVisibilityMode,
-            formatter: (raw: unknown) => formatTemporalLabel(raw),
-          }),
+          callback: formatCategoryAxisTick,
         },
       };
       const patchedScales = {
@@ -729,11 +771,6 @@ export function DashboardWidgetRenderer({
             }
           : {}),
       };
-      const legendFilter = createLegendLabelFilter({
-        mode: labelVisibilityMode,
-        labels: chartConfig?.labels,
-        datasets: chartConfig?.datasets,
-      });
       const builtLegend = (builtPlugins?.legend as Record<string, unknown> | undefined) ?? {};
       const builtLegendLabels = (builtLegend.labels as Record<string, unknown> | undefined) ?? {};
       const plugins = {
@@ -743,7 +780,6 @@ export function DashboardWidgetRenderer({
           ...builtLegend,
           labels: {
             ...builtLegendLabels,
-            ...(legendFilter ? { filter: legendFilter } : {}),
           },
         },
         datalabels: {
@@ -753,6 +789,7 @@ export function DashboardWidgetRenderer({
               ? false
               : createDataLabelDisplay({
                   mode: labelVisibilityMode,
+                  labels: chartConfig?.labels,
                   datasets: chartConfig?.datasets,
                 }),
           ...(datalabelFormatter != null && { formatter: datalabelFormatter }),
@@ -898,7 +935,33 @@ export function DashboardWidgetRenderer({
                 <label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
                   {widget.filterConfig.label}
                 </label>
-                {widget.filterConfig.inputType === "select" && Array.isArray(widget.facetValues?.[widget.filterConfig.field]) ? (
+                {widget.filterConfig.inputType === "multi" && Array.isArray(widget.facetValues?.[widget.filterConfig.field]) ? (
+                  (() => {
+                    const opts = (widget.facetValues![widget.filterConfig!.field] as unknown[]).map(String);
+                    const selected = (Array.isArray(filterValue) ? filterValue : filterValue != null && filterValue !== "" ? [filterValue] : []) as string[];
+                    const selectedNorm = selected.map(String);
+                    const toggle = (s: string, checked: boolean) => {
+                      const next = checked ? [...selectedNorm, s] : selectedNorm.filter((x) => x !== s);
+                      onFilterChange?.(widget.id, next);
+                    };
+                    return (
+                      <div className="flex flex-col gap-2 max-h-40 overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--platform-border)" }}>
+                        {opts.map((s) => (
+                          <label key={s} className="flex items-center gap-2 cursor-pointer text-sm" style={{ color: "var(--platform-fg)" }}>
+                            <input
+                              type="checkbox"
+                              className="rounded border"
+                              style={{ borderColor: "var(--platform-border)" }}
+                              checked={selectedNorm.includes(s)}
+                              onChange={(e) => toggle(s, e.target.checked)}
+                            />
+                            <span>{s}</span>
+                          </label>
+                        ))}
+                      </div>
+                    );
+                  })()
+                ) : widget.filterConfig.inputType === "select" && Array.isArray(widget.facetValues?.[widget.filterConfig.field]) ? (
                   <select
                     className="w-full rounded-lg border px-3 py-2 text-sm"
                     style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
@@ -938,7 +1001,9 @@ export function DashboardWidgetRenderer({
             )}
             {chartType !== "kpi" && chartType !== "table" && chartType !== "text" && chartType !== "image" && chartType !== "filter" && chartType !== "map" && chartConfig && (
               <div className="w-full" style={{ height: Math.max(220, (effectiveMinHeight ?? 240) - 72) }}>
-                {(chartType === "bar" || chartType === "combo") && <Bar data={(chartType === "combo" && effectiveChartData ? effectiveChartData : chartConfig) as never} options={chartOptions as never} />}
+                {(chartType === "bar" || chartType === "stackedColumn" || chartType === "combo") && (
+                  <Bar data={(chartType === "combo" && effectiveChartData ? effectiveChartData : chartConfig) as never} options={chartOptions as never} />
+                )}
                 {chartType === "horizontalBar" && (
                   (() => {
                     const optionsRecord = chartOptions as Record<string, unknown>;

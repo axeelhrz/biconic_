@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { Loader2, Play, Trash2, MoreHorizontal } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, Play, Trash2, MoreHorizontal } from "lucide-react";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "@/components/dashboard/DashboardWidgetRenderer";
 import {
   DropdownMenu,
@@ -52,7 +52,7 @@ type MetricBlockProps = {
   state?: MetricBlockState;
   insight?: string;
   chartConfig?: ChartConfig | null;
-  chartType?: "bar" | "horizontalBar" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter";
+  chartType?: "bar" | "horizontalBar" | "stackedColumn" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter" | "map";
   isLoading?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
@@ -76,6 +76,10 @@ type MetricBlockProps = {
   darkChartTheme?: boolean;
   /** Vista previa admin: sin menú, sin selección, mismo aspecto del lienzo */
   readOnly?: boolean;
+  /** Cambiar orden en el lienzo (persiste gridOrder al guardar dashboard). */
+  onMoveOrder?: (direction: -1 | 1) => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
 };
 
 const STATE_LABELS: Record<MetricBlockState, string> = {
@@ -111,6 +115,9 @@ export function MetricBlock({
   showTechnicalPreview = false,
   darkChartTheme = false,
   readOnly = false,
+  onMoveOrder,
+  canMoveUp = false,
+  canMoveDown = false,
 }: MetricBlockProps) {
   const hasViz = useMemo(() => {
     if (chartType === "kpi") {
@@ -200,6 +207,31 @@ export function MetricBlock({
               <DropdownMenuLabel className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--studio-fg-muted)]">
                 Modificar gráfica
               </DropdownMenuLabel>
+              {onMoveOrder && (
+                <>
+                  <DropdownMenuItem
+                    className="metric-block-dropdown-item flex items-center gap-3 rounded-lg px-3 py-2.5 mx-1.5 my-0.5 text-sm text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
+                    disabled={!canMoveUp}
+                    onClick={(e) => { e.stopPropagation(); if (canMoveUp) onMoveOrder(-1); }}
+                  >
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--studio-bg-elevated)]">
+                      <ChevronUp className="h-4 w-4" />
+                    </span>
+                    <span>Mover arriba</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="metric-block-dropdown-item flex items-center gap-3 rounded-lg px-3 py-2.5 mx-1.5 my-0.5 text-sm text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
+                    disabled={!canMoveDown}
+                    onClick={(e) => { e.stopPropagation(); if (canMoveDown) onMoveOrder(1); }}
+                  >
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--studio-bg-elevated)]">
+                      <ChevronDown className="h-4 w-4" />
+                    </span>
+                    <span>Mover abajo</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator className="my-1.5 bg-[var(--studio-border)]" />
+                </>
+              )}
               <DropdownMenuItem
                 className="metric-block-dropdown-item flex items-center gap-3 rounded-lg px-3 py-2.5 mx-1.5 my-0.5 text-sm text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
                 onClick={(e) => { e.stopPropagation(); onRun?.(); }}

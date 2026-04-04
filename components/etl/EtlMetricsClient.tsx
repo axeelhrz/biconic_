@@ -86,6 +86,12 @@ function aggregationResultColumnKey(m: { alias?: string; func?: string; field?: 
 
 const CHART_TYPES: { value: string; label: string; icon: ComponentType<{ className?: string }>; description: string }[] = [
   { value: "bar", label: "Barras", icon: BarChart2, description: "Comparar valores por categoría" },
+  {
+    value: "stackedColumn",
+    label: "Columnas apiladas",
+    icon: BarChart2,
+    description: "Eje X + métricas; segmentos por una segunda dimensión (apilado)",
+  },
   { value: "horizontalBar", label: "Barras horiz.", icon: BarChart2, description: "Ideal para muchas categorías o nombres largos" },
   { value: "line", label: "Líneas", icon: LineChart, description: "Evolución temporal o tendencias" },
   { value: "area", label: "Área", icon: AreaChart, description: "Tendencias con volumen acumulado" },
@@ -464,6 +470,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [etlData, setEtlData] = useState<ETLDataResponse | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** Análisis guardado en edición (lista «Análisis guardados»); no confundir con editingId de métrica. */
+  const [editingSavedAnalysisId, setEditingSavedAnalysisId] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
   const [formChartType, setFormChartType] = useState("bar");
   const [chartXAxis, setChartXAxis] = useState<string>("");
@@ -560,6 +568,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartGridXDisplay, setChartGridXDisplay] = useState(true);
   const [chartGridYDisplay, setChartGridYDisplay] = useState(true);
   const [chartGridColor, setChartGridColor] = useState<string>("");
+  /** Mapa: país por defecto para geocodificación cuando la fila no incluye país. */
+  const [mapDefaultCountry, setMapDefaultCountry] = useState<string>("");
   const [chartAxisXVisible, setChartAxisXVisible] = useState(true);
   const [chartAxisYVisible, setChartAxisYVisible] = useState(true);
   const [chartScalePerMetric, setChartScalePerMetric] = useState<Record<string, { min?: number; max?: number; step?: number }>>({});
@@ -664,6 +674,82 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   /** Columnas calculadas (ej. factura = CANTIDAD * PRECIO_UNITARIO); se guardan en dataset y aparecen como medidas. */
   const [derivedColumns, setDerivedColumns] = useState<DerivedColumn[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<{ type: "metric"; id: string; name: string } | { type: "derived"; name: string } | null>(null);
+  /** Evita que el paso Mapeo conserve ejes de un gráfico anterior cuando cambia el tipo o la selección de métricas del análisis. */
+  const lastChartTypeForMappingRef = useRef<string | null>(null);
+  const prevAnalysisSelectionSigRef = useRef<string>("");
+  const savedAnalysesSectionRef = useRef<HTMLElement | null>(null);
+
+  const clearAnalysisDraft = useCallback(() => {
+    if (typeof window === "undefined" || !analysisDraftStorageKey) return;
+    window.localStorage.removeItem(analysisDraftStorageKey);
+    analysisDraftHydratedRef.current = false;
+  }, [analysisDraftStorageKey]);
+
+  const resetChartWizardState = useCallback(() => {
+    setChartXAxis("");
+    setChartYAxes([]);
+    setChartSeriesField("");
+    setChartLabelOverrides({});
+    setLabelOverrideRawDrafts({});
+    setChartRankingEnabled(false);
+    setChartRankingTop(5);
+    setChartRankingMetric("");
+    setChartMetricFormats({});
+    setChartSeriesColors({});
+    setChartPinnedDimensions([]);
+    setChartSortDirection("none");
+    setChartSortBy("series");
+    setChartSortByMetric("");
+    setChartAxisOrder("alpha");
+    setChartAxisOrderTouched(false);
+    setChartScaleMode("auto");
+    setChartScaleMin("");
+    setChartScaleMax("");
+    setChartAxisStep("");
+    setChartScalePerMetric({});
+    setChartColorScheme("auto");
+    setChartComboSyncAxes(false);
+    setChartGridXDisplay(true);
+    setChartGridYDisplay(true);
+    setChartGridColor("");
+    setMapDefaultCountry("");
+    setChartAxisXVisible(true);
+    setChartAxisYVisible(true);
+    setShowDataLabels(true);
+    setLabelVisibilityMode("auto");
+    setPreviewDateOrder("asc");
+    lastChartTypeForMappingRef.current = null;
+    prevAnalysisSelectionSigRef.current = "";
+  }, []);
+
+  const startNewAnalysis = useCallback(() => {
+    resetChartWizardState();
+    clearAnalysisDraft();
+    setEditingId(null);
+    setEditingSavedAnalysisId(null);
+    setAnalysisSelectedMetricIds([]);
+    setFormDimensions([]);
+    setFormFilters([]);
+    setFormOrderBy(null);
+    setFormLimit(100);
+    setTimeColumn("");
+    setAnalysisGranularity("");
+    setAnalysisTimeRange("0");
+    setAnalysisDateFrom("");
+    setAnalysisDateTo("");
+    setAnalysisDateFormat("short");
+    setTransformCompare("none");
+    setTransformCompareFixedValue("");
+    setTransformShowDelta(true);
+    setTransformShowDeltaPct(true);
+    setTransformShowAccum(true);
+    setFormChartType("bar");
+    setAnalysisNameToSave("");
+    setPreviewData(null);
+    setWizard("C");
+    setWizardStep(0);
+    setShowForm(true);
+  }, [resetChartWizardState, clearAnalysisDraft]);
 
   const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
     A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
@@ -1339,10 +1425,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
   const openNew = () => {
     setEditingId(null);
+    setEditingSavedAnalysisId(null);
+    resetChartWizardState();
     setFormName("");
     setFormChartType("bar");
-    setChartAxisOrder("alpha");
-    setChartAxisOrderTouched(false);
     setFormDimensions([]);
     setFormMetrics([{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado", expression: "" } as AggregationMetricEdit]);
     setFormFilters([]);
@@ -1360,8 +1446,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setTransformShowDelta(true);
     setTransformShowDeltaPct(true);
     setTransformShowAccum(true);
-    setShowDataLabels(true);
-    setLabelVisibilityMode("auto");
     setPreviewData(null);
     if (!hideDatasetTab) {
       setGrainOption("");
@@ -1378,6 +1462,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
   const openEdit = (saved: SavedMetricForm) => {
     setEditingId(saved.id);
+    setEditingSavedAnalysisId(null);
     setFormName(saved.name);
     setAnalysisSelectedMetricIds([]);
     setFormulaFromSavedMetricIds([]);
@@ -1513,6 +1598,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         setAnalysisDateFrom("");
         setAnalysisDateTo("");
       }
+      const adfOpen = (cfg as { analysisDateDisplayFormat?: string }).analysisDateDisplayFormat;
+      if (adfOpen === "short" || adfOpen === "monthYear" || adfOpen === "year" || adfOpen === "datetime") {
+        setAnalysisDateFormat(adfOpen);
+      } else {
+        setAnalysisDateFormat("short");
+      }
+      setMapDefaultCountry(typeof (cfg as { mapDefaultCountry?: string }).mapDefaultCountry === "string" ? String((cfg as { mapDefaultCountry: string }).mapDefaultCountry) : "");
       const first = (cfg.metrics ?? [saved.metric])[0];
       setFormMetric(first ? { ...first, id: first.id || `m-${Date.now()}` } : { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" });
     } else {
@@ -1559,6 +1651,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setInterDrillThroughTarget("");
       setInterTooltipFields(["value", "delta_pct"]);
       setInterHighlight(true);
+      setAnalysisDateFormat("short");
+      setMapDefaultCountry("");
       setFormMetric({ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` });
     }
     setPreviewData(null);
@@ -1666,6 +1760,32 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       })
       .filter(Boolean);
   }, [wizard, analysisSelectedMetricIds, savedMetrics]);
+
+  const geoHints = useMemo<GeoHints | undefined>(() => {
+    const keys = Object.keys(columnRoles);
+    if (keys.length === 0) return undefined;
+    const prioritized = Array.from(new Set([...formDimensions, ...keys]));
+    const pickByGeoType = (geoType: GeoType) =>
+      prioritized.find((k) => columnRoles[k]?.role === "geo" && columnRoles[k]?.geoType === geoType);
+    const pickByRegex = (re: RegExp) => prioritized.find((k) => re.test(k));
+
+    const countryField = pickByGeoType("country") ?? pickByRegex(/pais|country|nation|naci[oó]n/i);
+    const provinceField = pickByGeoType("province") ?? pickByRegex(/provincia|estado|state|region|departamento/i);
+    const cityField = pickByGeoType("city") ?? pickByRegex(/ciudad|city|localidad|municipio|town/i);
+    const addressField = pickByGeoType("address") ?? pickByRegex(/direccion|domicilio|address|calle|street/i);
+    const latField = pickByRegex(/^lat$|latitud|latitude/i);
+    const lonField = pickByRegex(/^lon$|^lng$|longitud|longitude/i);
+
+    const hints: GeoHints = {
+      ...(countryField ? { countryField } : {}),
+      ...(provinceField ? { provinceField } : {}),
+      ...(cityField ? { cityField } : {}),
+      ...(addressField ? { addressField } : {}),
+      ...(latField ? { latField } : {}),
+      ...(lonField ? { lonField } : {}),
+    };
+    return Object.keys(hints).length > 0 ? hints : undefined;
+  }, [columnRoles, formDimensions]);
 
   const fetchPreview = useCallback(async () => {
     if (effectiveFormMetrics.length === 0) return;
@@ -1792,6 +1912,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (useAnalysisConfig && transformShowAccum) {
         body.cumulative = "running_sum";
       }
+      if (useAnalysisConfig) {
+        body.chartType = formChartType;
+        if (chartXAxis) body.chartXAxis = chartXAxis;
+        if (geoHints && Object.keys(geoHints).length > 0) body.geoHints = geoHints;
+        if (formChartType === "map" && mapDefaultCountry.trim()) body.mapDefaultCountry = mapDefaultCountry.trim();
+      }
       const res = await fetch("/api/dashboard/aggregate-data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1814,7 +1940,31 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     } finally {
       setPreviewLoading(false);
     }
-  }, [etlId, tableNameForPreview, formDimensions, effectiveFormMetrics, formFilters, formOrderBy, formLimit, fetchData, derivedColumnsByName, derivedColumns, wizard, timeColumn, analysisGranularity, analysisTimeRange, analysisDateFrom, analysisDateTo, transformCompare, transformCompareFixedValue, savedMetrics]);
+  }, [
+    etlId,
+    tableNameForPreview,
+    formDimensions,
+    effectiveFormMetrics,
+    formFilters,
+    formOrderBy,
+    formLimit,
+    fetchData,
+    derivedColumnsByName,
+    derivedColumns,
+    wizard,
+    timeColumn,
+    analysisGranularity,
+    analysisTimeRange,
+    analysisDateFrom,
+    analysisDateTo,
+    transformCompare,
+    transformCompareFixedValue,
+    savedMetrics,
+    formChartType,
+    chartXAxis,
+    geoHints,
+    mapDefaultCountry,
+  ]);
 
   const fetchPreviewRef = useRef(fetchPreview);
   fetchPreviewRef.current = fetchPreview;
@@ -1881,32 +2031,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     const hasGeo = formDimensions.some((d) => columnRoles[d]?.role === "geo" || geoKeywords.test(d));
     return { hasGeo };
   }, [formDimensions, columnRoles]);
-
-  const geoHints = useMemo<GeoHints | undefined>(() => {
-    const keys = Object.keys(columnRoles);
-    if (keys.length === 0) return undefined;
-    const prioritized = Array.from(new Set([...formDimensions, ...keys]));
-    const pickByGeoType = (geoType: GeoType) =>
-      prioritized.find((k) => columnRoles[k]?.role === "geo" && columnRoles[k]?.geoType === geoType);
-    const pickByRegex = (re: RegExp) => prioritized.find((k) => re.test(k));
-
-    const countryField = pickByGeoType("country") ?? pickByRegex(/pais|country|nation|naci[oó]n/i);
-    const provinceField = pickByGeoType("province") ?? pickByRegex(/provincia|estado|state|region|departamento/i);
-    const cityField = pickByGeoType("city") ?? pickByRegex(/ciudad|city|localidad|municipio|town/i);
-    const addressField = pickByGeoType("address") ?? pickByRegex(/direccion|domicilio|address|calle|street/i);
-    const latField = pickByRegex(/^lat$|latitud|latitude/i);
-    const lonField = pickByRegex(/^lon$|^lng$|longitud|longitude/i);
-
-    const hints: GeoHints = {
-      ...(countryField ? { countryField } : {}),
-      ...(provinceField ? { provinceField } : {}),
-      ...(cityField ? { cityField } : {}),
-      ...(addressField ? { addressField } : {}),
-      ...(latField ? { latField } : {}),
-      ...(lonField ? { lonField } : {}),
-    };
-    return Object.keys(hints).length > 0 ? hints : undefined;
-  }, [columnRoles, formDimensions]);
 
   const chartAutoSelectedRef = useRef(false);
   useEffect(() => {
@@ -2327,9 +2451,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     });
   }, [chartNumericColumns, effectiveFormMetrics, formChartType]);
 
-  const lastChartTypeForMappingRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (wizard !== "C" && wizard !== "D") return;
+    const allowed = new Set(chartNumericColumns.map((c) => c.key));
+    if (allowed.size === 0) return;
+    setChartMetricFormats((prev) => {
+      const next = Object.fromEntries(Object.entries(prev).filter(([k]) => allowed.has(k)));
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+  }, [chartNumericColumns, wizard]);
+
   useEffect(() => {
     if (wizard !== "D" || wizardStep !== 1) return;
+    const selectionSig = [...analysisSelectedMetricIds].sort().join("|");
+    const prevSig = prevAnalysisSelectionSigRef.current;
+    const analysisSelectionChanged = prevSig !== selectionSig;
     const dims = chartDimensionColumns;
     const nums = chartNumericColumns;
     const formulaResultKey = (() => {
@@ -2347,10 +2483,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       return undefined;
     })();
     const chartTypeChanged = lastChartTypeForMappingRef.current !== formChartType;
-    lastChartTypeForMappingRef.current = formChartType;
     const emptyMapping = !chartXAxis && chartYAxes.length === 0;
-    if (editingId && !emptyMapping) return;
-    if (!chartTypeChanged && !emptyMapping) return;
+    const shouldRemap =
+      chartTypeChanged || emptyMapping || (analysisSelectionChanged && !editingId && !editingSavedAnalysisId);
+    prevAnalysisSelectionSigRef.current = selectionSig;
+    lastChartTypeForMappingRef.current = formChartType;
+    if ((editingId || editingSavedAnalysisId) && !shouldRemap) return;
+    if (!shouldRemap) return;
     if (dims.length === 0 && nums.length === 0) return;
 
     if (formChartType === "kpi") {
@@ -2379,7 +2518,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       }
       if (dims.length >= 2 && !chartSeriesField) setChartSeriesField(dims[1]!.key);
     }
-  }, [wizard, wizardStep, formChartType, chartDimensionColumns, chartNumericColumns, chartXAxis, chartYAxes.length, chartSeriesField, columnRoles, editingId, effectiveFormMetrics]);
+  }, [
+    wizard,
+    wizardStep,
+    formChartType,
+    chartDimensionColumns,
+    chartNumericColumns,
+    chartXAxis,
+    chartYAxes.length,
+    chartSeriesField,
+    columnRoles,
+    editingId,
+    editingSavedAnalysisId,
+    effectiveFormMetrics,
+    analysisSelectedMetricIds,
+  ]);
 
   useEffect(() => {
     if (!ratioReuseDisplayMode) return;
@@ -2411,17 +2564,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
+    setEditingSavedAnalysisId(null);
+    lastChartTypeForMappingRef.current = null;
+    prevAnalysisSelectionSigRef.current = "";
     setWizard("A");
     setAnalysisSelectedMetricIds([]);
     setWizardStep(0);
     setAfterSaveInB(null);
   };
-
-  const clearAnalysisDraft = useCallback(() => {
-    if (typeof window === "undefined" || !analysisDraftStorageKey) return;
-    window.localStorage.removeItem(analysisDraftStorageKey);
-    analysisDraftHydratedRef.current = false;
-  }, [analysisDraftStorageKey]);
 
   useEffect(() => {
     if (!showForm) {
@@ -2429,6 +2579,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       return;
     }
     if (editingId) return;
+    if (editingSavedAnalysisId) return;
     if (!analysisDraftStorageKey) return;
     if (wizard !== "C" && wizard !== "D") return;
     if (analysisDraftHydratedRef.current) return;
@@ -2470,11 +2621,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     } finally {
       analysisDraftHydratedRef.current = true;
     }
-  }, [showForm, editingId, analysisDraftStorageKey, wizard]);
+  }, [showForm, editingId, editingSavedAnalysisId, analysisDraftStorageKey, wizard]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !analysisDraftStorageKey) return;
-    if (!showForm || !!editingId) return;
+    if (!showForm || !!editingId || editingSavedAnalysisId) return;
     if (wizard !== "C" && wizard !== "D") return;
     const draft = {
       analysisSelectedMetricIds,
@@ -2495,6 +2646,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     analysisDraftStorageKey,
     showForm,
     editingId,
+    editingSavedAnalysisId,
     wizard,
     analysisSelectedMetricIds,
     formDimensions,
@@ -2773,6 +2925,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       interDrillThroughTarget: interDrillThrough && interDrillThroughTarget ? interDrillThroughTarget : undefined,
       interTooltipFields: interTooltipFields.length > 0 ? interTooltipFields : undefined,
       interHighlight: interHighlight === false ? false : undefined,
+      analysisDateDisplayFormat: analysisDateFormat,
+      ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
     };
     let expr = (firstMetric as { expression?: string }).expression;
     const alias = (firstMetric.alias || "").trim();
@@ -3042,6 +3196,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       interDrillThroughTarget: interDrillThrough && interDrillThroughTarget ? interDrillThroughTarget : undefined,
       interTooltipFields: interTooltipFields.length > 0 ? interTooltipFields : undefined,
       interHighlight: interHighlight === false ? false : undefined,
+      analysisDateDisplayFormat: analysisDateFormat,
+      ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
     };
     const item: SavedMetricForm = {
       id: `sm-${Date.now()}`,
@@ -3096,9 +3252,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     }
   };
 
-  const buildAnalysisPayload = useCallback((name: string) => {
+  const buildAnalysisPayload = useCallback((name: string, existingAnalysisId?: string | null) => {
     return {
-      id: `sa-${Date.now()}`,
+      id: existingAnalysisId && String(existingAnalysisId).trim() !== "" ? String(existingAnalysisId) : `sa-${Date.now()}`,
       name,
       metricIds: [...analysisSelectedMetricIds],
       dimensions: formDimensions.length > 0 ? formDimensions : undefined,
@@ -3148,8 +3304,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                 unit: analysisTimeRange === "7" || analysisTimeRange === "30" ? "days" : "months",
               }
             : undefined,
+      analysisDateDisplayFormat: analysisDateFormat,
+      ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
     };
   }, [
+    analysisDateFormat,
+    mapDefaultCountry,
     analysisSelectedMetricIds,
     formDimensions,
     formChartType,
@@ -3196,8 +3356,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       toast.error("Seleccioná al menos una métrica para el análisis.");
       return;
     }
-    const newAnalysis = buildAnalysisPayload(name);
-    const nextAnalyses = [...(data?.savedAnalyses ?? []), newAnalysis];
+    const newAnalysis = buildAnalysisPayload(name, editingSavedAnalysisId);
+    const prevList = data?.savedAnalyses ?? [];
+    const nextAnalyses = editingSavedAnalysisId
+      ? prevList.map((x) => (String((x as { id?: string }).id) === String(editingSavedAnalysisId) ? newAnalysis : x))
+      : [...prevList, newAnalysis];
     setSavingAnalysis(true);
     try {
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
@@ -3211,15 +3374,170 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         return;
       }
       setData((prev) => (prev ? { ...prev, savedAnalyses: nextAnalyses } : null));
-      toast.success(`Análisis «${name}» guardado. Aparecerá al añadir al dashboard.`);
+      toast.success(
+        editingSavedAnalysisId
+          ? `Análisis «${name}» actualizado.`
+          : `Análisis «${name}» guardado. Aparecerá al añadir al dashboard.`
+      );
       setAnalysisNameToSave("");
+      setEditingSavedAnalysisId(null);
       clearAnalysisDraft();
+      setShowForm(false);
+      setWizard(hideDatasetTab ? "B" : "A");
+      setWizardStep(0);
+      router.replace(`/admin/etl/${etlId}/metrics?tab=analyses`);
+      window.setTimeout(() => {
+        savedAnalysesSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 150);
     } catch {
       toast.error("Error al guardar el análisis");
     } finally {
       setSavingAnalysis(false);
     }
   };
+
+  const deleteSavedAnalysis = async (analysisId: string) => {
+    const next = (data?.savedAnalyses ?? []).filter((x) => String((x as { id?: string }).id) !== String(analysisId));
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/etl/${etlId}/metrics`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedMetrics: savedMetrics, savedAnalyses: next }),
+      });
+      const json = await safeJsonResponse(res);
+      if (!res.ok || !json.ok) {
+        toast.error(json.error ?? "Error al eliminar el análisis");
+        return;
+      }
+      setData((prev) => (prev ? { ...prev, savedAnalyses: next } : null));
+      toast.success("Análisis eliminado");
+      if (editingSavedAnalysisId === analysisId) {
+        setEditingSavedAnalysisId(null);
+        setShowForm(false);
+      }
+    } catch {
+      toast.error("Error al eliminar el análisis");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const loadSavedAnalysisIntoWizard = useCallback(
+    (a: Record<string, unknown>) => {
+      clearAnalysisDraft();
+      analysisDraftHydratedRef.current = true;
+      setEditingId(null);
+      setEditingSavedAnalysisId(String(a.id ?? ""));
+      setAnalysisNameToSave(String(a.name ?? ""));
+      setAnalysisSelectedMetricIds(Array.isArray(a.metricIds) ? (a.metricIds as string[]) : []);
+      const dims =
+        Array.isArray(a.dimensions) && (a.dimensions as unknown[]).length > 0
+          ? (a.dimensions as string[])
+          : [a.dimension, a.dimension2].filter((d): d is string => typeof d === "string" && d !== "");
+      setFormDimensions(dims);
+      setFormChartType(typeof a.chartType === "string" && a.chartType ? a.chartType : "bar");
+      setChartXAxis(typeof a.chartXAxis === "string" ? a.chartXAxis : "");
+      setChartYAxes(Array.isArray(a.chartYAxes) ? (a.chartYAxes as string[]) : []);
+      setChartSeriesField(typeof a.chartSeriesField === "string" ? a.chartSeriesField : "");
+      setChartLabelOverrides(
+        a.chartLabelOverrides && typeof a.chartLabelOverrides === "object"
+          ? (a.chartLabelOverrides as Record<string, string>)
+          : {}
+      );
+      setLabelOverrideRawDrafts({});
+      if (a.labelVisibilityMode === "all" || a.labelVisibilityMode === "auto" || a.labelVisibilityMode === "min_max") {
+        setLabelVisibilityMode(a.labelVisibilityMode);
+      } else {
+        setLabelVisibilityMode("auto");
+      }
+      const vt = a.chartValueType;
+      if (vt === "currency" || vt === "percent" || vt === "number") setChartValueType(vt as "number" | "currency" | "percent");
+      else setChartValueType("number");
+      const vs = a.chartValueScale;
+      if (vs === "K" || vs === "M" || vs === "BI" || vs === "none") setChartValueScale(vs as "none" | "K" | "M" | "BI");
+      else setChartValueScale("none");
+      setChartCurrencySymbol(typeof a.chartCurrencySymbol === "string" ? a.chartCurrencySymbol : "$");
+      setChartThousandSep(a.chartThousandSep !== false);
+      setChartDecimals(typeof a.chartDecimals === "number" ? a.chartDecimals : 2);
+      setChartSeriesColors(
+        a.chartSeriesColors && typeof a.chartSeriesColors === "object" ? (a.chartSeriesColors as Record<string, string>) : {}
+      );
+      setChartGridXDisplay(a.chartGridXDisplay !== false);
+      setChartGridYDisplay(a.chartGridYDisplay !== false);
+      setChartGridColor(typeof a.chartGridColor === "string" ? a.chartGridColor : "");
+      setChartAxisXVisible(a.chartAxisXVisible !== false);
+      setChartAxisYVisible(a.chartAxisYVisible !== false);
+      setChartSortDirection(
+        a.chartSortDirection === "asc" || a.chartSortDirection === "desc" || a.chartSortDirection === "none"
+          ? (a.chartSortDirection as "none" | "asc" | "desc")
+          : "none"
+      );
+      setChartSortBy(a.chartSortBy === "axis" ? "axis" : "series");
+      setChartSortByMetric(typeof a.chartSortByMetric === "string" ? a.chartSortByMetric : "");
+      setChartRankingEnabled(!!a.chartRankingEnabled);
+      setChartRankingTop(typeof a.chartRankingTop === "number" ? a.chartRankingTop : 5);
+      setChartRankingMetric(typeof a.chartRankingMetric === "string" ? a.chartRankingMetric : "");
+      if (Array.isArray(a.filters)) {
+        setFormFilters(
+          (a.filters as AggregationFilterEdit[]).map((f, i) => ({
+            ...f,
+            id: typeof f.id === "string" && f.id ? f.id : `f-${Date.now()}-${i}`,
+          }))
+        );
+      } else {
+        setFormFilters([]);
+      }
+      if (a.orderBy && typeof a.orderBy === "object" && (a.orderBy as { field?: string }).field) {
+        setFormOrderBy(a.orderBy as { field: string; direction: "ASC" | "DESC" });
+      } else {
+        setFormOrderBy(null);
+      }
+      setFormLimit(typeof a.limit === "number" ? a.limit : 100);
+      setTimeColumn(typeof a.dateDimension === "string" ? a.dateDimension : "");
+      const gran = a.dateGroupByGranularity;
+      if (typeof gran === "string" && ["day", "week", "month", "quarter", "semester", "year"].includes(gran)) {
+        setAnalysisGranularity(gran);
+      } else {
+        setAnalysisGranularity("");
+      }
+      const drf = a.dateRangeFilter as { from?: string; to?: string; last?: number; unit?: string } | undefined;
+      if (drf?.from && drf?.to) {
+        setAnalysisTimeRange("custom");
+        setAnalysisDateFrom(drf.from);
+        setAnalysisDateTo(drf.to);
+      } else if (typeof drf?.last === "number" && drf.last > 0) {
+        setAnalysisTimeRange(String(drf.last));
+        setAnalysisDateFrom("");
+        setAnalysisDateTo("");
+      } else {
+        setAnalysisTimeRange("0");
+        setAnalysisDateFrom("");
+        setAnalysisDateTo("");
+      }
+      const adf = a.analysisDateDisplayFormat;
+      if (adf === "short" || adf === "monthYear" || adf === "year" || adf === "datetime") {
+        setAnalysisDateFormat(adf);
+      } else {
+        setAnalysisDateFormat("short");
+      }
+      setMapDefaultCountry(typeof a.mapDefaultCountry === "string" ? a.mapDefaultCountry : "");
+      prevAnalysisSelectionSigRef.current = [...(Array.isArray(a.metricIds) ? (a.metricIds as string[]) : [])].sort().join("|");
+      lastChartTypeForMappingRef.current = null;
+      setWizard("D");
+      setWizardStep(0);
+      setShowForm(true);
+    },
+    [clearAnalysisDraft]
+  );
+
+  useEffect(() => {
+    if (searchParams.get("tab") !== "analyses") return;
+    const t = window.setTimeout(() => {
+      savedAnalysesSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 200);
+    return () => window.clearTimeout(t);
+  }, [searchParams]);
 
   const handleFinalizeWizardSave = useCallback(async () => {
     if (analysisSelectedMetricIds.length > 0) {
@@ -3345,16 +3663,29 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             Ir al Dashboard
           </Button>
           {!datasetOnly && hasData && (
-            <Button
-              type="button"
-              className="rounded-xl"
-              style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
-              onClick={openNew}
-              disabled={hideDatasetTab && !currentDataset}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Nueva métrica
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl"
+                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                onClick={startNewAnalysis}
+                disabled={hideDatasetTab && !currentDataset}
+              >
+                <BarChart2 className="h-4 w-4 mr-2" />
+                Nuevo análisis
+              </Button>
+              <Button
+                type="button"
+                className="rounded-xl"
+                style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                onClick={openNew}
+                disabled={hideDatasetTab && !currentDataset}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Nueva métrica
+              </Button>
+            </>
           )}
         </div>
       </header>
@@ -5279,6 +5610,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       );
                     })}
                   </div>
+                  {formChartType === "map" && (
+                    <div className="mt-4 space-y-2">
+                      <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
+                        País por defecto (geocodificación)
+                      </Label>
+                      <Input
+                        value={mapDefaultCountry}
+                        onChange={(e) => setMapDefaultCountry(e.target.value)}
+                        placeholder="Ej. Argentina — si las filas no traen país"
+                        className="max-w-md rounded-xl"
+                        style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                      />
+                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                        Se usa al buscar coordenadas en OpenStreetMap cuando falta una columna de país. Opcional.
+                      </p>
+                    </div>
+                  )}
                   <div className="mt-6 flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Mapeo</Button>
@@ -5981,7 +6329,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       )}
                       <Button type="button" className="rounded-xl px-6 font-semibold" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={() => void handleFinalizeWizardSave()} disabled={saving}>
                         {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                        {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? "Guardar análisis" : "Crear métrica"}
+                        {editingId ? "Guardar cambios" : analysisSelectedMetricIds.length > 0 ? (editingSavedAnalysisId ? "Actualizar análisis" : "Guardar análisis") : "Crear métrica"}
                       </Button>
                     </div>
                   </div>
@@ -6045,6 +6393,93 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
               );
             })}
           </ul>
+        </section>
+      )}
+
+      {hasData && !datasetOnly && (savedMetrics.length > 0 || (data?.savedAnalyses?.length ?? 0) > 0) && (
+        <section
+          ref={savedAnalysesSectionRef}
+          id="saved-analyses-section"
+          className="mb-6 scroll-mt-24"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+            <div>
+              <h2 className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>
+                Análisis guardados
+              </h2>
+              <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                Gráficos listos para añadir al dashboard desde el estudio. Editá o eliminá cada uno.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-xl shrink-0"
+              style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
+              onClick={startNewAnalysis}
+              disabled={savedMetrics.length === 0 || (hideDatasetTab && !currentDataset)}
+            >
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              Crear nuevo análisis
+            </Button>
+          </div>
+          {(data?.savedAnalyses?.length ?? 0) === 0 ? (
+            <p className="text-xs py-2" style={{ color: "var(--platform-fg-muted)" }}>
+              Todavía no hay análisis guardados. Creá uno desde el asistente (Nuevo análisis) y guardalo en el último paso.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {(data?.savedAnalyses ?? []).map((raw) => {
+                const sa = raw as { id?: string; name?: string; chartType?: string; metricIds?: string[] };
+                const sid = String(sa.id ?? "");
+                return (
+                  <li
+                    key={sid || sa.name}
+                    className="flex items-center justify-between gap-4 rounded-xl border p-4"
+                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <span className="font-medium block" style={{ color: "var(--platform-fg)" }}>
+                        {sa.name || "Sin nombre"}
+                      </span>
+                      <span className="text-xs block mt-1 truncate" style={{ color: "var(--platform-fg-muted)" }}>
+                        {sa.chartType ? `Tipo: ${sa.chartType}` : "Gráfico"}{" "}
+                        · {(sa.metricIds?.length ?? 0)} métrica(s)
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        style={{ color: "var(--platform-fg-muted)" }}
+                        onClick={() => loadSavedAnalysisIntoWizard(raw as Record<string, unknown>)}
+                        aria-label="Editar análisis"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-red-500"
+                        onClick={() => {
+                          if (typeof window !== "undefined" && !window.confirm(`¿Eliminar el análisis «${sa.name}»?`)) return;
+                          void deleteSavedAnalysis(sid);
+                        }}
+                        disabled={saving}
+                        aria-label="Eliminar análisis"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </section>
       )}
 

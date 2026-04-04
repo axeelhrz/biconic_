@@ -16,7 +16,12 @@ import {
   buildChartStyleFromAgg,
   resolveDarkChartTheme,
 } from "@/lib/dashboard/widgetRenderParity";
-import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, FileDown, Loader2 } from "lucide-react";
+import {
+  exportDashboardExcel,
+  exportDashboardPdfFromElement,
+  exportDashboardSummaryPpt,
+} from "@/lib/dashboard/dashboardExport";
 import { Button } from "@/components/ui/button";
 
 // Types compatible with persisted layout and API
@@ -97,6 +102,8 @@ type AggregationConfig = {
     latField?: string;
     lonField?: string;
   };
+  analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
+  mapDefaultCountry?: string;
 };
 
 export type Widget = DashboardWidgetRendererWidget & {
@@ -109,6 +116,8 @@ export type Widget = DashboardWidgetRendererWidget & {
   dataSourceId?: string | null;
   excludeGlobalFilters?: boolean;
   gridOrder?: number;
+  metricId?: string;
+  metricIds?: string[];
   /** Misma semántica que AdminDashboardStudio: pestaña del lienzo */
   pageId?: string;
 };
@@ -184,6 +193,8 @@ export function DashboardViewer({
   const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>(() => ({ ...DEFAULT_DASHBOARD_THEME }));
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
   const [globalFilterDistinctValues, setGlobalFilterDistinctValues] = useState<Record<string, unknown[]>>({});
+  const canvasExportRef = useRef<HTMLDivElement>(null);
+  const [exportBusy, setExportBusy] = useState(false);
   /** Si viene del layout guardado: misma página activa que AdminDashboardStudio (vista previa = lienzo). */
   const [pageLayout, setPageLayout] = useState<{
     firstPageId: string;
@@ -442,6 +453,43 @@ export function DashboardViewer({
           }
         }
 
+        const filterWidgetsOnPage = stateRef.current.widgets.filter(
+          (w) => w.type === "filter" && pageOf(w) === targetPage && (w as Widget).filterConfig?.field
+        );
+        for (const fw of filterWidgetsOnPage) {
+          const fc = (fw as Widget).filterConfig!;
+          const v = filterValues[fw.id];
+          if (v === "" || v == null) continue;
+          if (Array.isArray(v) && v.length === 0) continue;
+          const scopeIds = fc.scopeMetricIds;
+          if (Array.isArray(scopeIds) && scopeIds.length > 0) {
+            const allowed = new Set(scopeIds.map(String));
+            const mid = String((widget as { metricId?: string }).metricId ?? "").trim();
+            const midsRaw = (widget as { metricIds?: unknown }).metricIds;
+            const mids = Array.isArray(midsRaw) ? midsRaw.map((x) => String(x)) : [];
+            const applies =
+              (mid !== "" && allowed.has(mid)) || mids.some((id) => allowed.has(String(id)));
+            if (!applies) continue;
+          }
+          const isSemanticFw = datasetDimensions && fc.field in datasetDimensions;
+          if (isSemanticFw && widgetSourceId && !datasetDimensions![fc.field]?.[widgetSourceId]) continue;
+          const physicalFw = mapDatasetField(fc.field);
+          const rawOpFw = fc.operator || "=";
+          const useInFw =
+            rawOpFw === "IN" ||
+            (fc.inputType === "multi" && Array.isArray(v) && v.length > 0);
+          const opFw = useInFw ? "IN" : rawOpFw;
+          const valueFw: unknown = opFw === "IN" ? (Array.isArray(v) ? v : [v]) : v;
+          mappedGlobalFilters.push({
+            id: fw.id,
+            field: physicalFw,
+            operator: opFw,
+            value: valueFw,
+            convertToNumber: false,
+            inputType: fc.inputType,
+          } as AggregationFilter);
+        }
+
         const dashLayoutSaved = (etlData as { dashboard?: { layout?: { savedMetrics?: unknown[] } } })?.dashboard?.layout?.savedMetrics;
         const layoutSavedMetrics = (Array.isArray(dashLayoutSaved) ? dashLayoutSaved : []) as NonNullable<
           Parameters<typeof loadPreviewWidgetData>[0]["savedMetrics"]
@@ -633,7 +681,51 @@ export function DashboardViewer({
     if (hasOrder) return [...list].sort((a, b) => (a.gridOrder ?? 0) - (b.gridOrder ?? 0));
     return list;
   }, [widgets, pageLayout]);
+
+  const exportableWidgets = useMemo(
+    () =>
+      orderedWidgets.filter(
+        (w) => w.type !== "filter" && w.type !== "text" && w.type !== "image"
+      ),
+    [orderedWidgets]
+  );
+
   const placements = useMemo(() => computeGridPlacements(orderedWidgets), [orderedWidgets]);
+
+  const runExportExcel = useCallback(async () => {
+    setExportBusy(true);
+    try {
+      await exportDashboardExcel(
+        `dashboard-${dashboardId}`,
+        exportableWidgets.map((w) => ({ title: w.title, rows: w.rows }))
+      );
+    } finally {
+      setExportBusy(false);
+    }
+  }, [dashboardId, exportableWidgets]);
+
+  const runExportPdf = useCallback(async () => {
+    const el = canvasExportRef.current;
+    if (!el) return;
+    setExportBusy(true);
+    try {
+      await exportDashboardPdfFromElement(el, `dashboard-${dashboardId}`);
+    } finally {
+      setExportBusy(false);
+    }
+  }, [dashboardId]);
+
+  const runExportPpt = useCallback(async () => {
+    setExportBusy(true);
+    try {
+      await exportDashboardSummaryPpt(
+        `dashboard-${dashboardId}`,
+        exportableWidgets.map((w) => ({ title: w.title, rows: w.rows }))
+      );
+    } finally {
+      setExportBusy(false);
+    }
+  }, [dashboardId, exportableWidgets]);
 
   // Filtros dinámicos: por cada widget, etiquetas de filtros globales que tienen valor pero no aplican a este gráfico (no contiene esa columna)
   const nonApplicableFilterLabelsByWidget = useMemo(() => {
@@ -760,6 +852,46 @@ export function DashboardViewer({
             <h1 className="truncate text-lg font-semibold" style={{ color: "var(--platform-fg, var(--client-text, #0f172a))" }}>
               {title}
             </h1>
+            {variant === "default" && exportableWidgets.length > 0 && (
+              <div className="flex flex-shrink-0 flex-wrap items-center gap-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1 text-xs rounded-lg"
+                  style={{ borderColor: "var(--platform-border)" }}
+                  disabled={exportBusy}
+                  onClick={() => void runExportExcel()}
+                >
+                  <FileDown className="h-3.5 w-3.5" />
+                  Excel
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1 text-xs rounded-lg"
+                  style={{ borderColor: "var(--platform-border)" }}
+                  disabled={exportBusy}
+                  onClick={() => void runExportPdf()}
+                >
+                  <FileDown className="h-3.5 w-3.5" />
+                  PDF
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1 text-xs rounded-lg"
+                  style={{ borderColor: "var(--platform-border)" }}
+                  disabled={exportBusy}
+                  onClick={() => void runExportPpt()}
+                >
+                  <FileDown className="h-3.5 w-3.5" />
+                  PPT
+                </Button>
+              </div>
+            )}
           </div>
         </header>
       )}
@@ -916,6 +1048,7 @@ export function DashboardViewer({
           </div>
         ) : (
           <div
+            ref={canvasExportRef}
             className={`grid gap-4${useClientTheme ? " client-view-grid" : ""}`}
             style={{
               gridTemplateColumns: "repeat(4, minmax(0, 1fr))",

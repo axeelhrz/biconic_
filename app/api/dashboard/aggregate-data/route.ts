@@ -80,6 +80,8 @@ interface AggregationRequest {
   chartType?: string;
   chartXAxis?: string;
   geoHints?: GeoHints;
+  /** País por defecto para geocodificación cuando la fila no incluye país. */
+  mapDefaultCountry?: string;
 }
 
 // --- Constantes ---
@@ -1687,6 +1689,7 @@ export async function POST(req: NextRequest) {
           dimList,
           chartXAxis: body.chartXAxis ?? body.dimension ?? body.dimensions?.[0],
           geoHints: body.geoHints,
+          mapDefaultCountry: typeof body.mapDefaultCountry === "string" ? body.mapDefaultCountry : undefined,
           cacheClient,
         })
       : sortedResults;

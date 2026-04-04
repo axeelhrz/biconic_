@@ -86,6 +86,8 @@ export type AggregationConfigEdit = {
   chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
+  mapDefaultCountry?: string;
   geoHints?: {
     countryField?: string;
     provinceField?: string;
@@ -167,6 +169,8 @@ export type SavedMetricAggregationConfig = {
   chartStackBySeries?: boolean;
   chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
+  mapDefaultCountry?: string;
   geoHints?: {
     countryField?: string;
     provinceField?: string;

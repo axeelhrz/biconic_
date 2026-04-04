@@ -75,12 +75,6 @@ export function DashboardMapWidget({
       if (withLat && withLon) {
         latColRes = withLat;
         lonColRes = withLon;
-      } else {
-        const numericKeys = keys.filter((k) => typeof first[k] === "number");
-        if (numericKeys.length >= 2) {
-          latColRes = numericKeys[0] ?? null;
-          lonColRes = numericKeys[1] ?? null;
-        }
       }
     }
 

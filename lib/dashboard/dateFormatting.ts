@@ -84,3 +84,39 @@ export function formatDateByGranularity(
   return `${pad2(day)}/${pad2(month)}/${year}`;
 }
 
+/** Mismo criterio que el preview del wizard de análisis (`formatPreviewDateValue`). */
+export type AnalysisDateDisplayFormat = "short" | "monthYear" | "year" | "datetime";
+
+const MONTH_NAMES_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+
+/**
+ * Formatea valores de eje / etiqueta temporal según el formato de visualización elegido en el análisis.
+ * Si `displayFormat` es undefined, usa `formatDateByGranularity`.
+ */
+export function formatAnalysisDateForChart(
+  value: unknown,
+  granularity: DateGranularity,
+  displayFormat: AnalysisDateDisplayFormat | undefined,
+  fallback?: string
+): string | null {
+  if (displayFormat == null) {
+    return formatDateByGranularity(value, granularity, fallback);
+  }
+  const dt = parseDateLike(value);
+  if (!dt) return fallback ?? null;
+
+  const year = dt.getUTCFullYear();
+  const month = dt.getUTCMonth() + 1;
+  const day = dt.getUTCDate();
+
+  if (displayFormat === "year") return String(year);
+  if (displayFormat === "monthYear") return `${MONTH_NAMES_SHORT[month - 1] ?? ""} ${year}`.trim();
+  if (displayFormat === "datetime") {
+    return `${pad2(day)}/${pad2(month)}/${year} ${pad2(dt.getUTCHours())}:${pad2(dt.getUTCMinutes())}`;
+  }
+  if (displayFormat === "short") {
+    return `${pad2(day)}/${pad2(month)}/${year}`;
+  }
+  return formatDateByGranularity(value, granularity, fallback);
+}
+

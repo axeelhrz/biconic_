@@ -35,6 +35,7 @@ interface AggregationRequest {
   chartType?: string;
   chartXAxis?: string;
   geoHints?: GeoHints;
+  mapDefaultCountry?: string;
 }
 
 // --- Constantes ---
@@ -423,6 +424,7 @@ export async function POST(
           dimList,
           chartXAxis: body.chartXAxis ?? body.dimension ?? body.dimensions?.[0],
           geoHints: body.geoHints,
+          mapDefaultCountry: typeof body.mapDefaultCountry === "string" ? body.mapDefaultCountry : undefined,
           cacheClient: supabase as unknown as GeoCacheClient,
         })
       : mappedResults;
