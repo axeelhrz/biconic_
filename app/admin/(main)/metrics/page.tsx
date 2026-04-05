@@ -18,7 +18,14 @@ import {
 import { toast } from "sonner";
 
 type SavedMetric = { id: string; name: string; metric: { func?: string; field?: string; alias?: string } };
-type EtlWithMetrics = { id: string; title: string; name: string; savedMetrics: SavedMetric[] };
+type SavedAnalysisBrief = { id?: string; name?: string; chartType?: string; metricIds?: string[] };
+type EtlWithMetrics = {
+  id: string;
+  title: string;
+  name: string;
+  savedMetrics: SavedMetric[];
+  savedAnalyses?: SavedAnalysisBrief[];
+};
 type DatasetOption = { id: string; etl_id: string; name: string | null; etl_title: string | null };
 
 export default function AdminMetricsPage() {
@@ -208,7 +215,10 @@ export default function AdminMetricsPage() {
   }, [selectedKeys, fetchMetrics]);
 
   const totalMetrics = etls.reduce((acc, e) => acc + (e.savedMetrics?.length ?? 0), 0);
-  const etlsWithMetrics = etls.filter((e) => (e.savedMetrics?.length ?? 0) > 0);
+  const totalAnalyses = etls.reduce((acc, e) => acc + (e.savedAnalyses?.length ?? 0), 0);
+  const etlsWithContent = etls.filter(
+    (e) => (e.savedMetrics?.length ?? 0) > 0 || (e.savedAnalyses?.length ?? 0) > 0
+  );
 
   return (
     <div className="flex w-full flex-col min-h-0">
@@ -231,10 +241,10 @@ export default function AdminMetricsPage() {
             </div>
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" style={{ color: "var(--platform-fg)" }}>
-                Métricas
+                Métricas y Análisis
               </h1>
               <p className="mt-1 text-sm sm:text-base max-w-xl" style={{ color: "var(--platform-fg-muted)" }}>
-                Gestioná métricas reutilizables por ETL y usalas como gráficos en los dashboards.
+                Gestioná métricas reutilizables y análisis guardados (gráficos listos) por ETL; usalos en los dashboards desde el estudio.
               </p>
             </div>
           </div>
@@ -500,17 +510,17 @@ export default function AdminMetricsPage() {
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin" style={{ color: "var(--platform-accent)" }} />
         </div>
-      ) : etlsWithMetrics.length === 0 ? (
+      ) : etlsWithContent.length === 0 ? (
         <div
           className="rounded-xl border p-8 text-center"
           style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
         >
           <BarChart3 className="h-12 w-12 mx-auto mb-4" style={{ color: "var(--platform-fg-muted)" }} />
           <p className="text-base font-medium mb-1" style={{ color: "var(--platform-fg)" }}>
-            Aún no hay métricas creadas
+            Aún no hay métricas ni análisis guardados
           </p>
           <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
-            Creá métricas eligiendo un dataset arriba (los datasets se configuran en la sección Datasets).
+            Creá métricas desde un dataset (Datasets). Los análisis se guardan en el asistente del ETL (pasos Análisis y Gráfico).
           </p>
           <Button
             onClick={() => setCreateOpen(true)}
@@ -526,7 +536,11 @@ export default function AdminMetricsPage() {
         <div className="flex flex-col gap-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
             <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-              {totalMetrics} métrica{totalMetrics !== 1 ? "s" : ""} en {etlsWithMetrics.length} ETL{etlsWithMetrics.length !== 1 ? "s" : ""}.
+              {totalMetrics} métrica{totalMetrics !== 1 ? "s" : ""}
+              {totalAnalyses > 0
+                ? ` · ${totalAnalyses} análisis guardado${totalAnalyses !== 1 ? "s" : ""}`
+                : ""}{" "}
+              en {etlsWithContent.length} ETL{etlsWithContent.length !== 1 ? "s" : ""}.
               {selectedKeys.size > 0 ? (
                 <span className="ml-1 font-medium" style={{ color: "var(--platform-fg)" }}>
                   ({selectedKeys.size} seleccionada{selectedKeys.size !== 1 ? "s" : ""})
@@ -568,7 +582,10 @@ export default function AdminMetricsPage() {
               </Button>
             </div>
           </div>
-          {etlsWithMetrics.map((etl) => (
+          {etlsWithContent.map((etl) => {
+            const analyses = etl.savedAnalyses ?? [];
+            const metrics = etl.savedMetrics ?? [];
+            return (
             <section
               key={etl.id}
               className="rounded-xl border overflow-hidden"
@@ -594,8 +611,9 @@ export default function AdminMetricsPage() {
                   Gestionar
                 </Link>
               </div>
+              {metrics.length > 0 ? (
               <ul className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
-                {(etl.savedMetrics ?? []).map((m) => (
+                {metrics.map((m) => (
                   <li
                     key={m.id}
                     className="flex items-center justify-between gap-4 px-4 py-3"
@@ -641,8 +659,54 @@ export default function AdminMetricsPage() {
                   </li>
                 ))}
               </ul>
+              ) : null}
+              {analyses.length > 0 ? (
+                <div
+                  className={metrics.length > 0 ? "border-t" : ""}
+                  style={{ borderColor: "var(--platform-border)" }}
+                >
+                  <div className="px-4 py-2.5" style={{ background: "var(--platform-bg-elevated)" }}>
+                    <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--platform-fg-muted)" }}>
+                      Análisis guardados
+                    </p>
+                  </div>
+                  <ul className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
+                    {analyses.map((raw) => {
+                      const aid = String(raw.id ?? "");
+                      const label = raw.name?.trim() || "Sin nombre";
+                      return (
+                        <li
+                          key={aid || label}
+                          className="flex items-center justify-between gap-4 px-4 py-3"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <span className="font-medium text-sm block truncate" style={{ color: "var(--platform-fg)" }}>
+                              {label}
+                            </span>
+                            <span className="text-xs mt-0.5 block truncate" style={{ color: "var(--platform-fg-muted)" }}>
+                              {raw.chartType ? `Tipo: ${raw.chartType}` : "Gráfico"}
+                              {" · "}
+                              {(raw.metricIds?.length ?? 0)} métrica{(raw.metricIds?.length ?? 0) !== 1 ? "s" : ""}
+                            </span>
+                          </div>
+                          {aid ? (
+                            <Link
+                              href={`/admin/etl/${etl.id}/metrics?analysisId=${encodeURIComponent(aid)}&step=D`}
+                              className="text-sm font-medium shrink-0"
+                              style={{ color: "var(--platform-accent)" }}
+                            >
+                              Editar
+                            </Link>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ) : null}
             </section>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

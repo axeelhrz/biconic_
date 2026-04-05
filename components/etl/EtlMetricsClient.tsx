@@ -3565,6 +3565,30 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     [clearAnalysisDraft]
   );
 
+  const loadSavedAnalysisIntoWizardRef = useRef(loadSavedAnalysisIntoWizard);
+  loadSavedAnalysisIntoWizardRef.current = loadSavedAnalysisIntoWizard;
+
+  // Entrada desde /admin/metrics: abrir análisis guardado (?analysisId=...&step=C|D). No competir con metricId.
+  const openedFromQueryAnalysisRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!hideDatasetTab) return;
+    const metricId = (searchParams.get("metricId") ?? "").trim();
+    if (metricId) return;
+    const analysisId = (searchParams.get("analysisId") ?? "").trim();
+    if (!analysisId) return;
+    if (openedFromQueryAnalysisRef.current === analysisId) return;
+    const list = data?.savedAnalyses ?? [];
+    const target = list.find((x) => String((x as { id?: string }).id) === analysisId);
+    if (!target) return;
+    openedFromQueryAnalysisRef.current = analysisId;
+    loadSavedAnalysisIntoWizardRef.current(target as Record<string, unknown>);
+    const step = searchParams.get("step");
+    if (step === "C") {
+      setWizard("C");
+      setWizardStep(0);
+    }
+  }, [hideDatasetTab, searchParams, data?.savedAnalyses]);
+
   useEffect(() => {
     if (searchParams.get("tab") !== "analyses") return;
     const t = window.setTimeout(() => {

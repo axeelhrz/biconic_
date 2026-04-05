@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 
 /**
  * GET /api/admin/metrics
- * Lista todas las métricas reutilizables agrupadas por ETL (layout.saved_metrics de cada ETL).
+ * Lista métricas reutilizables y análisis guardados por ETL (layout.saved_metrics, layout.saved_analyses).
  * Requiere APP_ADMIN.
  */
 export async function GET() {
@@ -33,13 +33,15 @@ export async function GET() {
     }
 
     const etlsWithMetrics = (etls ?? []).map((etl) => {
-      const layout = (etl as { layout?: { saved_metrics?: unknown[] } }).layout;
+      const layout = (etl as { layout?: { saved_metrics?: unknown[]; saved_analyses?: unknown[] } }).layout;
       const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
+      const savedAnalyses = Array.isArray(layout?.saved_analyses) ? layout.saved_analyses : [];
       return {
         id: (etl as { id: string }).id,
         title: (etl as { title?: string }).title ?? (etl as { name?: string }).name ?? "",
         name: (etl as { name?: string }).name ?? (etl as { title?: string }).title ?? "",
         savedMetrics,
+        savedAnalyses,
       };
     });
 
