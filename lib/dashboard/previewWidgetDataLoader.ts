@@ -232,7 +232,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
   const displayWidget = resolveWidgetAggregationForDisplay(
     widget as { aggregationConfig?: Record<string, unknown> | null },
     datasetDimensions,
-    sourceId ?? undefined
+    sourceId ?? undefined,
+    rows[0] as Record<string, unknown> | undefined
   ) as WidgetLike;
   const chartWidget = displayWidget as BuildChartConfigWidget;
 

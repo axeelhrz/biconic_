@@ -151,8 +151,16 @@ type DatasetDimensionsMap = Record<string, Record<string, string>>;
  */
 export function resolveWidgetAggregationForDisplay<
   W extends { aggregationConfig?: Record<string, unknown> | null },
->(widget: W, datasetDimensions: DatasetDimensionsMap | undefined, sourceId: string | undefined): W {
+>(
+  widget: W,
+  datasetDimensions: DatasetDimensionsMap | undefined,
+  sourceId: string | undefined,
+  /** Primera fila de la API: si el mapeo semántico no coincide con columnas reales, preferir la clave que exista en la fila. */
+  sampleRow?: Record<string, unknown> | null
+): W {
   if (!datasetDimensions || !sourceId || !widget.aggregationConfig) return widget;
+  const resultKeys =
+    sampleRow && typeof sampleRow === "object" ? new Set(Object.keys(sampleRow)) : null;
   const mapKey = (k: unknown): string | undefined => {
     if (k == null || k === "") return undefined;
     const t = String(k).trim();
@@ -160,43 +168,63 @@ export function resolveWidgetAggregationForDisplay<
     const mapped = datasetDimensions[t]?.[sourceId];
     return mapped ?? t;
   };
+  const pickKeyInRow = (mapped: string, original: string): string => {
+    if (!resultKeys) return mapped;
+    if (resultKeys.has(mapped)) return mapped;
+    if (resultKeys.has(original)) return original;
+    return mapped;
+  };
   const agg = widget.aggregationConfig;
   const next: Record<string, unknown> = { ...agg };
   if (typeof agg.chartXAxis === "string") {
-    const m = mapKey(agg.chartXAxis);
-    if (m) next.chartXAxis = m;
+    const orig = String(agg.chartXAxis).trim();
+    const m = mapKey(agg.chartXAxis) ?? orig;
+    if (m) next.chartXAxis = pickKeyInRow(m, orig);
   }
   if (Array.isArray(agg.chartYAxes)) {
-    next.chartYAxes = agg.chartYAxes.map((y) => mapKey(y) ?? y);
+    next.chartYAxes = agg.chartYAxes.map((y) => {
+      const orig = String(y ?? "").trim();
+      const m = mapKey(y) ?? orig;
+      return pickKeyInRow(m, orig);
+    });
   }
   const dsOverrides = agg.chartDatasetLabelOverrides as Record<string, string> | undefined;
   if (dsOverrides && typeof dsOverrides === "object" && !Array.isArray(dsOverrides)) {
     const remapped: Record<string, string> = {};
     for (const [k, v] of Object.entries(dsOverrides)) {
       if (typeof v !== "string" || v.trim() === "") continue;
-      const nk = mapKey(k) ?? k;
+      const origK = String(k).trim();
+      const nk = pickKeyInRow(mapKey(k) ?? origK, origK);
       remapped[nk] = v;
     }
     if (Object.keys(remapped).length > 0) next.chartDatasetLabelOverrides = remapped;
   }
   if (typeof agg.dimension === "string") {
-    const m = mapKey(agg.dimension);
-    if (m) next.dimension = m;
+    const orig = String(agg.dimension).trim();
+    const m = mapKey(agg.dimension) ?? orig;
+    if (m) next.dimension = pickKeyInRow(m, orig);
   }
   if (Array.isArray(agg.dimensions)) {
-    next.dimensions = agg.dimensions.map((d) => mapKey(d) ?? d);
+    next.dimensions = agg.dimensions.map((d) => {
+      const orig = String(d ?? "").trim();
+      const m = mapKey(d) ?? orig;
+      return pickKeyInRow(m, orig);
+    });
   }
   if (typeof agg.dimension2 === "string") {
-    const m = mapKey(agg.dimension2);
-    if (m) next.dimension2 = m;
+    const orig = String(agg.dimension2).trim();
+    const m = mapKey(agg.dimension2) ?? orig;
+    if (m) next.dimension2 = pickKeyInRow(m, orig);
   }
   if (typeof agg.chartSeriesField === "string") {
-    const m = mapKey(agg.chartSeriesField);
-    if (m) next.chartSeriesField = m;
+    const orig = String(agg.chartSeriesField).trim();
+    const m = mapKey(agg.chartSeriesField) ?? orig;
+    if (m) next.chartSeriesField = pickKeyInRow(m, orig);
   }
   if (typeof agg.dateDimension === "string") {
-    const m = mapKey(agg.dateDimension);
-    if (m) next.dateDimension = m;
+    const orig = String(agg.dateDimension).trim();
+    const m = mapKey(agg.dateDimension) ?? orig;
+    if (m) next.dateDimension = pickKeyInRow(m, orig);
   }
   return { ...widget, aggregationConfig: next as W["aggregationConfig"] };
 }

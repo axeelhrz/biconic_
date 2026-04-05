@@ -229,6 +229,28 @@ export function getProcessedRowsForChart(
       rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
       rows = rows.slice(0, agg.chartRankingTop as number);
     }
+  } else if (
+    !shouldApplyRanking &&
+    isTemporalXAxis &&
+    (agg?.chartAxisOrder === "date_asc" || agg?.chartAxisOrder === "date_desc") &&
+    (!agg?.chartSortDirection || agg.chartSortDirection === "none")
+  ) {
+    const axisOrder = agg.chartAxisOrder as string;
+    rows.sort((a, b) => {
+      const va = (a as Record<string, unknown>)[xKey];
+      const vb = (b as Record<string, unknown>)[xKey];
+      const ta =
+        parseDateLike(va)?.getTime() ??
+        (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
+      const tb =
+        parseDateLike(vb)?.getTime() ??
+        (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
+      if (!Number.isNaN(ta) && !Number.isNaN(tb)) {
+        const dirDate = axisOrder === "date_desc" ? -1 : 1;
+        return (ta - tb) * dirDate;
+      }
+      return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true });
+    });
   } else if (agg?.chartSortDirection && agg.chartSortDirection !== "none") {
     const sortByDimension = (agg.chartSortBy as string) === "dimension" || (agg.chartSortBy as string) === "axis";
     let sortField = yKeys[0] || xKey;
@@ -413,6 +435,28 @@ export function buildChartConfig(
       rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
       rows = rows.slice(0, agg.chartRankingTop as number);
     }
+  } else if (
+    !shouldApplyRanking &&
+    isTemporalXAxis &&
+    (agg?.chartAxisOrder === "date_asc" || agg?.chartAxisOrder === "date_desc") &&
+    (!agg?.chartSortDirection || agg.chartSortDirection === "none")
+  ) {
+    const axisOrder = agg.chartAxisOrder as string;
+    rows.sort((a, b) => {
+      const va = (a as Record<string, unknown>)[xKey];
+      const vb = (b as Record<string, unknown>)[xKey];
+      const ta =
+        parseDateLike(va)?.getTime() ??
+        (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
+      const tb =
+        parseDateLike(vb)?.getTime() ??
+        (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
+      if (!Number.isNaN(ta) && !Number.isNaN(tb)) {
+        const dirDate = axisOrder === "date_desc" ? -1 : 1;
+        return (ta - tb) * dirDate;
+      }
+      return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true });
+    });
   } else if (agg?.chartSortDirection && agg.chartSortDirection !== "none") {
     // Ordenación explícita (chartSortBy, chartSortByMetric, chartSortDirection, chartAxisOrder)
     const sortByDimension = (agg.chartSortBy as string) === "dimension" || (agg.chartSortBy as string) === "axis";
