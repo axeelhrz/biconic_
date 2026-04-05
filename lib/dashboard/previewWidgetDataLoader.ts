@@ -165,6 +165,22 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     const shouldApplyRanking = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0;
     const rankingMetric = agg?.chartRankingMetric || agg?.metrics?.[0]?.alias;
     const mappedChartX = agg?.chartXAxis ? mapField(agg.chartXAxis, sourceId, datasetDimensions) : undefined;
+    const mapAggFilterField = <T extends { field?: string }>(f: T): T => {
+      const fld = f.field;
+      if (fld == null || fld === "") return f;
+      const physical = mapField(fld, sourceId, datasetDimensions) ?? fld;
+      return { ...f, field: physical };
+    };
+    const aggFiltersMapped = (agg?.filters ?? []).map((f) => mapAggFilterField(f));
+    const globalFiltersMapped = (globalFilters ?? []).map((f) => mapAggFilterField(f));
+    const dateRangeRaw = agg?.dateRangeFilter as { field?: string; last?: number; unit?: string; from?: string; to?: string } | undefined;
+    const dateRangeMapped =
+      dateRangeRaw && typeof dateRangeRaw.field === "string"
+        ? {
+            ...dateRangeRaw,
+            field: mapField(dateRangeRaw.field, sourceId, datasetDimensions) ?? dateRangeRaw.field,
+          }
+        : dateRangeRaw;
     const payload = {
       tableName,
       etlId: etlId ?? undefined,
@@ -173,7 +189,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       dimension: mapField(agg?.dimension, sourceId, datasetDimensions),
       dimensions: dimensions.map((d) => mapField(d, sourceId, datasetDimensions)),
       metrics: metricsPayload,
-      filters: [...(globalFilters ?? []), ...(agg?.filters ?? [])],
+      filters: [...globalFiltersMapped, ...aggFiltersMapped],
       orderBy: shouldApplyRanking && rankingMetric
         ? { field: rankingMetric, direction: "DESC" as const }
         : agg?.orderBy,
@@ -191,7 +207,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
             },
           }
         : {}),
-      ...(agg?.dateRangeFilter ? { dateRangeFilter: agg.dateRangeFilter } : {}),
+      ...(dateRangeMapped ? { dateRangeFilter: dateRangeMapped } : {}),
       ...(savedMetrics?.length ? { savedMetrics: buildSavedMetricsPayload(savedMetrics, agg?.metrics) } : {}),
       ...(agg?.geoHints ? { geoHints: agg.geoHints } : {}),
       ...(typeof agg?.mapDefaultCountry === "string" && agg.mapDefaultCountry.trim()

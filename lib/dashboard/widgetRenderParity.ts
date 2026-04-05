@@ -172,6 +172,12 @@ export function resolveWidgetAggregationForDisplay<
     if (!resultKeys) return mapped;
     if (resultKeys.has(mapped)) return mapped;
     if (resultKeys.has(original)) return original;
+    const lm = mapped.toLowerCase();
+    const lo = original.toLowerCase();
+    for (const k of resultKeys) {
+      const kl = k.toLowerCase();
+      if (kl === lm || kl === lo) return k;
+    }
     return mapped;
   };
   const agg = widget.aggregationConfig;

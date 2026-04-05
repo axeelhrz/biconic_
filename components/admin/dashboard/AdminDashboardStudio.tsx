@@ -206,7 +206,20 @@ interface AdminDashboardStudioProps {
   embeddedPreview?: boolean;
 }
 
-const SUPPORTED_CHART_TYPES = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "kpi", "table", "combo", "scatter"] as const;
+const SUPPORTED_CHART_TYPES = [
+  "bar",
+  "horizontalBar",
+  "stackedColumn",
+  "line",
+  "area",
+  "pie",
+  "doughnut",
+  "kpi",
+  "table",
+  "combo",
+  "scatter",
+  "map",
+] as const;
 type SupportedChartType = typeof SUPPORTED_CHART_TYPES[number];
 
 function normalizeChartType(raw: unknown, fallback: SupportedChartType = "bar"): SupportedChartType {
