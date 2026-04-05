@@ -1990,22 +1990,33 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     }
   }, [wizard, wizardStep, showForm]);
 
-  // Si se entra directo al paso Gráfico (p.ej. desde /admin/metrics?metricId=...&step=D),
-  // intentar cargar preview automáticamente una vez por métrica para habilitar el mapeo.
+  /** Sesión de edición: métrica guardada o análisis guardado (ambos abren wizard D sin pasar por C·Preview). */
+  const previewEditKey = useMemo(() => {
+    if (editingId != null && String(editingId).trim() !== "") {
+      return `metric:${String(editingId).trim()}`;
+    }
+    if (editingSavedAnalysisId != null && String(editingSavedAnalysisId).trim() !== "") {
+      return `analysis:${String(editingSavedAnalysisId).trim()}`;
+    }
+    return null;
+  }, [editingId, editingSavedAnalysisId]);
+
+  // Si se entra directo al paso Gráfico (métrica o análisis guardado, p.ej. ?metricId= / ?analysisId=),
+  // cargar preview automáticamente una vez por entidad para habilitar mapeo y vista previa en Guardar.
   const autoPreviewForEditRef = useRef<string | null>(null);
   useEffect(() => {
     if (!showForm) autoPreviewForEditRef.current = null;
   }, [showForm]);
   useEffect(() => {
     if (!showForm || wizard !== "D") return;
-    if (!editingId) return;
+    if (!previewEditKey) return;
     if (previewLoading) return;
     if (previewData && previewData.length > 0) return;
     if (effectiveFormMetrics.length === 0) return;
-    if (autoPreviewForEditRef.current === editingId) return;
-    autoPreviewForEditRef.current = editingId;
+    if (autoPreviewForEditRef.current === previewEditKey) return;
+    autoPreviewForEditRef.current = previewEditKey;
     fetchPreviewRef.current();
-  }, [showForm, wizard, editingId, previewLoading, previewData, effectiveFormMetrics.length]);
+  }, [showForm, wizard, previewEditKey, previewLoading, previewData, effectiveFormMetrics.length]);
 
   /** Única fuente de sugerencias de tipo de gráfico según métricas, dimensiones y datos (evitar duplicar lógica en otros pasos). */
   const { recommendationText, suggestedChartType } = useMemo(() => {
@@ -5702,8 +5713,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     <div className="rounded-xl border border-dashed p-6 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                       <BarChart2 className="h-10 w-10 mx-auto mb-3 opacity-50" style={{ color: "var(--platform-fg-muted)" }} />
                       <p className="text-sm font-medium mb-1" style={{ color: "var(--platform-fg)" }}>Sin datos para mapear</p>
-                      <p className="text-xs mb-4 max-w-sm mx-auto" style={{ color: "var(--platform-fg-muted)" }}>Volvé al paso <strong>Preview</strong> en Análisis (Dimensiones y tiempo → Filtros → Transformaciones → Preview) y tocá «Actualizar vista previa» para cargar los datos.</p>
-                      <Button type="button" variant="outline" size="sm" className="rounded-xl" style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }} onClick={goPrev}>← Volver a Tipo de gráfico</Button>
+                      <p className="text-xs mb-4 max-w-sm mx-auto" style={{ color: "var(--platform-fg-muted)" }}>Volvé al paso <strong>Preview</strong> en Análisis y tocá «Actualizar vista previa», o cargá los datos desde acá.</p>
+                      <div className="flex flex-col sm:flex-row gap-2 justify-center items-center">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="rounded-xl"
+                          style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
+                          onClick={fetchPreview}
+                          disabled={effectiveFormMetrics.length === 0 || previewLoading}
+                        >
+                          {previewLoading ? "Cargando…" : "Actualizar vista previa"}
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>← Volver a Tipo de gráfico</Button>
+                      </div>
                     </div>
                   ) : (
                     <>
