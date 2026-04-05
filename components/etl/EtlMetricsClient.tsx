@@ -28,6 +28,7 @@ import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget
 import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
+import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
 
 // Reserved for future UI (e.g. aggregate function selector)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -396,54 +397,6 @@ type DatasetRelation = {
   otherColumn: string;
   joinType: "INNER" | "LEFT";
 };
-
-type ExpandSavedMetricsOptions = {
-  setDisplayAliasToSavedName?: boolean;
-};
-
-function rewriteFormulaMetricRefs(formula: string, localCount: number, globalStartIndex: number): string {
-  return formula.replace(/metric_(\d+)\b/gi, (match, rawIndex: string) => {
-    const localIndex = Number.parseInt(rawIndex, 10);
-    if (!Number.isFinite(localIndex) || localIndex < 0 || localIndex >= localCount) return match;
-    return `metric_${globalStartIndex + localIndex}`;
-  });
-}
-
-function expandSavedMetricsWithGlobalRefs(
-  selectedMetricIds: string[],
-  savedMetrics: SavedMetricForm[],
-  options?: ExpandSavedMetricsOptions
-): AggregationMetricEdit[] {
-  const selected = selectedMetricIds
-    .map((id) => savedMetrics.find((s) => String(s.id) === String(id)))
-    .filter((s): s is SavedMetricForm => s != null);
-  const out: AggregationMetricEdit[] = [];
-  const norm = (value: string) => (value || "").trim().toLowerCase();
-
-  for (const saved of selected) {
-    const cfg = saved.aggregationConfig;
-    const list = cfg?.metrics?.length ? cfg.metrics : (saved.metric ? [saved.metric] : []);
-    if (list.length === 0) continue;
-    const globalStart = out.length;
-    const savedName = String(saved.name || "").trim();
-    const resultIdx = list.findIndex((m) => norm((m as { alias?: string }).alias ?? "") === norm(savedName));
-    const displayIdx = resultIdx >= 0 ? resultIdx : list.length - 1;
-
-    for (let i = 0; i < list.length; i++) {
-      const metric = { ...list[i], id: (list[i] as { id?: string }).id ?? `${saved.id}-${i}` } as AggregationMetricEdit;
-      if (options?.setDisplayAliasToSavedName && i === displayIdx && savedName) {
-        metric.alias = savedName;
-      }
-      const formula = (metric as { formula?: string }).formula?.trim();
-      if (formula) {
-        (metric as { formula?: string }).formula = rewriteFormulaMetricRefs(formula, list.length, globalStart);
-      }
-      out.push(metric);
-    }
-  }
-
-  return out;
-}
 
 export type EtlMetricsClientProps = {
   etlId: string;

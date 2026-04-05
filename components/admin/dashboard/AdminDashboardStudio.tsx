@@ -30,6 +30,7 @@ import { StudioEmptyState } from "./StudioEmptyState";
 import { MetricBlock, type MetricBlockState } from "./MetricBlock";
 import type { ChartConfig } from "./MetricBlock";
 import type { SavedMetricForm } from "./AddMetricConfigForm";
+import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
@@ -997,33 +998,25 @@ export function AdminDashboardStudio({
       const dims = Array.isArray(mergedCfg.dimensions)
         ? mergedCfg.dimensions.map((d) => String(d))
         : [mergedCfg.dimension, mergedCfg.dimension2].filter(Boolean).map((d) => String(d));
-      const metricsFromLinked = linkedSavedMetrics.flatMap((saved) => {
-        const cfg = (saved.aggregationConfig ?? {}) as Record<string, unknown>;
-        return toAggregationMetricList(cfg.metrics, saved.metric);
-      });
-      const metrics =
-        metricsFromLinked.length > 0
-          ? metricsFromLinked
+      const metricIdsOrdered = (analysis.metricIds || []).map((id) => String(id));
+      const expandedFromAnalysis =
+        metricIdsOrdered.length > 0 && linkedSavedMetrics.length > 0
+          ? expandSavedMetricsWithGlobalRefs(metricIdsOrdered, linkedSavedMetrics, {
+              setDisplayAliasToSavedName: true,
+            })
+          : [];
+      const sanitizedMetrics: AggregationMetric[] =
+        expandedFromAnalysis.length > 0
+          ? expandedFromAnalysis.map((m) => ({
+              id: String(m.id ?? `m-${Date.now()}`),
+              field: String(m.field ?? ""),
+              func: String(m.func ?? "SUM"),
+              alias: String(m.alias ?? ""),
+              condition: m.condition as AggregationMetric["condition"],
+              formula: typeof m.formula === "string" ? m.formula : undefined,
+              expression: typeof m.expression === "string" ? m.expression : undefined,
+            }))
           : toAggregationMetricList(mergedCfg.metrics);
-      const linkedByName = new Map(
-        linkedSavedMetrics.map((saved) => [
-          String(saved.name ?? "").trim().toLowerCase(),
-          saved.metric,
-        ])
-      );
-      const sanitizedMetrics = metrics.map((metric) => {
-        const fieldKey = String(metric.field ?? "").trim().toLowerCase();
-        if (!fieldKey) return metric;
-        const linkedMetric = linkedByName.get(fieldKey);
-        const linkedField = String(linkedMetric?.field ?? "").trim();
-        const linkedExpr = String(linkedMetric?.expression ?? "").trim();
-        if (!linkedMetric || (!linkedField && !linkedExpr)) return metric;
-        return {
-          ...metric,
-          ...(linkedField ? { field: linkedField } : {}),
-          ...(linkedExpr ? { expression: linkedExpr } : {}),
-        };
-      });
       const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
       const sources = etlData?.dataSources;
       const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
