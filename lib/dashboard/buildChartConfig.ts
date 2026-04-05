@@ -77,6 +77,29 @@ function metricExternalColumnKey(m: AggMetricLike | undefined): string {
   return String(raw ?? "").trim();
 }
 
+function normalizeLooseKey(s: string): string {
+  return s.toLowerCase().replace(/[\s-]+/g, "_").replace(/_+/g, "_");
+}
+
+/**
+ * Alinea un alias de chartYAxes con la clave real en las filas (API puede devolver otro casing,
+ * guiones bajos vs espacios, etc.). Sin esto solo se grafica la primera métrica que hace match exacto.
+ */
+function matchResultKey(candidate: string, resultKeys: string[]): string | null {
+  const t = String(candidate ?? "").trim();
+  if (!t) return null;
+  if (resultKeys.includes(t)) return t;
+  const tl = t.toLowerCase();
+  for (const k of resultKeys) {
+    if (k.toLowerCase() === tl) return k;
+  }
+  const nt = normalizeLooseKey(t);
+  for (const k of resultKeys) {
+    if (normalizeLooseKey(k) === nt) return k;
+  }
+  return null;
+}
+
 /**
  * Convierte una entrada de chartYAxes (alias, metric_N, etc.) a la clave presente en las filas.
  */
@@ -91,12 +114,29 @@ function resolveChartYAxisEntryToResultKey(
     const idx = parseInt(match[1]!, 10);
     if (Number.isFinite(idx) && idx >= 0 && idx < metrics.length) {
       const ext = metricExternalColumnKey(metrics[idx]);
-      if (ext && resultKeys.includes(ext)) return ext;
+      if (ext) {
+        const hit = matchResultKey(ext, resultKeys);
+        if (hit) return hit;
+      }
     }
-    if (resultKeys.includes(trimmed)) return trimmed;
-    return null;
+    return matchResultKey(trimmed, resultKeys);
   }
-  return resultKeys.includes(trimmed) ? trimmed : null;
+  const direct = matchResultKey(trimmed, resultKeys);
+  if (direct) return direct;
+  if (Array.isArray(metrics)) {
+    for (const m of metrics) {
+      const ext = metricExternalColumnKey(m);
+      if (!ext) continue;
+      if (
+        ext.toLowerCase() === trimmed.toLowerCase() ||
+        normalizeLooseKey(ext) === normalizeLooseKey(trimmed)
+      ) {
+        const hit = matchResultKey(ext, resultKeys);
+        if (hit) return hit;
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -124,10 +164,11 @@ export function resolveWidgetAxisKeys(
       : [];
   const resolvedType = String(agg?.chartType ?? widget.type ?? "").trim();
   const isHorizontalBar = resolvedType === "horizontalBar";
-  const chartXAxisKey =
-    typeof agg?.chartXAxis === "string" && resultKeys.includes(agg.chartXAxis)
-      ? agg.chartXAxis
-      : undefined;
+  const chartXAxisRaw =
+    typeof agg?.chartXAxis === "string" ? String(agg.chartXAxis).trim() : "";
+  const chartXAxisKey = chartXAxisRaw
+    ? matchResultKey(chartXAxisRaw, resultKeys) ?? undefined
+    : undefined;
   const explicitDimensionCandidates = [
     agg?.dimension,
     ...(Array.isArray(agg?.dimensions) ? agg.dimensions : []),
@@ -136,7 +177,10 @@ export function resolveWidgetAxisKeys(
   ]
     .map((k) => String(k ?? "").trim())
     .filter(Boolean);
-  const explicitDimensionKey = explicitDimensionCandidates.find((k) => resultKeys.includes(k));
+  const explicitDimensionKey =
+    explicitDimensionCandidates
+      .map((k) => matchResultKey(k, resultKeys))
+      .find((k) => k != null) ?? undefined;
   const inferredDimensionKey = resultKeys.find((k) => {
     if (metricAliases.includes(k)) return false;
     const valueType = typeof (sample as Record<string, unknown>)[k];
@@ -162,10 +206,20 @@ export function resolveWidgetAxisKeys(
     yKeys = ordered;
   }
   if (!hasExplicitYAxes && yKeys.length === 0 && formulaMetricAliases.length > 0) {
-    yKeys = formulaMetricAliases.filter((k) => resultKeys.includes(k));
+    yKeys = formulaMetricAliases
+      .map((k) => matchResultKey(k, resultKeys))
+      .filter((k): k is string => k != null);
   }
   if (!hasExplicitYAxes && yKeys.length === 0 && metricAliases.length > 0) {
-    yKeys = metricAliases.filter((k) => resultKeys.includes(k));
+    const seen = new Set<string>();
+    yKeys = metricAliases
+      .map((k) => matchResultKey(k, resultKeys))
+      .filter((k): k is string => k != null)
+      .filter((k) => {
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
   }
   if (!hasExplicitYAxes && yKeys.length === 0) {
     const numKeys = resultKeys.filter((k) => typeof (sample as Record<string, unknown>)[k] === "number");
