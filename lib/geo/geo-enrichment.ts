@@ -1,3 +1,10 @@
+import {
+  getArProvinceCentroid,
+  isArgentinaDefaultCountry,
+  isPointInArgentinaBBox,
+  resolveArProvinceGadmId,
+} from "@/lib/geo/argentinaProvinces";
+
 type CacheSelectBuilder = {
   eq: (column: string, value: string) => {
     maybeSingle: () => Promise<{ data: unknown; error: unknown }>;
@@ -62,6 +69,30 @@ type GeocodeResult = {
   lon: number;
   displayName?: string;
   source: "cache" | "nominatim";
+};
+
+/** ISO 3166-1 alpha-2 para el parámetro `countrycodes` de Nominatim (coma-separado si varios). */
+function mapDefaultCountryToNominatimCountryCodes(mapDefaultCountry: string | undefined): string | undefined {
+  if (!mapDefaultCountry?.trim()) return undefined;
+  const n = mapDefaultCountry
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+  if (n === "argentina" || n === "ar") return "ar";
+  if (n === "espana" || n === "españa" || n === "spain" || n === "es") return "es";
+  if (n === "chile" || n === "cl") return "cl";
+  if (n === "brasil" || n === "brazil" || n === "br") return "br";
+  if (n === "uruguay" || n === "uy") return "uy";
+  if (n === "paraguay" || n === "py") return "py";
+  if (n === "bolivia" || n === "bo") return "bo";
+  return undefined;
+}
+
+type ResolveGeoContext = {
+  nominatimCountryCodes?: string;
+  /** Si true, descarta resultados Nominatim fuera del bbox Argentina (defensa ante homónimos). */
+  restrictResultsToArgentinaBBox?: boolean;
 };
 
 export type EnrichRowsWithGeoOptions = {
@@ -217,12 +248,23 @@ const writeCache = async (
   await cacheClient.from("geo_location_cache").upsert(payload, { onConflict: "cache_key" });
 };
 
-const geocodeWithNominatim = async (query: string): Promise<{ lat: number; lon: number; displayName?: string } | null> => {
+const geocodeWithNominatim = async (
+  query: string,
+  opts?: { countryCodes?: string }
+): Promise<{ lat: number; lon: number; displayName?: string } | null> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), NOMINATIM_TIMEOUT_MS);
   try {
     await rateLimitNominatim();
-    const url = `${NOMINATIM_URL}?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
+    const params = new URLSearchParams({
+      format: "jsonv2",
+      limit: "1",
+      q: query,
+    });
+    if (opts?.countryCodes?.trim()) {
+      params.set("countrycodes", opts.countryCodes.trim().toLowerCase());
+    }
+    const url = `${NOMINATIM_URL}?${params.toString()}`;
     const res = await fetch(url, {
       method: "GET",
       headers: {
@@ -249,25 +291,35 @@ const geocodeWithNominatim = async (query: string): Promise<{ lat: number; lon: 
 
 const resolveCoordinates = async (
   parts: GeoComponent,
-  cacheClient?: GeoCacheClient | null
+  cacheClient: GeoCacheClient | null | undefined,
+  ctx?: ResolveGeoContext
 ): Promise<GeocodeResult | null> => {
-  const cacheKey = buildCacheKey(parts);
-  if (!cacheKey.replace(/\|/g, "")) return null;
+  const cc = ctx?.nominatimCountryCodes?.trim().toLowerCase();
+  const baseKey = buildCacheKey(parts);
+  if (!baseKey.replace(/\|/g, "")) return null;
+  const cacheKey = cc ? `${baseKey}|cc:${cc}` : baseKey;
 
   const cacheHit = await readCache(cacheClient, cacheKey);
   if (cacheHit && isFiniteNumber(cacheHit.lat) && isFiniteNumber(cacheHit.lon)) {
-    return {
-      lat: cacheHit.lat,
-      lon: cacheHit.lon,
-      displayName: cacheHit.display_name ?? undefined,
-      source: "cache",
-    };
+    if (ctx?.restrictResultsToArgentinaBBox && !isPointInArgentinaBBox(cacheHit.lat, cacheHit.lon)) {
+      // Caché obsoleta o clave heredada: no usar punto fuera de Argentina.
+    } else {
+      return {
+        lat: cacheHit.lat,
+        lon: cacheHit.lon,
+        displayName: cacheHit.display_name ?? undefined,
+        source: "cache",
+      };
+    }
   }
 
   const candidates = buildGeoQueryCandidates(parts);
   for (const query of candidates) {
-    const geocoded = await geocodeWithNominatim(query);
+    const geocoded = await geocodeWithNominatim(query, cc ? { countryCodes: cc } : undefined);
     if (!geocoded) continue;
+    if (ctx?.restrictResultsToArgentinaBBox && !isPointInArgentinaBBox(geocoded.lat, geocoded.lon)) {
+      continue;
+    }
     await writeCache(cacheClient, {
       cache_key: cacheKey,
       query_text: query,
@@ -284,6 +336,8 @@ const resolveCoordinates = async (
 export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Promise<Record<string, unknown>[]> {
   const { rows, dimList = [], chartXAxis, geoHints, cacheClient, mapDefaultCountry } = options;
   const defaultCountry = mapDefaultCountry?.trim() || undefined;
+  const argentinaMode = isArgentinaDefaultCountry(defaultCountry);
+  const nominatimCc = mapDefaultCountryToNominatimCountryCodes(defaultCountry);
   if (!Array.isArray(rows) || rows.length === 0) return rows;
 
   const limitedRows = rows.slice(0, MAX_GEOCODE_ROWS);
@@ -309,7 +363,41 @@ export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Prom
     const components = inferGeoComponents(r, keys, dimList, geoHints);
     const withCountry =
       components.country || !defaultCountry ? components : { ...components, country: defaultCountry };
-    const resolved = await resolveCoordinates(withCountry, cacheClient);
+
+    if (argentinaMode) {
+      const tryTexts = [label, withCountry.province].filter(
+        (x): x is string => typeof x === "string" && x.trim().length > 0
+      );
+      const seen = new Set<string>();
+      let usedProvinceCentroid = false;
+      for (const t of tryTexts) {
+        if (seen.has(t)) continue;
+        seen.add(t);
+        const pid = resolveArProvinceGadmId(t);
+        if (!pid) continue;
+        const cent = getArProvinceCentroid(pid);
+        if (!cent) continue;
+        r.__geo_lat = cent.lat;
+        r.__geo_lon = cent.lon;
+        r.__geo_label = label ?? t;
+        r.__geo_source = "ar_province_centroid";
+        r.__geo_resolved = true;
+        enriched.push(r);
+        usedProvinceCentroid = true;
+        break;
+      }
+      if (usedProvinceCentroid) continue;
+    }
+
+    const resolveCtx: ResolveGeoContext | undefined =
+      nominatimCc || argentinaMode
+        ? {
+            nominatimCountryCodes: nominatimCc,
+            restrictResultsToArgentinaBBox: argentinaMode && nominatimCc === "ar",
+          }
+        : undefined;
+
+    const resolved = await resolveCoordinates(withCountry, cacheClient, resolveCtx);
     if (resolved) {
       r.__geo_lat = resolved.lat;
       r.__geo_lon = resolved.lon;

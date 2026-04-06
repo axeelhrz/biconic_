@@ -5,6 +5,7 @@ import L from "leaflet";
 import { CircleMarker, GeoJSON, MapContainer, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import {
+  AR_BOUNDING_BOX,
   AR_GEOJSON_PATH,
   isArgentinaDefaultCountry,
   resolveArProvinceGadmId,
@@ -29,10 +30,10 @@ type DashboardMapWidgetProps = {
 const DEFAULT_CENTER: [number, number] = [-34.6, -58.4];
 const DEFAULT_ZOOM = 3;
 
-/** Encuadre aproximado Argentina (sur-oeste, nor-este) en lat/lng. */
+/** Encuadre Argentina: mismo bbox que validación de geocodificación en lib/geo. */
 const AR_MAX_BOUNDS: L.LatLngBoundsExpression = [
-  [-55.2, -73.8],
-  [-20.8, -52.5],
+  [AR_BOUNDING_BOX.minLat, AR_BOUNDING_BOX.minLon],
+  [AR_BOUNDING_BOX.maxLat, AR_BOUNDING_BOX.maxLon],
 ];
 const AR_DEFAULT_CENTER: [number, number] = [-37.2, -64.6];
 const AR_DEFAULT_ZOOM = 4;
