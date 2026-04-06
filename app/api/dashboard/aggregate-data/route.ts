@@ -1381,15 +1381,28 @@ export async function POST(req: NextRequest) {
       if (!temporalSortRequested && dimMatch) {
         orderByField = `"${dimMatch.replace(/"/g, '""')}"`;
       } else if (!temporalSortRequested) {
-        const matchedMetric = body.metrics.find((m) => {
-          const sig = `${m.func}(${m.field})`;
-          return (
-            requestedSortNormalized === normalizeStr(m.alias || "") ||
-            requestedSortNormalized === normalizeStr(sig)
-          );
-        });
-        if (matchedMetric)
-          orderByField = `"${(matchedMetric as any).internalAlias}"`;
+        const metricIdxMatch = /^metric_(\d+)$/i.exec(String(body.orderBy.field || "").trim());
+        let orderByInternal: string | undefined;
+        if (metricIdxMatch) {
+          const idx = parseInt(metricIdxMatch[1]!, 10);
+          if (Number.isFinite(idx) && idx >= 0 && idx < body.metrics.length) {
+            const ia = (body.metrics[idx] as { internalAlias?: string }).internalAlias;
+            if (typeof ia === "string" && ia.trim() !== "") orderByInternal = ia;
+          }
+        }
+        if (orderByInternal) {
+          orderByField = `"${orderByInternal.replace(/"/g, '""')}"`;
+        } else {
+          const matchedMetric = body.metrics.find((m) => {
+            const sig = `${m.func}(${m.field})`;
+            return (
+              requestedSortNormalized === normalizeStr(m.alias || "") ||
+              requestedSortNormalized === normalizeStr(sig)
+            );
+          });
+          if (matchedMetric)
+            orderByField = `"${(matchedMetric as any).internalAlias}"`;
+        }
       }
       query += ` ORDER BY ${orderByField} ${safeDir}`;
     } else if (dateGroupByExpr) {

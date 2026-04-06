@@ -161,9 +161,11 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     }));
     const primaryDim = dimensions[0] ?? agg?.dimension;
     const dateGroupByGranularity = agg?.dateGroupByGranularity;
-    /** Alineado con buildChartConfig: si el usuario activó Top N, la API aplica orderBy+limit también con eje temporal. */
-    const shouldApplyRanking = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0;
-    const rankingMetric = agg?.chartRankingMetric || agg?.metrics?.[0]?.alias;
+    /**
+     * Paridad con EtlMetricsClient.fetchPreview: Top N solo en buildChartConfig/getProcessedRowsForChart.
+     * Evita ORDER BY + LIMIT en SQL (incorrecto con metric_N, FORMULA en capa externa, etc.).
+     */
+    const rankingActive = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0;
     const mappedChartX = agg?.chartXAxis ? mapField(agg.chartXAxis, sourceId, datasetDimensions) : undefined;
     const mapAggFilterField = <T extends { field?: string }>(f: T): T => {
       const fld = f.field;
@@ -190,12 +192,15 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       dimensions: dimensions.map((d) => mapField(d, sourceId, datasetDimensions)),
       metrics: metricsPayload,
       filters: [...globalFiltersMapped, ...aggFiltersMapped],
-      orderBy: shouldApplyRanking && rankingMetric
-        ? { field: rankingMetric, direction: "DESC" as const }
-        : agg?.orderBy,
-      limit: shouldApplyRanking
-        ? Math.max(1, agg?.chartRankingTop ?? 5)
-        : agg?.limit ?? 1000,
+      ...(rankingActive
+        ? {
+            unlimited: true as const,
+            ...(agg?.orderBy?.field ? { orderBy: agg.orderBy } : {}),
+          }
+        : {
+            orderBy: agg?.orderBy,
+            limit: agg?.limit ?? 1000,
+          }),
       cumulative: agg?.cumulative ?? "none",
       comparePeriod: agg?.comparePeriod,
       dateDimension: mapField(agg?.dateDimension, sourceId, datasetDimensions),
