@@ -102,9 +102,10 @@ function isYearOperator(operator: unknown): boolean {
   return String(operator ?? "").toUpperCase() === "YEAR";
 }
 
-/** Un año por filtro: valores heredados como multi (array) se reducen al primero. */
-function normalizeYearFilterStoredValue(operator: unknown, v: unknown): unknown {
+/** Un año por filtro: valores heredados como multi (array) se conservan; en select único se reduce al primero. */
+function normalizeYearFilterStoredValue(operator: unknown, inputType: unknown, v: unknown): unknown {
   if (!isYearOperator(operator)) return v;
+  if (inputType === "multi") return v;
   if (Array.isArray(v) && v.length > 0) return String(v[0]);
   return v;
 }
@@ -312,9 +313,15 @@ export function DashboardViewer({
         setGlobalFilters(initialGlobalFilters);
         const initialFv: Record<string, unknown> = {};
         for (const gf of initialGlobalFilters) {
-          const v = (gf as AggregationFilter & { value?: unknown }).value;
-          if (v === "" || v === null || v === undefined) continue;
-          if (Array.isArray(v) && v.length === 0) continue;
+          const raw = (gf as AggregationFilter & { value?: unknown }).value;
+          if (raw === "" || raw === null || raw === undefined) continue;
+          if (Array.isArray(raw) && raw.length === 0) continue;
+          let v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
+          v = normalizeYearFilterStoredValue(
+            (gf as AggregationFilter).operator,
+            (gf as AggregationFilter).inputType,
+            v
+          );
           initialFv[gf.id] = v;
         }
         setFilterValues(initialFv);
@@ -374,7 +381,11 @@ export function DashboardViewer({
       if (raw === "" || raw === null || raw === undefined) continue;
       if (Array.isArray(raw) && raw.length === 0) continue;
       let v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
-      v = normalizeYearFilterStoredValue((gf as AggregationFilter).operator, v);
+      v = normalizeYearFilterStoredValue(
+        (gf as AggregationFilter).operator,
+        (gf as AggregationFilter).inputType,
+        v
+      );
       initialFv[gf.id] = v;
     }
     setFilterValues(initialFv);
@@ -553,13 +564,13 @@ export function DashboardViewer({
             if (Array.isArray(v) && v.length === 0) continue;
             const rawOp = f.operator || "=";
             const rawOpUpper = String(rawOp).toUpperCase();
-            if (rawOpUpper === "YEAR" && Array.isArray(v) && v.length > 0) {
+            const inputT = f.inputType;
+            if (rawOpUpper === "YEAR" && Array.isArray(v) && v.length > 0 && inputT !== "multi") {
               v = v[0];
             }
             const isSemantic = datasetDimensions && f.field in datasetDimensions;
             if (isSemantic && widgetSourceId && !datasetDimensions![f.field]?.[widgetSourceId]) continue;
             const physicalField = mapDatasetField(f.field);
-            const inputT = f.inputType;
             const useIn =
               rawOp === "IN" ||
               (rawOpUpper !== "YEAR" && inputT === "multi" && Array.isArray(v) && v.length > 0);
@@ -579,7 +590,7 @@ export function DashboardViewer({
           if (Array.isArray(v) && v.length === 0) continue;
           const rawOpFw = fc.operator || "=";
           const rawOpFwUpper = String(rawOpFw).toUpperCase();
-          if (rawOpFwUpper === "YEAR" && Array.isArray(v) && v.length > 0) {
+          if (rawOpFwUpper === "YEAR" && Array.isArray(v) && v.length > 0 && fc.inputType !== "multi") {
             v = v[0];
           }
           const scopeIds = fc.scopeMetricIds;
@@ -1058,8 +1069,7 @@ export function DashboardViewer({
               : rawDistinct;
             const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
             const isYearOp = isYearOperator((gf as AggregationFilter).operator);
-            const isMulti =
-              !isYearOp && ((gf.operator || "=") === "IN" || inputType === "multi");
+            const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
             const selectedArrayRaw = isMulti
               ? (Array.isArray(filterValues[gf.id]) ? filterValues[gf.id] : filterValues[gf.id] != null && filterValues[gf.id] !== "" ? [filterValues[gf.id]] : []) as string[]
               : [];
