@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import postgres from "postgres";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { enrichRowsWithGeo, type GeoCacheClient, type GeoHints } from "@/lib/geo/geo-enrichment";
+import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
 
 // --- Interfaces (Copied from internal route) ---
 interface Metric {
@@ -272,16 +273,7 @@ export async function POST(
           }
 
           if (op === "MONTH") {
-            if (Array.isArray(f.value)) {
-              const list = f.value
-                .map((v) => Number(v))
-                .filter((n) => !isNaN(n))
-                .join(", ");
-              return `EXTRACT(MONTH FROM ${fieldExpression}) IN (${list})`;
-            }
-            return `EXTRACT(MONTH FROM ${fieldExpression}) = ${Number(
-              f.value
-            )}`;
+            return buildMonthFilterSqlClause(fieldExpression, f.value);
           }
           if (op === "YEAR") {
             if (Array.isArray(f.value)) {

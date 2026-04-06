@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
 
 interface Filter {
   field: string;
@@ -158,10 +159,7 @@ export async function POST(
                 : `"${safeField}"`;
           }
 
-          if (op === "MONTH")
-            return `EXTRACT(MONTH FROM ${fieldExpression}) = ${Number(
-              f.value
-            )}`;
+          if (op === "MONTH") return buildMonthFilterSqlClause(fieldExpression, f.value);
           if (op === "YEAR")
             return `EXTRACT(YEAR FROM ${fieldExpression}) = ${Number(f.value)}`;
           if (op === "DAY") {
