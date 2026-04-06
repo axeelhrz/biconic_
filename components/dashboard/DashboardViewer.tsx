@@ -31,6 +31,10 @@ import {
   exportDashboardSummaryPpt,
 } from "@/lib/dashboard/dashboardExport";
 import { Button } from "@/components/ui/button";
+import {
+  computeDashboardGridPlacements,
+  DASHBOARD_GRID_COLUMN_COUNT,
+} from "@/lib/dashboard/gridLayout";
 
 // Types compatible with persisted layout and API
 type AggregationFilter = {
@@ -152,24 +156,6 @@ function widgetMatchesActivePage(
     return true;
   }
   return false;
-}
-
-function computeGridPlacements(
-  ordered: Widget[]
-): { widget: Widget; row: number; col: number; span: number }[] {
-  const placements: { widget: Widget; row: number; col: number; span: number }[] = [];
-  let row = 0,
-    col = 0;
-  for (const w of ordered) {
-    const span = Math.min(4, Math.max(1, (w.gridSpan ?? 2) as number)) as 1 | 2 | 4;
-    placements.push({ widget: w, row, col, span });
-    col += span;
-    if (col >= 4) {
-      col = 0;
-      row += 1;
-    }
-  }
-  return placements;
 }
 
 export interface DashboardViewerProps {
@@ -745,7 +731,7 @@ export function DashboardViewer({
     [orderedWidgets]
   );
 
-  const placements = useMemo(() => computeGridPlacements(orderedWidgets), [orderedWidgets]);
+  const placements = useMemo(() => computeDashboardGridPlacements(orderedWidgets), [orderedWidgets]);
 
   const runExportExcel = useCallback(async () => {
     setExportBusy(true);
@@ -1067,7 +1053,7 @@ export function DashboardViewer({
             ref={canvasExportRef}
             className={`grid gap-4${useClientTheme ? " client-view-grid" : ""}`}
             style={{
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+              gridTemplateColumns: `repeat(${DASHBOARD_GRID_COLUMN_COUNT}, minmax(0, 1fr))`,
             }}
           >
             {placements.map(({ widget, row, col, span }) => {

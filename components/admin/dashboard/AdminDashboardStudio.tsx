@@ -40,6 +40,7 @@ import {
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import { clampGridSpan } from "@/lib/dashboard/gridLayout";
 import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
@@ -1305,7 +1306,7 @@ export function AdminDashboardStudio({
       let minHeight: number | undefined;
       if (state.edge === "e" || state.edge === "se") {
         const spanDelta = Math.round(dx / 60);
-        gridSpan = Math.min(4, Math.max(1, state.startSpan + spanDelta));
+        gridSpan = clampGridSpan(state.startSpan + spanDelta, state.startSpan);
       }
       if (state.edge === "s" || state.edge === "se") {
         minHeight = Math.min(600, Math.max(200, state.startMinHeight + dy));
@@ -1960,7 +1961,7 @@ export function AdminDashboardStudio({
                     kpiValue = fallbackFromRows;
                   }
                 }
-                const span = Math.min(4, Math.max(1, w.gridSpan ?? 2));
+                const span = clampGridSpan(w.gridSpan, 2);
                 const isSelected = selectedId === w.id;
                 const minH = w.minHeight ?? 280;
                 const effectiveTheme = mergeCardTheme(themeResolved, w.cardTheme);

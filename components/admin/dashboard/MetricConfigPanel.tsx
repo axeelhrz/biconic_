@@ -436,13 +436,16 @@ export function MetricConfigPanel({
             <div>
               <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columnas en grid</Label>
               <select
-                value={Math.min(4, Math.max(1, widget.gridSpan ?? 2))}
-                onChange={(e) => onUpdate({ gridSpan: parseInt(e.target.value, 10) as 1 | 2 | 4 })}
+                value={Math.min(6, Math.max(1, widget.gridSpan ?? 2))}
+                onChange={(e) => onUpdate({ gridSpan: parseInt(e.target.value, 10) })}
                 className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
               >
                 <option value={1}>1</option>
                 <option value={2}>2</option>
-                <option value={4}>4 (ancho completo)</option>
+                <option value={3}>3</option>
+                <option value={4}>4</option>
+                <option value={5}>5</option>
+                <option value={6}>6 (ancho completo)</option>
               </select>
             </div>
 

@@ -494,13 +494,16 @@ export function AddMetricConfigForm({
         <div>
           <Label className="add-metric-label">Columnas en grid</Label>
           <select
-            value={Math.min(4, Math.max(1, form.gridSpan ?? 2))}
-            onChange={(e) => updateForm({ gridSpan: parseInt(e.target.value, 10) as 1 | 2 | 4 })}
+            value={Math.min(6, Math.max(1, form.gridSpan ?? 2))}
+            onChange={(e) => updateForm({ gridSpan: parseInt(e.target.value, 10) })}
             className="add-metric-select mt-1"
           >
             <option value={1}>1</option>
             <option value={2}>2</option>
-            <option value={4}>4 (ancho completo)</option>
+            <option value={3}>3</option>
+            <option value={4}>4</option>
+            <option value={5}>5</option>
+            <option value={6}>6 (ancho completo)</option>
           </select>
         </div>
         {(form.type === "pie" || form.type === "doughnut") && (

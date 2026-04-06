@@ -42,7 +42,10 @@ const HEIGHT_OPTIONS = [
 const SPAN_OPTIONS = [
   { value: 1, label: "1 columna" },
   { value: 2, label: "2 columnas" },
-  { value: 4, label: "Ancho completo" },
+  { value: 3, label: "3 columnas" },
+  { value: 4, label: "4 columnas" },
+  { value: 5, label: "5 columnas" },
+  { value: 6, label: "6 columnas (ancho completo)" },
 ] as const;
 
 type MetricBlockProps = {

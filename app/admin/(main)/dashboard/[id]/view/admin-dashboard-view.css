@@ -185,11 +185,11 @@
   padding: 0;
 }
 
-/* Grid: 4 columnas en desktop para posicionar y redimensionar widgets (1/2/4 cols) */
+/* Grid: 6 columnas en desktop (alineado con lib/dashboard/gridLayout) */
 .admin-view-page .admin-dashboard-view [data-role="canvas"] .admin-view-grid,
 .admin-view-page .admin-dashboard-view [data-role="canvas"] > div.grid {
   display: grid !important;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   background: none;
   border: none;
   box-shadow: none;

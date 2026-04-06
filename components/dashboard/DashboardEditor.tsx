@@ -16,6 +16,7 @@ import {
 } from "@/types/dashboard";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
+import { clampGridSpan, DASHBOARD_GRID_COLUMN_COUNT } from "@/lib/dashboard/gridLayout";
 
 type AggregationFilter = {
   id: string;
@@ -284,9 +285,12 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
               <p className="mb-2">No hay widgets. Añade uno desde los botones de arriba.</p>
             </div>
           ) : (
-            <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+            <div
+              className="grid gap-3"
+              style={{ gridTemplateColumns: `repeat(${DASHBOARD_GRID_COLUMN_COUNT}, minmax(0, 1fr))` }}
+            >
               {widgets.map((w) => {
-                const span = Math.min(4, Math.max(1, (w.gridSpan ?? 2) as number));
+                const span = clampGridSpan(w.gridSpan, 2);
                 return (
                   <div
                     key={w.id}
