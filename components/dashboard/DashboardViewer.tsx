@@ -24,13 +24,14 @@ import {
   resolveDarkChartTheme,
 } from "@/lib/dashboard/widgetRenderParity";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
-import { AlertTriangle, ArrowLeft, FileDown, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2 } from "lucide-react";
 import {
   exportDashboardExcel,
   exportDashboardPdfFromElement,
   exportDashboardSummaryPpt,
 } from "@/lib/dashboard/dashboardExport";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   computeDashboardGridPlacements,
   DASHBOARD_GRID_COLUMN_COUNT,
@@ -111,6 +112,16 @@ function normalizeYearFilterStoredValue(operator: unknown, v: unknown): unknown 
 function yearFilterSelectDisplayValue(raw: unknown): string {
   if (Array.isArray(raw) && raw.length > 0) return String(raw[0]);
   return String(raw ?? "");
+}
+
+function globalMultiFilterTriggerLabel(operator: unknown, selected: string[], options: unknown[]): string {
+  if (selected.length === 0) return "Todos";
+  if (selected.length === 1) {
+    const s = selected[0]!;
+    const match = options.find((o) => String(o) === s);
+    return monthFilterOptionLabel(operator, match !== undefined ? match : s);
+  }
+  return `${selected.length} seleccionados`;
 }
 
 // Types compatible with persisted layout and API
@@ -1061,53 +1072,87 @@ export function DashboardViewer({
               <div key={gf.id} className="flex flex-col gap-1.5 text-sm">
                 <span style={{ color: "var(--platform-fg-muted)" }}>{label}</span>
                 {isMulti && hasOptions ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs rounded-md"
-                      style={{ borderColor: "var(--platform-border)" }}
-                      onClick={() => setFilterValues((prev) => ({ ...prev, [gf.id]: [...options].map(String) }))}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 min-w-[10rem] max-w-[14rem] justify-between gap-1 text-xs font-normal rounded-md px-2"
+                        style={{
+                          borderColor: "var(--platform-border)",
+                          color: "var(--platform-fg)",
+                          background: "var(--platform-bg)",
+                        }}
+                        aria-haspopup="dialog"
+                        aria-label={`${label}: elegir valores`}
+                      >
+                        <span className="truncate text-left">
+                          {globalMultiFilterTriggerLabel((gf as AggregationFilter).operator, selectedArray, options)}
+                        </span>
+                        <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align="start"
+                      className="w-72 p-3"
+                      style={{
+                        background: "var(--platform-bg, var(--popover))",
+                        borderColor: "var(--platform-border)",
+                        color: "var(--platform-fg)",
+                      }}
                     >
-                      Seleccionar todo
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs rounded-md"
-                      style={{ borderColor: "var(--platform-border)" }}
-                      onClick={() => setFilterValues((prev) => ({ ...prev, [gf.id]: [] }))}
-                    >
-                      Deseleccionar todo
-                    </Button>
-                    <div className="flex flex-wrap gap-x-3 gap-y-1 max-h-24 overflow-y-auto">
-                      {options.map((v) => {
-                        const s = String(v);
-                        const checked = selectedArray.includes(s);
-                        return (
-                          <label key={s} className="flex items-center gap-1.5 cursor-pointer whitespace-nowrap" style={{ color: "var(--platform-fg)" }}>
-                            <input
-                              type="checkbox"
-                              className="rounded border"
-                              style={{ borderColor: "var(--platform-border)" }}
-                              checked={checked}
-                              onChange={(e) => {
-                                const next = e.target.checked
-                                  ? [...selectedArray, s]
-                                  : selectedArray.filter((x) => x !== s);
-                                setFilterValues((prev) => ({ ...prev, [gf.id]: next }));
-                              }}
-                            />
-                            <span className="text-xs">
-                              {monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs rounded-md"
+                          style={{ borderColor: "var(--platform-border)" }}
+                          onClick={() => setFilterValues((prev) => ({ ...prev, [gf.id]: [...options].map(String) }))}
+                        >
+                          Seleccionar todo
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs rounded-md"
+                          style={{ borderColor: "var(--platform-border)" }}
+                          onClick={() => setFilterValues((prev) => ({ ...prev, [gf.id]: [] }))}
+                        >
+                          Deseleccionar todo
+                        </Button>
+                      </div>
+                      <div className="max-h-60 overflow-y-auto flex flex-col gap-1.5 pr-1">
+                        {options.map((v) => {
+                          const s = String(v);
+                          const checked = selectedArray.includes(s);
+                          return (
+                            <label
+                              key={s}
+                              className="flex items-center gap-2 cursor-pointer text-xs py-0.5"
+                              style={{ color: "var(--platform-fg)" }}
+                            >
+                              <input
+                                type="checkbox"
+                                className="rounded border shrink-0"
+                                style={{ borderColor: "var(--platform-border)" }}
+                                checked={checked}
+                                onChange={(e) => {
+                                  const next = e.target.checked
+                                    ? [...selectedArray, s]
+                                    : selectedArray.filter((x) => x !== s);
+                                  setFilterValues((prev) => ({ ...prev, [gf.id]: next }));
+                                }}
+                              />
+                              <span>{monthFilterOptionLabel((gf as AggregationFilter).operator, v)}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 ) : (gf as any).operator === "YEAR_MONTH" ? (
                   <input
                     type="month"
