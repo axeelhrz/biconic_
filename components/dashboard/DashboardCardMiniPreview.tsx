@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Loader2 } from "lucide-react";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "@/components/dashboard/DashboardWidgetRenderer";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
 import { buildChartMetricStyles, buildResolvedChartStyle, resolveDarkChartTheme } from "@/lib/dashboard/widgetRenderParity";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
-import { mergeTheme, type DashboardTheme } from "@/types/dashboard";
+import {
+  mergeCardTheme,
+  mergeTheme,
+  themeToCssVars,
+  themeToWrapperBackground,
+  type DashboardTheme,
+} from "@/types/dashboard";
 
 type AggregationMetric = {
   id?: string;
@@ -61,6 +67,7 @@ type LayoutWidget = {
   source?: { labelField?: string };
   aggregationConfig?: AggregationConfig;
   chartStyle?: ChartStyleConfig;
+  cardTheme?: Partial<DashboardTheme>;
 };
 
 type LayoutData = {
@@ -95,6 +102,8 @@ type MiniWidgetData = {
   rendererWidget: DashboardWidgetRendererWidget;
   hasData: boolean;
   gridSpan: number;
+  cellStyle?: CSSProperties;
+  cellChartDark?: boolean;
 };
 
 function pickWidgets(layout: LayoutData): LayoutWidget[] {
@@ -109,7 +118,7 @@ function pickWidgets(layout: LayoutData): LayoutWidget[] {
 async function loadWidgetData(
   widget: LayoutWidget,
   etlData: EtlDataPayload,
-  themeFont?: string
+  themeMerged: ReturnType<typeof mergeTheme>
 ): Promise<MiniWidgetData> {
   const type = widget.type ?? "bar";
   const id = widget.id ?? `w-${Math.random().toString(36).slice(2)}`;
@@ -119,6 +128,13 @@ async function loadWidgetData(
   const sourceId = widget.dataSourceId ?? etlData.primarySourceId ?? sources[0]?.id;
   const source = sources.find((s) => s.id === sourceId) ?? sources[0];
 
+  const effectiveTheme = mergeCardTheme(themeMerged, widget.cardTheme);
+  const cellStyle = {
+    ...(themeToCssVars(effectiveTheme) as CSSProperties),
+    ...themeToWrapperBackground(effectiveTheme),
+  } as CSSProperties;
+  const cellChartDark = resolveDarkChartTheme(effectiveTheme, true);
+
   if (!source) {
     return {
       id,
@@ -126,6 +142,8 @@ async function loadWidgetData(
       type,
       hasData: false,
       gridSpan,
+      cellStyle,
+      cellChartDark,
       rendererWidget: {
         id,
         title,
@@ -158,32 +176,43 @@ async function loadWidgetData(
       config: loaded.chartConfig,
       rows: loaded.processedRows,
       aggregationConfig: agg,
-      chartStyle: buildResolvedChartStyle(agg, widget.chartStyle ?? null, themeFont),
+      chartStyle: buildResolvedChartStyle(agg, widget.chartStyle ?? null, effectiveTheme.fontFamily),
       chartMetricStyles: buildChartMetricStyles(agg),
       labelDisplayMode: "percent",
     },
     hasData: loaded.hasData,
     gridSpan,
+    cellStyle,
+    cellChartDark,
   };
 }
 
-function MiniWidgetTile({ widget, darkChartTheme }: { widget: MiniWidgetData; darkChartTheme: boolean }) {
+function MiniWidgetTile({ widget }: { widget: MiniWidgetData }) {
+  const wrapStyle = widget.cellStyle;
+
   if (!widget.hasData) {
     return (
-      <div className="flex h-full items-center justify-center rounded-md border text-[10px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+      <div
+        className="flex h-full items-center justify-center rounded-md border text-[10px]"
+        style={{
+          ...wrapStyle,
+          borderColor: "var(--platform-border)",
+          color: "var(--platform-fg-muted)",
+        }}
+      >
         Sin datos
       </div>
     );
   }
 
   return (
-    <div className="h-full rounded-md border p-1" style={{ borderColor: "var(--platform-border)" }}>
+    <div className="h-full min-h-0 rounded-md border p-1" style={{ ...wrapStyle, borderColor: "var(--platform-border)" }}>
       <DashboardWidgetRenderer
         widget={widget.rendererWidget}
         isLoading={false}
         hideHeader
         minHeight={130}
-        darkChartTheme={darkChartTheme}
+        darkChartTheme={widget.cellChartDark ?? true}
         className="!border-0 !p-0 !shadow-none h-full"
       />
     </div>
@@ -198,7 +227,6 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
   const ref = useRef<HTMLDivElement | null>(null);
   const selectedWidgets = useMemo(() => pickWidgets(layout), [layout]);
   const themeMerged = useMemo(() => mergeTheme(layout.theme), [layout.theme]);
-  const darkChartTheme = useMemo(() => resolveDarkChartTheme(themeMerged, true), [themeMerged]);
 
   useEffect(() => {
     const node = ref.current;
@@ -244,15 +272,22 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
             const current = queue.shift();
             if (!current) break;
             try {
-              const loaded = await loadWidgetData(current, etlJson.data!, themeMerged.fontFamily);
+              const loaded = await loadWidgetData(current, etlJson.data!, themeMerged);
               partial.push(loaded);
             } catch {
+              const eff = mergeCardTheme(themeMerged, current.cardTheme);
+              const fallbackCell = {
+                ...(themeToCssVars(eff) as CSSProperties),
+                ...themeToWrapperBackground(eff),
+              } as CSSProperties;
               partial.push({
                 id: current.id ?? `w-${Math.random().toString(36).slice(2)}`,
                 title: current.title ?? "Widget",
                 type: current.type ?? "bar",
                 hasData: false,
                 gridSpan: current.gridSpan === 1 ? 1 : 2,
+                cellStyle: fallbackCell,
+                cellChartDark: resolveDarkChartTheme(eff, true),
                 rendererWidget: {
                   id: current.id ?? `w-${Math.random().toString(36).slice(2)}`,
                   title: current.title ?? "Widget",
@@ -280,7 +315,7 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
       cancelled = true;
       abortController.abort();
     };
-  }, [dashboardId, selectedWidgets, isVisible, themeMerged.fontFamily]);
+  }, [dashboardId, selectedWidgets, isVisible, themeMerged]);
 
   return (
     <div
@@ -303,7 +338,7 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
               key={widget.id}
               className={widget.gridSpan === 2 ? "col-span-2 min-h-0" : "col-span-1 min-h-0"}
             >
-              <MiniWidgetTile widget={widget} darkChartTheme={darkChartTheme} />
+              <MiniWidgetTile widget={widget} />
             </div>
           ))}
         </div>

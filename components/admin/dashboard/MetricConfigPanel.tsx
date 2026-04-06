@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import type { DashboardTheme } from "@/types/dashboard";
+import { mergeCardTheme, mergeTheme } from "@/types/dashboard";
 import { X, Trash2, Play, BookmarkPlus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AdminFieldSelector from "./AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
+import { DashboardThemeFormSections, mergeCardThemePatch } from "./DashboardThemeFormSections";
 
 export type MetricConditionEdit = {
   field: string;
@@ -118,6 +121,8 @@ export type MetricConfigWidget = {
   excludeGlobalFilters?: boolean;
   /** ID de la fuente de datos cuando el dashboard tiene múltiples ETLs */
   dataSourceId?: string | null;
+  /** Tema visual solo para esta tarjeta (opcional). */
+  cardTheme?: Partial<DashboardTheme>;
 };
 
 export type SavedMetricPanel = { id: string; name: string; metric: AggregationMetricEdit };
@@ -153,6 +158,8 @@ const OPERATORS = [
 
 type MetricConfigPanelProps = {
   widget: MetricConfigWidget;
+  /** Tema global del dashboard (barra de apariencia); base para fusionar con `cardTheme`. */
+  dashboardTheme?: DashboardTheme;
   etlData: ETLDataResponse | null;
   etlLoading: boolean;
   onUpdate: (patch: Partial<MetricConfigWidget>) => void;
@@ -188,6 +195,7 @@ const LEGEND_POSITION_OPTIONS: Array<{ value: "top" | "bottom" | "left" | "right
 
 export function MetricConfigPanel({
   widget,
+  dashboardTheme,
   etlData,
   etlLoading,
   onUpdate,
@@ -312,6 +320,12 @@ export function MetricConfigPanel({
 
   const showDataTabs = !["filter", "image", "text"].includes(widget.type);
 
+  const themeGlobalResolved = useMemo(() => mergeTheme(dashboardTheme ?? undefined), [dashboardTheme]);
+  const cardAppearancePreview = useMemo(
+    () => mergeCardTheme(themeGlobalResolved, widget.cardTheme),
+    [themeGlobalResolved, widget.cardTheme]
+  );
+
   return (
     <aside className="metric-config-panel flex h-full w-full max-w-[380px] flex-col border-l border-[var(--studio-border)] bg-[var(--studio-bg-elevated)] shadow-xl">
       <header className="flex flex-shrink-0 items-center justify-between border-b border-[var(--studio-border)] bg-[var(--studio-surface)] px-4 py-3">
@@ -413,6 +427,31 @@ export function MetricConfigPanel({
                 </select>
               </div>
             ) : null}
+
+            <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs font-semibold text-[var(--studio-fg)]">Apariencia de esta tarjeta</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 shrink-0 text-xs"
+                  onClick={() => onUpdate({ cardTheme: undefined })}
+                >
+                  Usar solo tema del dashboard
+                </Button>
+              </div>
+              <p className="text-[11px] leading-snug text-[var(--studio-fg-muted)]">
+                Afecta solo a esta métrica en el lienzo y en la vista cliente. Campos vacíos heredan el tema global.
+              </p>
+              <DashboardThemeFormSections
+                scope="card"
+                value={cardAppearancePreview}
+                onPatch={(patch) => onUpdate({ cardTheme: mergeCardThemePatch(widget.cardTheme, patch) })}
+                labelClassName="text-xs font-medium text-[var(--studio-fg-muted)]"
+                inputClassName="h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+              />
+            </div>
 
             {((widget.aggregationConfig as any)?.chartType || widget.type) === "kpi" && (
               <div className="space-y-3">

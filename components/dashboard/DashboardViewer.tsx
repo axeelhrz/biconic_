@@ -6,7 +6,10 @@ import { useDashboardEtlData } from "@/hooks/useDashboardEtlData";
 import {
   type DashboardTheme,
   DEFAULT_DASHBOARD_THEME,
+  mergeCardTheme,
   mergeTheme,
+  themeToCssVars,
+  themeToWrapperBackground,
 } from "@/types/dashboard";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./DashboardWidgetRenderer";
 import { safeJsonResponse } from "@/lib/safe-json-response";
@@ -130,6 +133,8 @@ export type Widget = DashboardWidgetRendererWidget & {
   analysisId?: string;
   /** Misma semántica que AdminDashboardStudio: pestaña del lienzo */
   pageId?: string;
+  /** Overrides visuales respecto a `layout.theme` (solo esta tarjeta). */
+  cardTheme?: Partial<DashboardTheme>;
 };
 
 /** Coincide con la página activa; corrige legado "page-1" vs id real de la primera página. */
@@ -817,54 +822,15 @@ export function DashboardViewer({
   /** Tema cliente: no depende de hideHeader (vista previa admin oculta el h1 pero mantiene branding). */
   const useClientTheme = variant === "default" && !backHref;
   // Mismo criterio que AdminDashboardStudio (MetricBlock): fallback true para paridad del lienzo.
-  const darkChartTheme = useMemo(() => resolveDarkChartTheme(themeMerged, true), [themeMerged]);
   const themeVars = useMemo(() => {
     if (!useClientTheme) return {};
-    const bg = themeMerged.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor;
-    const cardBg = themeMerged.cardBackgroundColor ?? DEFAULT_DASHBOARD_THEME.cardBackgroundColor;
-    const borderColor = themeMerged.cardBorderColor ?? DEFAULT_DASHBOARD_THEME.cardBorderColor;
-    const borderWidth = themeMerged.cardBorderWidth ?? DEFAULT_DASHBOARD_THEME.cardBorderWidth ?? 1;
-    const radius = themeMerged.cardBorderRadius ?? DEFAULT_DASHBOARD_THEME.cardBorderRadius ?? 20;
-    const textColor = themeMerged.textColor ?? DEFAULT_DASHBOARD_THEME.textColor;
-    const textMutedColor = themeMerged.textMutedColor ?? DEFAULT_DASHBOARD_THEME.textMutedColor;
-    return {
-      "--client-font": themeMerged.fontFamily ?? DEFAULT_DASHBOARD_THEME.fontFamily,
-      "--client-header-font-size": `${themeMerged.headerFontSize ?? DEFAULT_DASHBOARD_THEME.headerFontSize ?? 1.25}rem`,
-      "--client-card-title-font-size": `${themeMerged.cardTitleFontSize ?? DEFAULT_DASHBOARD_THEME.cardTitleFontSize ?? 0.8125}rem`,
-      "--client-kpi-value-font-size": `${themeMerged.kpiValueFontSize ?? DEFAULT_DASHBOARD_THEME.kpiValueFontSize ?? 1.25}rem`,
-      "--client-accent": themeMerged.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor,
-      "--client-bg": bg,
-      "--client-card": cardBg,
-      "--client-text": textColor,
-      "--client-text-muted": textMutedColor,
-      "--client-border": borderColor,
-      "--client-border-width": `${borderWidth}px`,
-      "--client-radius": `${radius}px`,
-      "--platform-surface": cardBg,
-      "--platform-border": borderColor,
-      "--platform-card-border-width": `${borderWidth}px`,
-      "--platform-card-radius": `${radius}px`,
-      "--platform-fg": textColor,
-      "--platform-fg-muted": textMutedColor,
-    } as React.CSSProperties;
+    return themeToCssVars(themeMerged) as React.CSSProperties;
   }, [useClientTheme, themeMerged]);
 
   const wrapperBackground = useMemo(() => {
     if (!useClientTheme) return undefined;
-    const bg = themeMerged.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor;
-    const url = themeMerged.backgroundImageUrl?.trim();
-    if (url) {
-      const safeUrl = url.replace(/"/g, "%22");
-      return {
-        backgroundColor: bg,
-        backgroundImage: `url("${safeUrl}")`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        backgroundRepeat: "no-repeat",
-      };
-    }
-    return { backgroundColor: bg };
-  }, [useClientTheme, themeMerged.backgroundColor, themeMerged.backgroundImageUrl]);
+    return themeToWrapperBackground(themeMerged);
+  }, [useClientTheme, themeMerged]);
 
   return (
     <div
@@ -1102,6 +1068,11 @@ export function DashboardViewer({
                 nonApplicableLabels.length > 0
                   ? `El filtro${nonApplicableLabels.length === 1 ? "" : "s"} "${nonApplicableLabels.join('", "')}" no afecta a este gráfico porque no utiliza ese campo.`
                   : undefined;
+              const effectiveTheme = mergeCardTheme(themeMerged, widget.cardTheme);
+              const cellThemeVars = useClientTheme
+                ? (themeToCssVars(effectiveTheme) as React.CSSProperties)
+                : {};
+              const cellBg = useClientTheme ? themeToWrapperBackground(effectiveTheme) : {};
               return (
                 <div
                   key={widget.id}
@@ -1113,6 +1084,8 @@ export function DashboardViewer({
                     flexDirection: "column",
                     minHeight: 0,
                     position: "relative",
+                    ...cellThemeVars,
+                    ...cellBg,
                   }}
                 >
                   {filterWarningTooltip && (
@@ -1130,7 +1103,7 @@ export function DashboardViewer({
                       chartStyle: buildResolvedChartStyle(
                         widget.aggregationConfig,
                         widget.chartStyle as ChartStyleConfig | null | undefined,
-                        themeMerged.fontFamily
+                        effectiveTheme.fontFamily
                       ),
                       chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
                     } as DashboardWidgetRendererWidget}
@@ -1138,7 +1111,7 @@ export function DashboardViewer({
                     filterValue={filterValues[widget.id]}
                     onFilterChange={handleFilterChange}
                     minHeight={widget.minHeight ?? 280}
-                    darkChartTheme={darkChartTheme}
+                    darkChartTheme={resolveDarkChartTheme(effectiveTheme, true)}
                   />
                 </div>
               );

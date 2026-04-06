@@ -72,3 +72,68 @@ export function mergeTheme(partial?: DashboardTheme | null): DashboardTheme {
     ...partial,
   };
 }
+
+/** Tema efectivo de una tarjeta: global del layout + overrides por widget (`cardTheme`). */
+export function mergeCardTheme(global: DashboardTheme, card?: Partial<DashboardTheme> | null): DashboardTheme {
+  if (!card || typeof card !== "object") return { ...global };
+  return { ...global, ...card };
+}
+
+/**
+ * Variables CSS alineadas con la vista cliente (`DashboardWidgetRenderer`, cabeceras).
+ * `theme` debe ser un tema ya resuelto (p. ej. tras `mergeTheme` o `mergeCardTheme`).
+ */
+export function themeToCssVars(theme: DashboardTheme): Record<string, string> {
+  const bg = theme.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor ?? "";
+  const cardBg = theme.cardBackgroundColor ?? DEFAULT_DASHBOARD_THEME.cardBackgroundColor ?? "";
+  const borderColor = theme.cardBorderColor ?? DEFAULT_DASHBOARD_THEME.cardBorderColor ?? "";
+  const borderWidth = theme.cardBorderWidth ?? DEFAULT_DASHBOARD_THEME.cardBorderWidth ?? 1;
+  const radius = theme.cardBorderRadius ?? DEFAULT_DASHBOARD_THEME.cardBorderRadius ?? 20;
+  const textColor = theme.textColor ?? DEFAULT_DASHBOARD_THEME.textColor ?? "";
+  const textMutedColor = theme.textMutedColor ?? DEFAULT_DASHBOARD_THEME.textMutedColor ?? "";
+  const fontFamily = theme.fontFamily ?? DEFAULT_DASHBOARD_THEME.fontFamily ?? "";
+  const accent = theme.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor ?? "";
+  return {
+    "--client-font": fontFamily,
+    "--client-header-font-size": `${theme.headerFontSize ?? DEFAULT_DASHBOARD_THEME.headerFontSize ?? 1.25}rem`,
+    "--client-card-title-font-size": `${theme.cardTitleFontSize ?? DEFAULT_DASHBOARD_THEME.cardTitleFontSize ?? 0.8125}rem`,
+    "--client-kpi-value-font-size": `${theme.kpiValueFontSize ?? DEFAULT_DASHBOARD_THEME.kpiValueFontSize ?? 1.25}rem`,
+    "--client-accent": accent,
+    "--client-bg": bg,
+    "--client-card": cardBg,
+    "--client-text": textColor,
+    "--client-text-muted": textMutedColor,
+    "--client-border": borderColor,
+    "--client-border-width": `${borderWidth}px`,
+    "--client-radius": `${radius}px`,
+    "--platform-surface": cardBg,
+    "--platform-border": borderColor,
+    "--platform-card-border-width": `${borderWidth}px`,
+    "--platform-card-radius": `${radius}px`,
+    "--platform-fg": textColor,
+    "--platform-fg-muted": textMutedColor,
+  };
+}
+
+/** Fondo del contenedor (página o celda de widget) según color e imagen del tema. */
+export function themeToWrapperBackground(theme: DashboardTheme): {
+  backgroundColor: string;
+  backgroundImage?: string;
+  backgroundSize?: string;
+  backgroundPosition?: string;
+  backgroundRepeat?: string;
+} {
+  const bg = theme.backgroundColor ?? DEFAULT_DASHBOARD_THEME.backgroundColor ?? "";
+  const url = theme.backgroundImageUrl?.trim();
+  if (url) {
+    const safeUrl = url.replace(/"/g, "%22");
+    return {
+      backgroundColor: bg,
+      backgroundImage: `url("${safeUrl}")`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+    };
+  }
+  return { backgroundColor: bg };
+}

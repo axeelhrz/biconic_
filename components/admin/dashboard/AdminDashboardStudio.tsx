@@ -21,7 +21,10 @@ import { searchEtls, addDashboardDataSource, removeDashboardDataSource } from "@
 import {
   type DashboardTheme,
   DEFAULT_DASHBOARD_THEME,
+  mergeCardTheme,
   mergeTheme,
+  themeToCssVars,
+  themeToWrapperBackground,
 } from "@/types/dashboard";
 import { StudioHeader, type DashboardStatus, type StudioMode } from "./StudioHeader";
 import { StudioAppearanceBar } from "./StudioAppearanceBar";
@@ -206,6 +209,8 @@ type StudioWidget = {
   };
   /** ID de la fuente de datos (dashboard_data_sources) cuando el dashboard tiene múltiples ETLs */
   dataSourceId?: string | null;
+  /** Overrides visuales respecto al tema global del layout. */
+  cardTheme?: Partial<DashboardTheme>;
   [key: string]: unknown;
 };
 
@@ -249,6 +254,19 @@ type SupportedChartType = typeof SUPPORTED_CHART_TYPES[number];
 function normalizeChartType(raw: unknown, fallback: SupportedChartType = "bar"): SupportedChartType {
   const value = String(raw ?? "").trim();
   return (SUPPORTED_CHART_TYPES as readonly string[]).includes(value) ? (value as SupportedChartType) : fallback;
+}
+
+function studioBlockCellChromeStyle(resolvedTheme: DashboardTheme): CSSProperties {
+  return {
+    ...(themeToCssVars(resolvedTheme) as CSSProperties),
+    ...themeToWrapperBackground(resolvedTheme),
+    "--studio-card-bg":
+      resolvedTheme.cardBackgroundColor ?? DEFAULT_DASHBOARD_THEME.cardBackgroundColor ?? "var(--studio-surface)",
+    "--studio-card-border-color":
+      resolvedTheme.cardBorderColor ?? DEFAULT_DASHBOARD_THEME.cardBorderColor ?? "var(--studio-border)",
+    "--studio-card-border-width": `${resolvedTheme.cardBorderWidth ?? DEFAULT_DASHBOARD_THEME.cardBorderWidth ?? 1}px`,
+    "--studio-card-radius": `${resolvedTheme.cardBorderRadius ?? DEFAULT_DASHBOARD_THEME.cardBorderRadius ?? 20}px`,
+  } as CSSProperties;
 }
 
 function isInvalidIdentifierValue(value: unknown): boolean {
@@ -1365,7 +1383,7 @@ export function AdminDashboardStudio({
     [activePageId]
   );
 
-  const darkChartTheme = resolveDarkChartTheme(mergeTheme(dashboardTheme), true);
+  const themeResolved = useMemo(() => mergeTheme(dashboardTheme), [dashboardTheme]);
 
   const handleMetricPanelUpdate = useCallback(
     (patch: Partial<MetricConfigWidget>) => {
@@ -1402,12 +1420,7 @@ export function AdminDashboardStudio({
     backgroundPosition: "center",
   };
 
-  const cardStyle = {
-    "--studio-card-bg": dashboardTheme.cardBackgroundColor ?? "var(--studio-surface)",
-    "--studio-card-border-color": dashboardTheme.cardBorderColor ?? "var(--studio-border)",
-    "--studio-card-border-width": `${dashboardTheme.cardBorderWidth ?? 1}px`,
-    "--studio-card-radius": `${dashboardTheme.cardBorderRadius ?? 20}px`,
-  } as CSSProperties;
+  const addMetricCellStyle = studioBlockCellChromeStyle(themeResolved);
 
   return (
     <div className="admin-dashboard-studio flex h-full flex-col min-h-0 text-[var(--studio-fg)]" style={bgStyle}>
@@ -1950,6 +1963,7 @@ export function AdminDashboardStudio({
                 const span = Math.min(4, Math.max(1, w.gridSpan ?? 2));
                 const isSelected = selectedId === w.id;
                 const minH = w.minHeight ?? 280;
+                const effectiveTheme = mergeCardTheme(themeResolved, w.cardTheme);
                 const orderIdx = sortedWidgets.findIndex((x) => x.id === w.id);
                 const canMoveUpReorder = orderIdx > 0;
                 const canMoveDownReorder = orderIdx >= 0 && orderIdx < sortedWidgets.length - 1;
@@ -1975,7 +1989,7 @@ export function AdminDashboardStudio({
                     style={{
                       gridColumn: `span ${span}`,
                       minHeight: minH,
-                      ...cardStyle,
+                      ...studioBlockCellChromeStyle(effectiveTheme),
                     }}
                   >
                     {isSelected && !embeddedPreview && (
@@ -2034,7 +2048,7 @@ export function AdminDashboardStudio({
                         chartStyle: buildResolvedChartStyle(
                           w.aggregationConfig,
                           w.chartStyle as ChartStyleConfig | null | undefined,
-                          dashboardTheme.fontFamily
+                          effectiveTheme.fontFamily
                         ),
                         labelDisplayMode: (w as { labelDisplayMode?: "percent" | "value" | "both" }).labelDisplayMode,
                         chartMetricStyles: (() => {
@@ -2045,13 +2059,13 @@ export function AdminDashboardStudio({
                         minHeight: minH,
                       }}
                       showTechnicalPreview={embeddedPreview ? false : showDiagnostics}
-                      darkChartTheme={darkChartTheme}
+                      darkChartTheme={resolveDarkChartTheme(effectiveTheme, true)}
                     />
                   </div>
                 );
               })}
               {!embeddedPreview && (
-              <div className="studio-block-cell studio-add-metric-cell" style={cardStyle}>
+              <div className="studio-block-cell studio-add-metric-cell" style={addMetricCellStyle}>
                 <button
                   type="button"
                   onClick={() => setAddMetricOpen(true)}
@@ -2075,6 +2089,7 @@ export function AdminDashboardStudio({
           selectedWidgetForPanel &&
           selectedWidgetForPanel.type !== "filter" && (
             <MetricConfigPanel
+              dashboardTheme={dashboardTheme}
               widget={{
                 id: selectedWidgetForPanel.id,
                 type: selectedWidgetForPanel.type,
@@ -2091,6 +2106,7 @@ export function AdminDashboardStudio({
                 kpiSecondaryValue: selectedWidgetForPanel.kpiSecondaryValue,
                 excludeGlobalFilters: selectedWidgetForPanel.excludeGlobalFilters,
                 dataSourceId: selectedWidgetForPanel.dataSourceId,
+                cardTheme: selectedWidgetForPanel.cardTheme,
               }}
               etlData={etlData}
               etlLoading={etlLoading}
