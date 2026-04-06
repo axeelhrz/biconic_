@@ -5,7 +5,8 @@ import { Loader2 } from "lucide-react";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "@/components/dashboard/DashboardWidgetRenderer";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
-import { buildChartMetricStyles, buildChartStyleFromAgg, resolveDarkChartTheme } from "@/lib/dashboard/widgetRenderParity";
+import { buildChartMetricStyles, buildResolvedChartStyle, resolveDarkChartTheme } from "@/lib/dashboard/widgetRenderParity";
+import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { mergeTheme, type DashboardTheme } from "@/types/dashboard";
 
 type AggregationMetric = {
@@ -59,6 +60,7 @@ type LayoutWidget = {
   dataSourceId?: string | null;
   source?: { labelField?: string };
   aggregationConfig?: AggregationConfig;
+  chartStyle?: ChartStyleConfig;
 };
 
 type LayoutData = {
@@ -106,7 +108,8 @@ function pickWidgets(layout: LayoutData): LayoutWidget[] {
 
 async function loadWidgetData(
   widget: LayoutWidget,
-  etlData: EtlDataPayload
+  etlData: EtlDataPayload,
+  themeFont?: string
 ): Promise<MiniWidgetData> {
   const type = widget.type ?? "bar";
   const id = widget.id ?? `w-${Math.random().toString(36).slice(2)}`;
@@ -155,7 +158,7 @@ async function loadWidgetData(
       config: loaded.chartConfig,
       rows: loaded.processedRows,
       aggregationConfig: agg,
-      chartStyle: buildChartStyleFromAgg(agg),
+      chartStyle: buildResolvedChartStyle(agg, widget.chartStyle ?? null, themeFont),
       chartMetricStyles: buildChartMetricStyles(agg),
       labelDisplayMode: "percent",
     },
@@ -194,7 +197,8 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
   const [isVisible, setIsVisible] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const selectedWidgets = useMemo(() => pickWidgets(layout), [layout]);
-  const darkChartTheme = useMemo(() => resolveDarkChartTheme(mergeTheme(layout.theme), true), [layout.theme]);
+  const themeMerged = useMemo(() => mergeTheme(layout.theme), [layout.theme]);
+  const darkChartTheme = useMemo(() => resolveDarkChartTheme(themeMerged, true), [themeMerged]);
 
   useEffect(() => {
     const node = ref.current;
@@ -240,7 +244,7 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
             const current = queue.shift();
             if (!current) break;
             try {
-              const loaded = await loadWidgetData(current, etlJson.data!);
+              const loaded = await loadWidgetData(current, etlJson.data!, themeMerged.fontFamily);
               partial.push(loaded);
             } catch {
               partial.push({
@@ -276,7 +280,7 @@ export function DashboardCardMiniPreview({ dashboardId, layout }: { dashboardId:
       cancelled = true;
       abortController.abort();
     };
-  }, [dashboardId, selectedWidgets, isVisible]);
+  }, [dashboardId, selectedWidgets, isVisible, themeMerged.fontFamily]);
 
   return (
     <div

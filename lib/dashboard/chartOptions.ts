@@ -56,6 +56,16 @@ export type ChartStyleConfig = {
   gridYDisplay?: boolean;
   /** Color de las líneas de cuadrícula (ej. #e2e8f0). */
   gridColor?: string;
+  /** Color de etiquetas de ejes (ticks). Si no se define, usa el tema claro/oscuro del visor. */
+  axisTickColor?: string;
+  /** Rotación máxima (grados) de etiquetas del eje categoría. */
+  categoryTickMaxRotation?: number;
+  /** Rotación mínima (grados) del eje categoría. */
+  categoryTickMinRotation?: number;
+  /** Límite de ticks en el eje categoría (Chart.js maxTicksLimit). */
+  categoryMaxTicks?: number;
+  /** Familia tipográfica CSS para ejes, leyenda y etiquetas de datos (opcional). */
+  chartFontFamily?: string;
 };
 
 const DEFAULT_LAYOUT_PADDING = 16;
@@ -356,17 +366,44 @@ export function buildChartOptions(
   const formatter = getValueFormatter(style, type === "pie" || type === "doughnut" ? (labelDisplayMode || "percent") : "value");
   const fontSize = style?.dataLabelFontSize ?? 12;
   const color = style?.dataLabelColor ?? "#374151";
+  const tickFontSize = style?.fontSize ?? 11;
+  const tickFamily = style?.chartFontFamily;
+  const tickColor = style?.axisTickColor;
+  const categoryTickOpts: Record<string, unknown> = {
+    font: { size: tickFontSize, ...(tickFamily ? { family: tickFamily } : {}) },
+    ...(tickColor != null && tickColor !== "" ? { color: tickColor } : {}),
+    ...(style?.categoryTickMaxRotation != null
+      ? { maxRotation: style.categoryTickMaxRotation, minRotation: style.categoryTickMinRotation ?? 0 }
+      : {}),
+    ...(style?.categoryMaxTicks != null && Number.isFinite(style.categoryMaxTicks)
+      ? { maxTicksLimit: Math.max(2, Math.floor(style.categoryMaxTicks)), autoSkip: true }
+      : {}),
+  };
+  const valueTickOpts: Record<string, unknown> = {
+    font: { size: tickFontSize, ...(tickFamily ? { family: tickFamily } : {}) },
+    ...(tickColor != null && tickColor !== "" ? { color: tickColor } : {}),
+  };
 
   const base = {
     responsive: true,
     maintainAspectRatio: false,
     layout: { padding },
     plugins: {
-      legend: { display: true },
+      legend: {
+        display: true,
+        labels: {
+          font: { size: tickFontSize, ...(tickFamily ? { family: tickFamily } : {}) },
+          ...(tickColor != null && tickColor !== "" ? { color: tickColor } : {}),
+        },
+      },
       datalabels: {
         display: true,
         color,
-        font: { size: fontSize, weight: "bold" as const },
+        font: {
+          size: fontSize,
+          weight: "bold" as const,
+          ...(tickFamily ? { family: tickFamily } : {}),
+        },
         formatter,
       },
     },
@@ -377,24 +414,36 @@ export function buildChartOptions(
     const gridColor = style?.gridColor ?? "#eee";
     const gridX = { display: style?.gridXDisplay ?? false, color: gridColor };
     const gridY = { display: style?.gridYDisplay ?? true, color: gridColor };
-    const axisX = {
+    const axisXCategory = {
       display: style?.axisXVisible ?? true,
       reverse: style?.axisXReverse ?? false,
       grid: gridX,
-      ticks: { font: { size: style?.fontSize ?? 11 } },
+      ticks: { ...categoryTickOpts },
     };
-    const axisY = {
+    const axisYCategory = {
       display: style?.axisYVisible ?? true,
       reverse: style?.axisYReverse ?? false,
       grid: gridY,
-      ticks: { font: { size: style?.fontSize ?? 11 } },
+      ticks: { ...categoryTickOpts },
+    };
+    const axisXValue = {
+      display: style?.axisXVisible ?? true,
+      reverse: style?.axisXReverse ?? false,
+      grid: gridX,
+      ticks: { ...valueTickOpts },
+    };
+    const axisYValue = {
+      display: style?.axisYVisible ?? true,
+      reverse: style?.axisYReverse ?? false,
+      grid: gridY,
+      ticks: { ...valueTickOpts },
     };
     if (type === "horizontalBar") {
-      scales.x = axisX;
-      scales.y = { ...axisY, grid: gridY };
+      scales.x = axisXValue;
+      scales.y = { ...axisYCategory, grid: gridY };
     } else {
-      scales.x = axisX;
-      scales.y = axisY;
+      scales.x = axisXCategory;
+      scales.y = axisYValue;
     }
     return {
       ...base,
@@ -418,13 +467,14 @@ export function buildChartOptions(
 
   if (type === "pie" || type === "doughnut") {
     const plugins = base.plugins as { datalabels?: Record<string, unknown> };
+    const dl = plugins.datalabels ?? {};
     return {
       ...base,
       plugins: {
         ...base.plugins,
         datalabels: {
-          ...(plugins.datalabels ?? {}),
-          color: "#ffffff",
+          ...dl,
+          color: style?.dataLabelColor ?? "#ffffff",
         },
       },
     };

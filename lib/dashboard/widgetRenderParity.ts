@@ -9,7 +9,7 @@ type MetricFormatEntry = {
   thousandSep?: boolean;
 };
 
-type AggregationLike = {
+export type AggregationLike = {
   chartValueType?: string;
   chartValueScale?: string;
   chartNumberFormat?: string;
@@ -18,6 +18,16 @@ type AggregationLike = {
   chartThousandSep?: boolean;
   chartYAxes?: string[];
   chartMetricFormats?: Record<string, MetricFormatEntry>;
+  chartDataLabelFontSize?: number;
+  chartDataLabelColor?: string;
+  chartAxisFontSize?: number;
+  chartLayoutPadding?: number;
+  chartAxisTickColor?: string;
+  chartCategoryTickMaxRotation?: number;
+  chartCategoryTickMinRotation?: number;
+  chartCategoryMaxTicks?: number;
+  chartFontFamily?: string;
+  labelVisibilityMaxCount?: number;
 };
 
 const DARK_LUMA_THRESHOLD = 0.55;
@@ -89,6 +99,56 @@ export function buildChartMetricStyles(agg: AggregationLike | undefined): (Chart
       perMetric != null
     );
   });
+}
+
+/** Campos visuales del gráfico guardados en aggregationConfig (tipografía, colores, eje categoría). */
+export function mergeChartVisualStyle(
+  agg: AggregationLike | undefined,
+  themeFontFamily?: string | null
+): Partial<ChartStyleConfig> {
+  if (!agg) return {};
+  const out: Partial<ChartStyleConfig> = {};
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const fs = n(agg.chartDataLabelFontSize);
+  if (fs != null) out.dataLabelFontSize = fs;
+  if (agg.chartDataLabelColor != null && String(agg.chartDataLabelColor).trim() !== "") {
+    out.dataLabelColor = String(agg.chartDataLabelColor).trim();
+  }
+  const axisFs = n(agg.chartAxisFontSize);
+  if (axisFs != null) out.fontSize = axisFs;
+  const pad = n(agg.chartLayoutPadding);
+  if (pad != null) out.layoutPadding = pad;
+  if (agg.chartAxisTickColor != null && String(agg.chartAxisTickColor).trim() !== "") {
+    out.axisTickColor = String(agg.chartAxisTickColor).trim();
+  }
+  const rotMax = n(agg.chartCategoryTickMaxRotation);
+  if (rotMax != null) out.categoryTickMaxRotation = rotMax;
+  const rotMin = n(agg.chartCategoryTickMinRotation);
+  if (rotMin != null) out.categoryTickMinRotation = rotMin;
+  const maxTicks = n(agg.chartCategoryMaxTicks);
+  if (maxTicks != null) out.categoryMaxTicks = maxTicks;
+  const fam = String(agg.chartFontFamily ?? "").trim();
+  if (fam) out.chartFontFamily = fam;
+  else if (themeFontFamily && String(themeFontFamily).trim() !== "") {
+    out.chartFontFamily = String(themeFontFamily).trim();
+  }
+  return out;
+}
+
+/** Une formato numérico, estilos visuales de agg y chartStyle persistido en el widget. */
+export function buildResolvedChartStyle(
+  agg: AggregationLike | undefined,
+  widgetChartStyle?: ChartStyleConfig | null,
+  themeFontFamily?: string | null
+): ChartStyleConfig | undefined {
+  const fromFormat = buildChartStyleFromAgg(agg);
+  const fromVisual = mergeChartVisualStyle(agg, themeFontFamily);
+  const merged: ChartStyleConfig = {
+    ...(fromFormat ?? {}),
+    ...fromVisual,
+    ...(widgetChartStyle ?? {}),
+  };
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function parseHexColor(input: string): { r: number; g: number; b: number } | null {

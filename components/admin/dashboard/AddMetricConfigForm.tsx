@@ -84,6 +84,17 @@ export type AggregationConfigEdit = {
   chartGridColor?: string;
   chartAxisXVisible?: boolean;
   chartAxisYVisible?: boolean;
+  chartDataLabelFontSize?: number;
+  chartDataLabelColor?: string;
+  chartAxisFontSize?: number;
+  chartLayoutPadding?: number;
+  chartAxisTickColor?: string;
+  chartCategoryTickMaxRotation?: number;
+  chartCategoryTickMinRotation?: number;
+  chartCategoryMaxTicks?: number;
+  chartFontFamily?: string;
+  labelVisibilityMaxCount?: number;
+  chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
   /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
   chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
@@ -530,6 +541,172 @@ export function AddMetricConfigForm({
               ))}
             </select>
           </div>
+        )}
+        {CHART_TYPES_FOR_LABELS.includes(form.type) && (
+          <div>
+            <Label className="add-metric-label">Máx. puntos con etiqueta (automático)</Label>
+            <Input
+              type="number"
+              min={2}
+              max={50}
+              placeholder="Predeterminado (8)"
+              value={agg.labelVisibilityMaxCount ?? ""}
+              onChange={(e) =>
+                updateAgg({
+                  labelVisibilityMaxCount: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                })
+              }
+              className="add-metric-input mt-1 h-8 text-xs"
+            />
+          </div>
+        )}
+        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(form.type) && (
+          <div>
+            <Label className="add-metric-label">Posición de la leyenda</Label>
+            <select
+              value={agg.chartLegendPosition ?? ""}
+              onChange={(e) =>
+                updateAgg({
+                  chartLegendPosition: (e.target.value || undefined) as AggregationConfigEdit["chartLegendPosition"],
+                })
+              }
+              className="add-metric-select mt-1 h-8 text-xs"
+            >
+              <option value="">Predeterminada</option>
+              <option value="top">Arriba</option>
+              <option value="bottom">Abajo</option>
+              <option value="left">Izquierda</option>
+              <option value="right">Derecha</option>
+              <option value="chartArea">Sobre el gráfico</option>
+            </select>
+          </div>
+        )}
+        {["bar", "horizontalBar", "line", "pie", "doughnut", "combo", "scatter"].includes(form.type) && (
+          <details className="rounded-lg border border-[var(--studio-border)] p-2">
+            <summary className="cursor-pointer text-xs font-medium text-[var(--studio-fg)]">
+              Tipografía, colores internos y eje de categorías
+            </summary>
+            <div className="mt-3 space-y-2">
+              <div>
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Fuente (CSS, opcional)</Label>
+                <Input
+                  value={agg.chartFontFamily ?? ""}
+                  onChange={(e) => updateAgg({ chartFontFamily: e.target.value || undefined })}
+                  className="add-metric-input mt-0.5 h-8 font-mono text-[11px]"
+                  placeholder="Vacío = tema del dashboard"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Tamaño etiquetas de dato</Label>
+                  <Input
+                    type="number"
+                    min={6}
+                    max={28}
+                    value={agg.chartDataLabelFontSize ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartDataLabelFontSize: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="add-metric-input mt-0.5 h-8 text-xs"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Tamaño ejes</Label>
+                  <Input
+                    type="number"
+                    min={6}
+                    max={22}
+                    value={agg.chartAxisFontSize ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartAxisFontSize: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="add-metric-input mt-0.5 h-8 text-xs"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Padding gráfico (px)</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={64}
+                  value={agg.chartLayoutPadding ?? ""}
+                  onChange={(e) =>
+                    updateAgg({
+                      chartLayoutPadding: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                    })
+                  }
+                  className="add-metric-input mt-0.5 h-8 text-xs"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Color etiquetas de dato</Label>
+                <input
+                  type="color"
+                  value={agg.chartDataLabelColor || "#374151"}
+                  onChange={(e) => updateAgg({ chartDataLabelColor: e.target.value })}
+                  className="h-8 w-10 rounded border border-[var(--studio-border)]"
+                />
+                <Input
+                  value={agg.chartDataLabelColor ?? ""}
+                  onChange={(e) => updateAgg({ chartDataLabelColor: e.target.value || undefined })}
+                  className="add-metric-input h-8 min-w-0 flex-1 font-mono text-[11px]"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Color ticks ejes</Label>
+                <input
+                  type="color"
+                  value={agg.chartAxisTickColor || "#64748b"}
+                  onChange={(e) => updateAgg({ chartAxisTickColor: e.target.value })}
+                  className="h-8 w-10 rounded border border-[var(--studio-border)]"
+                />
+                <Input
+                  value={agg.chartAxisTickColor ?? ""}
+                  onChange={(e) => updateAgg({ chartAxisTickColor: e.target.value || undefined })}
+                  className="add-metric-input h-8 min-w-0 flex-1 font-mono text-[11px]"
+                />
+              </div>
+              {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes(form.type) && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Rotación máx. categorías (°)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={90}
+                      value={agg.chartCategoryTickMaxRotation ?? ""}
+                      onChange={(e) =>
+                        updateAgg({
+                          chartCategoryTickMaxRotation: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                        })
+                      }
+                      className="add-metric-input mt-0.5 h-8 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Máx. ticks categorías</Label>
+                    <Input
+                      type="number"
+                      min={2}
+                      max={100}
+                      value={agg.chartCategoryMaxTicks ?? ""}
+                      onChange={(e) =>
+                        updateAgg({
+                          chartCategoryMaxTicks: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                        })
+                      }
+                      className="add-metric-input mt-0.5 h-8 text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </details>
         )}
         {["bar", "horizontalBar", "line", "pie", "doughnut", "combo"].includes(form.type) && (
           <div>

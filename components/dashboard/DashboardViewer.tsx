@@ -17,9 +17,10 @@ import {
 } from "@/lib/metrics/expandSavedMetricsForAnalysis";
 import {
   buildChartMetricStyles,
-  buildChartStyleFromAgg,
+  buildResolvedChartStyle,
   resolveDarkChartTheme,
 } from "@/lib/dashboard/widgetRenderParity";
+import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { AlertTriangle, ArrowLeft, FileDown, Loader2 } from "lucide-react";
 import {
   exportDashboardExcel,
@@ -1126,7 +1127,11 @@ export function DashboardViewer({
                   <DashboardWidgetRenderer
                     widget={{
                       ...widget,
-                      chartStyle: widget.chartStyle ?? buildChartStyleFromAgg(widget.aggregationConfig),
+                      chartStyle: buildResolvedChartStyle(
+                        widget.aggregationConfig,
+                        widget.chartStyle as ChartStyleConfig | null | undefined,
+                        themeMerged.fontFamily
+                      ),
                       chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
                     } as DashboardWidgetRendererWidget}
                     isLoading={widget.isLoading === true}

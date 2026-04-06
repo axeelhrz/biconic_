@@ -36,6 +36,7 @@ import {
   type DateGranularity,
 } from "@/lib/dashboard/dateFormatting";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 
 const DashboardMapWidget = dynamic(
@@ -402,8 +403,10 @@ export function DashboardWidgetRenderer({
       analysisDateDisplayFormat?: AnalysisDateDisplayFormat;
       chartDoughnutCutout?: string | number;
       chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
+      labelVisibilityMaxCount?: number;
     } | undefined;
     const style: ChartStyleConfig | undefined = {
+      ...mergeChartVisualStyle(widget.aggregationConfig as AggregationLike),
       ...(widget.chartStyle as ChartStyleConfig | undefined),
       ...(agg && {
         gridXDisplay: agg.chartGridXDisplay,
@@ -413,6 +416,10 @@ export function DashboardWidgetRenderer({
         axisYVisible: agg.chartAxisYVisible,
       }),
     };
+    const labelMaxVisible =
+      typeof agg?.labelVisibilityMaxCount === "number" && Number.isFinite(agg.labelVisibilityMaxCount) && agg.labelVisibilityMaxCount >= 2
+        ? Math.floor(agg.labelVisibilityMaxCount)
+        : undefined;
     const labelMode = widget.labelDisplayMode ?? "percent";
     const type = chartType === "horizontalBar"
       ? "horizontalBar"
@@ -508,8 +515,13 @@ export function DashboardWidgetRenderer({
                   mode: labelVisibilityMode,
                   labels: chartConfig?.labels,
                   datasets: chartConfig?.datasets,
+                  maxVisible: labelMaxVisible,
                 }),
-          ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
+          ...(style?.dataLabelColor
+            ? { color: style.dataLabelColor }
+            : darkChartTheme
+              ? { color: DATALABEL_COLOR_DARK }
+              : {}),
         },
       };
       return {
@@ -544,8 +556,16 @@ export function DashboardWidgetRenderer({
             (typeof agg?.chartStackBySeries === "boolean" ? agg.chartStackBySeries : true);
       const isComboTwo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2 && !stackBySeriesEnabled;
       const syncAxes = isComboTwo && (widget.aggregationConfig as { chartComboSyncAxes?: boolean } | undefined)?.chartComboSyncAxes === true;
-      const axisTickColor = darkChartTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
-      const axisTickFont = { size: style?.fontSize ?? 11 };
+      const axisTickColorResolved =
+        style?.axisTickColor != null && String(style.axisTickColor).trim() !== ""
+          ? String(style.axisTickColor).trim()
+          : darkChartTheme
+            ? AXIS_COLOR_DARK
+            : AXIS_COLOR;
+      const axisTickFont = {
+        size: style?.fontSize ?? 11,
+        ...(style?.chartFontFamily ? { family: style.chartFontFamily } : {}),
+      };
       const axisTitle0 = String(chartConfig?.datasets?.[0]?.label ?? yAxisKeys[0] ?? "").trim();
       const axisTitle1 = String(chartConfig?.datasets?.[1]?.label ?? yAxisKeys[1] ?? "").trim();
       let comboScales: Record<string, unknown> | undefined;
@@ -580,7 +600,7 @@ export function DashboardWidgetRenderer({
               max: 1,
               ticks: {
                 ...(((built.scales as Record<string, unknown>)?.y as Record<string, unknown> | undefined)?.ticks ?? {}),
-                color: axisTickColor,
+                color: axisTickColorResolved,
                 font: axisTickFont,
                 callback: (value: number) => fmt0(value * range0 + min0),
               },
@@ -588,7 +608,7 @@ export function DashboardWidgetRenderer({
             ...(!syncAxes && {
               ticks: {
                 ...(((built.scales as Record<string, unknown>)?.y as Record<string, unknown> | undefined)?.ticks ?? {}),
-                color: axisTickColor,
+                color: axisTickColorResolved,
                 font: axisTickFont,
                 callback: (value: number | string) => fmt0(Number(value)),
               },
@@ -597,8 +617,12 @@ export function DashboardWidgetRenderer({
               title: {
                 display: true,
                 text: axisTitle0,
-                color: axisTickColor,
-                font: { size: 11, weight: "600" as const },
+                color: axisTickColorResolved,
+                font: {
+                  size: 11,
+                  weight: "600" as const,
+                  ...(style?.chartFontFamily ? { family: style.chartFontFamily } : {}),
+                },
               },
             }),
           },
@@ -614,14 +638,14 @@ export function DashboardWidgetRenderer({
               min: 0,
               max: 1,
               ticks: {
-                color: axisTickColor,
+                color: axisTickColorResolved,
                 font: axisTickFont,
                 callback: (value: number) => fmt1(value * range1 + min1),
               },
             }),
             ...(!syncAxes && {
               ticks: {
-                color: axisTickColor,
+                color: axisTickColorResolved,
                 font: axisTickFont,
                 callback: (value: number | string) => fmt1(Number(value)),
               },
@@ -630,8 +654,12 @@ export function DashboardWidgetRenderer({
               title: {
                 display: true,
                 text: axisTitle1,
-                color: axisTickColor,
-                font: { size: 11, weight: "600" as const },
+                color: axisTickColorResolved,
+                font: {
+                  size: 11,
+                  weight: "600" as const,
+                  ...(style?.chartFontFamily ? { family: style.chartFontFamily } : {}),
+                },
               },
             }),
           },
@@ -791,9 +819,14 @@ export function DashboardWidgetRenderer({
                   mode: labelVisibilityMode,
                   labels: chartConfig?.labels,
                   datasets: chartConfig?.datasets,
+                  maxVisible: labelMaxVisible,
                 }),
           ...(datalabelFormatter != null && { formatter: datalabelFormatter }),
-          ...(darkChartTheme && { color: DATALABEL_COLOR_DARK }),
+          ...(style?.dataLabelColor
+            ? { color: style.dataLabelColor }
+            : darkChartTheme
+              ? { color: DATALABEL_COLOR_DARK }
+              : {}),
         },
         ...(tooltipCallbacks && {
           tooltip: {

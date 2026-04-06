@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
@@ -37,7 +37,16 @@ import {
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
-import { buildChartMetricStyles, buildChartStyleFromAgg, resolveDarkChartTheme } from "@/lib/dashboard/widgetRenderParity";
+import {
+  buildChartMetricStyles,
+  buildResolvedChartStyle,
+  resolveDarkChartTheme,
+} from "@/lib/dashboard/widgetRenderParity";
+import {
+  MetricConfigPanel,
+  type MetricConfigWidget,
+  type AggregationConfigEdit,
+} from "./MetricConfigPanel";
 
 type SavedMetric = SavedMetricForm;
 
@@ -141,6 +150,17 @@ type AggregationConfig = {
   chartAxisXVisible?: boolean;
   chartAxisYVisible?: boolean;
   chartStackBySeries?: boolean;
+  chartDataLabelFontSize?: number;
+  chartDataLabelColor?: string;
+  chartAxisFontSize?: number;
+  chartLayoutPadding?: number;
+  chartAxisTickColor?: string;
+  chartCategoryTickMaxRotation?: number;
+  chartCategoryTickMinRotation?: number;
+  chartCategoryMaxTicks?: number;
+  chartFontFamily?: string;
+  labelVisibilityMaxCount?: number;
+  chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
   /** Si la dimensión es fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
   /** Filtro de rango de fechas (últimos N días/meses o rango custom) para alinear con la vista previa del ETL. */
@@ -1347,6 +1367,32 @@ export function AdminDashboardStudio({
 
   const darkChartTheme = resolveDarkChartTheme(mergeTheme(dashboardTheme), true);
 
+  const handleMetricPanelUpdate = useCallback(
+    (patch: Partial<MetricConfigWidget>) => {
+      if (!selectedId) return;
+      setWidgets((prev) =>
+        prev.map((w) => {
+          if (w.id !== selectedId) return w;
+          const next: StudioWidget = { ...w, ...patch };
+          if (patch.aggregationConfig != null) {
+            next.aggregationConfig = {
+              ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
+              ...patch.aggregationConfig,
+            } as AggregationConfig;
+          }
+          return next;
+        })
+      );
+      setIsDirty(true);
+    },
+    [selectedId]
+  );
+
+  const selectedWidgetForPanel = useMemo(() => {
+    if (!selectedId) return null;
+    return widgets.find((w) => w.id === selectedId) ?? null;
+  }, [selectedId, widgets]);
+
   const bgStyle = {
     backgroundColor: dashboardTheme.backgroundColor ?? undefined,
     backgroundImage: dashboardTheme.backgroundImageUrl
@@ -1854,8 +1900,8 @@ export function AdminDashboardStudio({
         onDeletePage={deletePage}
         readOnly={embeddedPreview}
       />
-      <main className="studio-main flex flex-1 min-h-0 overflow-hidden">
-        <div className="flex flex-1 min-h-0 overflow-auto min-w-0">
+      <main className="studio-main flex min-h-0 flex-1 flex-row overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
         {widgetsForCurrentPage.length === 0 && sortedWidgets.length === 0 ? (
           <StudioEmptyState
             onAddMetrics={openAddMetricList}
@@ -1985,7 +2031,11 @@ export function AdminDashboardStudio({
                         config: w.config ?? undefined,
                         rows: w.rows,
                         aggregationConfig: w.aggregationConfig,
-                        chartStyle: (w.chartStyle as Record<string, unknown> | undefined) ?? buildChartStyleFromAgg(w.aggregationConfig),
+                        chartStyle: buildResolvedChartStyle(
+                          w.aggregationConfig,
+                          w.chartStyle as ChartStyleConfig | null | undefined,
+                          dashboardTheme.fontFamily
+                        ),
                         labelDisplayMode: (w as { labelDisplayMode?: "percent" | "value" | "both" }).labelDisplayMode,
                         chartMetricStyles: (() => {
                           const current = (w as { chartMetricStyles?: (ChartStyleConfig | undefined)[] }).chartMetricStyles;
@@ -2020,6 +2070,41 @@ export function AdminDashboardStudio({
           </div>
         )}
         </div>
+        {!embeddedPreview &&
+          mode !== "presentar" &&
+          selectedWidgetForPanel &&
+          selectedWidgetForPanel.type !== "filter" && (
+            <MetricConfigPanel
+              widget={{
+                id: selectedWidgetForPanel.id,
+                type: selectedWidgetForPanel.type,
+                title: selectedWidgetForPanel.title,
+                gridSpan: selectedWidgetForPanel.gridSpan,
+                minHeight: selectedWidgetForPanel.minHeight,
+                aggregationConfig: (selectedWidgetForPanel.aggregationConfig ?? {
+                  enabled: false,
+                  metrics: [],
+                }) as AggregationConfigEdit,
+                labelDisplayMode: selectedWidgetForPanel.labelDisplayMode,
+                color: selectedWidgetForPanel.color as string | undefined,
+                kpiSecondaryLabel: selectedWidgetForPanel.kpiSecondaryLabel,
+                kpiSecondaryValue: selectedWidgetForPanel.kpiSecondaryValue,
+                excludeGlobalFilters: selectedWidgetForPanel.excludeGlobalFilters,
+                dataSourceId: selectedWidgetForPanel.dataSourceId,
+              }}
+              etlData={etlData}
+              etlLoading={etlLoading}
+              onUpdate={handleMetricPanelUpdate}
+              onLoadData={() => void loadMetricData(selectedWidgetForPanel.id)}
+              onClose={() => setSelectedId(null)}
+              savedMetrics={savedMetrics.map((s) => ({
+                id: s.id,
+                name: s.name,
+                metric: s.metric,
+                aggregationConfig: s.aggregationConfig,
+              }))}
+            />
+          )}
       </main>
 
       <Dialog

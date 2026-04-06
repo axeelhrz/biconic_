@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AdminFieldSelector from "./AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 
@@ -78,6 +79,17 @@ export type AggregationConfigEdit = {
   chartGridColor?: string;
   chartAxisXVisible?: boolean;
   chartAxisYVisible?: boolean;
+  chartDataLabelFontSize?: number;
+  chartDataLabelColor?: string;
+  chartAxisFontSize?: number;
+  chartLayoutPadding?: number;
+  chartAxisTickColor?: string;
+  chartCategoryTickMaxRotation?: number;
+  chartCategoryTickMinRotation?: number;
+  chartCategoryMaxTicks?: number;
+  chartFontFamily?: string;
+  labelVisibilityMaxCount?: number;
+  chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
   /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
   chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
@@ -156,6 +168,22 @@ const LABEL_VISIBILITY_OPTIONS: Array<{ value: "all" | "auto" | "min_max"; label
   { value: "all", label: "Todas" },
   { value: "auto", label: "Algunas (automático)" },
   { value: "min_max", label: "Máximos y mínimos" },
+];
+
+const CHART_FONT_FAMILY_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Heredar del dashboard" },
+  { value: "'DM Sans', system-ui, -apple-system, sans-serif", label: "DM Sans" },
+  { value: "Inter, system-ui, -apple-system, sans-serif", label: "Inter" },
+  { value: "'Roboto', system-ui, sans-serif", label: "Roboto" },
+  { value: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", label: "Sistema" },
+];
+
+const LEGEND_POSITION_OPTIONS: Array<{ value: "top" | "bottom" | "left" | "right" | "chartArea"; label: string }> = [
+  { value: "top", label: "Arriba" },
+  { value: "bottom", label: "Abajo" },
+  { value: "left", label: "Izquierda" },
+  { value: "right", label: "Derecha" },
+  { value: "chartArea", label: "Sobre el gráfico" },
 ];
 
 export function MetricConfigPanel({
@@ -282,6 +310,8 @@ export function MetricConfigPanel({
     ? [agg.dimension, agg.dimension2, agg.dateDimension, ...metrics.map((m) => m.alias || m.field)].filter(Boolean) as string[]
     : fields;
 
+  const showDataTabs = !["filter", "image", "text"].includes(widget.type);
+
   return (
     <aside className="metric-config-panel flex h-full w-full max-w-[380px] flex-col border-l border-[var(--studio-border)] bg-[var(--studio-bg-elevated)] shadow-xl">
       <header className="flex flex-shrink-0 items-center justify-between border-b border-[var(--studio-border)] bg-[var(--studio-surface)] px-4 py-3">
@@ -290,49 +320,145 @@ export function MetricConfigPanel({
           <X className="h-4 w-4" />
         </Button>
       </header>
-      <div className="flex-1 overflow-y-auto p-4 space-y-5">
-        <div>
-          <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Título</Label>
-          <Input
-            value={widget.title}
-            onChange={(e) => onUpdate({ title: e.target.value })}
-            className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)]"
-            placeholder="Nombre de la métrica"
-          />
-        </div>
-
-        <div>
-          <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tipo de gráfico</Label>
-          <select
-            value={(widget.aggregationConfig as any)?.chartType || widget.type}
-            onChange={(e) => {
-              const newType = e.target.value;
-              onUpdate({
-                type: newType,
-                aggregationConfig: { ...agg, chartType: newType },
-              });
-            }}
-            className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+      <Tabs defaultValue="general" className="flex min-h-0 min-w-0 flex-1 flex-col px-3 pt-3">
+        <TabsList className="mb-2 h-auto w-full flex-shrink-0 flex-wrap justify-start gap-1 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] p-1">
+          <TabsTrigger
+            value="general"
+            className="px-2 py-1.5 text-xs data-[state=active]:bg-[var(--studio-accent-dim)] data-[state=active]:text-[var(--studio-accent)]"
           >
-            {CHART_TYPES.map((t) => (
-              <option key={t.value} value={t.value}>{t.label}</option>
-            ))}
-          </select>
-        </div>
+            General
+          </TabsTrigger>
+          {showDataTabs ? (
+            <>
+              <TabsTrigger
+                value="appearance"
+                className="px-2 py-1.5 text-xs data-[state=active]:bg-[var(--studio-accent-dim)] data-[state=active]:text-[var(--studio-accent)]"
+              >
+                Apariencia
+              </TabsTrigger>
+              <TabsTrigger
+                value="data"
+                className="px-2 py-1.5 text-xs data-[state=active]:bg-[var(--studio-accent-dim)] data-[state=active]:text-[var(--studio-accent)]"
+              >
+                Datos
+              </TabsTrigger>
+              <TabsTrigger
+                value="order"
+                className="px-2 py-1.5 text-xs data-[state=active]:bg-[var(--studio-accent-dim)] data-[state=active]:text-[var(--studio-accent)]"
+              >
+                Orden
+              </TabsTrigger>
+            </>
+          ) : null}
+        </TabsList>
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto pb-4">
+          <TabsContent value="general" className="mt-0 space-y-5 focus-visible:outline-none">
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Título</Label>
+              <Input
+                value={widget.title}
+                onChange={(e) => onUpdate({ title: e.target.value })}
+                className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)]"
+                placeholder="Nombre de la métrica"
+              />
+            </div>
 
-        <div>
-          <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columnas en grid</Label>
-          <select
-            value={Math.min(4, Math.max(1, widget.gridSpan ?? 2))}
-            onChange={(e) => onUpdate({ gridSpan: parseInt(e.target.value, 10) as 1 | 2 | 4 })}
-            className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
-          >
-            <option value={1}>1</option>
-            <option value={2}>2</option>
-            <option value={4}>4 (ancho completo)</option>
-          </select>
-        </div>
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tipo de gráfico</Label>
+              <select
+                value={(widget.aggregationConfig as any)?.chartType || widget.type}
+                onChange={(e) => {
+                  const newType = e.target.value;
+                  onUpdate({
+                    type: newType,
+                    aggregationConfig: { ...agg, chartType: newType },
+                  });
+                }}
+                className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+              >
+                {CHART_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columnas en grid</Label>
+              <select
+                value={Math.min(4, Math.max(1, widget.gridSpan ?? 2))}
+                onChange={(e) => onUpdate({ gridSpan: parseInt(e.target.value, 10) as 1 | 2 | 4 })}
+                className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+              >
+                <option value={1}>1</option>
+                <option value={2}>2</option>
+                <option value={4}>4 (ancho completo)</option>
+              </select>
+            </div>
+
+            {sources && sources.length > 1 ? (
+              <div>
+                <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Fuente de datos</Label>
+                <select
+                  value={widget.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id ?? ""}
+                  onChange={(e) => onUpdate({ dataSourceId: e.target.value || null })}
+                  className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+                >
+                  {sources.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.etlName || s.alias || s.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            {((widget.aggregationConfig as any)?.chartType || widget.type) === "kpi" && (
+              <div className="space-y-3">
+                <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">KPI — línea secundaria</Label>
+                <Input
+                  value={widget.kpiSecondaryLabel ?? ""}
+                  onChange={(e) => onUpdate({ kpiSecondaryLabel: e.target.value || undefined })}
+                  className="h-9 rounded-lg"
+                  placeholder="Etiqueta (ej. Ticket promedio)"
+                />
+                <Input
+                  value={widget.kpiSecondaryValue ?? ""}
+                  onChange={(e) => onUpdate({ kpiSecondaryValue: e.target.value || undefined })}
+                  className="h-9 rounded-lg"
+                  placeholder="Valor (ej. $ 3.202)"
+                />
+              </div>
+            )}
+
+            {showDataTabs ? (
+              <>
+                <div className="flex items-center gap-2 pt-2">
+                  <Checkbox
+                    id="exclude-global"
+                    checked={!!widget.excludeGlobalFilters}
+                    onCheckedChange={(c) => onUpdate({ excludeGlobalFilters: !!c })}
+                  />
+                  <Label htmlFor="exclude-global" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                    Excluir filtros globales de esta métrica
+                  </Label>
+                </div>
+                <Button
+                  className="mt-2 h-10 w-full border border-[rgba(34,211,238,0.3)] bg-[var(--studio-accent-dim)] font-medium text-[var(--studio-accent)] hover:bg-[rgba(34,211,238,0.25)] hover:text-[var(--studio-accent)]"
+                  onClick={onLoadData}
+                  disabled={!etlData || etlLoading}
+                >
+                  <Play className="mr-2 h-4 w-4" />
+                  Actualizar datos
+                </Button>
+              </>
+            ) : null}
+          </TabsContent>
+
+          {showDataTabs ? (
+            <>
+            <TabsContent value="appearance" className="mt-0 space-y-5 focus-visible:outline-none">
         {(((widget.aggregationConfig as any)?.chartType || widget.type) === "pie" || ((widget.aggregationConfig as any)?.chartType || widget.type) === "doughnut") && (
           <div>
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Etiquetas en gráfico</Label>
@@ -371,6 +497,50 @@ export function MetricConfigPanel({
             >
               {LABEL_VISIBILITY_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        {showLabelOverrides && (
+          <div>
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Máx. puntos con etiqueta (automático)</Label>
+            <Input
+              type="number"
+              min={2}
+              max={50}
+              placeholder="Predeterminado (8)"
+              value={agg.labelVisibilityMaxCount ?? ""}
+              onChange={(e) =>
+                updateAgg({
+                  labelVisibilityMaxCount: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                })
+              }
+              className="mt-1.5 h-9 text-xs"
+            />
+            <p className="mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">
+              Solo con “Algunas (automático)”. Subí el número si querés más etiquetas visibles sobre barras o líneas.
+            </p>
+          </div>
+        )}
+        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(
+          (widget.aggregationConfig as any)?.chartType || widget.type
+        ) && (
+          <div>
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición de la leyenda</Label>
+            <select
+              value={agg.chartLegendPosition ?? ""}
+              onChange={(e) =>
+                updateAgg({
+                  chartLegendPosition: (e.target.value || undefined) as AggregationConfigEdit["chartLegendPosition"],
+                })
+              }
+              className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+            >
+              <option value="">Predeterminada</option>
+              {LEGEND_POSITION_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
               ))}
             </select>
           </div>
@@ -455,55 +625,182 @@ export function MetricConfigPanel({
           </div>
         )}
 
-        {showLabelOverrides && (
-          <div className="border-t border-[var(--studio-border)] pt-4">
-            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Nombres de etiquetas en el gráfico</Label>
-            <p className="text-[11px] text-[var(--studio-fg-muted)] mt-0.5 mb-2">Reemplazar el valor que viene de los datos por el texto a mostrar (eje X, porciones, leyenda).</p>
-            <div className="space-y-2">
-              {labelOverridesEntries.map(([raw, display], idx) => (
-                <div key={`override-${idx}-${raw}`} className="flex gap-2 items-center">
-                  <Input
-                    value={labelOverrideRawDrafts[raw] ?? raw}
-                    onChange={(e) => setLabelOverrideRawDrafts((prev) => ({ ...prev, [raw]: e.target.value }))}
-                    onBlur={() => commitLabelOverrideRawDraft(raw, display)}
-                    placeholder="Valor original (ej. Q1)"
-                    className="h-8 text-xs flex-1"
-                  />
-                  <span className="text-[var(--studio-fg-muted)] text-xs">→</span>
-                  <Input
-                    value={display}
-                    onChange={(e) => setLabelOverride(raw, raw, e.target.value)}
-                    placeholder="Nombre a mostrar"
-                    className="h-8 text-xs flex-1"
-                  />
-                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500" onClick={() => removeLabelOverride(raw)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
+        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(
+          (widget.aggregationConfig as any)?.chartType || widget.type
+        ) && (
+          <div className="space-y-3 border-t border-[var(--studio-border)] pt-4">
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tipografía y colores del gráfico</Label>
+            <p className="text-[11px] text-[var(--studio-fg-muted)]">
+              Si dejás la fuente vacía, se usa la del tema del dashboard. Los colores pisan el modo claro/oscuro del visor.
+            </p>
+            <div>
+              <Label className="text-[11px] text-[var(--studio-fg-muted)]">Fuente (font-family CSS)</Label>
+              <select
+                className="mt-0.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
+                value={
+                  CHART_FONT_FAMILY_OPTIONS.some((o) => o.value === (agg.chartFontFamily ?? ""))
+                    ? (agg.chartFontFamily ?? "")
+                    : agg.chartFontFamily
+                      ? "__other__"
+                      : ""
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "__other__") {
+                    updateAgg({ chartFontFamily: agg.chartFontFamily || "'DM Sans', system-ui, sans-serif" });
+                  } else {
+                    updateAgg({ chartFontFamily: v || undefined });
+                  }
+                }}
+              >
+                {CHART_FONT_FAMILY_OPTIONS.map((o) => (
+                  <option key={o.value || "inherit"} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+                <option value="__other__">Personalizada…</option>
+              </select>
+              <Input
+                value={agg.chartFontFamily ?? ""}
+                onChange={(e) => updateAgg({ chartFontFamily: e.target.value || undefined })}
+                className="mt-2 h-8 font-mono text-[11px]"
+                placeholder="'Inter', system-ui, sans-serif"
+              />
             </div>
-            <Button type="button" variant="outline" size="sm" className="mt-2 h-8 text-xs" onClick={addLabelOverride}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Añadir etiqueta
-            </Button>
-          </div>
-        )}
-
-        {((widget.aggregationConfig as any)?.chartType || widget.type) === "kpi" && (
-          <div className="space-y-3">
-            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">KPI — línea secundaria</Label>
-            <Input
-              value={widget.kpiSecondaryLabel ?? ""}
-              onChange={(e) => onUpdate({ kpiSecondaryLabel: e.target.value || undefined })}
-              className="h-9 rounded-lg"
-              placeholder="Etiqueta (ej. Ticket promedio)"
-            />
-            <Input
-              value={widget.kpiSecondaryValue ?? ""}
-              onChange={(e) => onUpdate({ kpiSecondaryValue: e.target.value || undefined })}
-              className="h-9 rounded-lg"
-              placeholder="Valor (ej. $ 3.202)"
-            />
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Tamaño etiquetas de dato</Label>
+                <Input
+                  type="number"
+                  min={6}
+                  max={28}
+                  value={agg.chartDataLabelFontSize ?? ""}
+                  onChange={(e) =>
+                    updateAgg({
+                      chartDataLabelFontSize: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                    })
+                  }
+                  className="mt-0.5 h-8 text-xs"
+                  placeholder="12"
+                />
+              </div>
+              <div>
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Tamaño ejes / leyenda</Label>
+                <Input
+                  type="number"
+                  min={6}
+                  max={22}
+                  value={agg.chartAxisFontSize ?? ""}
+                  onChange={(e) =>
+                    updateAgg({
+                      chartAxisFontSize: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                    })
+                  }
+                  className="mt-0.5 h-8 text-xs"
+                  placeholder="11"
+                />
+              </div>
+            </div>
+            <div>
+              <Label className="text-[11px] text-[var(--studio-fg-muted)]">Padding interno del gráfico (px)</Label>
+              <Input
+                type="number"
+                min={0}
+                max={64}
+                value={agg.chartLayoutPadding ?? ""}
+                onChange={(e) =>
+                  updateAgg({
+                    chartLayoutPadding: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                  })
+                }
+                className="mt-0.5 h-8 text-xs"
+                placeholder="16"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Label className="text-[11px] text-[var(--studio-fg-muted)]">Color etiquetas de dato</Label>
+              <input
+                type="color"
+                value={agg.chartDataLabelColor || "#374151"}
+                onChange={(e) => updateAgg({ chartDataLabelColor: e.target.value })}
+                className="h-8 w-10 rounded border border-[var(--studio-border)]"
+              />
+              <Input
+                value={agg.chartDataLabelColor ?? ""}
+                onChange={(e) => updateAgg({ chartDataLabelColor: e.target.value || undefined })}
+                className="h-8 min-w-[7rem] flex-1 font-mono text-[11px]"
+                placeholder="#374151"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Label className="text-[11px] text-[var(--studio-fg-muted)]">Color ticks de ejes</Label>
+              <input
+                type="color"
+                value={agg.chartAxisTickColor || "#64748b"}
+                onChange={(e) => updateAgg({ chartAxisTickColor: e.target.value })}
+                className="h-8 w-10 rounded border border-[var(--studio-border)]"
+              />
+              <Input
+                value={agg.chartAxisTickColor ?? ""}
+                onChange={(e) => updateAgg({ chartAxisTickColor: e.target.value || undefined })}
+                className="h-8 min-w-[7rem] flex-1 font-mono text-[11px]"
+                placeholder="#64748b"
+              />
+            </div>
+            {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes(
+              (widget.aggregationConfig as any)?.chartType || widget.type
+            ) && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Rotación máx. eje categorías (°)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={90}
+                    value={agg.chartCategoryTickMaxRotation ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartCategoryTickMaxRotation: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Máx. ticks en categorías</Label>
+                  <Input
+                    type="number"
+                    min={2}
+                    max={100}
+                    value={agg.chartCategoryMaxTicks ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartCategoryMaxTicks: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="Auto"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Rotación mínima (°)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={90}
+                    value={agg.chartCategoryTickMinRotation ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartCategoryTickMinRotation: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -655,9 +952,9 @@ export function MetricConfigPanel({
           </div>
         )}
 
-        {!["filter", "image", "text"].includes(widget.type) && (
-          <>
-            <div className="border-t border-[var(--studio-border)] pt-4">
+            </TabsContent>
+            <TabsContent value="data" className="mt-0 space-y-5 focus-visible:outline-none">
+            <div>
               <div className="flex items-center justify-between mb-3">
                 <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Agregación de datos</Label>
                 <Checkbox
@@ -974,70 +1271,112 @@ export function MetricConfigPanel({
                           ))}
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Ordenar por</Label>
-                          <select
-                            value={agg.orderBy?.field || ""}
-                            onChange={(e) => updateAgg({ orderBy: { field: e.target.value, direction: agg.orderBy?.direction || "DESC" } })}
-                            className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-                          >
-                            <option value="">—</option>
-                            {orderFields.map((name) => (
-                              <option key={name} value={name}>{name}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Sentido</Label>
-                          <select
-                            value={agg.orderBy?.direction || "DESC"}
-                            onChange={(e) => updateAgg({ orderBy: { field: agg.orderBy?.field || orderFields[0] || "", direction: e.target.value as "ASC" | "DESC" } })}
-                            className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-                          >
-                            <option value="DESC">Desc</option>
-                            <option value="ASC">Asc</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div>
-                        <Label className="text-[11px] text-[var(--studio-fg-muted)]">Límite (filas)</Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={1000}
-                          value={agg.limit ?? ""}
-                          onChange={(e) => updateAgg({ limit: e.target.value ? parseInt(e.target.value, 10) : undefined })}
-                          className="mt-0.5 h-8 text-xs"
-                          placeholder="Ej. 10"
-                        />
-                      </div>
                     </div>
                   )}
                 </>
               )}
             </div>
-            <div className="flex items-center gap-2 pt-2">
-              <Checkbox
-                id="exclude-global"
-                checked={!!widget.excludeGlobalFilters}
-                onCheckedChange={(c) => onUpdate({ excludeGlobalFilters: !!c })}
-              />
-              <Label htmlFor="exclude-global" className="text-xs text-[var(--studio-fg-muted)] cursor-pointer">
-                Excluir filtros globales de esta métrica
-              </Label>
-            </div>
-            <Button
-              className="w-full mt-2 h-10 font-medium bg-[var(--studio-accent-dim)] text-[var(--studio-accent)] hover:bg-[rgba(34,211,238,0.25)] hover:text-[var(--studio-accent)] border border-[rgba(34,211,238,0.3)]"
-              onClick={onLoadData}
-              disabled={!etlData || etlLoading}
-            >
-              <Play className="mr-2 h-4 w-4" />
-              Actualizar datos
-            </Button>
-          </>
-        )}
-      </div>
+            </TabsContent>
+            <TabsContent value="order" className="mt-0 space-y-5 focus-visible:outline-none">
+              <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+                El <span className="font-medium text-[var(--studio-fg)]">orden de las categorías</span> en el gráfico sigue el orden de los datos devueltos por la agregación. Configurá abajo por qué campo ordenar (dimensión o métrica) y el sentido. Para textos superpuestos en el eje, en{" "}
+                <span className="font-medium text-[var(--studio-fg)]">Apariencia</span> podés rotar etiquetas, limitar ticks o reducir cuántas etiquetas de datos se muestran.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Ordenar por</Label>
+                  <select
+                    value={agg.orderBy?.field || ""}
+                    onChange={(e) =>
+                      updateAgg({ orderBy: { field: e.target.value, direction: agg.orderBy?.direction || "DESC" } })
+                    }
+                    className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
+                  >
+                    <option value="">—</option>
+                    {orderFields.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Sentido</Label>
+                  <select
+                    value={agg.orderBy?.direction || "DESC"}
+                    onChange={(e) =>
+                      updateAgg({
+                        orderBy: {
+                          field: agg.orderBy?.field || orderFields[0] || "",
+                          direction: e.target.value as "ASC" | "DESC",
+                        },
+                      })
+                    }
+                    className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
+                  >
+                    <option value="DESC">Desc</option>
+                    <option value="ASC">Asc</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Límite (filas)</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  value={agg.limit ?? ""}
+                  onChange={(e) => updateAgg({ limit: e.target.value ? parseInt(e.target.value, 10) : undefined })}
+                  className="mt-0.5 h-8 text-xs"
+                  placeholder="Ej. 10"
+                />
+              </div>
+              {showLabelOverrides && (
+                <div className="border-t border-[var(--studio-border)] pt-4">
+                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Renombrar etiquetas en el gráfico</Label>
+                  <p className="mb-2 mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">
+                    Reemplazá el valor que viene de los datos por el texto a mostrar (eje de categorías, porciones, leyenda).
+                  </p>
+                  <div className="space-y-2">
+                    {labelOverridesEntries.map(([raw, display], idx) => (
+                      <div key={`override-${idx}-${raw}`} className="flex items-center gap-2">
+                        <Input
+                          value={labelOverrideRawDrafts[raw] ?? raw}
+                          onChange={(e) => setLabelOverrideRawDrafts((prev) => ({ ...prev, [raw]: e.target.value }))}
+                          onBlur={() => commitLabelOverrideRawDraft(raw, display)}
+                          placeholder="Valor original (ej. Q1)"
+                          className="h-8 flex-1 text-xs"
+                        />
+                        <span className="text-xs text-[var(--studio-fg-muted)]">→</span>
+                        <Input
+                          value={display}
+                          onChange={(e) => setLabelOverride(raw, raw, e.target.value)}
+                          placeholder="Nombre a mostrar"
+                          className="h-8 flex-1 text-xs"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 shrink-0 text-red-500"
+                          onClick={() => removeLabelOverride(raw)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <Button type="button" variant="outline" size="sm" className="mt-2 h-8 text-xs" onClick={addLabelOverride}>
+                    <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    Añadir etiqueta
+                  </Button>
+                </div>
+              )}
+            </TabsContent>
+            </>
+          ) : null}
+        </div>
+      </Tabs>
     </aside>
   );
 }
