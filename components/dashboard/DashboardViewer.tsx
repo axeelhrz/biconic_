@@ -326,10 +326,15 @@ export function DashboardViewer({
     );
     let cancelled = false;
     const primaryDateFields = dataSources?.[0]?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
+    const dateDistinctTransforms = new Set(["YEAR", "MONTH", "DAY", "QUARTER", "SEMESTER"]);
     (async () => {
       for (const gf of selectFilters) {
         if (cancelled) break;
         try {
+          const filterOp = String((gf as { operator?: string }).operator ?? "").toUpperCase();
+          /** El UI usa input type="month"; no hace falta lista de distinct. */
+          if (filterOp === "YEAR_MONTH") continue;
+
           const physicalField =
             datasetDimensions?.[gf.field!]?.[primarySourceId!] ?? gf.field!;
           const isDateField =
@@ -340,7 +345,10 @@ export function DashboardViewer({
             field: physicalField,
             limit: 200,
           };
-          if (isDateField) body.transform = "YEAR";
+          if (isDateField) {
+            const t = dateDistinctTransforms.has(filterOp) ? filterOp : "YEAR";
+            body.transform = t;
+          }
           const res = await fetch(distinctUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
