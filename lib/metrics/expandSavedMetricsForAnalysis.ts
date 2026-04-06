@@ -58,3 +58,31 @@ export function expandSavedMetricsWithGlobalRefs(
 
   return out;
 }
+
+/** Widget persistido con análisis (varias métricas guardadas en orden). */
+export type WidgetMetricSelectionLike = {
+  analysisId?: unknown;
+  metricIds?: unknown;
+};
+
+/**
+ * Si el widget viene de un análisis guardado, reconstruye la lista `metrics` para el POST de agregación
+ * (alias por tarjeta, fórmulas con índices globales). Así el editor coincide con la vista aunque el layout
+ * en DB todavía tenga `aggregationConfig.metrics` viejas.
+ */
+export function expandAnalysisMetricsForFetch(
+  widget: WidgetMetricSelectionLike,
+  savedMetricsPool: SavedMetricForExpand[]
+): AggregationMetricEdit[] | null {
+  const analysisId = String(widget.analysisId ?? "").trim();
+  const ids = Array.isArray(widget.metricIds)
+    ? widget.metricIds.map((x) => String(x ?? "").trim()).filter(Boolean)
+    : [];
+  const analysisLike = analysisId !== "" || ids.length > 1;
+  if (!analysisLike || ids.length === 0) return null;
+  const linked = ids
+    .map((id) => savedMetricsPool.find((s) => String(s.id) === String(id)))
+    .filter((s): s is SavedMetricForExpand => s != null);
+  if (linked.length === 0) return null;
+  return expandSavedMetricsWithGlobalRefs(ids, linked, { setDisplayAliasToSavedName: true });
+}

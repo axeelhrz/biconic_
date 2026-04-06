@@ -30,7 +30,10 @@ import { StudioEmptyState } from "./StudioEmptyState";
 import { MetricBlock, type MetricBlockState } from "./MetricBlock";
 import type { ChartConfig } from "./MetricBlock";
 import type { SavedMetricForm } from "./AddMetricConfigForm";
-import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
+import {
+  expandAnalysisMetricsForFetch,
+  expandSavedMetricsWithGlobalRefs,
+} from "@/lib/metrics/expandSavedMetricsForAnalysis";
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
@@ -309,6 +312,9 @@ export function AdminDashboardStudio({
   const loadedOnce = useRef(false);
   const etlMetricsMergedRef = useRef(false);
   const autoLoadWidgetsDoneRef = useRef(false);
+  /** Tras merge de savedMetrics desde ETL, recargar widgets de análisis (expand depende de tarjetas por id). */
+  const analysisReloadLastSavedMetricsLenRef = useRef(-1);
+  const layoutHydratedForAnalysisRef = useRef(false);
   const resizeStateRef = useRef<{
     widgetId: string;
     edge: string;
@@ -338,6 +344,8 @@ export function AdminDashboardStudio({
   useEffect(() => {
     etlMetricsMergedRef.current = false;
     autoLoadWidgetsDoneRef.current = false;
+    analysisReloadLastSavedMetricsLenRef.current = -1;
+    layoutHydratedForAnalysisRef.current = false;
     setLayoutLoaded(false);
   }, [dashboardId]);
 
@@ -602,13 +610,33 @@ export function AdminDashboardStudio({
           }
         }
         if (agg?.enabled && agg.metrics.length > 0) {
-          const mappedWidgetFilters = (agg.filters || []).map((f) => ({
+          const expandedEdits = expandAnalysisMetricsForFetch(
+            {
+              analysisId: (widget as { analysisId?: unknown }).analysisId,
+              metricIds: (widget as { metricIds?: unknown }).metricIds,
+            },
+            savedMetrics
+          );
+          const metricsForLoad: AggregationMetric[] =
+            expandedEdits && expandedEdits.length > 0
+              ? expandedEdits.map((m, idx) => ({
+                  id: String(m.id ?? `m-${idx}`),
+                  field: String(m.field ?? ""),
+                  func: String(m.func ?? "SUM"),
+                  alias: String(m.alias ?? ""),
+                  condition: m.condition as AggregationMetric["condition"],
+                  formula: typeof m.formula === "string" ? m.formula : undefined,
+                  expression: typeof m.expression === "string" ? m.expression : undefined,
+                }))
+              : agg.metrics;
+          const aggForLoad: AggregationConfig = { ...agg, metrics: metricsForLoad };
+          const mappedWidgetFilters = (aggForLoad.filters || []).map((f) => ({
             ...f,
             field: mapDatasetField(f.field),
             operator: Array.isArray(f.value) && String(f.operator ?? "").toUpperCase() !== "IN" ? "IN" : f.operator,
           }));
           const normalizedAgg = {
-            ...agg,
+            ...aggForLoad,
             filters: mappedWidgetFilters,
           };
           const widgetForBuild = { type: widget.type, aggregationConfig: normalizedAgg, source: widget.source, color: (widget as { color?: string }).color };
@@ -616,9 +644,9 @@ export function AdminDashboardStudio({
             ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.all ?? etlData?.fields?.all ?? [])
             : (etlData?.fields?.all ?? []);
           const sourceFieldSet = new Set(sourceAllFields.map((field) => String(field).trim().toLowerCase()));
-          const dimensionsRaw = (agg as any).dimensions?.length > 0
-            ? (agg as any).dimensions as string[]
-            : [agg.dimension, agg.dimension2].filter(Boolean) as string[];
+          const dimensionsRaw = (aggForLoad as any).dimensions?.length > 0
+            ? (aggForLoad as any).dimensions as string[]
+            : [aggForLoad.dimension, aggForLoad.dimension2].filter(Boolean) as string[];
           const dimensions = dimensionsRaw
             .map((d) => String(d ?? "").trim())
             .filter((d) => !isInvalidIdentifierValue(d));
@@ -634,7 +662,7 @@ export function AdminDashboardStudio({
             : undefined;
           const firstSavedByIdMetric = (savedById as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } } | undefined)?.aggregationConfig?.metrics?.[0]
             ?? (savedById as { metric?: { field?: string; func?: string; alias?: string; expression?: string } } | undefined)?.metric;
-          const metricsPayload = agg.metrics
+          const metricsPayload = aggForLoad.metrics
             .map(({ id, ...m }) => {
               if (m.func === "FORMULA")
                 return { formula: m.formula || "", alias: m.alias || "formula", field: "" };
@@ -685,19 +713,19 @@ export function AdminDashboardStudio({
           }
           const widgetEtlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
           const widgetDateFields = sourceId ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.date ?? etlData?.fields?.date ?? []) : (etlData?.fields?.date ?? []);
-          const primaryDimension = dimensions[0] ?? agg.dimension;
+          const primaryDimension = dimensions[0] ?? aggForLoad.dimension;
           const isDateDimension = primaryDimension && widgetDateFields.some((d: string) => (d || "").toLowerCase() === (primaryDimension || "").toLowerCase());
-          const dateGroupByGranularity = (agg as { dateGroupByGranularity?: string }).dateGroupByGranularity;
+          const dateGroupByGranularity = (aggForLoad as { dateGroupByGranularity?: string }).dateGroupByGranularity;
           const metricAliasesForApi = metricsPayload.map((m: Record<string, unknown>) => m.alias as string).filter(Boolean);
           const isTemporalAxis =
             !!dateGroupByGranularity ||
-            !!(primaryDimension && agg.dateDimension && String(primaryDimension).trim().toLowerCase() === String(agg.dateDimension ?? "").trim().toLowerCase()) ||
+            !!(primaryDimension && aggForLoad.dateDimension && String(primaryDimension).trim().toLowerCase() === String(aggForLoad.dateDimension ?? "").trim().toLowerCase()) ||
             !!isDateDimension;
-          const rankingLimit = agg.chartRankingEnabled && agg.chartRankingTop && agg.chartRankingTop > 0 && !isTemporalAxis
-            ? agg.chartRankingTop
+          const rankingLimit = aggForLoad.chartRankingEnabled && aggForLoad.chartRankingTop && aggForLoad.chartRankingTop > 0 && !isTemporalAxis
+            ? aggForLoad.chartRankingTop
             : undefined;
-          const rankingOrderBy = rankingLimit && (agg.chartRankingMetric || metricAliasesForApi[0])
-            ? { field: agg.chartRankingMetric || metricAliasesForApi[0], direction: "DESC" as const }
+          const rankingOrderBy = rankingLimit && (aggForLoad.chartRankingMetric || metricAliasesForApi[0])
+            ? { field: aggForLoad.chartRankingMetric || metricAliasesForApi[0], direction: "DESC" as const }
             : undefined;
           const toSavedMetricPayload = (s: SavedMetric) => {
             const first = (s as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
@@ -718,7 +746,7 @@ export function AdminDashboardStudio({
           };
           // Priorizar métricas vinculadas por ID; usar nombre solo como fallback legado.
           const metricFieldNames = new Set(
-            agg.metrics
+            aggForLoad.metrics
               .filter((m) => m.func !== "FORMULA" && m.field != null && String(m.field).trim() !== "")
               .map((m) => String(m.field).trim().toLowerCase())
           );
@@ -731,24 +759,24 @@ export function AdminDashboardStudio({
           const aggregatePayload = {
             tableName,
             etlId: widgetEtlId || undefined,
-            dimension: isInvalidIdentifierValue(agg.dimension) ? undefined : agg.dimension,
+            dimension: isInvalidIdentifierValue(aggForLoad.dimension) ? undefined : aggForLoad.dimension,
             dimensions: dimensions.length > 0 ? dimensions : undefined,
-            chartType: agg.chartType || widget.type,
-            chartXAxis: isInvalidIdentifierValue(agg.chartXAxis) ? undefined : agg.chartXAxis || undefined,
-            ...(agg.geoHints ? { geoHints: agg.geoHints } : {}),
-            ...(typeof agg.mapDefaultCountry === "string" && agg.mapDefaultCountry.trim()
-              ? { mapDefaultCountry: agg.mapDefaultCountry.trim() }
+            chartType: aggForLoad.chartType || widget.type,
+            chartXAxis: isInvalidIdentifierValue(aggForLoad.chartXAxis) ? undefined : aggForLoad.chartXAxis || undefined,
+            ...(aggForLoad.geoHints ? { geoHints: aggForLoad.geoHints } : {}),
+            ...(typeof aggForLoad.mapDefaultCountry === "string" && aggForLoad.mapDefaultCountry.trim()
+              ? { mapDefaultCountry: aggForLoad.mapDefaultCountry.trim() }
               : {}),
             metrics: metricsPayload,
             filters: [...mappedWidgetFilters, ...mappedGlobalFilters],
-            orderBy: rankingOrderBy || agg.orderBy,
-            limit: rankingLimit ?? agg.limit ?? 100,
-            cumulative: agg.cumulative || "none",
-            comparePeriod: agg.comparePeriod || undefined,
-            dateDimension: agg.dateDimension || undefined,
+            orderBy: rankingOrderBy || aggForLoad.orderBy,
+            limit: rankingLimit ?? aggForLoad.limit ?? 100,
+            cumulative: aggForLoad.cumulative || "none",
+            comparePeriod: aggForLoad.comparePeriod || undefined,
+            dateDimension: aggForLoad.dateDimension || undefined,
             ...(dateGroupByGranularity && primaryDimension && { dateGroupBy: { field: primaryDimension, granularity: dateGroupByGranularity } }),
-            ...((agg as { dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string } }).dateRangeFilter && {
-              dateRangeFilter: (agg as { dateRangeFilter: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter,
+            ...((aggForLoad as { dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string } }).dateRangeFilter && {
+              dateRangeFilter: (aggForLoad as { dateRangeFilter: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter,
             }),
             ...(derivedColumnsFromLayout.length > 0 && { derivedColumns: derivedColumnsFromLayout }),
             ...(savedMetricsForBody.length > 0 && { savedMetrics: savedMetricsForBody }),
@@ -920,6 +948,33 @@ export function AdminDashboardStudio({
       }
     })();
   }, [layoutLoaded, etlData, etlLoading, widgets, loadMetricData]);
+
+  // Cuando el layout trae pocos savedMetrics y el efecto ETL añade tarjetas completas, volver a cargar análisis.
+  useEffect(() => {
+    if (!layoutLoaded || !etlData || etlLoading || widgets.length === 0) return;
+    const hasMultiMetricAnalysis = widgets.some((w) => {
+      const mids = (w as { metricIds?: unknown }).metricIds;
+      return Array.isArray(mids) && mids.length > 1;
+    });
+    const hasAnalysisId = widgets.some((w) => String((w as { analysisId?: unknown }).analysisId ?? "").trim() !== "");
+    if (!hasMultiMetricAnalysis && !hasAnalysisId) return;
+    if (!layoutHydratedForAnalysisRef.current) {
+      layoutHydratedForAnalysisRef.current = true;
+      analysisReloadLastSavedMetricsLenRef.current = savedMetrics.length;
+      return;
+    }
+    if (savedMetrics.length <= analysisReloadLastSavedMetricsLenRef.current) return;
+    analysisReloadLastSavedMetricsLenRef.current = savedMetrics.length;
+    const t = window.setTimeout(() => {
+      widgets.forEach((w) => {
+        const mids = (w as { metricIds?: unknown }).metricIds;
+        const multi = Array.isArray(mids) && mids.length > 1;
+        const aid = String((w as { analysisId?: unknown }).analysisId ?? "").trim() !== "";
+        if ((multi || aid) && w.aggregationConfig?.enabled) void loadMetricData(w.id);
+      });
+    }, 200);
+    return () => window.clearTimeout(t);
+  }, [layoutLoaded, etlData, etlLoading, savedMetrics.length, widgets, loadMetricData]);
 
   const runAllMetrics = useCallback(async () => {
     const toRun = activePageId ? widgets.filter((w) => (w.pageId ?? "page-1") === activePageId) : widgets;

@@ -12,6 +12,10 @@ import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./D
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
 import {
+  expandAnalysisMetricsForFetch,
+  type SavedMetricForExpand,
+} from "@/lib/metrics/expandSavedMetricsForAnalysis";
+import {
   buildChartMetricStyles,
   buildChartStyleFromAgg,
   resolveDarkChartTheme,
@@ -42,6 +46,9 @@ type AggregationMetric = {
   field: string;
   func: string;
   alias: string;
+  formula?: string;
+  expression?: string;
+  condition?: { field: string; operator: string; value: unknown };
   numericCast?: "none" | "numeric" | "sanitize";
   conversionType?: "none" | "multiply" | "divide";
   conversionFactor?: number;
@@ -119,6 +126,7 @@ export type Widget = DashboardWidgetRendererWidget & {
   gridOrder?: number;
   metricId?: string;
   metricIds?: string[];
+  analysisId?: string;
   /** Misma semántica que AdminDashboardStudio: pestaña del lienzo */
   pageId?: string;
 };
@@ -495,6 +503,18 @@ export function DashboardViewer({
         const layoutSavedMetrics = (Array.isArray(dashLayoutSaved) ? dashLayoutSaved : []) as NonNullable<
           Parameters<typeof loadPreviewWidgetData>[0]["savedMetrics"]
         >;
+        const dsSavedRaw = (dataSourcesList?.find((s) => s.id === widgetSourceId) as { savedMetrics?: unknown[] } | undefined)
+          ?.savedMetrics;
+        const dsSavedMetrics = (Array.isArray(dsSavedRaw) ? dsSavedRaw : []) as NonNullable<
+          Parameters<typeof loadPreviewWidgetData>[0]["savedMetrics"]
+        >;
+        const savedMetricsPoolMap = new Map<string, (typeof layoutSavedMetrics)[0] & { id?: string }>();
+        for (const m of [...layoutSavedMetrics, ...dsSavedMetrics]) {
+          const row = m as { id?: string };
+          const id = String(row?.id ?? "").trim();
+          if (id) savedMetricsPoolMap.set(id, m as (typeof layoutSavedMetrics)[0] & { id?: string });
+        }
+        const savedMetricsPool = Array.from(savedMetricsPoolMap.values());
 
         const widgetEtlId = widgetSourceId
           ? dataSourcesList?.find((s) => s.id === widgetSourceId)?.etlId ?? (etlData as { etl?: { id?: string } })?.etl?.id
@@ -515,13 +535,33 @@ export function DashboardViewer({
         };
 
         if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
-          const mappedWidgetFilters = (aggConfig.filters || []).map((f) => ({
+          const expandedEdits = expandAnalysisMetricsForFetch(
+            {
+              analysisId: (widget as Widget).analysisId,
+              metricIds: (widget as Widget).metricIds,
+            },
+            savedMetricsPool as SavedMetricForExpand[]
+          );
+          const metricsForLoad: AggregationMetric[] =
+            expandedEdits && expandedEdits.length > 0
+              ? expandedEdits.map((m, idx) => ({
+                  id: String(m.id ?? `m-${idx}`),
+                  field: String(m.field ?? ""),
+                  func: String(m.func ?? "SUM"),
+                  alias: String(m.alias ?? ""),
+                  formula: typeof m.formula === "string" ? m.formula : undefined,
+                  expression: typeof m.expression === "string" ? m.expression : undefined,
+                  condition: m.condition as AggregationMetric["condition"],
+                }))
+              : aggConfig.metrics;
+          const aggConfigForLoad: AggregationConfig = { ...aggConfig, metrics: metricsForLoad };
+          const mappedWidgetFilters = (aggConfigForLoad.filters || []).map((f) => ({
             ...f,
             field: mapDatasetField(f.field),
             operator:
               Array.isArray(f.value) && String(f.operator ?? "").toUpperCase() !== "IN" ? "IN" : f.operator,
           }));
-          const normalizedAgg = { ...aggConfig, filters: mappedWidgetFilters };
+          const normalizedAgg = { ...aggConfigForLoad, filters: mappedWidgetFilters };
           const widgetForBuild = {
             type: widget.type,
             aggregationConfig: normalizedAgg,
@@ -535,7 +575,7 @@ export function DashboardViewer({
             etlId: widgetEtlId,
             sourceId: widgetSourceId,
             datasetDimensions,
-            savedMetrics: layoutSavedMetrics,
+            savedMetrics: savedMetricsPool.length > 0 ? savedMetricsPool : layoutSavedMetrics,
             globalFilters: mappedGlobalFilters,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
