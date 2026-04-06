@@ -1,24 +1,59 @@
 "use client";
 
-import { useMemo } from "react";
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from "react-leaflet";
+import { useEffect, useMemo, useState } from "react";
+import L from "leaflet";
+import { CircleMarker, GeoJSON, MapContainer, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
+import {
+  AR_GEOJSON_PATH,
+  isArgentinaDefaultCountry,
+  resolveArProvinceGadmId,
+  type ArProvinceGadmId,
+} from "@/lib/geo/argentinaProvinces";
 
 export type MapAggregationConfig = {
   chartXAxis?: string;
   chartYAxes?: string[];
   dimension?: string;
   dimensions?: string[];
+  mapDefaultCountry?: string;
 };
 
 type DashboardMapWidgetProps = {
   rows: Record<string, unknown>[];
   aggregationConfig?: MapAggregationConfig;
+  mapDefaultCountry?: string;
   height?: number;
 };
 
 const DEFAULT_CENTER: [number, number] = [-34.6, -58.4];
 const DEFAULT_ZOOM = 3;
+
+/** Encuadre aproximado Argentina (sur-oeste, nor-este) en lat/lng. */
+const AR_MAX_BOUNDS: L.LatLngBoundsExpression = [
+  [-55.2, -73.8],
+  [-20.8, -52.5],
+];
+const AR_DEFAULT_CENTER: [number, number] = [-37.2, -64.6];
+const AR_DEFAULT_ZOOM = 4;
+
+const CARTO_LIGHT_TILE =
+  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+const CARTO_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+type ArProvinceProps = { id?: string; name?: string };
+
+type ArProvinceFeature = {
+  type?: string;
+  properties?: ArProvinceProps | null;
+  geometry?: unknown;
+};
+
+type ArFeatureCollection = {
+  type: "FeatureCollection";
+  features: ArProvinceFeature[];
+};
 
 function FitBounds({ points }: { points: [number, number][] }) {
   const map = useMap();
@@ -44,14 +79,82 @@ function FitBounds({ points }: { points: [number, number][] }) {
   return null;
 }
 
+function FitArgentinaGeoJson({ data }: { data: ArFeatureCollection | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!data?.features?.length) return;
+    const layer = L.geoJSON(data as never);
+    const b = layer.getBounds();
+    layer.remove();
+    if (b.isValid()) {
+      map.fitBounds(b, { padding: [18, 18], maxZoom: 5, animate: false });
+    }
+  }, [data, map]);
+  return null;
+}
+
+function getIntensity(value: number | null, minValue: number | null, maxValue: number | null): number {
+  if (value == null || minValue == null || maxValue == null) return 0.45;
+  const hasRange = maxValue > minValue;
+  if (!hasRange) return 0.6;
+  return Math.max(0, Math.min(1, (value - minValue) / (maxValue - minValue)));
+}
+
+function getFillColor(value: number | null, minValue: number | null, maxValue: number | null): string {
+  const intensity = getIntensity(value, minValue, maxValue);
+  const lightness = 72 - intensity * 34;
+  return `hsl(199 89% ${lightness}%)`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 export function DashboardMapWidget({
   rows,
   aggregationConfig,
+  mapDefaultCountry: mapDefaultCountryProp,
   height = 280,
 }: DashboardMapWidgetProps) {
-  const { markers, valueKey, unresolvedCount } = useMemo(() => {
+  const mapDefaultCountry = mapDefaultCountryProp ?? aggregationConfig?.mapDefaultCountry;
+  const argentinaMode = isArgentinaDefaultCountry(mapDefaultCountry);
+
+  const [arGeo, setArGeo] = useState<ArFeatureCollection | null>(null);
+  const [arGeoError, setArGeoError] = useState(false);
+
+  useEffect(() => {
+    if (!argentinaMode) return;
+    let cancelled = false;
+    fetch(AR_GEOJSON_PATH)
+      .then((r) => {
+        if (!r.ok) throw new Error("geo");
+        return r.json();
+      })
+      .then((j: unknown) => {
+        const fc = j as ArFeatureCollection;
+        if (!cancelled && fc?.type === "FeatureCollection" && Array.isArray(fc.features)) setArGeo(fc);
+      })
+      .catch(() => {
+        if (!cancelled) setArGeoError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [argentinaMode]);
+
+  const { markers, valueKey, unresolvedCount, provinceSums, provinceMatchRows } = useMemo(() => {
     if (!Array.isArray(rows) || rows.length === 0) {
-      return { markers: [] as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>, valueKey: "", unresolvedCount: 0 };
+      return {
+        markers: [] as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>,
+        valueKey: "",
+        unresolvedCount: 0,
+        provinceSums: new Map<ArProvinceGadmId, number>(),
+        provinceMatchRows: 0,
+      };
     }
     const first = rows[0] as Record<string, unknown>;
     const keys = Object.keys(first);
@@ -80,31 +183,60 @@ export function DashboardMapWidget({
 
     const xAxis = aggregationConfig?.chartXAxis ?? aggregationConfig?.dimension ?? aggregationConfig?.dimensions?.[0];
     const yAxes = aggregationConfig?.chartYAxes;
-    const labelKeyRes = geoLabelKey ?? ((xAxis && keys.includes(xAxis)) ? xAxis : (keys.find((k) => typeof first[k] === "string") ?? ""));
-    const valueKeyRes = (Array.isArray(yAxes) && yAxes[0] && keys.includes(yAxes[0])) ? yAxes[0] : (keys.find((k) => typeof first[k] === "number" && k !== latColRes && k !== lonColRes) ?? "");
+    const labelKeyRes =
+      geoLabelKey ?? (xAxis && keys.includes(xAxis) ? xAxis : (keys.find((k) => typeof first[k] === "string") ?? ""));
+    const valueKeyRes =
+      Array.isArray(yAxes) && yAxes[0] && keys.includes(yAxes[0])
+        ? yAxes[0]
+        : (keys.find((k) => typeof first[k] === "number" && k !== latColRes && k !== lonColRes) ?? "");
+
+    const provinceSumsRes = new Map<ArProvinceGadmId, number>();
+    let provinceMatchRowsRes = 0;
+
+    for (const row of rows.slice(0, 500)) {
+      const r = row as Record<string, unknown>;
+      const rawLabel = labelKeyRes ? r[labelKeyRes] : "";
+      const fromDim = rawLabel != null ? String(rawLabel) : "";
+      const fromGeo = r.__geo_label != null ? String(r.__geo_label) : "";
+      const pid = resolveArProvinceGadmId(fromDim) ?? resolveArProvinceGadmId(fromGeo);
+      if (!pid) continue;
+      const valueCandidate = valueKeyRes ? Number(r[valueKeyRes]) : NaN;
+      if (!Number.isFinite(valueCandidate)) continue;
+      provinceMatchRowsRes += 1;
+      provinceSumsRes.set(pid, (provinceSumsRes.get(pid) ?? 0) + valueCandidate);
+    }
 
     if (!latColRes || !lonColRes) {
       const unresolved = rows.length;
-      return { markers: [], valueKey: valueKeyRes ?? "", unresolvedCount: unresolved };
+      return {
+        markers: [],
+        valueKey: valueKeyRes ?? "",
+        unresolvedCount: unresolved,
+        provinceSums: provinceSumsRes,
+        provinceMatchRows: provinceMatchRowsRes,
+      };
     }
 
-    const markersRes = rows.slice(0, 500).map((row) => {
-      const r = row as Record<string, unknown>;
-      const lat = Number(r[latColRes!]);
-      const lon = Number(r[lonColRes!]);
-      const rawLabel = labelKeyRes ? r[labelKeyRes] : "";
-      const label = rawLabel != null ? String(rawLabel) : "";
-      const valueCandidate = valueKeyRes ? Number(r[valueKeyRes]) : NaN;
-      const sourceValue = geoSourceKey ? String(r[geoSourceKey] ?? "") : "native";
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-      return {
-        lat,
-        lon,
-        value: Number.isFinite(valueCandidate) ? valueCandidate : null,
-        label,
-        source: sourceValue,
-      };
-    }).filter(Boolean) as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>;
+    const markersRes = rows
+      .slice(0, 500)
+      .map((row) => {
+        const r = row as Record<string, unknown>;
+        const lat = Number(r[latColRes!]);
+        const lon = Number(r[lonColRes!]);
+        const rawLabel = labelKeyRes ? r[labelKeyRes] : "";
+        const label = rawLabel != null ? String(rawLabel) : "";
+        const valueCandidate = valueKeyRes ? Number(r[valueKeyRes]) : NaN;
+        const sourceValue = geoSourceKey ? String(r[geoSourceKey] ?? "") : "native";
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+        return {
+          lat,
+          lon,
+          value: Number.isFinite(valueCandidate) ? valueCandidate : null,
+          label,
+          source: sourceValue,
+        };
+      })
+      .filter(Boolean) as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>;
 
     const unresolvedCountRes = rows.reduce((acc, row) => {
       const r = row as Record<string, unknown>;
@@ -116,10 +248,110 @@ export function DashboardMapWidget({
       return acc + 1;
     }, 0);
 
-    return { markers: markersRes, valueKey: valueKeyRes ?? "", unresolvedCount: unresolvedCountRes };
+    return {
+      markers: markersRes,
+      valueKey: valueKeyRes ?? "",
+      unresolvedCount: unresolvedCountRes,
+      provinceSums: provinceSumsRes,
+      provinceMatchRows: provinceMatchRowsRes,
+    };
   }, [rows, aggregationConfig]);
 
+  const useArChoropleth =
+    argentinaMode && arGeo && !arGeoError && provinceSums.size > 0;
+
+  const choroplethNumeric = useMemo(() => [...provinceSums.values()].filter((v) => Number.isFinite(v)), [provinceSums]);
+  const chMin = choroplethNumeric.length > 0 ? Math.min(...choroplethNumeric) : null;
+  const chMax = choroplethNumeric.length > 0 ? Math.max(...choroplethNumeric) : null;
+
   const points = markers.map((m) => [m.lat, m.lon] as [number, number]);
+
+  if (argentinaMode && provinceSums.size > 0 && !arGeoError && !arGeo) {
+    return (
+      <div
+        className="flex flex-1 items-center justify-center rounded border text-center text-sm"
+        style={{
+          height: `${height}px`,
+          borderColor: "var(--platform-border, #e2e8f0)",
+          color: "var(--platform-fg-muted, #64748b)",
+        }}
+      >
+        Cargando mapa de provincias…
+      </div>
+    );
+  }
+
+  if (useArChoropleth) {
+    const styleFeature = (feature: ArProvinceFeature | null | undefined) => {
+      const id = feature?.properties?.id as ArProvinceGadmId | undefined;
+      const v = id ? provinceSums.get(id) : undefined;
+      const has = v != null && Number.isFinite(v);
+      if (!has) {
+        return {
+          fillColor: "#e8edf3",
+          fillOpacity: 0.92,
+          color: "#b8c5d6",
+          weight: 0.9,
+          opacity: 1,
+        };
+      }
+      const fill = getFillColor(v, chMin, chMax);
+      return {
+        fillColor: fill,
+        fillOpacity: 0.88,
+        color: "#64748b",
+        weight: 1,
+        opacity: 0.95,
+      };
+    };
+
+    return (
+      <div
+        className="relative rounded overflow-hidden border"
+        style={{ height: `${height}px`, borderColor: "var(--platform-border, #e2e8f0)" }}
+      >
+        <MapContainer
+          center={AR_DEFAULT_CENTER}
+          zoom={AR_DEFAULT_ZOOM}
+          style={{ height: "100%", width: "100%" }}
+          scrollWheelZoom={true}
+          maxBounds={AR_MAX_BOUNDS}
+          maxBoundsViscosity={0.82}
+        >
+          <TileLayer attribution={CARTO_ATTRIBUTION} url={CARTO_LIGHT_TILE} />
+          <FitArgentinaGeoJson data={arGeo} />
+          <GeoJSON
+            data={arGeo as never}
+            style={(feat) => styleFeature(feat as ArProvinceFeature)}
+            onEachFeature={(feature, layer) => {
+              const props = feature.properties as { id?: string; name?: string } | undefined;
+              const id = props?.id as ArProvinceGadmId | undefined;
+              const name = props?.name ?? id ?? "Provincia";
+              const v = id ? provinceSums.get(id) : undefined;
+              const valueStr = v != null && Number.isFinite(v) ? String(v) : "Sin dato";
+              const safeName = escapeHtml(name);
+              const safeKey = escapeHtml(valueKey);
+              const safeVal = escapeHtml(valueStr);
+              layer.bindPopup(
+                `<div class="text-xs space-y-1"><strong>${safeName}</strong>${valueKey ? `<div>${safeKey}: ${safeVal}</div>` : `<div>${safeVal}</div>`}</div>`
+              );
+            }}
+          />
+        </MapContainer>
+        {provinceMatchRows < rows.length ? (
+          <div
+            className="pointer-events-none absolute bottom-2 left-2 rounded px-2 py-1 text-[11px]"
+            style={{
+              background: "rgba(15,23,42,0.75)",
+              color: "#f8fafc",
+            }}
+          >
+            {rows.length - provinceMatchRows} filas sin provincia reconocida
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   if (markers.length === 0) {
     return (
@@ -132,7 +364,12 @@ export function DashboardMapWidget({
         }}
       >
         <p className="mb-1">Sin coordenadas para mostrar en el mapa</p>
-        <p className="text-xs">Verificá una dimensión geo (país/provincia/localidad) o columnas de latitud/longitud.</p>
+        <p className="text-xs">
+          Verificá una dimensión geo (país/provincia/localidad) o columnas de latitud/longitud.
+          {argentinaMode && provinceSums.size === 0 && arGeo && !arGeoError ? (
+            <span className="block mt-1">Para el mapa por provincias, configurá «País por defecto del mapa» en Argentina y que los nombres de provincia coincidan con las jurisdicciones.</span>
+          ) : null}
+        </p>
       </div>
     );
   }
@@ -141,44 +378,51 @@ export function DashboardMapWidget({
   const minValue = numericValues.length > 0 ? Math.min(...numericValues) : null;
   const maxValue = numericValues.length > 0 ? Math.max(...numericValues) : null;
   const hasRange = minValue != null && maxValue != null && maxValue > minValue;
-  const getIntensity = (value: number | null) => {
+  const getIntensityLocal = (value: number | null) => {
     if (value == null || minValue == null || maxValue == null) return 0.45;
     if (!hasRange) return 0.6;
     return Math.max(0, Math.min(1, (value - minValue) / (maxValue - minValue)));
   };
   const getRadius = (value: number | null) => {
-    const intensity = getIntensity(value);
+    const intensity = getIntensityLocal(value);
     return 5 + intensity * 9;
   };
-  const getFillColor = (value: number | null) => {
-    const intensity = getIntensity(value);
+  const getFillColorLocal = (value: number | null) => {
+    const intensity = getIntensityLocal(value);
     const lightness = 72 - intensity * 34;
     return `hsl(199 89% ${lightness}%)`;
   };
   const getFillOpacity = (value: number | null) => {
-    const intensity = getIntensity(value);
+    const intensity = getIntensityLocal(value);
     return 0.4 + intensity * 0.45;
   };
+
+  const tileUrl =
+    argentinaMode && arGeo && !arGeoError ? CARTO_LIGHT_TILE : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+  const attribution =
+    argentinaMode && arGeo && !arGeoError
+      ? CARTO_ATTRIBUTION
+      : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
   return (
     <div className="relative rounded overflow-hidden border" style={{ height: `${height}px`, borderColor: "var(--platform-border, #e2e8f0)" }}>
       <MapContainer
-        center={DEFAULT_CENTER}
-        zoom={DEFAULT_ZOOM}
+        center={argentinaMode ? AR_DEFAULT_CENTER : DEFAULT_CENTER}
+        zoom={argentinaMode ? AR_DEFAULT_ZOOM : DEFAULT_ZOOM}
         style={{ height: "100%", width: "100%" }}
         scrollWheelZoom={true}
+        {...(argentinaMode && arGeo && !arGeoError
+          ? { maxBounds: AR_MAX_BOUNDS, maxBoundsViscosity: 0.82 }
+          : {})}
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        <TileLayer attribution={attribution} url={tileUrl} />
         <FitBounds points={points} />
         {markers.map((marker, i) => {
           const value = marker.value != null ? String(marker.value) : "";
           const popupLabel = marker.label || `(${marker.lat.toFixed(4)}, ${marker.lon.toFixed(4)})`;
           const popupContent = [popupLabel, value].filter(Boolean).join(" — ");
           const radius = getRadius(marker.value);
-          const fillColor = getFillColor(marker.value);
+          const fillColor = getFillColorLocal(marker.value);
           const fillOpacity = getFillOpacity(marker.value);
           return (
             <CircleMarker

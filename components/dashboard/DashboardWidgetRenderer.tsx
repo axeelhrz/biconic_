@@ -993,7 +993,18 @@ export function DashboardWidgetRenderer({
                 ) : (
                   <DashboardMapWidget
                     rows={tableRows as Record<string, unknown>[]}
-                    aggregationConfig={widget.aggregationConfig as { chartXAxis?: string; chartYAxes?: string[]; dimension?: string; dimensions?: string[] } | undefined}
+                    aggregationConfig={
+                      widget.aggregationConfig as {
+                        chartXAxis?: string;
+                        chartYAxes?: string[];
+                        dimension?: string;
+                        dimensions?: string[];
+                        mapDefaultCountry?: string;
+                      } | undefined
+                    }
+                    mapDefaultCountry={
+                      (widget.aggregationConfig as { mapDefaultCountry?: string } | undefined)?.mapDefaultCountry
+                    }
                     height={Math.max(220, (effectiveMinHeight ?? 240) - 52)}
                   />
                 )}
