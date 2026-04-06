@@ -162,7 +162,7 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   position: relative;
 }
 
@@ -308,9 +308,6 @@
 }
 
 @media (max-width: 767px) {
-  [data-theme="client"] .client-view-body {
-    flex-direction: column;
-  }
   [data-theme="client"] .client-view-filters {
     width: 100%;
     max-width: 100%;
