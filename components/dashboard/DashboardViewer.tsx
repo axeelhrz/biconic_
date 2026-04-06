@@ -160,6 +160,8 @@ type AggregationConfig = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  /** Top N por métrica: ordenar de mayor a menor (`desc`, default) o menor a mayor (`asc`). */
+  chartRankingDirection?: "asc" | "desc";
   chartSortDirection?: string;
   chartSortBy?: string;
   chartSortByMetric?: string;

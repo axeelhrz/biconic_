@@ -288,6 +288,7 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
     chartRankingEnabled: cfg.chartRankingEnabled,
     chartRankingTop: cfg.chartRankingTop,
     chartRankingMetric: cfg.chartRankingMetric,
+    chartRankingDirection: cfg.chartRankingDirection,
     dateGroupByGranularity: cfg.dateGroupByGranularity,
     dateRangeFilter: cfg.dateRangeFilter,
   };

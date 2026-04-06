@@ -510,6 +510,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartRankingEnabled, setChartRankingEnabled] = useState(false);
   const [chartRankingTop, setChartRankingTop] = useState(5);
   const [chartRankingMetric, setChartRankingMetric] = useState("");
+  const [chartRankingDirection, setChartRankingDirection] = useState<"asc" | "desc">("desc");
   const [chartSortByMetric, setChartSortByMetric] = useState("");
   const [previewDateOrder, setPreviewDateOrder] = useState<"asc" | "desc">("asc");
   const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
@@ -1487,6 +1488,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartRankingEnabled(!!cfg.chartRankingEnabled);
       setChartRankingTop(cfg.chartRankingTop ?? 5);
       setChartRankingMetric(cfg.chartRankingMetric ?? "");
+      setChartRankingDirection(
+        cfg.chartRankingDirection === "asc" || cfg.chartRankingDirection === "desc"
+          ? cfg.chartRankingDirection
+          : "desc"
+      );
       setChartPinnedDimensions(Array.isArray(cfg.chartPinnedDimensions) ? cfg.chartPinnedDimensions : []);
       setChartColorScheme(cfg.chartColorScheme ?? "auto");
       setChartSeriesColors(cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? cfg.chartSeriesColors : {});
@@ -2057,6 +2063,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartRankingEnabled,
         chartRankingTop,
         chartRankingMetric,
+        chartRankingDirection,
         chartSortDirection,
         chartSortBy,
         chartSortByMetric,
@@ -2079,6 +2086,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartRankingEnabled,
     chartRankingTop,
     chartRankingMetric,
+    chartRankingDirection,
     chartSortDirection,
     chartSortBy,
     chartSortByMetric,
@@ -2210,6 +2218,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartRankingEnabled,
         chartRankingTop,
         chartRankingMetric,
+        chartRankingDirection,
         chartSortDirection,
         chartSortBy,
         chartSortByMetric,
@@ -2259,6 +2268,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartRankingEnabled,
     chartRankingTop,
     chartRankingMetric,
+    chartRankingDirection,
     chartSortDirection,
     chartSortBy,
     chartSortByMetric,
@@ -2858,6 +2868,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingEnabled: chartRankingEnabled || undefined,
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
+      chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
@@ -3131,6 +3142,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingEnabled: chartRankingEnabled || undefined,
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
+      chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
@@ -3276,6 +3288,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingEnabled: chartRankingEnabled || undefined,
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
+      chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
       filters: formFilters.length
         ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator }))
         : undefined,
@@ -3329,6 +3342,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartRankingEnabled,
     chartRankingTop,
     chartRankingMetric,
+    chartRankingDirection,
     formFilters,
     formOrderBy,
     formLimit,
@@ -3476,6 +3490,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartRankingEnabled(!!a.chartRankingEnabled);
       setChartRankingTop(typeof a.chartRankingTop === "number" ? a.chartRankingTop : 5);
       setChartRankingMetric(typeof a.chartRankingMetric === "string" ? a.chartRankingMetric : "");
+      setChartRankingDirection(
+        a.chartRankingDirection === "asc" || a.chartRankingDirection === "desc"
+          ? a.chartRankingDirection
+          : "desc"
+      );
       if (Array.isArray(a.filters)) {
         setFormFilters(
           (a.filters as AggregationFilterEdit[]).map((f, i) => ({
@@ -6078,7 +6097,28 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                               {chartNumericColumns.map((c) => (<option key={c.key} value={c.key}>{c.label}</option>))}
                             </select>
                           </div>
-                          <p className="text-xs w-full" style={{ color: "var(--platform-fg-muted)" }}>Ej: Top {chartRankingTop} {formDimensions[0] ? formDimensions[0] : "categorías"} que más {chartYAxes[0] ? (chartAvailableColumns.find((c) => c.key === chartYAxes[0])?.label ?? chartYAxes[0]) : "valor"} tienen.</p>
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Orden</Label>
+                            <select
+                              value={chartRankingDirection}
+                              onChange={(e) => setChartRankingDirection(e.target.value === "asc" ? "asc" : "desc")}
+                              className="h-8 rounded-lg border px-2 text-xs min-w-[11rem]"
+                              style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                            >
+                              <option value="desc">Descendente (mayor primero)</option>
+                              <option value="asc">Ascendente (menor primero)</option>
+                            </select>
+                          </div>
+                          <p className="text-xs w-full" style={{ color: "var(--platform-fg-muted)" }}>
+                            Ej: Top {chartRankingTop} {formDimensions[0] ? formDimensions[0] : "categorías"} que{" "}
+                            {chartRankingDirection === "asc" ? "menos" : "más"}{" "}
+                            {chartRankingMetric
+                              ? (chartAvailableColumns.find((c) => c.key === chartRankingMetric)?.label ?? chartRankingMetric)
+                              : chartYAxes[0]
+                                ? (chartAvailableColumns.find((c) => c.key === chartYAxes[0])?.label ?? chartYAxes[0])
+                                : "valor"}{" "}
+                            tienen.
+                          </p>
                         </div>
                       )}
                     </div>
@@ -6284,7 +6324,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         {previewWidgetForRenderer && formChartType !== "kpi" && formChartType !== "table" && (
                           <div className="h-[320px] w-full">
                             <DashboardWidgetRenderer
-                              key={`pv-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
+                              key={`pv-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
                               widget={previewWidgetForRenderer}
                               isLoading={false}
                               hideHeader

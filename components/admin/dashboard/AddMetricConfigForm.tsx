@@ -66,6 +66,7 @@ export type AggregationConfigEdit = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  chartRankingDirection?: "asc" | "desc";
   chartPinnedDimensions?: string[];
   chartColorScheme?: string;
   chartSeriesColors?: Record<string, string>;
@@ -166,6 +167,7 @@ export type SavedMetricAggregationConfig = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  chartRankingDirection?: "asc" | "desc";
   chartPinnedDimensions?: string[];
   chartColorScheme?: string;
   chartSeriesColors?: Record<string, string>;
@@ -338,6 +340,7 @@ export function AddMetricConfigForm({
         chartRankingEnabled: cfg.chartRankingEnabled,
         chartRankingTop: cfg.chartRankingTop,
         chartRankingMetric: cfg.chartRankingMetric,
+        chartRankingDirection: cfg.chartRankingDirection,
         chartPinnedDimensions: cfg.chartPinnedDimensions,
         chartColorScheme: cfg.chartColorScheme,
         chartSeriesColors: cfg.chartSeriesColors,

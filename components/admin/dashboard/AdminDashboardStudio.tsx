@@ -79,6 +79,7 @@ export type SavedAnalysis = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  chartRankingDirection?: "asc" | "desc";
   filters?: AggregationFilter[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
@@ -134,6 +135,7 @@ type AggregationConfig = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  chartRankingDirection?: "asc" | "desc";
   chartColorScheme?: string;
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";
@@ -763,8 +765,13 @@ export function AdminDashboardStudio({
           const rankingLimit = aggForLoad.chartRankingEnabled && aggForLoad.chartRankingTop && aggForLoad.chartRankingTop > 0 && !isTemporalAxis
             ? aggForLoad.chartRankingTop
             : undefined;
+          const rankingDir =
+            String((aggForLoad as { chartRankingDirection?: string }).chartRankingDirection ?? "desc").toLowerCase() ===
+            "asc"
+              ? ("ASC" as const)
+              : ("DESC" as const);
           const rankingOrderBy = rankingLimit && (aggForLoad.chartRankingMetric || metricAliasesForApi[0])
-            ? { field: aggForLoad.chartRankingMetric || metricAliasesForApi[0], direction: "DESC" as const }
+            ? { field: aggForLoad.chartRankingMetric || metricAliasesForApi[0], direction: rankingDir }
             : undefined;
           const toSavedMetricPayload = (s: SavedMetric) => {
             const first = (s as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]

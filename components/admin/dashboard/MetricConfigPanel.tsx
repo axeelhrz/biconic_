@@ -67,6 +67,7 @@ export type AggregationConfigEdit = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  chartRankingDirection?: "asc" | "desc";
   chartColorScheme?: string;
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";

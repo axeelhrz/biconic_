@@ -49,6 +49,7 @@ export type BuildChartConfigWidget = {
     chartRankingEnabled?: boolean;
     chartRankingTop?: number;
     chartRankingMetric?: string;
+    chartRankingDirection?: "asc" | "desc";
     chartSortDirection?: string;
     chartSortBy?: string;
     chartSortByMetric?: string;
@@ -247,6 +248,18 @@ function shouldApplyTemporalRankingRule(
   );
 }
 
+function compareRowsByRankingMetric(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+  rKey: string,
+  direction: string | undefined
+): number {
+  const va = Number(a[rKey] ?? 0);
+  const vb = Number(b[rKey] ?? 0);
+  if (String(direction ?? "desc").toLowerCase() === "asc") return va - vb;
+  return vb - va;
+}
+
 /**
  * Aplica el mismo orden y ranking que buildChartConfig y devuelve las filas procesadas.
  * Usar para widgets tipo "table" para que la tabla muestre el mismo orden y Top N que los gráficos.
@@ -280,7 +293,14 @@ export function getProcessedRowsForChart(
       }
     }
     if (rKey) {
-      rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
+      rows.sort((a, b) =>
+        compareRowsByRankingMetric(
+          a as Record<string, unknown>,
+          b as Record<string, unknown>,
+          rKey,
+          agg?.chartRankingDirection
+        )
+      );
       rows = rows.slice(0, agg.chartRankingTop as number);
     }
   } else if (
@@ -486,7 +506,14 @@ export function buildChartConfig(
       }
     }
     if (rKey) {
-      rows.sort((a, b) => Number((b as Record<string, unknown>)[rKey] ?? 0) - Number((a as Record<string, unknown>)[rKey] ?? 0));
+      rows.sort((a, b) =>
+        compareRowsByRankingMetric(
+          a as Record<string, unknown>,
+          b as Record<string, unknown>,
+          rKey,
+          agg?.chartRankingDirection
+        )
+      );
       rows = rows.slice(0, agg.chartRankingTop as number);
     }
   } else if (

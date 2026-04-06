@@ -29,6 +29,7 @@ type AggregationConfigLike = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  chartRankingDirection?: "asc" | "desc";
   chartType?: string;
   chartXAxis?: string;
   analysisDateDisplayFormat?: string;

@@ -46,6 +46,7 @@ type AggregationConfig = {
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
+  chartRankingDirection?: "asc" | "desc";
   geoHints?: {
     countryField?: string;
     provinceField?: string;
