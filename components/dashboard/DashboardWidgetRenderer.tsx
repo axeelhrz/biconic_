@@ -744,6 +744,11 @@ export function DashboardWidgetRenderer({
       const valueScale = (builtScales[valueScaleKey] as Record<string, unknown> | undefined) ?? {};
       const valueTicks = (valueScale.ticks as Record<string, unknown> | undefined) ?? {};
       const primaryMetricScale = resolveMetricScale(0);
+      const axisValueFormatStyle =
+        (metricStyles?.[0] as ChartStyleConfig | undefined) ??
+        (widget.chartStyle as ChartStyleConfig | undefined) ??
+        style;
+      const formatValueAxisTickFn = !isComboTwo ? getValueFormatter(axisValueFormatStyle, "value") : null;
       const categoryLabels = chartConfig?.labels ?? [];
       const formatCategoryAxisTick = (value: unknown, tickIndex: number): string => {
         if (categoryLabels.length === 0) return formatTemporalLabel(value);
@@ -780,6 +785,11 @@ export function DashboardWidgetRenderer({
                 ticks: {
                   ...valueTicks,
                   ...(primaryMetricScale.step != null ? { stepSize: primaryMetricScale.step } : {}),
+                  ...(formatValueAxisTickFn != null
+                    ? {
+                        callback: (v: number | string) => formatValueAxisTickFn(Number(v)),
+                      }
+                    : {}),
                 },
               },
             }
@@ -794,6 +804,11 @@ export function DashboardWidgetRenderer({
                 ticks: {
                   ...valueTicks,
                   ...(primaryMetricScale.step != null ? { stepSize: primaryMetricScale.step } : {}),
+                  ...(formatValueAxisTickFn != null
+                    ? {
+                        callback: (v: number | string) => formatValueAxisTickFn(Number(v)),
+                      }
+                    : {}),
                 },
               },
             }

@@ -129,6 +129,7 @@ export type SavedMetricPanel = { id: string; name: string; metric: AggregationMe
 
 const CHART_TYPES: { value: string; label: string }[] = [
   { value: "bar", label: "Barras verticales" },
+  { value: "stackedColumn", label: "Columnas apiladas" },
   { value: "horizontalBar", label: "Barras horizontales" },
   { value: "line", label: "Líneas" },
   { value: "area", label: "Área" },
@@ -139,6 +140,15 @@ const CHART_TYPES: { value: string; label: string }[] = [
   { value: "combo", label: "Combo (barras + línea)" },
   { value: "scatter", label: "Dispersión" },
 ];
+
+/** Incluye apiladas: mismas opciones de apariencia que barras/líneas. */
+const CHART_APPEARANCE_CARTESIAN =
+  "bar,horizontalBar,stackedColumn,line,area,combo,scatter";
+const CHART_APPEARANCE_WITH_LEGEND = `${CHART_APPEARANCE_CARTESIAN},pie,doughnut`;
+
+function isChartTypeIn(csv: string, ct: string): boolean {
+  return csv.split(",").includes(ct);
+}
 
 const AGG_FUNCS: { value: string; label: string }[] = [
   { value: "SUM", label: "Suma" },
@@ -170,7 +180,7 @@ type MetricConfigPanelProps = {
   onSaveMetricAsTemplate?: (name: string, metric: AggregationMetricEdit) => void;
 };
 
-const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
+const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "stackedColumn", "line", "area", "pie", "doughnut", "combo", "scatter"];
 const LABEL_VISIBILITY_OPTIONS: Array<{ value: "all" | "auto" | "min_max"; label: string }> = [
   { value: "all", label: "Todas" },
   { value: "auto", label: "Algunas (automático)" },
@@ -595,9 +605,7 @@ export function MetricConfigPanel({
             </p>
           </div>
         )}
-        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(
-          (widget.aggregationConfig as any)?.chartType || widget.type
-        ) && (
+        {isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) && (
           <div>
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición de la leyenda</Label>
             <select
@@ -623,7 +631,7 @@ export function MetricConfigPanel({
             <div className="space-y-4 border-b border-[var(--studio-border)] pb-4">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Colores, ejes y cuadrícula</h4>
 
-        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes((widget.aggregationConfig as any)?.chartType || widget.type) && (
+        {isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) && (
           <div>
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Color principal de la serie</Label>
             <div className="mt-1.5 flex items-center gap-2">
@@ -642,7 +650,7 @@ export function MetricConfigPanel({
             </div>
           </div>
         )}
-        {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes((widget.aggregationConfig as any)?.chartType || widget.type) && (
+        {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
           <div>
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Visibilidad de ejes</Label>
             <div className="mt-1.5 flex flex-wrap items-center gap-4">
@@ -667,7 +675,7 @@ export function MetricConfigPanel({
             </div>
           </div>
         )}
-        {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes((widget.aggregationConfig as any)?.chartType || widget.type) && (
+        {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
           <div>
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Líneas de cuadrícula</Label>
             <div className="mt-1.5 flex flex-wrap items-center gap-4">
@@ -702,9 +710,7 @@ export function MetricConfigPanel({
           </div>
         )}
 
-        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(
-          (widget.aggregationConfig as any)?.chartType || widget.type
-        ) && (
+        {isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) && (
           <>
             <div className="flex flex-wrap items-center gap-2">
               <Label className="text-xs text-[var(--studio-fg-muted)]">Color de etiquetas de dato</Label>
@@ -740,9 +746,7 @@ export function MetricConfigPanel({
         )}
             </div>
 
-        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(
-          (widget.aggregationConfig as any)?.chartType || widget.type
-        ) && (
+        {isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) && (
           <div className="space-y-3 border-b border-[var(--studio-border)] pb-4">
             <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Tipografía y espacio</h4>
             <p className="text-[11px] text-[var(--studio-fg-muted)]">
@@ -832,9 +836,7 @@ export function MetricConfigPanel({
                 placeholder="16"
               />
             </div>
-            {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes(
-              (widget.aggregationConfig as any)?.chartType || widget.type
-            ) && (
+            {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <Label className="text-[11px] text-[var(--studio-fg-muted)]">Rotación máx. eje categorías (°)</Label>
@@ -1033,6 +1035,15 @@ export function MetricConfigPanel({
                         className="h-7 w-12 text-[11px]"
                       />
                     </div>
+                    <label className="mt-2 flex cursor-pointer items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={(m.thousandSep !== undefined ? m.thousandSep : agg.chartThousandSep) !== false}
+                        onChange={(e) => updateM({ thousandSep: e.target.checked })}
+                        className="rounded"
+                      />
+                      <span className="text-[10px] text-[var(--studio-fg-muted)]">Separador de miles</span>
+                    </label>
                   </div>
                 );
               })}
@@ -1094,7 +1105,7 @@ export function MetricConfigPanel({
                         fieldType="all"
                         placeholder="Ninguna..."
                       />
-                      {["bar", "horizontalBar", "combo"].includes((agg.chartType as string) || widget.type) && (
+                      {["bar", "horizontalBar", "combo", "stackedColumn"].includes((agg.chartType as string) || widget.type) && (
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input
                             type="checkbox"
