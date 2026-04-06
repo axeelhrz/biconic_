@@ -167,6 +167,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
      * Evita ORDER BY + LIMIT en SQL (incorrecto con metric_N, FORMULA en capa externa, etc.).
      */
     const rankingActive = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0;
+    /** Misma condición que el bloque `dateGroupBy` del payload: evita LIMIT+N filas con ORDER BY periodo ASC (corta meses recientes si hay 2ª dimensión, ej. columnas apiladas por rubro). */
+    const hasDateGroupBy = !!(dateGroupByGranularity && primaryDim);
     const mappedChartX = agg?.chartXAxis ? mapField(agg.chartXAxis, sourceId, datasetDimensions) : undefined;
     const mapAggFilterField = <T extends { field?: string }>(f: T): T => {
       const fld = f.field;
@@ -193,7 +195,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       dimensions: dimensions.map((d) => mapField(d, sourceId, datasetDimensions)),
       metrics: metricsPayload,
       filters: [...globalFiltersMapped, ...aggFiltersMapped],
-      ...(rankingActive
+      ...(rankingActive || hasDateGroupBy
         ? {
             unlimited: true as const,
             ...(agg?.orderBy?.field ? { orderBy: agg.orderBy } : {}),
