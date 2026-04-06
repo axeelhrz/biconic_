@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import type { DashboardTheme } from "@/types/dashboard";
 import { mergeCardTheme, mergeTheme } from "@/types/dashboard";
 import { X, Trash2, Play, BookmarkPlus, Plus } from "lucide-react";
@@ -206,6 +206,10 @@ export function MetricConfigPanel({
 }: MetricConfigPanelProps) {
   const [saveTemplateForIndex, setSaveTemplateForIndex] = useState<number | null>(null);
   const [saveTemplateName, setSaveTemplateName] = useState("");
+  const [panelTab, setPanelTab] = useState("general");
+  useEffect(() => {
+    setPanelTab("general");
+  }, [widget.id]);
   const agg = widget.aggregationConfig || { enabled: false, metrics: [] };
   const chartType = (agg.chartType as string) || widget.type;
   const showLabelOverrides = CHART_TYPES_FOR_LABELS.includes(chartType);
@@ -334,7 +338,7 @@ export function MetricConfigPanel({
           <X className="h-4 w-4" />
         </Button>
       </header>
-      <Tabs defaultValue="general" className="flex min-h-0 min-w-0 flex-1 flex-col px-3 pt-3">
+      <Tabs value={panelTab} onValueChange={setPanelTab} className="flex min-h-0 min-w-0 flex-1 flex-col px-3 pt-3">
         <TabsList className="mb-2 h-auto w-full flex-shrink-0 flex-wrap justify-start gap-1 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] p-1">
           <TabsTrigger
             value="general"
@@ -346,9 +350,10 @@ export function MetricConfigPanel({
             <>
               <TabsTrigger
                 value="appearance"
+                title="Leyenda, etiquetas de datos, colores, ejes y tipografía del gráfico"
                 className="px-2 py-1.5 text-xs data-[state=active]:bg-[var(--studio-accent-dim)] data-[state=active]:text-[var(--studio-accent)]"
               >
-                Apariencia
+                Gráfico
               </TabsTrigger>
               <TabsTrigger
                 value="data"
@@ -367,6 +372,26 @@ export function MetricConfigPanel({
         </TabsList>
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto pb-4">
           <TabsContent value="general" className="mt-0 space-y-5 focus-visible:outline-none">
+            {showDataTabs ? (
+              <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/80 p-3">
+                <p className="text-xs leading-relaxed text-[var(--studio-fg)]">
+                  Para la <strong className="text-[var(--studio-accent)]">ubicación de la leyenda</strong>,{" "}
+                  <strong className="text-[var(--studio-accent)]">etiquetas sobre barras/líneas</strong>,{" "}
+                  <strong className="text-[var(--studio-accent)]">colores</strong> (serie, cuadrícula, ejes) y{" "}
+                  <strong className="text-[var(--studio-accent)]">tipografía del gráfico</strong>, usá la pestaña{" "}
+                  <strong>Gráfico</strong>.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-full border-[var(--studio-border)] text-xs"
+                  onClick={() => setPanelTab("appearance")}
+                >
+                  Abrir opciones del gráfico
+                </Button>
+              </div>
+            ) : null}
             <div>
               <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Título</Label>
               <Input
@@ -498,6 +523,15 @@ export function MetricConfigPanel({
           {showDataTabs ? (
             <>
             <TabsContent value="appearance" className="mt-0 space-y-5 focus-visible:outline-none">
+            <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+              Acá definís <strong className="text-[var(--studio-fg)]">leyenda</strong>,{" "}
+              <strong className="text-[var(--studio-fg)]">etiquetas sobre los datos</strong>,{" "}
+              <strong className="text-[var(--studio-fg)]">colores</strong> de la serie y de ejes/cuadrícula, y{" "}
+              <strong className="text-[var(--studio-fg)]">tipografía</strong> del dibujo (combo, barras, líneas, etc.). El fondo
+              y borde de la <em>tarjeta</em> se configuran en <strong>General</strong> → «Apariencia de esta tarjeta».
+            </p>
+            <div className="space-y-4 border-b border-[var(--studio-border)] pb-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Leyenda y etiquetas</h4>
         {(((widget.aggregationConfig as any)?.chartType || widget.type) === "pie" || ((widget.aggregationConfig as any)?.chartType || widget.type) === "doughnut") && (
           <div>
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Etiquetas en gráfico</Label>
@@ -584,10 +618,14 @@ export function MetricConfigPanel({
             </select>
           </div>
         )}
+            </div>
+
+            <div className="space-y-4 border-b border-[var(--studio-border)] pb-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Colores, ejes y cuadrícula</h4>
 
         {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes((widget.aggregationConfig as any)?.chartType || widget.type) && (
           <div>
-            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Color del gráfico</Label>
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Color principal de la serie</Label>
             <div className="mt-1.5 flex items-center gap-2">
               <input
                 type="color"
@@ -652,8 +690,8 @@ export function MetricConfigPanel({
                 <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar líneas en eje Y</span>
               </label>
             </div>
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-xs text-[var(--studio-fg-muted)]">Color</span>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-[var(--studio-fg-muted)]">Color de la cuadrícula</span>
               <input
                 type="color"
                 value={agg.chartGridColor || "#e2e8f0"}
@@ -667,10 +705,48 @@ export function MetricConfigPanel({
         {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(
           (widget.aggregationConfig as any)?.chartType || widget.type
         ) && (
-          <div className="space-y-3 border-t border-[var(--studio-border)] pt-4">
-            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tipografía y colores del gráfico</Label>
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <Label className="text-xs text-[var(--studio-fg-muted)]">Color de etiquetas de dato</Label>
+              <input
+                type="color"
+                value={agg.chartDataLabelColor || "#374151"}
+                onChange={(e) => updateAgg({ chartDataLabelColor: e.target.value })}
+                className="h-8 w-10 rounded border border-[var(--studio-border)]"
+              />
+              <Input
+                value={agg.chartDataLabelColor ?? ""}
+                onChange={(e) => updateAgg({ chartDataLabelColor: e.target.value || undefined })}
+                className="h-8 min-w-[7rem] flex-1 font-mono text-[11px]"
+                placeholder="#374151 o rgba(...)"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Label className="text-xs text-[var(--studio-fg-muted)]">Color de números en ejes</Label>
+              <input
+                type="color"
+                value={agg.chartAxisTickColor || "#64748b"}
+                onChange={(e) => updateAgg({ chartAxisTickColor: e.target.value })}
+                className="h-8 w-10 rounded border border-[var(--studio-border)]"
+              />
+              <Input
+                value={agg.chartAxisTickColor ?? ""}
+                onChange={(e) => updateAgg({ chartAxisTickColor: e.target.value || undefined })}
+                className="h-8 min-w-[7rem] flex-1 font-mono text-[11px]"
+                placeholder="#64748b"
+              />
+            </div>
+          </>
+        )}
+            </div>
+
+        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(
+          (widget.aggregationConfig as any)?.chartType || widget.type
+        ) && (
+          <div className="space-y-3 border-b border-[var(--studio-border)] pb-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Tipografía y espacio</h4>
             <p className="text-[11px] text-[var(--studio-fg-muted)]">
-              Si dejás la fuente vacía, se usa la del tema del dashboard. Los colores pisan el modo claro/oscuro del visor.
+              Si dejás «Heredar del dashboard» en la fuente, se usa la familia del tema. Los tamaños ayudan cuando la leyenda o las etiquetas se superponen.
             </p>
             <div>
               <Label className="text-[11px] text-[var(--studio-fg-muted)]">Fuente (font-family CSS)</Label>
@@ -756,36 +832,6 @@ export function MetricConfigPanel({
                 placeholder="16"
               />
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Label className="text-[11px] text-[var(--studio-fg-muted)]">Color etiquetas de dato</Label>
-              <input
-                type="color"
-                value={agg.chartDataLabelColor || "#374151"}
-                onChange={(e) => updateAgg({ chartDataLabelColor: e.target.value })}
-                className="h-8 w-10 rounded border border-[var(--studio-border)]"
-              />
-              <Input
-                value={agg.chartDataLabelColor ?? ""}
-                onChange={(e) => updateAgg({ chartDataLabelColor: e.target.value || undefined })}
-                className="h-8 min-w-[7rem] flex-1 font-mono text-[11px]"
-                placeholder="#374151"
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Label className="text-[11px] text-[var(--studio-fg-muted)]">Color ticks de ejes</Label>
-              <input
-                type="color"
-                value={agg.chartAxisTickColor || "#64748b"}
-                onChange={(e) => updateAgg({ chartAxisTickColor: e.target.value })}
-                className="h-8 w-10 rounded border border-[var(--studio-border)]"
-              />
-              <Input
-                value={agg.chartAxisTickColor ?? ""}
-                onChange={(e) => updateAgg({ chartAxisTickColor: e.target.value || undefined })}
-                className="h-8 min-w-[7rem] flex-1 font-mono text-[11px]"
-                placeholder="#64748b"
-              />
-            </div>
             {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes(
               (widget.aggregationConfig as any)?.chartType || widget.type
             ) && (
@@ -844,8 +890,11 @@ export function MetricConfigPanel({
         )}
 
         {!["filter", "image", "text"].includes(widget.type) && (Array.isArray(agg.chartYAxes) ? agg.chartYAxes.length : 0) <= 1 && (
-          <div className="border-t border-[var(--studio-border)] pt-4 space-y-3">
-            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Formato de números</Label>
+          <div className="space-y-3 border-t border-[var(--studio-border)] pt-4">
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Formato de números</h4>
+              <p className="mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">Moneda, porcentaje, decimales y escala (K/M) en el gráfico.</p>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-[11px] text-[var(--studio-fg-muted)]">Tipo</Label>
