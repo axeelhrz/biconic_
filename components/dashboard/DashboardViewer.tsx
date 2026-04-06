@@ -97,6 +97,22 @@ function monthFilterOptionLabel(operator: unknown, value: unknown): string {
   return String(value ?? "");
 }
 
+function isYearOperator(operator: unknown): boolean {
+  return String(operator ?? "").toUpperCase() === "YEAR";
+}
+
+/** Un año por filtro: valores heredados como multi (array) se reducen al primero. */
+function normalizeYearFilterStoredValue(operator: unknown, v: unknown): unknown {
+  if (!isYearOperator(operator)) return v;
+  if (Array.isArray(v) && v.length > 0) return String(v[0]);
+  return v;
+}
+
+function yearFilterSelectDisplayValue(raw: unknown): string {
+  if (Array.isArray(raw) && raw.length > 0) return String(raw[0]);
+  return String(raw ?? "");
+}
+
 // Types compatible with persisted layout and API
 type AggregationFilter = {
   id: string;
@@ -344,7 +360,8 @@ export function DashboardViewer({
       const raw = (gf as AggregationFilter & { value?: unknown }).value;
       if (raw === "" || raw === null || raw === undefined) continue;
       if (Array.isArray(raw) && raw.length === 0) continue;
-      const v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
+      let v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
+      v = normalizeYearFilterStoredValue((gf as AggregationFilter).operator, v);
       initialFv[gf.id] = v;
     }
     setFilterValues(initialFv);
@@ -517,17 +534,22 @@ export function DashboardViewer({
               if (!f.applyToWidgetIds.includes(widgetId)) continue;
             }
             if (fieldsWithWidgets.has(f.field)) continue;
-            const v =
+            let v =
               filterValues[f.id] !== undefined ? filterValues[f.id] : (f as AggregationFilter & { value?: unknown }).value;
             if (v === "" || v == null) continue;
             if (Array.isArray(v) && v.length === 0) continue;
+            const rawOp = f.operator || "=";
+            const rawOpUpper = String(rawOp).toUpperCase();
+            if (rawOpUpper === "YEAR" && Array.isArray(v) && v.length > 0) {
+              v = v[0];
+            }
             const isSemantic = datasetDimensions && f.field in datasetDimensions;
             if (isSemantic && widgetSourceId && !datasetDimensions![f.field]?.[widgetSourceId]) continue;
             const physicalField = mapDatasetField(f.field);
-            const rawOp = f.operator || "=";
             const inputT = f.inputType;
             const useIn =
-              rawOp === "IN" || (inputT === "multi" && Array.isArray(v) && v.length > 0);
+              rawOp === "IN" ||
+              (rawOpUpper !== "YEAR" && inputT === "multi" && Array.isArray(v) && v.length > 0);
             const op = useIn ? "IN" : rawOp;
             const value: unknown = op === "IN" ? (Array.isArray(v) ? v : [v]) : v;
             mappedGlobalFilters.push({ ...f, field: physicalField, operator: op, value });
@@ -539,9 +561,14 @@ export function DashboardViewer({
         );
         for (const fw of filterWidgetsOnPage) {
           const fc = (fw as Widget).filterConfig!;
-          const v = filterValues[fw.id];
+          let v = filterValues[fw.id];
           if (v === "" || v == null) continue;
           if (Array.isArray(v) && v.length === 0) continue;
+          const rawOpFw = fc.operator || "=";
+          const rawOpFwUpper = String(rawOpFw).toUpperCase();
+          if (rawOpFwUpper === "YEAR" && Array.isArray(v) && v.length > 0) {
+            v = v[0];
+          }
           const scopeIds = fc.scopeMetricIds;
           if (Array.isArray(scopeIds) && scopeIds.length > 0) {
             const allowed = new Set(scopeIds.map(String));
@@ -555,10 +582,9 @@ export function DashboardViewer({
           const isSemanticFw = datasetDimensions && fc.field in datasetDimensions;
           if (isSemanticFw && widgetSourceId && !datasetDimensions![fc.field]?.[widgetSourceId]) continue;
           const physicalFw = mapDatasetField(fc.field);
-          const rawOpFw = fc.operator || "=";
           const useInFw =
             rawOpFw === "IN" ||
-            (fc.inputType === "multi" && Array.isArray(v) && v.length > 0);
+            (rawOpFwUpper !== "YEAR" && fc.inputType === "multi" && Array.isArray(v) && v.length > 0);
           const opFw = useInFw ? "IN" : rawOpFw;
           const valueFw: unknown = opFw === "IN" ? (Array.isArray(v) ? v : [v]) : v;
           mappedGlobalFilters.push({
@@ -1018,7 +1044,9 @@ export function DashboardViewer({
                 : [...GLOBAL_MONTH_FILTER_VALUES]
               : rawDistinct;
             const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
-            const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
+            const isYearOp = isYearOperator((gf as AggregationFilter).operator);
+            const isMulti =
+              !isYearOp && ((gf.operator || "=") === "IN" || inputType === "multi");
             const selectedArrayRaw = isMulti
               ? (Array.isArray(filterValues[gf.id]) ? filterValues[gf.id] : filterValues[gf.id] != null && filterValues[gf.id] !== "" ? [filterValues[gf.id]] : []) as string[]
               : [];
@@ -1088,11 +1116,15 @@ export function DashboardViewer({
                       setFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value || undefined }))
                     }
                   />
-                ) : (gf as any).inputType === "select" && hasOptions ? (
+                ) : (((gf as any).inputType === "select" || isYearOp) && hasOptions) ? (
                   <select
                     className="rounded-md border px-2 py-1 text-sm min-w-[8rem]"
                     style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
-                    value={monthFilterSelectDisplayValue((gf as AggregationFilter).operator, filterValues[gf.id])}
+                    value={
+                      isYearOp
+                        ? yearFilterSelectDisplayValue(filterValues[gf.id])
+                        : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, filterValues[gf.id])
+                    }
                     onChange={(e) => setFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value }))}
                   >
                     <option value="">Todos</option>

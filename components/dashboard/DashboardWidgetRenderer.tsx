@@ -983,7 +983,9 @@ export function DashboardWidgetRenderer({
                 <label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
                   {widget.filterConfig.label}
                 </label>
-                {widget.filterConfig.inputType === "multi" && Array.isArray(widget.facetValues?.[widget.filterConfig.field]) ? (
+                {widget.filterConfig.inputType === "multi" &&
+                String(widget.filterConfig.operator ?? "").toUpperCase() !== "YEAR" &&
+                Array.isArray(widget.facetValues?.[widget.filterConfig.field]) ? (
                   (() => {
                     const opts = (widget.facetValues![widget.filterConfig!.field] as unknown[]).map(String);
                     const selected = (Array.isArray(filterValue) ? filterValue : filterValue != null && filterValue !== "" ? [filterValue] : []) as string[];
@@ -1009,7 +1011,9 @@ export function DashboardWidgetRenderer({
                       </div>
                     );
                   })()
-                ) : widget.filterConfig.inputType === "select" && Array.isArray(widget.facetValues?.[widget.filterConfig.field]) ? (
+                ) : ((widget.filterConfig.inputType === "select" ||
+                    String(widget.filterConfig.operator ?? "").toUpperCase() === "YEAR") &&
+                  Array.isArray(widget.facetValues?.[widget.filterConfig.field])) ? (
                   <select
                     className="w-full rounded-lg border px-3 py-2 text-sm"
                     style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
