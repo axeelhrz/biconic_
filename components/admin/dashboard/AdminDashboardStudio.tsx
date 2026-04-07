@@ -1951,7 +1951,7 @@ export function AdminDashboardStudio({
             etlId={etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId ?? null}
           />
         ) : (
-          <div className="studio-canvas flex flex-1 flex-col gap-6 min-w-0">
+          <div className="studio-canvas flex flex-1 flex-col gap-4 min-w-0">
             {isRunning && (
               <div className="studio-running-banner flex items-center gap-2 px-5 py-3 text-[var(--studio-text-body)] font-semibold">
                 <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-current" />

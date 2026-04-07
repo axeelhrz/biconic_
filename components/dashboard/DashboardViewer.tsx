@@ -1227,10 +1227,12 @@ export function DashboardViewer({
         ) : (
           <div
             ref={canvasExportRef}
-            className={`grid gap-4${useClientTheme ? " client-view-grid" : ""}`}
+            className={`grid${useClientTheme ? " client-view-grid" : ""}`}
             style={{
               gridTemplateColumns: `repeat(${packCols}, minmax(0, 1fr))`,
               gridAutoRows: `minmax(${DASHBOARD_GRID_ROW_UNIT_PX}px, auto)`,
+              rowGap: useClientTheme ? "0.5rem" : "0.75rem",
+              columnGap: useClientTheme ? "0.75rem" : "1rem",
             }}
           >
             {placements.map(({ widget, gridColumn, gridRow }) => {

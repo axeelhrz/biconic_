@@ -285,9 +285,10 @@
 .studio-blocks {
   display: grid;
   /* Mismo valor que DASHBOARD_GRID_ROW_UNIT_PX en lib/dashboard/gridLayout.ts */
-  grid-auto-rows: minmax(48px, auto);
+  grid-auto-rows: minmax(56px, auto);
   grid-template-columns: 1fr;
-  gap: 1rem;
+  row-gap: 0.5rem;
+  column-gap: 1rem;
   align-items: start;
   animation: studio-blocks-in 0.45s cubic-bezier(0.16, 1, 0.3, 1);
   width: 100%;
@@ -295,19 +296,22 @@
 }
 @media (min-width: 640px) {
   .studio-blocks {
-    gap: 1.25rem;
+    row-gap: 0.5rem;
+    column-gap: 1.25rem;
   }
 }
 @media (min-width: 768px) {
   .studio-blocks {
     grid-template-columns: repeat(2, 1fr);
-    gap: 1.5rem;
+    row-gap: 0.75rem;
+    column-gap: 1.5rem;
   }
 }
 @media (min-width: 1280px) {
   .studio-blocks {
     grid-template-columns: repeat(6, 1fr);
-    gap: 1.5rem;
+    row-gap: 0.75rem;
+    column-gap: 1.5rem;
   }
 }
 
@@ -554,7 +558,7 @@
   width: 100%;
   min-width: 0;
   padding: 1rem;
-  min-height: 420px;
+  min-height: 280px;
   box-sizing: border-box;
 }
 @media (min-width: 640px) {

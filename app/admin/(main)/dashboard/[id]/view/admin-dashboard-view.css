@@ -190,20 +190,22 @@
 .admin-view-page .admin-dashboard-view [data-role="canvas"] > div.grid {
   display: grid !important;
   /* Mismo valor que DASHBOARD_GRID_ROW_UNIT_PX en lib/dashboard/gridLayout.ts */
-  grid-auto-rows: minmax(48px, auto);
+  grid-auto-rows: minmax(56px, auto);
   grid-template-columns: repeat(6, minmax(0, 1fr));
   background: none;
   border: none;
   box-shadow: none;
   padding: 0 0 4rem 0;
   align-items: stretch;
-  gap: 2rem;
+  row-gap: 0.75rem;
+  column-gap: 2rem;
 }
 @media (max-width: 1023px) {
   .admin-view-page .admin-dashboard-view [data-role="canvas"] .admin-view-grid,
   .admin-view-page .admin-dashboard-view [data-role="canvas"] > div.grid {
     grid-template-columns: 1fr;
-    gap: 1.75rem;
+    row-gap: 0.5rem;
+    column-gap: 1.75rem;
   }
   .admin-view-page .admin-dashboard-view [data-role="canvas"] .admin-view-grid-item {
     grid-column: 1 !important;
@@ -213,7 +215,8 @@
 @media (min-width: 1024px) {
   .admin-view-page .admin-dashboard-view [data-role="canvas"] .admin-view-grid,
   .admin-view-page .admin-dashboard-view [data-role="canvas"] > div.grid {
-    gap: 2.5rem;
+    row-gap: 0.75rem;
+    column-gap: 2.5rem;
     padding-bottom: 5rem;
   }
 }

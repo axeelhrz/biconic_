@@ -5,7 +5,7 @@ export const DASHBOARD_GRID_COLUMN_COUNT = 6;
  * Altura nominal por pista de fila implícita del grid (empaquetado 2D).
  * Debe coincidir con `grid-auto-rows` en CSS del studio y de la vista cliente.
  */
-export const DASHBOARD_GRID_ROW_UNIT_PX = 48;
+export const DASHBOARD_GRID_ROW_UNIT_PX = 56;
 
 export function clampGridSpan(raw: number | undefined | null, defaultSpan = 2): number {
   const n = Number(raw);
