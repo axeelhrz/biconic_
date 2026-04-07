@@ -40,7 +40,12 @@ import {
 import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
-import { clampGridSpan } from "@/lib/dashboard/gridLayout";
+import {
+  clampGridSpan,
+  computeAddMetricPackedPlacement,
+  computeDashboardGridPlacementsPacked,
+} from "@/lib/dashboard/gridLayout";
+import { useDashboardPackColumnCount } from "@/hooks/useDashboardPackColumnCount";
 import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
@@ -1366,7 +1371,22 @@ export function AdminDashboardStudio({
     setIsDirty(true);
   }, []);
 
-  const sortedWidgets = [...widgetsForCurrentPage].sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999));
+  const sortedWidgets = useMemo(
+    () => [...widgetsForCurrentPage].sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999)),
+    [widgetsForCurrentPage]
+  );
+
+  const packCols = useDashboardPackColumnCount("studio");
+
+  const packedPlacements = useMemo(
+    () => computeDashboardGridPlacementsPacked(sortedWidgets, packCols),
+    [sortedWidgets, packCols]
+  );
+
+  const addMetricPack = useMemo(
+    () => computeAddMetricPackedPlacement(sortedWidgets, packCols),
+    [sortedWidgets, packCols]
+  );
 
   const moveWidgetGridOrder = useCallback(
     (widgetId: string, direction: -1 | 1) => {
@@ -1939,7 +1959,7 @@ export function AdminDashboardStudio({
               </div>
             )}
             <div className="studio-blocks">
-              {sortedWidgets.map((w) => {
+              {packedPlacements.map(({ widget: w, gridColumn, gridRow }) => {
                 const blockState: MetricBlockState = "estable";
                 const insight =
                   w.rows && Array.isArray(w.rows)
@@ -1974,9 +1994,9 @@ export function AdminDashboardStudio({
                 const isSelected = selectedId === w.id;
                 const minH = w.minHeight ?? 280;
                 const effectiveTheme = mergeCardTheme(themeResolved, w.cardTheme);
-                const orderIdx = sortedWidgets.findIndex((x) => x.id === w.id);
+                const orderIdx = packedPlacements.findIndex((x) => x.widget.id === w.id);
                 const canMoveUpReorder = orderIdx > 0;
-                const canMoveDownReorder = orderIdx >= 0 && orderIdx < sortedWidgets.length - 1;
+                const canMoveDownReorder = orderIdx >= 0 && orderIdx < packedPlacements.length - 1;
                 const onResizeStart = (edge: string) => (e: React.PointerEvent) => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -1997,7 +2017,8 @@ export function AdminDashboardStudio({
                     className="studio-block-cell"
                     data-selected={isSelected ? "true" : undefined}
                     style={{
-                      gridColumn: `span ${span}`,
+                      gridColumn,
+                      gridRow,
                       minHeight: minH,
                       ...studioBlockCellChromeStyle(effectiveTheme),
                     }}
@@ -2075,7 +2096,15 @@ export function AdminDashboardStudio({
                 );
               })}
               {!embeddedPreview && (
-              <div className="studio-block-cell studio-add-metric-cell" style={addMetricCellStyle}>
+              <div
+                className="studio-block-cell studio-add-metric-cell"
+                style={{
+                  gridColumn: addMetricPack.gridColumn,
+                  gridRow: addMetricPack.gridRow,
+                  minHeight: 200,
+                  ...addMetricCellStyle,
+                }}
+              >
                 <button
                   type="button"
                   onClick={() => setAddMetricOpen(true)}

@@ -32,10 +32,8 @@ import {
 } from "@/lib/dashboard/dashboardExport";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  computeDashboardGridPlacements,
-  DASHBOARD_GRID_COLUMN_COUNT,
-} from "@/lib/dashboard/gridLayout";
+import { computeDashboardGridPlacementsPacked, DASHBOARD_GRID_ROW_UNIT_PX } from "@/lib/dashboard/gridLayout";
+import { useDashboardPackColumnCount } from "@/hooks/useDashboardPackColumnCount";
 
 /** Meses 1–12 para filtro global MONTH (sin año en la UI). */
 const GLOBAL_MONTH_FILTER_VALUES = [
@@ -853,7 +851,12 @@ export function DashboardViewer({
     [orderedWidgets]
   );
 
-  const placements = useMemo(() => computeDashboardGridPlacements(orderedWidgets), [orderedWidgets]);
+  const packCols = useDashboardPackColumnCount("client");
+
+  const placements = useMemo(
+    () => computeDashboardGridPlacementsPacked(orderedWidgets, packCols),
+    [orderedWidgets, packCols]
+  );
 
   const runExportExcel = useCallback(async () => {
     setExportBusy(true);
@@ -1226,10 +1229,11 @@ export function DashboardViewer({
             ref={canvasExportRef}
             className={`grid gap-4${useClientTheme ? " client-view-grid" : ""}`}
             style={{
-              gridTemplateColumns: `repeat(${DASHBOARD_GRID_COLUMN_COUNT}, minmax(0, 1fr))`,
+              gridTemplateColumns: `repeat(${packCols}, minmax(0, 1fr))`,
+              gridAutoRows: `minmax(${DASHBOARD_GRID_ROW_UNIT_PX}px, auto)`,
             }}
           >
-            {placements.map(({ widget, row, col, span }) => {
+            {placements.map(({ widget, gridColumn, gridRow }) => {
               const nonApplicableLabels = nonApplicableFilterLabelsByWidget[widget.id] ?? [];
               const filterWarningTooltip =
                 nonApplicableLabels.length > 0
@@ -1245,8 +1249,8 @@ export function DashboardViewer({
                   key={widget.id}
                   className={useClientTheme ? "client-view-widget" : undefined}
                   style={{
-                    gridColumn: `span ${span}`,
-                    gridRow: row + 1,
+                    gridColumn,
+                    gridRow,
                     display: "flex",
                     flexDirection: "column",
                     minHeight: 0,

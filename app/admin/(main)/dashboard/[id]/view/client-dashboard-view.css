@@ -287,8 +287,9 @@
 
 [data-theme="client"] .client-view-grid {
   display: grid;
+  /* Mismo valor que DASHBOARD_GRID_ROW_UNIT_PX en lib/dashboard/gridLayout.ts */
+  grid-auto-rows: minmax(48px, auto);
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  grid-auto-rows: minmax(0, auto);
   gap: 0.75rem;
   align-items: start;
   align-content: start;

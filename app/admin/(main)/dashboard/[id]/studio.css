@@ -284,6 +284,8 @@
 /* ─── Metric blocks — grid responsive y tarjetas configurables ──────────── */
 .studio-blocks {
   display: grid;
+  /* Mismo valor que DASHBOARD_GRID_ROW_UNIT_PX en lib/dashboard/gridLayout.ts */
+  grid-auto-rows: minmax(48px, auto);
   grid-template-columns: 1fr;
   gap: 1rem;
   align-items: start;
