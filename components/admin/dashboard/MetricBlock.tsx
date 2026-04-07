@@ -33,10 +33,12 @@ export type ChartConfig = {
 };
 
 const HEIGHT_OPTIONS = [
-  { value: 200, label: "Pequeña (200px)" },
-  { value: 280, label: "Mediana (280px)" },
-  { value: 360, label: "Grande (360px)" },
-  { value: 440, label: "Extra (440px)" },
+  { value: 200, label: "Mínima (200px)" },
+  { value: 280, label: "Compacta (280px)" },
+  { value: 360, label: "Mediana (360px)" },
+  { value: 440, label: "Grande (440px)" },
+  { value: 520, label: "Extra grande (520px)" },
+  { value: 600, label: "Máxima (600px)" },
 ] as const;
 
 const SPAN_OPTIONS = [
@@ -164,6 +166,7 @@ export function MetricBlock({
       tabIndex={readOnly ? undefined : 0}
       data-selected={isSelected ? "true" : undefined}
       className={`metric-block group relative flex flex-col transition-all ${readOnly ? "cursor-default" : "cursor-pointer"}`}
+      style={{ minHeight }}
       onClick={readOnly ? undefined : onSelect}
       onKeyDown={
         readOnly
@@ -331,7 +334,7 @@ export function MetricBlock({
               hideHeader
               showTechnicalPreview={showTechnicalPreview}
               darkChartTheme={darkChartTheme}
-              minHeight={220}
+              minHeight={minHeight}
               className="!border-0 !p-0 !shadow-none h-full"
             />
           </div>
