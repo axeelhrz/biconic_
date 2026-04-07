@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Bar, Line, Pie, Doughnut, Scatter } from "react-chartjs-2";
 import {
@@ -23,6 +23,8 @@ import {
   buildPieDoughnutLegendShared,
   createDataLabelDisplay,
   formatValue,
+  getLayoutPadding,
+  getPieDoughnutLayoutPadding,
   getValueFormatter,
   normalizeLabelVisibilityMode,
   type ChartLabelVisibilityMode,
@@ -359,6 +361,23 @@ export function DashboardWidgetRenderer({
   const isCombo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2 && !stackBySeriesEnabled;
   const comboSyncAxes = isCombo && aggConfig?.chartComboSyncAxes === true;
 
+  const pieChartWrapRef = useRef<HTMLDivElement>(null);
+  const [pieContainerWidth, setPieContainerWidth] = useState(0);
+  useEffect(() => {
+    if (chartType !== "pie" && chartType !== "doughnut") {
+      setPieContainerWidth(0);
+      return;
+    }
+    const el = pieChartWrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      setPieContainerWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [chartType]);
+
   const effectiveChartData = useMemo((): ChartConfig | null | undefined => {
     if (!isCombo || !chartConfig?.datasets?.[0]?.data || !chartConfig?.datasets?.[1]?.data) return chartConfig ?? null;
     if (!comboSyncAxes) return chartConfig;
@@ -404,6 +423,8 @@ export function DashboardWidgetRenderer({
       chartDoughnutCutout?: string | number;
       chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
       labelVisibilityMaxCount?: number;
+      pieLegendVisible?: boolean;
+      pieLegendResponsive?: boolean;
     } | undefined;
     const style: ChartStyleConfig | undefined = {
       ...mergeChartVisualStyle(widget.aggregationConfig as AggregationLike),
@@ -480,53 +501,92 @@ export function DashboardWidgetRenderer({
       const base = buildChartOptions(type, style, labelMode) as Record<string, unknown>;
       const baseDatalabels = (base.plugins as { datalabels?: Record<string, unknown> })?.datalabels ?? {};
       const legendColor = darkChartTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
-      const pieLegend = buildPieDoughnutLegendShared(chartConfig ?? undefined, legendColor) as Record<string, unknown>;
-      const pieLegendLabels = (pieLegend.labels as Record<string, unknown> | undefined) ?? {};
       const optionsBaseNoScales = { ...optionsBase } as Record<string, unknown>;
       delete optionsBaseNoScales.scales;
       const optionsBasePlugins = (optionsBaseNoScales.plugins as Record<string, unknown> | undefined) ?? {};
       const legPos = agg?.chartLegendPosition;
-      const legendPosition =
+      const savedLegendPosition =
         legPos === "top" || legPos === "bottom" || legPos === "left" || legPos === "right" || legPos === "chartArea"
           ? legPos
           : undefined;
+      const baseLegendPosition = savedLegendPosition ?? "right";
+      const pieLegendResponsive = agg?.pieLegendResponsive === true;
+      const effectiveLegendPosition =
+        pieLegendResponsive && pieContainerWidth > 0 && pieContainerWidth < 480 ? "bottom" : baseLegendPosition;
+      const pieLegendVisible = agg?.pieLegendVisible !== false;
+      const labelCount = chartConfig?.labels?.length ?? 0;
+      const pieLegend = pieLegendVisible
+        ? (buildPieDoughnutLegendShared(chartConfig ?? undefined, legendColor, {
+            legendPosition: effectiveLegendPosition,
+            labelCount,
+          }) as Record<string, unknown>)
+        : { display: false };
+      const basePadding = getLayoutPadding(style);
+      const pieLayoutPadding = getPieDoughnutLayoutPadding(effectiveLegendPosition, basePadding);
       const cutout =
         type === "doughnut"
           ? agg?.chartDoughnutCutout != null && agg.chartDoughnutCutout !== ""
             ? agg.chartDoughnutCutout
             : "58%"
           : undefined;
+      const forceExteriorLabels = !pieLegendVisible;
+      const pieTooltipFormatter = getValueFormatter(style, labelMode);
+      const tooltipPlugin = {
+        ...(optionsBasePlugins.tooltip as Record<string, unknown> | undefined),
+        callbacks: {
+          ...((optionsBasePlugins.tooltip as { callbacks?: Record<string, unknown> } | undefined)?.callbacks ?? {}),
+          label: (ctx: { label?: string; parsed: number; chart?: unknown }) => {
+            const fullLabel = String(ctx.label ?? "");
+            const valueStr = pieTooltipFormatter(ctx.parsed, {
+              chart: ctx.chart as { data?: { datasets?: Array<{ data?: unknown[] }> } },
+            });
+            return fullLabel ? `${fullLabel}: ${valueStr}` : valueStr;
+          },
+        },
+      };
+      const datalabelDisplayResolved = forceExteriorLabels
+        ? true
+        : showDataLabels === false
+          ? false
+          : createDataLabelDisplay({
+              mode: labelVisibilityMode,
+              labels: chartConfig?.labels,
+              datasets: chartConfig?.datasets,
+              maxVisible: labelMaxVisible,
+            });
       const plugins = {
         ...optionsBasePlugins,
         ...(base.plugins as object),
-        legend: {
-          ...pieLegend,
-          ...(legendPosition ? { position: legendPosition } : {}),
-          labels: {
-            ...pieLegendLabels,
-          },
-        },
+        legend: pieLegend,
+        tooltip: tooltipPlugin,
         datalabels: {
           ...baseDatalabels,
-          display:
-            showDataLabels === false
-              ? false
-              : createDataLabelDisplay({
-                  mode: labelVisibilityMode,
-                  labels: chartConfig?.labels,
-                  datasets: chartConfig?.datasets,
-                  maxVisible: labelMaxVisible,
-                }),
-          ...(style?.dataLabelColor
-            ? { color: style.dataLabelColor }
-            : darkChartTheme
-              ? { color: DATALABEL_COLOR_DARK }
-              : {}),
+          display: datalabelDisplayResolved,
+          ...(forceExteriorLabels
+            ? {
+                anchor: "end",
+                align: "end",
+                offset: 10,
+                clamp: true,
+                ...(style?.dataLabelColor != null && String(style.dataLabelColor).trim() !== ""
+                  ? { color: style.dataLabelColor }
+                  : darkChartTheme
+                    ? { color: DATALABEL_COLOR_DARK }
+                    : { color: AXIS_COLOR }),
+              }
+            : {
+                ...(style?.dataLabelColor
+                  ? { color: style.dataLabelColor }
+                  : darkChartTheme
+                    ? { color: DATALABEL_COLOR_DARK }
+                    : {}),
+              }),
         },
       };
       return {
         ...base,
         ...optionsBaseNoScales,
+        layout: { padding: pieLayoutPadding },
         ...(cutout != null ? { cutout } : {}),
         elements: {
           arc: { borderWidth: 0 },
@@ -866,7 +926,16 @@ export function DashboardWidgetRenderer({
       return baseReturn;
     }
     return optionsBase;
-  }, [chartType, chartConfig, widget.chartStyle, widget.chartMetricStyles, widget.labelDisplayMode, widget.aggregationConfig, darkChartTheme]);
+  }, [
+    chartType,
+    chartConfig,
+    widget.chartStyle,
+    widget.chartMetricStyles,
+    widget.labelDisplayMode,
+    widget.aggregationConfig,
+    darkChartTheme,
+    pieContainerWidth,
+  ]);
 
   return (
     <Card
@@ -1063,7 +1132,11 @@ export function DashboardWidgetRenderer({
               </div>
             )}
             {chartType !== "kpi" && chartType !== "table" && chartType !== "text" && chartType !== "image" && chartType !== "filter" && chartType !== "map" && chartConfig && (
-              <div className="w-full" style={{ height: Math.max(220, (effectiveMinHeight ?? 240) - 72) }}>
+              <div
+                ref={chartType === "pie" || chartType === "doughnut" ? pieChartWrapRef : undefined}
+                className="w-full"
+                style={{ height: Math.max(220, (effectiveMinHeight ?? 240) - 72) }}
+              >
                 {(chartType === "bar" || chartType === "stackedColumn" || chartType === "combo") && (
                   <Bar data={(chartType === "combo" && effectiveChartData ? effectiveChartData : chartConfig) as never} options={chartOptions as never} />
                 )}

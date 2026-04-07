@@ -3,6 +3,8 @@
  * padding para evitar etiquetas cortadas, ejes, estilos y elementos.
  */
 
+import type { Chart } from "chart.js";
+
 /** Tipo de valor: número, moneda o porcentaje (sin escala). */
 export type ValueFormatType =
   | "none"
@@ -508,34 +510,114 @@ export function toChartStyleConfig(input?: ChartFormatConfigInput | null): Chart
   };
 }
 
+/** Posición efectiva de la leyenda en torta/dona (tras preferencias y responsive). */
+export type PieDoughnutLegendPosition = "top" | "bottom" | "left" | "right" | "chartArea";
+
+const PIE_LEGEND_LABEL_MAX_CHARS = 80;
+
+function truncatePieLegendText(text: string): string {
+  if (text.length <= PIE_LEGEND_LABEL_MAX_CHARS) return text;
+  return `${text.slice(0, PIE_LEGEND_LABEL_MAX_CHARS - 3)}...`;
+}
+
+/**
+ * Ancho máximo de leyenda según tamaño del canvas y posición (Chart.js scriptable).
+ */
+export function getPieLegendMaxWidthScriptable(
+  position: PieDoughnutLegendPosition
+): (ctx: { chart: { width: number } }) => number {
+  return ({ chart }) => {
+    const w = Math.max(chart.width, 1);
+    switch (position) {
+      case "top":
+      case "bottom":
+        return Math.max(160, Math.floor(w * 0.92));
+      case "chartArea":
+        return Math.max(120, Math.floor(w * 0.5));
+      case "left":
+      case "right":
+      default:
+        return Math.max(160, Math.min(340, Math.floor(w * 0.38)));
+    }
+  };
+}
+
+/**
+ * Padding del layout para separar el arco de la leyenda según su lado.
+ */
+export function getPieDoughnutLayoutPadding(
+  position: PieDoughnutLegendPosition,
+  basePadding = DEFAULT_LAYOUT_PADDING
+): { top: number; right: number; bottom: number; left: number } {
+  const e = Math.max(8, basePadding);
+  switch (position) {
+    case "right":
+      return { top: e, bottom: e, left: e, right: e + 10 };
+    case "left":
+      return { top: e, bottom: e, left: e + 10, right: e };
+    case "bottom":
+      return { top: e, bottom: e + 14, left: e, right: e };
+    case "top":
+      return { top: e + 14, bottom: e, left: e, right: e };
+    case "chartArea":
+      return { top: e + 6, bottom: e + 6, left: e + 6, right: e + 6 };
+    default:
+      return { top: e, bottom: e, left: e, right: e + 10 };
+  }
+}
+
+export type BuildPieDoughnutLegendOptions = {
+  /** Posición ya resuelta (predeterminado: derecha). */
+  legendPosition?: PieDoughnutLegendPosition;
+  /** Cantidad de categorías (para reducir fuente si hay muchas). */
+  labelCount?: number;
+};
+
 export function buildPieDoughnutLegendShared(
   chartConfig: { labels?: string[]; datasets?: Array<{ backgroundColor?: string | string[] }> } | null | undefined,
-  textColor: string = "#334155"
+  textColor: string = "#334155",
+  options?: BuildPieDoughnutLegendOptions
 ): Record<string, unknown> {
+  const position: PieDoughnutLegendPosition = options?.legendPosition ?? "right";
+  const labelCount = options?.labelCount ?? chartConfig?.labels?.length ?? 0;
+  const legendFontSize = labelCount > 12 ? 10 : labelCount > 8 ? 11 : 12;
+  const maxWidthScriptable = getPieLegendMaxWidthScriptable(position);
+
   const ds0 = chartConfig?.datasets?.[0];
   if (!ds0 || !Array.isArray(ds0.backgroundColor) || !chartConfig?.labels?.length) {
-    return { display: true, position: "right" as const, labels: { color: textColor, font: { size: 12, color: textColor } } };
+    return {
+      display: true,
+      position,
+      align: "center" as const,
+      maxWidth: maxWidthScriptable,
+      labels: { color: textColor, font: { size: legendFontSize, color: textColor } },
+    };
   }
+
   return {
     display: true,
-    position: "right" as const,
+    position,
     align: "center" as const,
-    maxWidth: 220,
+    maxWidth: maxWidthScriptable,
     labels: {
       color: textColor,
-      font: { size: 12, color: textColor },
+      font: { size: legendFontSize, color: textColor },
       boxWidth: 10,
       boxHeight: 10,
-      padding: 10,
+      padding: labelCount > 12 ? 6 : 10,
       usePointStyle: true,
       pointStyle: "circle",
-      generateLabels: () =>
-        chartConfig.labels!.map((label, i) => {
-          const bg = (ds0.backgroundColor as string[])[i] ?? (typeof ds0.backgroundColor === "string" ? ds0.backgroundColor : "#0ea5e9");
-          const text = String(label || "");
-          const compactText = text.length > 42 ? `${text.slice(0, 39)}...` : text;
+      generateLabels: (chart: Chart) => {
+        const labels = chart.data.labels ?? [];
+        const dataset = chart.data.datasets[0];
+        const bgArr = dataset?.backgroundColor;
+        if (!Array.isArray(bgArr) || !labels.length) return [];
+        return labels.map((label, i) => {
+          const bg =
+            (bgArr as string[])[i] ?? (typeof bgArr === "string" ? bgArr : "#0ea5e9");
+          const text = truncatePieLegendText(String(label ?? ""));
           return {
-            text: compactText,
+            text,
             fillStyle: typeof bg === "string" ? bg : "#0ea5e9",
             strokeStyle: "#fff",
             lineWidth: 1,
@@ -544,7 +626,8 @@ export function buildPieDoughnutLegendShared(
             datasetIndex: 0,
             fontColor: textColor,
           };
-        }),
+        });
+      },
     },
   };
 }

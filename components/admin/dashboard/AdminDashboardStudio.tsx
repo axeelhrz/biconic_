@@ -167,6 +167,8 @@ type AggregationConfig = {
   chartFontFamily?: string;
   labelVisibilityMaxCount?: number;
   chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
+  pieLegendVisible?: boolean;
+  pieLegendResponsive?: boolean;
   /** Si la dimensión es fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
   /** Filtro de rango de fechas (últimos N días/meses o rango custom) para alinear con la vista previa del ETL. */

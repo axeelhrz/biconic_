@@ -96,6 +96,8 @@ export type AggregationConfigEdit = {
   chartFontFamily?: string;
   labelVisibilityMaxCount?: number;
   chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
+  pieLegendVisible?: boolean;
+  pieLegendResponsive?: boolean;
   /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
   chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */

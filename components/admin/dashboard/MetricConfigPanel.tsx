@@ -94,6 +94,10 @@ export type AggregationConfigEdit = {
   chartFontFamily?: string;
   labelVisibilityMaxCount?: number;
   chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
+  /** Torta/dona: mostrar leyenda (si false, solo etiquetas en porciones). Por defecto true. */
+  pieLegendVisible?: boolean;
+  /** Torta/dona: bajo ~480px de ancho forzar leyenda abajo. */
+  pieLegendResponsive?: boolean;
   /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
   chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
@@ -547,17 +551,66 @@ export function MetricConfigPanel({
             <div className="space-y-4 border-b border-[var(--studio-border)] pb-4">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Leyenda y etiquetas</h4>
         {(((widget.aggregationConfig as any)?.chartType || widget.type) === "pie" || ((widget.aggregationConfig as any)?.chartType || widget.type) === "doughnut") && (
-          <div>
-            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Etiquetas en gráfico</Label>
-            <select
-              value={widget.labelDisplayMode || "percent"}
-              onChange={(e) => onUpdate({ labelDisplayMode: e.target.value as "percent" | "value" | "both" })}
-              className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
-            >
-              <option value="percent">Porcentaje</option>
-              <option value="value">Valor</option>
-              <option value="both">Valor + porcentaje</option>
-            </select>
+          <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]/40 p-3">
+            <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+              Con muchas categorías probá <strong className="text-[var(--studio-fg)]">leyenda abajo</strong> o{" "}
+              <strong className="text-[var(--studio-fg)]">desactivá la leyenda</strong> y usá etiquetas en las porciones. El tooltip siempre muestra el nombre completo.
+            </p>
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Etiquetas en porciones</Label>
+              <select
+                value={widget.labelDisplayMode || "percent"}
+                onChange={(e) => onUpdate({ labelDisplayMode: e.target.value as "percent" | "value" | "both" })}
+                className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+              >
+                <option value="percent">Porcentaje</option>
+                <option value="value">Valor</option>
+                <option value="both">Valor + porcentaje</option>
+              </select>
+            </div>
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición de la leyenda</Label>
+              <select
+                value={agg.chartLegendPosition ?? ""}
+                onChange={(e) =>
+                  updateAgg({
+                    chartLegendPosition: (e.target.value || undefined) as AggregationConfigEdit["chartLegendPosition"],
+                  })
+                }
+                className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+              >
+                <option value="">Predeterminada (derecha)</option>
+                {LEGEND_POSITION_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="pie-legend-visible"
+                checked={agg.pieLegendVisible !== false}
+                onChange={(e) => updateAgg({ pieLegendVisible: e.target.checked })}
+                className="rounded"
+              />
+              <Label htmlFor="pie-legend-visible" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                Mostrar leyenda
+              </Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="pie-legend-responsive"
+                checked={agg.pieLegendResponsive === true}
+                onChange={(e) => updateAgg({ pieLegendResponsive: e.target.checked ? true : undefined })}
+                className="rounded"
+              />
+              <Label htmlFor="pie-legend-responsive" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                En pantallas estrechas, leyenda abajo (ancho &lt; 480px)
+              </Label>
+            </div>
           </div>
         )}
         {showLabelOverrides && (
@@ -609,7 +662,9 @@ export function MetricConfigPanel({
             </p>
           </div>
         )}
-        {isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) && (
+        {isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) &&
+          chartType !== "pie" &&
+          chartType !== "doughnut" && (
           <div>
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición de la leyenda</Label>
             <select

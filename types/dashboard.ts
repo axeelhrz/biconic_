@@ -101,6 +101,10 @@ export function themeToCssVars(theme: DashboardTheme): Record<string, string> {
     "--client-accent": accent,
     "--client-bg": bg,
     "--client-card": cardBg,
+    /** Alineado con `.client-view-widget` en client-dashboard-view.css (evita que los defaults del CSS anulen el tema). */
+    "--client-card-border-color": borderColor,
+    "--client-card-border-width": `${borderWidth}px`,
+    "--client-card-radius": `${radius}px`,
     "--client-text": textColor,
     "--client-text-muted": textMutedColor,
     "--client-border": borderColor,
