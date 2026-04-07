@@ -45,7 +45,7 @@ import {
   computeAddMetricPackedPlacement,
   computeDashboardGridPlacementsPacked,
 } from "@/lib/dashboard/gridLayout";
-import { useDashboardPackColumnCount } from "@/hooks/useDashboardPackColumnCount";
+import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
 import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
@@ -1376,16 +1376,16 @@ export function AdminDashboardStudio({
     [widgetsForCurrentPage]
   );
 
-  const packCols = useDashboardPackColumnCount("studio");
+  const { packCols, packRowGapPx } = useDashboardPackLayout("studio");
 
   const packedPlacements = useMemo(
-    () => computeDashboardGridPlacementsPacked(sortedWidgets, packCols),
-    [sortedWidgets, packCols]
+    () => computeDashboardGridPlacementsPacked(sortedWidgets, packCols, undefined, packRowGapPx),
+    [sortedWidgets, packCols, packRowGapPx]
   );
 
   const addMetricPack = useMemo(
-    () => computeAddMetricPackedPlacement(sortedWidgets, packCols),
-    [sortedWidgets, packCols]
+    () => computeAddMetricPackedPlacement(sortedWidgets, packCols, undefined, packRowGapPx),
+    [sortedWidgets, packCols, packRowGapPx]
   );
 
   const moveWidgetGridOrder = useCallback(

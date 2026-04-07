@@ -33,7 +33,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { computeDashboardGridPlacementsPacked, DASHBOARD_GRID_ROW_UNIT_PX } from "@/lib/dashboard/gridLayout";
-import { useDashboardPackColumnCount } from "@/hooks/useDashboardPackColumnCount";
+import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
 
 /** Meses 1–12 para filtro global MONTH (sin año en la UI). */
 const GLOBAL_MONTH_FILTER_VALUES = [
@@ -851,11 +851,11 @@ export function DashboardViewer({
     [orderedWidgets]
   );
 
-  const packCols = useDashboardPackColumnCount("client");
+  const { packCols, packRowGapPx } = useDashboardPackLayout("client");
 
   const placements = useMemo(
-    () => computeDashboardGridPlacementsPacked(orderedWidgets, packCols),
-    [orderedWidgets, packCols]
+    () => computeDashboardGridPlacementsPacked(orderedWidgets, packCols, undefined, packRowGapPx),
+    [orderedWidgets, packCols, packRowGapPx]
   );
 
   const runExportExcel = useCallback(async () => {
@@ -1245,7 +1245,10 @@ export function DashboardViewer({
               const cellThemeVars = useClientTheme
                 ? (themeToCssVars(effectiveTheme) as React.CSSProperties)
                 : {};
-              const cellBg = useClientTheme ? themeToWrapperBackground(effectiveTheme) : {};
+              // Sin themeToWrapperBackground aquí: usa el color de página del dashboard y anula
+              // `background: var(--client-card)` en `.client-view-widget`. El Card interno es
+              // transparente en tema cliente; sin esto, al quitar el overlay de carga se veía
+              // el fondo del lienzo en lugar del color de tarjeta del editor.
               return (
                 <div
                   key={widget.id}
@@ -1258,7 +1261,6 @@ export function DashboardViewer({
                     minHeight: 0,
                     position: "relative",
                     ...cellThemeVars,
-                    ...cellBg,
                   }}
                 >
                   {filterWarningTooltip && (

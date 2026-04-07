@@ -7,6 +7,38 @@ export const DASHBOARD_GRID_COLUMN_COUNT = 6;
  */
 export const DASHBOARD_GRID_ROW_UNIT_PX = 56;
 
+/** Alineado con `row-gap` de `.studio-blocks` en studio.css (0.5rem / 0.75rem @ 16px). */
+export const DASHBOARD_GRID_ROW_GAP_PX_STUDIO_NARROW = 8;
+export const DASHBOARD_GRID_ROW_GAP_PX_STUDIO_WIDE = 12;
+
+/** Alineado con `.client-view-grid` row-gap 0.5rem @ 16px. */
+export const DASHBOARD_GRID_ROW_GAP_PX_CLIENT = 8;
+
+/** Default conservador si no se pasa gap (escritorio studio). */
+export const DASHBOARD_GRID_ROW_GAP_PX_DEFAULT = DASHBOARD_GRID_ROW_GAP_PX_STUDIO_WIDE;
+
+export function packRowGapPxStudio(innerWidth: number): number {
+  return innerWidth >= 768 ? DASHBOARD_GRID_ROW_GAP_PX_STUDIO_WIDE : DASHBOARD_GRID_ROW_GAP_PX_STUDIO_NARROW;
+}
+
+export function packRowGapPxClient(_innerWidth: number): number {
+  return DASHBOARD_GRID_ROW_GAP_PX_CLIENT;
+}
+
+/**
+ * Mínimo N tal que N·rowUnit + (N−1)·rowGap ≥ minHeightPx (altura mínima del área en CSS Grid).
+ */
+export function minRowSpanForMinHeight(
+  minHeightPx: number,
+  rowUnitPx: number = DASHBOARD_GRID_ROW_UNIT_PX,
+  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT
+): number {
+  const mh = Math.max(1, minHeightPx);
+  const ru = Math.max(1, rowUnitPx);
+  const g = Math.max(0, rowGapPx);
+  return Math.max(1, Math.ceil((mh + g) / (ru + g)));
+}
+
 export function clampGridSpan(raw: number | undefined | null, defaultSpan = 2): number {
   const n = Number(raw);
   const base = Number.isFinite(n) ? n : defaultSpan;
@@ -53,7 +85,8 @@ function defaultWidgetMinHeight(w: { minHeight?: number }): number {
 export function computeDashboardGridPlacementsPacked<T extends { gridSpan?: number; minHeight?: number }>(
   ordered: T[],
   cols: number = DASHBOARD_GRID_COLUMN_COUNT,
-  rowUnitPx: number = DASHBOARD_GRID_ROW_UNIT_PX
+  rowUnitPx: number = DASHBOARD_GRID_ROW_UNIT_PX,
+  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT
 ): PackedGridPlacement<T>[] {
   const occupied: boolean[][] = [];
   const ensureRows = (minRows: number) => {
@@ -84,7 +117,7 @@ export function computeDashboardGridPlacementsPacked<T extends { gridSpan?: numb
   for (const w of ordered) {
     const span = clampGridSpan(w.gridSpan, 2);
     const mh = defaultWidgetMinHeight(w);
-    const rowSpan = Math.max(1, Math.ceil(mh / rowUnitPx));
+    const rowSpan = minRowSpanForMinHeight(mh, rowUnitPx, rowGapPx);
     let placed = false;
     for (let r = 0; !placed; r++) {
       for (let c = 0; c <= cols - span; c++) {
@@ -111,10 +144,11 @@ export function computeAddMetricPackedPlacement(
   orderedWidgets: { gridSpan?: number; minHeight?: number }[],
   cols: number = DASHBOARD_GRID_COLUMN_COUNT,
   rowUnitPx: number = DASHBOARD_GRID_ROW_UNIT_PX,
+  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT,
   addMinHeight: number = 200
 ): { gridColumn: string; gridRow: string; rowSpan: number } {
   const phantom = { gridSpan: 1, minHeight: addMinHeight };
-  const all = computeDashboardGridPlacementsPacked([...orderedWidgets, phantom], cols, rowUnitPx);
+  const all = computeDashboardGridPlacementsPacked([...orderedWidgets, phantom], cols, rowUnitPx, rowGapPx);
   const last = all[all.length - 1];
   return {
     gridColumn: last.gridColumn,
