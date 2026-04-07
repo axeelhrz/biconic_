@@ -172,8 +172,12 @@ type AggregationConfig = {
   chartFontFamily?: string;
   labelVisibilityMaxCount?: number;
   chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
+  /** Barras/líneas/combo: mostrar leyenda (por defecto true). */
+  chartLegendVisible?: boolean;
   pieLegendVisible?: boolean;
   pieLegendResponsive?: boolean;
+  /** Tabla: nombre de columna en datos → encabezado mostrado. */
+  tableColumnLabelOverrides?: Record<string, string>;
   /** Si la dimensión es fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
   /** Filtro de rango de fechas (últimos N días/meses o rango custom) para alinear con la vista previa del ETL. */
@@ -211,6 +215,7 @@ type StudioWidget = {
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
+  kpiCaption?: string;
   diagnosticPreview?: {
     endpoint: string;
     payload: Record<string, unknown>;
@@ -2076,6 +2081,10 @@ export function AdminDashboardStudio({
                         config: w.config ?? undefined,
                         rows: w.rows,
                         aggregationConfig: w.aggregationConfig,
+                        color: w.color,
+                        kpiSecondaryLabel: w.kpiSecondaryLabel,
+                        kpiSecondaryValue: w.kpiSecondaryValue,
+                        kpiCaption: w.kpiCaption,
                         chartStyle: buildResolvedChartStyle(
                           w.aggregationConfig,
                           w.chartStyle as ChartStyleConfig | null | undefined,
@@ -2129,6 +2138,11 @@ export function AdminDashboardStudio({
           selectedWidgetForPanel.type !== "filter" && (
             <MetricConfigPanel
               dashboardTheme={dashboardTheme}
+              previewChartDatasetLabels={
+                selectedWidgetForPanel.config?.datasets
+                  ?.map((d) => String((d as { label?: string }).label ?? "").trim())
+                  .filter(Boolean) ?? []
+              }
               widget={{
                 id: selectedWidgetForPanel.id,
                 type: selectedWidgetForPanel.type,
@@ -2143,6 +2157,7 @@ export function AdminDashboardStudio({
                 color: selectedWidgetForPanel.color as string | undefined,
                 kpiSecondaryLabel: selectedWidgetForPanel.kpiSecondaryLabel,
                 kpiSecondaryValue: selectedWidgetForPanel.kpiSecondaryValue,
+                kpiCaption: selectedWidgetForPanel.kpiCaption,
                 excludeGlobalFilters: selectedWidgetForPanel.excludeGlobalFilters,
                 dataSourceId: selectedWidgetForPanel.dataSourceId,
                 cardTheme: selectedWidgetForPanel.cardTheme,

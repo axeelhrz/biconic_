@@ -96,6 +96,7 @@ export type AggregationConfigEdit = {
   chartFontFamily?: string;
   labelVisibilityMaxCount?: number;
   chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
+  chartLegendVisible?: boolean;
   pieLegendVisible?: boolean;
   pieLegendResponsive?: boolean;
   /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
@@ -112,6 +113,7 @@ export type AggregationConfigEdit = {
     latField?: string;
     lonField?: string;
   };
+  tableColumnLabelOverrides?: Record<string, string>;
 };
 
 export type AddMetricFormConfig = {
@@ -122,6 +124,7 @@ export type AddMetricFormConfig = {
   labelDisplayMode?: "percent" | "value" | "both";
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
+  kpiCaption?: string;
   aggregationConfig: AggregationConfigEdit;
   excludeGlobalFilters?: boolean;
   /** ID de la fuente de datos cuando el dashboard tiene múltiples ETLs */

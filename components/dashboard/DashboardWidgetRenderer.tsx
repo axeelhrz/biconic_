@@ -116,6 +116,8 @@ export interface DashboardWidgetRendererWidget {
   minHeight?: number;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
+  /** Texto bajo el valor del KPI (si no hay línea secundaria manual). */
+  kpiCaption?: string;
   imageConfig?: {
     width?: number;
     height?: number;
@@ -315,6 +317,8 @@ export function DashboardWidgetRenderer({
     const selected = [...dimensionsOrdered, ...metricsOrdered];
     return selected.length > 0 ? selected : firstRowKeys;
   }, [tableRows, chartType, widget.type, widget.aggregationConfig, widget.source]);
+  const tableHeaderLabels = (widget.aggregationConfig as { tableColumnLabelOverrides?: Record<string, string> } | undefined)
+    ?.tableColumnLabelOverrides;
   const tableMetricFormatters = useMemo(() => {
     const map = new Map<string, (value: number) => string>();
     const yKeys = Array.isArray(aggConfig?.chartYAxes) ? aggConfig.chartYAxes : [];
@@ -422,6 +426,8 @@ export function DashboardWidgetRenderer({
       analysisDateDisplayFormat?: AnalysisDateDisplayFormat;
       chartDoughnutCutout?: string | number;
       chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
+      /** Barras/líneas/combo: ocultar leyenda si false. */
+      chartLegendVisible?: boolean;
       labelVisibilityMaxCount?: number;
       pieLegendVisible?: boolean;
       pieLegendResponsive?: boolean;
@@ -876,15 +882,35 @@ export function DashboardWidgetRenderer({
       };
       const builtLegend = (builtPlugins?.legend as Record<string, unknown> | undefined) ?? {};
       const builtLegendLabels = (builtLegend.labels as Record<string, unknown> | undefined) ?? {};
+      const cartLegPosRaw = agg?.chartLegendPosition;
+      const cartLegendPosition =
+        cartLegPosRaw === "top" ||
+        cartLegPosRaw === "bottom" ||
+        cartLegPosRaw === "left" ||
+        cartLegPosRaw === "right" ||
+        cartLegPosRaw === "chartArea"
+          ? cartLegPosRaw
+          : "top";
+      const cartLegendVisible = agg?.chartLegendVisible !== false;
       const plugins = {
         ...optionsBase.plugins,
         ...builtPlugins,
-        legend: {
-          ...builtLegend,
-          labels: {
-            ...builtLegendLabels,
-          },
-        },
+        legend: cartLegendVisible
+          ? {
+              ...builtLegend,
+              display: true,
+              position: cartLegendPosition,
+              labels: {
+                ...builtLegendLabels,
+              },
+            }
+          : {
+              ...builtLegend,
+              display: false,
+              labels: {
+                ...builtLegendLabels,
+              },
+            },
         datalabels: {
           ...builtDatalabels,
           display:
@@ -990,6 +1016,14 @@ export function DashboardWidgetRenderer({
                       </span>
                     );
                   }
+                  const cap = String(widget.kpiCaption ?? "").trim();
+                  if (cap) {
+                    return (
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted, #64748b)" }}>
+                        {cap}
+                      </span>
+                    );
+                  }
                   const agg = widget.aggregationConfig as { chartYAxes?: string[]; metrics?: { alias?: string; field?: string }[] } | undefined;
                   const yKey = agg?.chartYAxes?.[0];
                   const metricLabel = yKey || agg?.metrics?.[0]?.alias || agg?.metrics?.[0]?.field;
@@ -1011,7 +1045,7 @@ export function DashboardWidgetRenderer({
                     <tr className="border-b text-left" style={{ borderColor: "var(--platform-border)" }}>
                       {tableColumnOrder.map((k) => (
                         <th key={k} className="py-1.5 pr-2 font-medium" style={{ color: "var(--platform-fg-muted)" }}>
-                          {k}
+                          {String(tableHeaderLabels?.[k] ?? "").trim() || k}
                         </th>
                       ))}
                     </tr>

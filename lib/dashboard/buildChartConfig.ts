@@ -46,6 +46,7 @@ export type BuildChartConfigWidget = {
     chartLabelOverrides?: Record<string, string>;
     /** Texto en leyenda por clave de métrica (misma clave que chartYAxes / columna en filas). */
     chartDatasetLabelOverrides?: Record<string, string>;
+    tableColumnLabelOverrides?: Record<string, string>;
     chartRankingEnabled?: boolean;
     chartRankingTop?: number;
     chartRankingMetric?: string;

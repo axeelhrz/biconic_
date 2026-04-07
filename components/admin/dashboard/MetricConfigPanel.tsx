@@ -94,6 +94,8 @@ export type AggregationConfigEdit = {
   chartFontFamily?: string;
   labelVisibilityMaxCount?: number;
   chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
+  /** Barras/líneas/combo: mostrar leyenda (por defecto true). */
+  chartLegendVisible?: boolean;
   /** Torta/dona: mostrar leyenda (si false, solo etiquetas en porciones). Por defecto true. */
   pieLegendVisible?: boolean;
   /** Torta/dona: bajo ~480px de ancho forzar leyenda abajo. */
@@ -110,6 +112,8 @@ export type AggregationConfigEdit = {
     latField?: string;
     lonField?: string;
   };
+  /** Tabla: clave de columna → texto del encabezado. */
+  tableColumnLabelOverrides?: Record<string, string>;
 };
 
 export type MetricConfigWidget = {
@@ -123,6 +127,8 @@ export type MetricConfigWidget = {
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
+  /** Texto bajo el valor del KPI (sin línea secundaria). */
+  kpiCaption?: string;
   excludeGlobalFilters?: boolean;
   /** ID de la fuente de datos cuando el dashboard tiene múltiples ETLs */
   dataSourceId?: string | null;
@@ -175,6 +181,8 @@ type MetricConfigPanelProps = {
   widget: MetricConfigWidget;
   /** Tema global del dashboard (barra de apariencia); base para fusionar con `cardTheme`. */
   dashboardTheme?: DashboardTheme;
+  /** Etiquetas de datasets del preview (colores por serie además de chartYAxes). */
+  previewChartDatasetLabels?: string[];
   etlData: ETLDataResponse | null;
   etlLoading: boolean;
   onUpdate: (patch: Partial<MetricConfigWidget>) => void;
@@ -211,6 +219,7 @@ const LEGEND_POSITION_OPTIONS: Array<{ value: "top" | "bottom" | "left" | "right
 export function MetricConfigPanel({
   widget,
   dashboardTheme,
+  previewChartDatasetLabels = [],
   etlData,
   etlLoading,
   onUpdate,
@@ -233,8 +242,18 @@ export function MetricConfigPanel({
     [agg.chartLabelOverrides]
   );
   const [labelOverrideRawDrafts, setLabelOverrideRawDrafts] = useState<Record<string, string>>({});
+  const [tableColKeyDrafts, setTableColKeyDrafts] = useState<Record<string, string>>({});
   const filters = agg.filters || [];
   const metrics = agg.metrics || [];
+  const yAxisKeysForUi = useMemo(() => {
+    const raw = (agg.chartYAxes ?? []).map((k) => String(k ?? "").trim()).filter(Boolean);
+    if (raw.length > 0) return raw;
+    return metrics.map((_, i) => `metric_${i}`);
+  }, [agg.chartYAxes, metrics]);
+  const seriesColorKeys = useMemo(() => {
+    const fromPreview = previewChartDatasetLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
+    return Array.from(new Set([...yAxisKeysForUi, ...fromPreview]));
+  }, [yAxisKeysForUi, previewChartDatasetLabels]);
   const sources = etlData?.dataSources;
   const selectedSource = sources?.find(
     (s) => s.id === (widget.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id)
@@ -324,6 +343,48 @@ export function MetricConfigPanel({
   const addLabelOverride = () => {
     if (Object.prototype.hasOwnProperty.call(agg.chartLabelOverrides ?? {}, "")) return;
     updateAgg({ chartLabelOverrides: { ...(agg.chartLabelOverrides ?? {}), "": "" } });
+  };
+
+  const tableColEntries = useMemo(
+    () => Object.entries(agg.tableColumnLabelOverrides ?? {}),
+    [agg.tableColumnLabelOverrides]
+  );
+  const setTableColHeader = (dataKey: string, header: string) => {
+    const next = { ...(agg.tableColumnLabelOverrides ?? {}) };
+    if (!Object.prototype.hasOwnProperty.call(next, dataKey)) return;
+    next[dataKey] = header;
+    updateAgg({ tableColumnLabelOverrides: Object.keys(next).length ? next : undefined });
+  };
+  const commitTableColKeyDraft = (oldKey: string, header: string) => {
+    const draft = tableColKeyDrafts[oldKey];
+    if (typeof draft !== "string") return;
+    const normalized = draft.trim();
+    setTableColKeyDrafts((prev) => {
+      const n = { ...prev };
+      delete n[oldKey];
+      return n;
+    });
+    if (normalized === "" || normalized === oldKey) return;
+    const next = { ...(agg.tableColumnLabelOverrides ?? {}) };
+    const prevHeader = next[oldKey] ?? header;
+    delete next[oldKey];
+    next[normalized] = prevHeader;
+    updateAgg({ tableColumnLabelOverrides: Object.keys(next).length ? next : undefined });
+  };
+  const removeTableColOverride = (key: string) => {
+    const next = { ...(agg.tableColumnLabelOverrides ?? {}) };
+    delete next[key];
+    setTableColKeyDrafts((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
+      const n = { ...prev };
+      delete n[key];
+      return n;
+    });
+    updateAgg({ tableColumnLabelOverrides: Object.keys(next).length ? next : undefined });
+  };
+  const addTableColOverride = () => {
+    if (Object.prototype.hasOwnProperty.call(agg.tableColumnLabelOverrides ?? {}, "")) return;
+    updateAgg({ tableColumnLabelOverrides: { ...(agg.tableColumnLabelOverrides ?? {}), "": "" } });
   };
 
   const addSavedMetric = (saved: SavedMetricPanel) => {
@@ -498,6 +559,16 @@ export function MetricConfigPanel({
 
             {((widget.aggregationConfig as any)?.chartType || widget.type) === "kpi" && (
               <div className="space-y-3">
+                <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">KPI — texto bajo el número</Label>
+                <Input
+                  value={widget.kpiCaption ?? ""}
+                  onChange={(e) => onUpdate({ kpiCaption: e.target.value || undefined })}
+                  className="h-9 rounded-lg"
+                  placeholder="Ej. Ventas del mes (si no usás línea secundaria)"
+                />
+                <p className="text-[11px] text-[var(--studio-fg-muted)]">
+                  Se muestra debajo del valor cuando no configurás la línea secundaria manual.
+                </p>
                 <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">KPI — línea secundaria</Label>
                 <Input
                   value={widget.kpiSecondaryLabel ?? ""}
@@ -511,6 +582,49 @@ export function MetricConfigPanel({
                   className="h-9 rounded-lg"
                   placeholder="Valor (ej. $ 3.202)"
                 />
+              </div>
+            )}
+
+            {((widget.aggregationConfig as any)?.chartType || widget.type) === "table" && (
+              <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
+                <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Encabezados de tabla</Label>
+                <p className="text-[11px] text-[var(--studio-fg-muted)]">
+                  Mapeá el nombre de columna en los datos al texto del encabezado (ej. <code className="text-[10px]">SUM(ventas)</code> → Ventas).
+                </p>
+                <div className="space-y-2">
+                  {tableColEntries.map(([dataKey, headerText], idx) => (
+                    <div key={`tcol-${idx}-${dataKey}`} className="flex items-center gap-2">
+                      <Input
+                        value={tableColKeyDrafts[dataKey] ?? dataKey}
+                        onChange={(e) => setTableColKeyDrafts((prev) => ({ ...prev, [dataKey]: e.target.value }))}
+                        onBlur={() => commitTableColKeyDraft(dataKey, headerText)}
+                        placeholder="Nombre de columna en datos"
+                        className="h-8 flex-1 text-xs font-mono"
+                      />
+                      <span className="text-xs text-[var(--studio-fg-muted)]">→</span>
+                      <Input
+                        value={headerText}
+                        onChange={(e) => setTableColHeader(dataKey, e.target.value)}
+                        placeholder="Encabezado visible"
+                        className="h-8 flex-1 text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0 text-red-500"
+                        onClick={() => removeTableColOverride(dataKey)}
+                        aria-label="Quitar"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={addTableColOverride}>
+                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  Añadir columna
+                </Button>
               </div>
             )}
 
@@ -665,24 +779,40 @@ export function MetricConfigPanel({
         {isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) &&
           chartType !== "pie" &&
           chartType !== "doughnut" && (
-          <div>
-            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición de la leyenda</Label>
-            <select
-              value={agg.chartLegendPosition ?? ""}
-              onChange={(e) =>
-                updateAgg({
-                  chartLegendPosition: (e.target.value || undefined) as AggregationConfigEdit["chartLegendPosition"],
-                })
-              }
-              className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
-            >
-              <option value="">Predeterminada</option>
-              {LEGEND_POSITION_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición de la leyenda</Label>
+              <select
+                value={agg.chartLegendPosition ?? ""}
+                onChange={(e) =>
+                  updateAgg({
+                    chartLegendPosition: (e.target.value || undefined) as AggregationConfigEdit["chartLegendPosition"],
+                  })
+                }
+                className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+              >
+                <option value="">Predeterminada (arriba)</option>
+                {LEGEND_POSITION_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="cart-legend-visible"
+                checked={agg.chartLegendVisible !== false}
+                onChange={(e) =>
+                  updateAgg({ chartLegendVisible: e.target.checked ? undefined : false })
+                }
+                className="rounded"
+              />
+              <Label htmlFor="cart-legend-visible" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                Mostrar leyenda
+              </Label>
+            </div>
           </div>
         )}
             </div>
@@ -707,6 +837,75 @@ export function MetricConfigPanel({
                 placeholder="#0ea5e9"
               />
             </div>
+          </div>
+        )}
+        {yAxisKeysForUi.length > 0 && isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) && (
+          <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Nombres en leyenda (por métrica)</Label>
+            <p className="text-[11px] text-[var(--studio-fg-muted)]">
+              Texto opcional en la leyenda para cada eje Y. Si lo dejás vacío se usa el alias de la métrica o el nombre de columna.
+            </p>
+            {yAxisKeysForUi.map((yKey) => (
+              <div key={yKey}>
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">{yKey}</Label>
+                <Input
+                  value={agg.chartDatasetLabelOverrides?.[yKey] ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const next = { ...(agg.chartDatasetLabelOverrides ?? {}) };
+                    if (v.trim() === "") delete next[yKey];
+                    else next[yKey] = v;
+                    updateAgg({
+                      chartDatasetLabelOverrides: Object.keys(next).length ? next : undefined,
+                    });
+                  }}
+                  placeholder={`Predeterminado (${yKey})`}
+                  className="mt-0.5 h-8 text-xs"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        {seriesColorKeys.length > 0 && isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) && (
+          <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Color por serie</Label>
+            <p className="text-[11px] text-[var(--studio-fg-muted)]">
+              Clave de métrica o etiqueta de serie del preview. Vacío en hex quita el color personalizado para esa clave.
+            </p>
+            {seriesColorKeys.map((sKey) => {
+              const hex = agg.chartSeriesColors?.[sKey] || widget.color || "#0ea5e9";
+              return (
+                <div key={sKey} className="flex flex-wrap items-center gap-2">
+                  <span className="min-w-0 max-w-[140px] truncate font-mono text-[11px] text-[var(--studio-fg-muted)]" title={sKey}>
+                    {sKey}
+                  </span>
+                  <input
+                    type="color"
+                    value={/^#[0-9A-Fa-f]{6}$/.test(hex) ? hex : "#0ea5e9"}
+                    onChange={(e) => {
+                      const next = { ...(agg.chartSeriesColors ?? {}) };
+                      next[sKey] = e.target.value;
+                      updateAgg({ chartSeriesColors: next });
+                    }}
+                    className="h-8 w-10 shrink-0 cursor-pointer rounded border border-[var(--studio-border)]"
+                  />
+                  <Input
+                    value={agg.chartSeriesColors?.[sKey] ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      const next = { ...(agg.chartSeriesColors ?? {}) };
+                      if (v.trim() === "") delete next[sKey];
+                      else next[sKey] = v;
+                      updateAgg({
+                        chartSeriesColors: Object.keys(next).length ? next : undefined,
+                      });
+                    }}
+                    className="h-8 min-w-[6rem] flex-1 font-mono text-[11px]"
+                    placeholder="#hex"
+                  />
+                </div>
+              );
+            })}
           </div>
         )}
         {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
