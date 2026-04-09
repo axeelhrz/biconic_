@@ -42,6 +42,8 @@ import {
   compactGeoOverridesByXLabelForRequest,
   type GeoComponentOverrides,
 } from "@/lib/geo/geo-enrichment";
+import { MapChartAppearanceFields } from "@/components/admin/dashboard/MapChartAppearanceFields";
+import { pickMapVisualFromCfg, type MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
 
 // Reserved for future UI (e.g. aggregate function selector)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -539,6 +541,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartGridColor, setChartGridColor] = useState<string>("");
   /** Mapa: país por defecto para geocodificación cuando la fila no incluye país. */
   const [mapDefaultCountry, setMapDefaultCountry] = useState<string>("");
+  const [mapVisualFields, setMapVisualFields] = useState<MapVisualConfigInput>({});
   const [geoComponentOverrides, setGeoComponentOverrides] = useState<GeoComponentOverrides>({});
   const [geoOverridesByXLabel, setGeoOverridesByXLabel] = useState<Record<string, GeoComponentOverrides>>({});
   const [etlGeoXLabelDrafts, setEtlGeoXLabelDrafts] = useState<Record<string, string>>({});
@@ -686,6 +689,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartGridYDisplay(true);
     setChartGridColor("");
     setMapDefaultCountry("");
+    setMapVisualFields({});
     setGeoComponentOverrides({});
     setGeoOverridesByXLabel({});
     setEtlGeoXLabelDrafts({});
@@ -1594,6 +1598,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         setAnalysisDateFormat("short");
       }
       setMapDefaultCountry(typeof (cfg as { mapDefaultCountry?: string }).mapDefaultCountry === "string" ? String((cfg as { mapDefaultCountry: string }).mapDefaultCountry) : "");
+      setMapVisualFields(pickMapVisualFromCfg(cfg));
       setGeoComponentOverrides(coerceGeoComponentOverrides((cfg as { geoComponentOverrides?: unknown }).geoComponentOverrides) ?? {});
       setGeoOverridesByXLabel(coerceGeoOverridesByXLabel((cfg as { geoOverridesByXLabel?: unknown }).geoOverridesByXLabel) ?? {});
       setEtlGeoXLabelDrafts({});
@@ -1646,6 +1651,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setInterHighlight(true);
       setAnalysisDateFormat("short");
       setMapDefaultCountry("");
+      setMapVisualFields({});
       setGeoComponentOverrides({});
       setGeoOverridesByXLabel({});
       setEtlGeoXLabelDrafts({});
@@ -1973,6 +1979,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartXAxis,
     geoHints,
     mapDefaultCountry,
+    mapVisualFields,
     geoComponentOverrides,
     geoOverridesByXLabel,
     data?.columnDisplay,
@@ -2985,6 +2992,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       ...(formChartType === "map" && compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel)
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
         : {}),
+      ...(formChartType === "map" ? { ...mapVisualFields } : {}),
     };
     let expr = (firstMetric as { expression?: string }).expression;
     const alias = (firstMetric.alias || "").trim();
@@ -3266,6 +3274,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       ...(formChartType === "map" && compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel)
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
         : {}),
+      ...(formChartType === "map" ? { ...mapVisualFields } : {}),
     };
     const item: SavedMetricForm = {
       id: `sm-${Date.now()}`,
@@ -3383,10 +3392,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       ...(formChartType === "map" && compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel)
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
         : {}),
+      ...(formChartType === "map" ? { ...mapVisualFields } : {}),
     };
   }, [
     analysisDateFormat,
     mapDefaultCountry,
+    mapVisualFields,
     geoComponentOverrides,
     geoOverridesByXLabel,
     analysisSelectedMetricIds,
@@ -3613,6 +3624,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         setAnalysisDateFormat("short");
       }
       setMapDefaultCountry(typeof a.mapDefaultCountry === "string" ? a.mapDefaultCountry : "");
+      setMapVisualFields(pickMapVisualFromCfg(a));
       setGeoComponentOverrides(coerceGeoComponentOverrides((a as { geoComponentOverrides?: unknown }).geoComponentOverrides) ?? {});
       setGeoOverridesByXLabel(coerceGeoOverridesByXLabel((a as { geoOverridesByXLabel?: unknown }).geoOverridesByXLabel) ?? {});
       setEtlGeoXLabelDrafts({});
@@ -5744,6 +5756,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
                           Se usa al buscar coordenadas en OpenStreetMap cuando falta una columna de país. Opcional.
                         </p>
+                      </div>
+                      <div
+                        className="rounded-xl border p-4 space-y-2"
+                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}
+                      >
+                        <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
+                          Color y tamaño en el mapa
+                        </Label>
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                          Misma configuración que en el estudio del dashboard (pestaña Gráfico).
+                        </p>
+                        <MapChartAppearanceFields
+                          theme="platform"
+                          agg={mapVisualFields}
+                          updateAgg={(patch) => setMapVisualFields((prev) => ({ ...prev, ...patch }))}
+                        />
                       </div>
                       {mapGeoInferencePreview ? (
                         <div

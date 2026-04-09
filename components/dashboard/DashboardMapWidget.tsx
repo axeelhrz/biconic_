@@ -11,8 +11,14 @@ import {
   resolveArProvinceGadmId,
   type ArProvinceGadmId,
 } from "@/lib/geo/argentinaProvinces";
+import type { MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
+import {
+  resolveChoroplethVisual,
+  resolveMapVisualStyle,
+  resolveMarkerVisual,
+} from "@/lib/dashboard/mapVisualScale";
 
-export type MapAggregationConfig = {
+export type MapAggregationConfig = MapVisualConfigInput & {
   chartXAxis?: string;
   chartYAxes?: string[];
   dimension?: string;
@@ -92,19 +98,6 @@ function FitArgentinaGeoJson({ data }: { data: ArFeatureCollection | null }) {
     }
   }, [data, map]);
   return null;
-}
-
-function getIntensity(value: number | null, minValue: number | null, maxValue: number | null): number {
-  if (value == null || minValue == null || maxValue == null) return 0.45;
-  const hasRange = maxValue > minValue;
-  if (!hasRange) return 0.6;
-  return Math.max(0, Math.min(1, (value - minValue) / (maxValue - minValue)));
-}
-
-function getFillColor(value: number | null, minValue: number | null, maxValue: number | null): string {
-  const intensity = getIntensity(value, minValue, maxValue);
-  const lightness = 72 - intensity * 34;
-  return `hsl(199 89% ${lightness}%)`;
 }
 
 function escapeHtml(s: string): string {
@@ -258,6 +251,8 @@ export function DashboardMapWidget({
     };
   }, [rows, aggregationConfig]);
 
+  const mapVisual = useMemo(() => resolveMapVisualStyle(aggregationConfig), [aggregationConfig]);
+
   const useArChoropleth =
     argentinaMode && arGeo && !arGeoError && provinceSums.size > 0;
 
@@ -289,19 +284,19 @@ export function DashboardMapWidget({
       const has = v != null && Number.isFinite(v);
       if (!has) {
         return {
-          fillColor: "#e8edf3",
+          fillColor: mapVisual.choroplethEmptyColor,
           fillOpacity: 0.92,
           color: "#b8c5d6",
           weight: 0.9,
           opacity: 1,
         };
       }
-      const fill = getFillColor(v, chMin, chMax);
+      const ch = resolveChoroplethVisual(v, chMin, chMax, mapVisual);
       return {
-        fillColor: fill,
-        fillOpacity: 0.88,
-        color: "#64748b",
-        weight: 1,
+        fillColor: ch.fillColor,
+        fillOpacity: ch.fillOpacity,
+        color: ch.strokeColor,
+        weight: ch.strokeWeight,
         opacity: 0.95,
       };
     };
@@ -378,25 +373,6 @@ export function DashboardMapWidget({
   const numericValues = markers.map((m) => m.value).filter((v): v is number => Number.isFinite(v));
   const minValue = numericValues.length > 0 ? Math.min(...numericValues) : null;
   const maxValue = numericValues.length > 0 ? Math.max(...numericValues) : null;
-  const hasRange = minValue != null && maxValue != null && maxValue > minValue;
-  const getIntensityLocal = (value: number | null) => {
-    if (value == null || minValue == null || maxValue == null) return 0.45;
-    if (!hasRange) return 0.6;
-    return Math.max(0, Math.min(1, (value - minValue) / (maxValue - minValue)));
-  };
-  const getRadius = (value: number | null) => {
-    const intensity = getIntensityLocal(value);
-    return 5 + intensity * 9;
-  };
-  const getFillColorLocal = (value: number | null) => {
-    const intensity = getIntensityLocal(value);
-    const lightness = 72 - intensity * 34;
-    return `hsl(199 89% ${lightness}%)`;
-  };
-  const getFillOpacity = (value: number | null) => {
-    const intensity = getIntensityLocal(value);
-    return 0.4 + intensity * 0.45;
-  };
 
   const tileUrl =
     argentinaMode && arGeo && !arGeoError ? CARTO_LIGHT_TILE : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
@@ -422,20 +398,18 @@ export function DashboardMapWidget({
           const value = marker.value != null ? String(marker.value) : "";
           const popupLabel = marker.label || `(${marker.lat.toFixed(4)}, ${marker.lon.toFixed(4)})`;
           const popupContent = [popupLabel, value].filter(Boolean).join(" — ");
-          const radius = getRadius(marker.value);
-          const fillColor = getFillColorLocal(marker.value);
-          const fillOpacity = getFillOpacity(marker.value);
+          const mv = resolveMarkerVisual(marker.value, minValue, maxValue, mapVisual);
           return (
             <CircleMarker
               key={i}
               center={[marker.lat, marker.lon]}
-              radius={radius}
+              radius={mv.radius}
               pathOptions={{
-                fillColor,
-                color: fillColor,
-                weight: 1.5,
+                fillColor: mv.fillColor,
+                color: mv.strokeColor,
+                weight: mv.strokeWidth,
                 opacity: 0.9,
-                fillOpacity,
+                fillOpacity: mv.fillOpacity,
               }}
             >
               <Popup>

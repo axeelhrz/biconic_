@@ -16,6 +16,7 @@ import {
   type GeoComponentOverrides,
 } from "@/lib/geo/geo-enrichment";
 import { DashboardThemeFormSections, mergeCardThemePatch } from "./DashboardThemeFormSections";
+import { MapChartAppearanceFields } from "./MapChartAppearanceFields";
 
 export type MetricConditionEdit = {
   field: string;
@@ -117,6 +118,16 @@ export type AggregationConfigEdit = {
     lonField?: string;
   };
   mapDefaultCountry?: string;
+  /** Mapa: codificación visual por valor. */
+  mapValueEncoding?: "both" | "color" | "size";
+  mapColorLow?: string;
+  mapColorHigh?: string;
+  mapRadiusMin?: number;
+  mapRadiusMax?: number;
+  mapFillOpacityMin?: number;
+  mapFillOpacityMax?: number;
+  mapStrokeWidth?: number;
+  mapChoroplethEmptyColor?: string;
   geoComponentOverrides?: GeoComponentOverrides;
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   /** Tabla: clave de columna → texto del encabezado. */
@@ -926,6 +937,17 @@ export function MetricConfigPanel({
               <strong className="text-[var(--studio-fg)]">tipografía</strong> del dibujo (combo, barras, líneas, etc.). El fondo
               y borde de la <em>tarjeta</em> se configuran en <strong>General</strong> → «Apariencia de esta tarjeta».
             </p>
+            {chartType === "map" && (
+              <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">
+                  Mapa — color y tamaño
+                </h4>
+                <p className="text-[11px] text-[var(--studio-fg-muted)]">
+                  Los valores de la métrica (eje Y) definen la intensidad entre color bajo y alto; el radio del punto responde al modo elegido.
+                </p>
+                <MapChartAppearanceFields agg={agg} updateAgg={updateAgg} />
+              </div>
+            )}
             <div className="space-y-4 border-b border-[var(--studio-border)] pb-4">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Leyenda y etiquetas</h4>
         {(((widget.aggregationConfig as any)?.chartType || widget.type) === "pie" || ((widget.aggregationConfig as any)?.chartType || widget.type) === "doughnut") && (
