@@ -8,15 +8,13 @@ import {
   AR_BOUNDING_BOX,
   AR_GEOJSON_PATH,
   isArgentinaDefaultCountry,
+  isPointInArgentinaBBox,
   resolveArProvinceGadmId,
   type ArProvinceGadmId,
 } from "@/lib/geo/argentinaProvinces";
+import { findArProvinceGadmIdForLatLon } from "@/lib/geo/pointInProvinceGeoJson";
 import type { MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
-import {
-  resolveChoroplethVisual,
-  resolveMapVisualStyle,
-  resolveMarkerVisual,
-} from "@/lib/dashboard/mapVisualScale";
+import { resolveChoroplethVisual, resolveMapVisualStyle, resolveMarkerVisual } from "@/lib/dashboard/mapVisualScale";
 
 export type MapAggregationConfig = MapVisualConfigInput & {
   chartXAxis?: string;
@@ -187,23 +185,48 @@ export function DashboardMapWidget({
     const provinceSumsRes = new Map<ArProvinceGadmId, number>();
     let provinceMatchRowsRes = 0;
 
+    const useProvincePolygons =
+      argentinaMode && arGeo && !arGeoError && Array.isArray(arGeo.features) && arGeo.features.length > 0;
+
+    const addToProvince = (pid: ArProvinceGadmId, valueCandidate: number) => {
+      provinceMatchRowsRes += 1;
+      provinceSumsRes.set(pid, (provinceSumsRes.get(pid) ?? 0) + valueCandidate);
+    };
+
     for (const row of rows.slice(0, 500)) {
       const r = row as Record<string, unknown>;
       const rawLabel = labelKeyRes ? r[labelKeyRes] : "";
       const fromDim = rawLabel != null ? String(rawLabel) : "";
       const fromGeo = r.__geo_label != null ? String(r.__geo_label) : "";
-      const pid = resolveArProvinceGadmId(fromDim) ?? resolveArProvinceGadmId(fromGeo);
-      if (!pid) continue;
       const valueCandidate = valueKeyRes ? Number(r[valueKeyRes]) : NaN;
       if (!Number.isFinite(valueCandidate)) continue;
-      provinceMatchRowsRes += 1;
-      provinceSumsRes.set(pid, (provinceSumsRes.get(pid) ?? 0) + valueCandidate);
+
+      let attributed = false;
+      if (latColRes && lonColRes) {
+        const lat = Number(r[latColRes]);
+        const lon = Number(r[lonColRes]);
+        if (useProvincePolygons && Number.isFinite(lat) && Number.isFinite(lon) && isPointInArgentinaBBox(lat, lon)) {
+          const pidPt = findArProvinceGadmIdForLatLon(arGeo, lat, lon);
+          if (pidPt) {
+            addToProvince(pidPt, valueCandidate);
+            attributed = true;
+          }
+        }
+      }
+
+      if (!attributed) {
+        const pid = resolveArProvinceGadmId(fromDim) ?? resolveArProvinceGadmId(fromGeo);
+        if (pid) {
+          addToProvince(pid, valueCandidate);
+          attributed = true;
+        }
+      }
     }
 
     if (!latColRes || !lonColRes) {
       const unresolved = rows.length;
       return {
-        markers: [],
+        markers: [] as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>,
         valueKey: valueKeyRes ?? "",
         unresolvedCount: unresolved,
         provinceSums: provinceSumsRes,
@@ -211,9 +234,10 @@ export function DashboardMapWidget({
       };
     }
 
-    const markersRes = rows
-      .slice(0, 500)
-      .map((row) => {
+    /** En Argentina con GeoJSON cargado, no se usan puntos: el valor va al polígono de la provincia. */
+    const markersRes: Array<{ lat: number; lon: number; value: number | null; label: string; source: string }> = [];
+    if (!useProvincePolygons) {
+      for (const row of rows.slice(0, 500)) {
         const r = row as Record<string, unknown>;
         const lat = Number(r[latColRes!]);
         const lon = Number(r[lonColRes!]);
@@ -221,16 +245,16 @@ export function DashboardMapWidget({
         const label = rawLabel != null ? String(rawLabel) : "";
         const valueCandidate = valueKeyRes ? Number(r[valueKeyRes]) : NaN;
         const sourceValue = geoSourceKey ? String(r[geoSourceKey] ?? "") : "native";
-        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-        return {
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        markersRes.push({
           lat,
           lon,
           value: Number.isFinite(valueCandidate) ? valueCandidate : null,
           label,
           source: sourceValue,
-        };
-      })
-      .filter(Boolean) as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>;
+        });
+      }
+    }
 
     const unresolvedCountRes = rows.reduce((acc, row) => {
       const r = row as Record<string, unknown>;
@@ -249,7 +273,7 @@ export function DashboardMapWidget({
       provinceSums: provinceSumsRes,
       provinceMatchRows: provinceMatchRowsRes,
     };
-  }, [rows, aggregationConfig]);
+  }, [rows, aggregationConfig, arGeo, arGeoError, argentinaMode]);
 
   const mapVisual = useMemo(() => resolveMapVisualStyle(aggregationConfig), [aggregationConfig]);
 
@@ -262,7 +286,7 @@ export function DashboardMapWidget({
 
   const points = markers.map((m) => [m.lat, m.lon] as [number, number]);
 
-  if (argentinaMode && provinceSums.size > 0 && !arGeoError && !arGeo) {
+  if (argentinaMode && !arGeoError && !arGeo) {
     return (
       <div
         className="flex flex-1 items-center justify-center rounded border text-center text-sm"
