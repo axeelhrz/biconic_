@@ -42,7 +42,7 @@ import {
   getProcessedRowsForChart,
   type BuildChartConfigWidget,
 } from "@/lib/dashboard/buildChartConfig";
-import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import type { ChartLabelDisplayMode, ChartPercentBasis, ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
 import {
   compactGeoComponentOverridesForRequest,
@@ -229,7 +229,8 @@ type StudioWidget = {
   source?: { labelField?: string; valueFields?: string[] };
   isLoading?: boolean;
   excludeGlobalFilters?: boolean;
-  labelDisplayMode?: "percent" | "value" | "both";
+  labelDisplayMode?: ChartLabelDisplayMode;
+  chartPercentBasis?: ChartPercentBasis;
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
@@ -2205,7 +2206,8 @@ export function AdminDashboardStudio({
                           w.chartStyle as ChartStyleConfig | null | undefined,
                           effectiveTheme.fontFamily
                         ),
-                        labelDisplayMode: (w as { labelDisplayMode?: "percent" | "value" | "both" }).labelDisplayMode,
+                        labelDisplayMode: (w as { labelDisplayMode?: ChartLabelDisplayMode }).labelDisplayMode,
+                        chartPercentBasis: (w as { chartPercentBasis?: ChartPercentBasis }).chartPercentBasis,
                         chartMetricStyles: (() => {
                           const current = (w as { chartMetricStyles?: (ChartStyleConfig | undefined)[] }).chartMetricStyles;
                           return Array.isArray(current) && current.length > 0 ? current : buildChartMetricStyles(w.aggregationConfig);
@@ -2284,6 +2286,7 @@ export function AdminDashboardStudio({
                     metrics: [],
                   }) as AggregationConfigEdit,
                   labelDisplayMode: selectedWidgetForPanel.labelDisplayMode,
+                  chartPercentBasis: selectedWidgetForPanel.chartPercentBasis,
                   color: selectedWidgetForPanel.color as string | undefined,
                   kpiSecondaryLabel: selectedWidgetForPanel.kpiSecondaryLabel,
                   kpiSecondaryValue: selectedWidgetForPanel.kpiSecondaryValue,

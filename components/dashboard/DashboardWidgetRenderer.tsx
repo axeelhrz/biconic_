@@ -22,13 +22,18 @@ import {
   buildChartOptions,
   buildPieDoughnutLegendShared,
   createDataLabelDisplay,
+  formatChartPointDisplay,
   formatValue,
   getLayoutPadding,
   getPieDoughnutLayoutPadding,
   getValueFormatter,
+  normalizeChartPercentBasis,
   normalizeLabelVisibilityMode,
+  type ChartLabelDisplayMode,
   type ChartLabelVisibilityMode,
+  type ChartPercentBasis,
   type ChartStyleConfig,
+  type FormatChartPointContext,
 } from "@/lib/dashboard/chartOptions";
 import {
   formatAnalysisDateForChart,
@@ -121,7 +126,9 @@ export interface DashboardWidgetRendererWidget {
   content?: string;
   filterConfig?: FilterWidgetConfig;
   facetValues?: Record<string, unknown[]>;
-  labelDisplayMode?: "percent" | "value" | "both";
+  labelDisplayMode?: ChartLabelDisplayMode;
+  /** Base del % (total general, por categoría o por serie). */
+  chartPercentBasis?: ChartPercentBasis;
   chartStyle?: ChartStyleConfig;
   /** Un estilo por dataset cuando el gráfico tiene varias métricas (formato por métrica). */
   chartMetricStyles?: (ChartStyleConfig | undefined)[];
@@ -518,7 +525,6 @@ export function DashboardWidgetRenderer({
       typeof agg?.labelVisibilityMaxCount === "number" && Number.isFinite(agg.labelVisibilityMaxCount) && agg.labelVisibilityMaxCount >= 2
         ? Math.floor(agg.labelVisibilityMaxCount)
         : undefined;
-    const labelMode = widget.labelDisplayMode ?? "percent";
     const type = chartType === "horizontalBar"
       ? "horizontalBar"
       : chartType === "area"
@@ -528,6 +534,9 @@ export function DashboardWidgetRenderer({
           : chartType === "scatter"
             ? "line"
             : (chartType as "bar" | "line" | "pie" | "doughnut");
+    const percentBasis = normalizeChartPercentBasis(widget.chartPercentBasis);
+    const pieLabelMode: ChartLabelDisplayMode = widget.labelDisplayMode ?? "percent";
+    const cartesianLabelMode: ChartLabelDisplayMode = widget.labelDisplayMode ?? "value";
     const metricStyles = widget.chartMetricStyles as (ChartStyleConfig | undefined)[] | undefined;
     const usePerMetricFormat = Array.isArray(metricStyles) && metricStyles.length > 0;
     const optionsBase = getChartOptionsBase(darkChartTheme);
@@ -578,7 +587,7 @@ export function DashboardWidgetRenderer({
       return formatted ?? base;
     };
     if (type === "pie" || type === "doughnut") {
-      const base = buildChartOptions(type, style, labelMode) as Record<string, unknown>;
+      const base = buildChartOptions(type, style, pieLabelMode, percentBasis) as Record<string, unknown>;
       const baseDatalabels = (base.plugins as { datalabels?: Record<string, unknown> })?.datalabels ?? {};
       const legendColor = darkChartTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
       const optionsBaseNoScales = { ...optionsBase } as Record<string, unknown>;
@@ -613,15 +622,23 @@ export function DashboardWidgetRenderer({
             : "58%"
           : undefined;
       const forceExteriorLabels = !pieIntegrated && !pieLegendVisible;
-      const pieTooltipFormatter = getValueFormatter(style, labelMode);
+      const pieTooltipFormatter = getValueFormatter(style, pieLabelMode, percentBasis);
       const tooltipPlugin = {
         ...(optionsBasePlugins.tooltip as Record<string, unknown> | undefined),
         callbacks: {
           ...((optionsBasePlugins.tooltip as { callbacks?: Record<string, unknown> } | undefined)?.callbacks ?? {}),
-          label: (ctx: { label?: string; parsed: number; chart?: unknown }) => {
+          label: (ctx: {
+            label?: string;
+            parsed: number;
+            chart?: unknown;
+            dataIndex?: number;
+            datasetIndex?: number;
+          }) => {
             const fullLabel = String(ctx.label ?? "");
             const valueStr = pieTooltipFormatter(ctx.parsed, {
               chart: ctx.chart as { data?: { datasets?: Array<{ data?: unknown[] }> } },
+              dataIndex: ctx.dataIndex,
+              datasetIndex: ctx.datasetIndex,
             });
             return fullLabel ? `${fullLabel}: ${valueStr}` : valueStr;
           },
@@ -636,7 +653,11 @@ export function DashboardWidgetRenderer({
               const labelsArr = chart?.data?.labels ?? [];
               const name = idx >= 0 && idx < labelsArr.length ? String(labelsArr[idx] ?? "") : "";
               const num = Number(value);
-              const valueStr = pieTooltipFormatter(num, { chart: ctx.chart as never });
+              const valueStr = pieTooltipFormatter(num, {
+                chart: ctx.chart as never,
+                dataIndex: idx >= 0 ? idx : undefined,
+                datasetIndex: 0,
+              });
               if (!name) return valueStr;
               return nameOrder === "above" ? `${name}\n${valueStr}` : `${valueStr}\n${name}`;
             }
@@ -713,7 +734,13 @@ export function DashboardWidgetRenderer({
       chartType === "stackedColumn" ||
       chartType === "scatter"
     ) {
-      const built = buildChartOptions(type, style, "value") as Record<string, unknown>;
+      const built = buildChartOptions(type, style, cartesianLabelMode, percentBasis) as Record<string, unknown>;
+      const rawDatasetsForPercent = chartConfig?.datasets ?? [];
+      const makePercentCtx = (dataIndex: number, datasetIndex: number): FormatChartPointContext => ({
+        chart: { data: { datasets: rawDatasetsForPercent } },
+        dataIndex,
+        datasetIndex,
+      });
       const builtPlugins = built.plugins as Record<string, unknown> | undefined;
       const builtDatalabels = builtPlugins?.datalabels as Record<string, unknown> | undefined ?? {};
       const hasSeriesDimension =
@@ -870,46 +897,85 @@ export function DashboardWidgetRenderer({
         if (datasetIndex === 0) return value * comboRanges.range0 + comboRanges.min0;
         return value * comboRanges.range1 + comboRanges.min1;
       };
-      const formatMetricValue = (value: number, datasetIndex?: number, ctx?: unknown): string => {
+      const formatCartesianPoint = (
+        value: number,
+        datasetIndex?: number,
+        ctx?: FormatChartPointContext
+      ): string => {
         const rawValue = toRawComboValue(value, datasetIndex);
-        const datasetStyle = datasetIndex != null && metricStyles?.[datasetIndex] != null
-          ? metricStyles[datasetIndex]!
-          : style;
-        if (datasetStyle != null || usePerMetricFormat || isComboTwo) {
-          return getValueFormatter(datasetStyle ?? undefined, "value")(
-            rawValue,
-            ctx as { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }
-          );
-        }
-        return String(rawValue);
+        const dsi =
+          typeof ctx?.datasetIndex === "number"
+            ? ctx.datasetIndex
+            : typeof datasetIndex === "number"
+              ? datasetIndex
+              : 0;
+        const di = ctx?.dataIndex;
+        const dsIdxForStyle = typeof datasetIndex === "number" ? datasetIndex : dsi;
+        const datasetStyle =
+          metricStyles?.[dsIdxForStyle] != null ? metricStyles[dsIdxForStyle]! : style;
+        const styleForFormat = datasetStyle ?? style;
+        const pointCtx: FormatChartPointContext | undefined =
+          cartesianLabelMode === "percent" || cartesianLabelMode === "both"
+            ? typeof di === "number"
+              ? makePercentCtx(di, dsi)
+              : undefined
+            : ctx;
+        return formatChartPointDisplay(
+          rawValue,
+          styleForFormat,
+          cartesianLabelMode,
+          percentBasis,
+          pointCtx
+        );
       };
-      const baseDatalabelFormatter = (builtDatalabels as { formatter?: (v: number, c?: unknown) => string }).formatter;
-      const datalabelFormatter =
-        usePerMetricFormat || isComboTwo
-          ? (value: number, ctx?: { datasetIndex?: number }) => formatMetricValue(value, ctx?.datasetIndex, ctx)
-          : baseDatalabelFormatter;
+      const datalabelFormatter = (value: number, ctx?: FormatChartPointContext) =>
+        formatCartesianPoint(value, ctx?.datasetIndex, {
+          chart: ctx?.chart,
+          dataIndex: ctx?.dataIndex,
+          datasetIndex: ctx?.datasetIndex,
+        });
+
+      const baseOptionsTooltipCallbacks = (
+        (optionsBase.plugins as { tooltip?: { callbacks?: Record<string, unknown> } } | undefined)?.tooltip
+          ?.callbacks ?? {}
+      ) as Record<string, unknown>;
+
+      const tooltipTitleCallback =
+        shouldFormatDateAxis || isComboTwo || usePerMetricFormat || syncAxes
+          ? (items: Array<{ label?: unknown }>) => {
+              const first = items?.[0];
+              return formatTemporalLabel(first?.label ?? "");
+            }
+          : undefined;
+
+      const tooltipLabelCallback =
+        cartesianLabelMode !== "value" || isComboTwo || usePerMetricFormat || syncAxes
+          ? (context: {
+              dataset: { label?: string };
+              parsed: { x?: number; y?: number };
+              datasetIndex?: number;
+              dataIndex?: number;
+              chart?: unknown;
+            }) => {
+              const parsedValue =
+                type === "horizontalBar" ? (context.parsed?.x ?? 0) : (context.parsed?.y ?? 0);
+              const formatted = formatCartesianPoint(parsedValue, context.datasetIndex, {
+                chart: context.chart as FormatChartPointContext["chart"],
+                dataIndex: context.dataIndex,
+                datasetIndex: context.datasetIndex,
+              });
+              return `${context.dataset?.label ?? ""}: ${formatted}`;
+            }
+          : undefined;
 
       const tooltipCallbacks =
-        isComboTwo || usePerMetricFormat || syncAxes
+        tooltipTitleCallback || tooltipLabelCallback
           ? {
-              title: (items: Array<{ label?: unknown }>) => {
-                const first = items?.[0];
-                return formatTemporalLabel(first?.label ?? "");
-              },
-              label: (context: { dataset: { label?: string }; parsed: { x?: number; y?: number }; datasetIndex?: number }) => {
-                const parsedValue = type === "horizontalBar" ? (context.parsed?.x ?? 0) : (context.parsed?.y ?? 0);
-                const formatted = formatMetricValue(parsedValue, context?.datasetIndex, context);
-                return `${context.dataset?.label ?? ""}: ${formatted}`;
-              },
+              ...baseOptionsTooltipCallbacks,
+              ...(tooltipTitleCallback ? { title: tooltipTitleCallback } : {}),
+              ...(tooltipLabelCallback ? { label: tooltipLabelCallback } : {}),
             }
-          : shouldFormatDateAxis
-            ? {
-                title: (items: Array<{ label?: unknown }>) => {
-                  const first = items?.[0];
-                  return formatTemporalLabel(first?.label ?? "");
-                },
-              }
-            : undefined;
+          : undefined;
       const builtScales = (built.scales as Record<string, unknown> | undefined) ?? {};
       const categoryScaleKey = type === "horizontalBar" ? "y" : "x";
       const valueScaleKey = type === "horizontalBar" ? "x" : "y";
@@ -1033,7 +1099,7 @@ export function DashboardWidgetRenderer({
                   datasets: chartConfig?.datasets,
                   maxVisible: labelMaxVisible,
                 }),
-          ...(datalabelFormatter != null && { formatter: datalabelFormatter }),
+          formatter: datalabelFormatter,
           ...(style?.dataLabelColor
             ? { color: style.dataLabelColor }
             : darkChartTheme
@@ -1079,6 +1145,7 @@ export function DashboardWidgetRenderer({
     widget.chartStyle,
     widget.chartMetricStyles,
     widget.labelDisplayMode,
+    widget.chartPercentBasis,
     widget.aggregationConfig,
     darkChartTheme,
     pieContainerWidth,

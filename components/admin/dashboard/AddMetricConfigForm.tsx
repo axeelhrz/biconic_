@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import AdminFieldSelector from "./AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
+import type { ChartLabelDisplayMode, ChartPercentBasis } from "@/lib/dashboard/chartOptions";
 
 export type MetricConditionEdit = {
   field: string;
@@ -132,7 +133,8 @@ export type AddMetricFormConfig = {
   type: string;
   gridSpan?: number;
   color?: string;
-  labelDisplayMode?: "percent" | "value" | "both";
+  labelDisplayMode?: ChartLabelDisplayMode;
+  chartPercentBasis?: ChartPercentBasis;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
   kpiCaption?: string;
@@ -590,7 +592,7 @@ export function AddMetricConfigForm({
               <Label className="add-metric-label">Etiquetas (valor en porción)</Label>
               <select
                 value={form.labelDisplayMode || "percent"}
-                onChange={(e) => updateForm({ labelDisplayMode: e.target.value as "percent" | "value" | "both" })}
+                onChange={(e) => updateForm({ labelDisplayMode: e.target.value as ChartLabelDisplayMode })}
                 className="add-metric-select mt-1"
               >
                 <option value="percent">Porcentaje</option>
@@ -598,6 +600,54 @@ export function AddMetricConfigForm({
                 <option value="both">Valor + porcentaje</option>
               </select>
             </div>
+            {(form.labelDisplayMode === "percent" || form.labelDisplayMode === "both" || !form.labelDisplayMode) && (
+              <div>
+                <Label className="add-metric-label">Base del porcentaje</Label>
+                <select
+                  value={form.chartPercentBasis ?? "grand_total"}
+                  onChange={(e) => updateForm({ chartPercentBasis: e.target.value as ChartPercentBasis })}
+                  className="add-metric-select mt-1"
+                >
+                  <option value="grand_total">Total general (toda la torta)</option>
+                  <option value="per_category">Por categoría</option>
+                  <option value="per_series">Por serie</option>
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+        {["bar", "horizontalBar", "line", "area", "combo", "scatter"].includes(form.type) && (
+          <div className="space-y-3 rounded-lg border border-[var(--studio-border)] p-3">
+            <Label className="add-metric-label">Tooltip y etiquetas (valor / %)</Label>
+            <p className="text-[11px] text-[var(--studio-fg-muted)]">
+              El eje sigue en valores absolutos; esto solo cambia tooltip y texto sobre barras o puntos.
+            </p>
+            <div>
+              <Label className="add-metric-label">Mostrar</Label>
+              <select
+                value={form.labelDisplayMode ?? "value"}
+                onChange={(e) => updateForm({ labelDisplayMode: e.target.value as ChartLabelDisplayMode })}
+                className="add-metric-select mt-1"
+              >
+                <option value="value">Valor absoluto</option>
+                <option value="percent">Porcentaje (%)</option>
+                <option value="both">Valor y porcentaje</option>
+              </select>
+            </div>
+            {(form.labelDisplayMode === "percent" || form.labelDisplayMode === "both") && (
+              <div>
+                <Label className="add-metric-label">Base del porcentaje</Label>
+                <select
+                  value={form.chartPercentBasis ?? "grand_total"}
+                  onChange={(e) => updateForm({ chartPercentBasis: e.target.value as ChartPercentBasis })}
+                  className="add-metric-select mt-1"
+                >
+                  <option value="grand_total">Total general</option>
+                  <option value="per_category">Por categoría (eje categoría)</option>
+                  <option value="per_series">Por serie (leyenda)</option>
+                </select>
+              </div>
+            )}
           </div>
         )}
         {CHART_TYPES_FOR_LABELS.includes(form.type) && (

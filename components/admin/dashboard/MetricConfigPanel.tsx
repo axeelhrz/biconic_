@@ -24,6 +24,7 @@ import {
 } from "@/lib/dashboard/gridLayout";
 import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
 import { CONTENT_ICON_POSITION_OPTIONS, type ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
+import type { ChartLabelDisplayMode, ChartPercentBasis } from "@/lib/dashboard/chartOptions";
 
 export type MetricConditionEdit = {
   field: string;
@@ -157,7 +158,8 @@ export type MetricConfigWidget = {
   gridSpan?: number;
   minHeight?: number;
   aggregationConfig?: AggregationConfigEdit;
-  labelDisplayMode?: "percent" | "value" | "both";
+  labelDisplayMode?: ChartLabelDisplayMode;
+  chartPercentBasis?: ChartPercentBasis;
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
@@ -1321,7 +1323,7 @@ export function MetricConfigPanel({
               <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Etiquetas en porciones</Label>
               <select
                 value={widget.labelDisplayMode || "percent"}
-                onChange={(e) => onUpdate({ labelDisplayMode: e.target.value as "percent" | "value" | "both" })}
+                onChange={(e) => onUpdate({ labelDisplayMode: e.target.value as ChartLabelDisplayMode })}
                 className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
               >
                 <option value="percent">Porcentaje</option>
@@ -1329,6 +1331,23 @@ export function MetricConfigPanel({
                 <option value="both">Valor + porcentaje</option>
               </select>
             </div>
+            {(widget.labelDisplayMode === "percent" || widget.labelDisplayMode === "both" || !widget.labelDisplayMode) && (
+              <div>
+                <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Base del porcentaje</Label>
+                <select
+                  value={widget.chartPercentBasis ?? "grand_total"}
+                  onChange={(e) => onUpdate({ chartPercentBasis: e.target.value as ChartPercentBasis })}
+                  className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                >
+                  <option value="grand_total">Total general (toda la torta)</option>
+                  <option value="per_category">Por categoría</option>
+                  <option value="per_series">Por serie</option>
+                </select>
+                <p className="mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">
+                  En circular/dona con una sola métrica, «Total general» y «Por categoría» suelen coincidir.
+                </p>
+              </div>
+            )}
             {agg.pieLegendMode !== "integrated" && (
               <>
                 <div>
@@ -1375,6 +1394,43 @@ export function MetricConfigPanel({
                   </Label>
                 </div>
               </>
+            )}
+          </div>
+        )}
+        {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
+          <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]/40 p-3">
+            <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tooltip y etiquetas (valor / %)</Label>
+            <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+              El eje numérico sigue en valores absolutos; acá definís si el tooltip y el texto sobre barras o puntos muestran número, porcentaje o ambos.
+            </p>
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Mostrar</Label>
+              <select
+                value={widget.labelDisplayMode ?? "value"}
+                onChange={(e) => onUpdate({ labelDisplayMode: e.target.value as ChartLabelDisplayMode })}
+                className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+              >
+                <option value="value">Valor absoluto</option>
+                <option value="percent">Porcentaje (%)</option>
+                <option value="both">Valor y porcentaje</option>
+              </select>
+            </div>
+            {(widget.labelDisplayMode === "percent" || widget.labelDisplayMode === "both") && (
+              <div>
+                <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Base del porcentaje</Label>
+                <select
+                  value={widget.chartPercentBasis ?? "grand_total"}
+                  onChange={(e) => onUpdate({ chartPercentBasis: e.target.value as ChartPercentBasis })}
+                  className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                >
+                  <option value="grand_total">Total general (todo el gráfico)</option>
+                  <option value="per_category">Por categoría (misma columna del eje categoría)</option>
+                  <option value="per_series">Por serie (cada leyenda respecto a su total)</option>
+                </select>
+                <p className="mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">
+                  En combo con métricas muy distintas, «Total general» puede ser poco interpretable; probá «Por serie».
+                </p>
+              </div>
             )}
           </div>
         )}

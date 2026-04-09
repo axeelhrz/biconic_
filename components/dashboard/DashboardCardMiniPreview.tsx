@@ -203,6 +203,7 @@ async function loadWidgetData(
       chartStyle: buildResolvedChartStyle(agg, widget.chartStyle ?? null, effectiveTheme.fontFamily),
       chartMetricStyles: buildChartMetricStyles(agg),
       labelDisplayMode: "percent",
+      chartPercentBasis: "grand_total",
     },
     hasData: loaded.hasData,
     gridSpan,

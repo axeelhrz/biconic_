@@ -130,32 +130,134 @@ export function getLayoutPadding(style?: ChartStyleConfig | null): number {
   return style?.layoutPadding ?? DEFAULT_LAYOUT_PADDING;
 }
 
-export function getValueFormatter(
-  style?: ChartStyleConfig | null,
-  labelMode?: "percent" | "value" | "both"
-) {
+/** Base para calcular %: total del gráfico, por categoría (eje X) o por serie (dataset). */
+export type ChartPercentBasis = "grand_total" | "per_category" | "per_series";
+
+export type ChartLabelDisplayMode = "percent" | "value" | "both";
+
+export function normalizeChartPercentBasis(b?: unknown): ChartPercentBasis {
+  if (b === "per_category" || b === "per_series" || b === "grand_total") return b;
+  return "grand_total";
+}
+
+export function sumFiniteNumbers(values: unknown[]): number {
+  let sum = 0;
+  for (const v of values) {
+    const n = Number(v);
+    if (Number.isFinite(n)) sum += n;
+  }
+  return sum;
+}
+
+/**
+ * Denominador para el % según la base. En pie/dona con un solo dataset,
+ * `per_category` usa el total del anillo (suma de la serie), no el valor de una sola porción.
+ */
+export function resolvePercentDenominator(
+  basis: ChartPercentBasis,
+  datasets: Array<{ data?: unknown[] } | undefined> | undefined,
+  dataIndex: number,
+  datasetIndex: number
+): number {
+  if (!datasets || datasets.length === 0) return 0;
+  switch (basis) {
+    case "grand_total": {
+      let sum = 0;
+      for (const ds of datasets) {
+        if (!Array.isArray(ds?.data)) continue;
+        sum += sumFiniteNumbers(ds.data);
+      }
+      return sum;
+    }
+    case "per_category": {
+      if (datasets.length === 1) {
+        const arr = datasets[0]?.data;
+        return Array.isArray(arr) ? sumFiniteNumbers(arr) : 0;
+      }
+      let sum = 0;
+      for (const ds of datasets) {
+        const arr = ds?.data;
+        if (!Array.isArray(arr) || dataIndex < 0 || dataIndex >= arr.length) continue;
+        const n = Number(arr[dataIndex]);
+        if (Number.isFinite(n)) sum += n;
+      }
+      return sum;
+    }
+    case "per_series": {
+      const ds = datasets[datasetIndex];
+      if (!ds || !Array.isArray(ds.data)) return 0;
+      return sumFiniteNumbers(ds.data);
+    }
+    default:
+      return 0;
+  }
+}
+
+export type FormatChartPointContext = {
+  chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } };
+  dataIndex?: number;
+  datasetIndex?: number;
+};
+
+export function formatChartPointDisplay(
+  rawValue: number,
+  style: ChartStyleConfig | null | undefined,
+  labelMode: ChartLabelDisplayMode | undefined,
+  percentBasis: ChartPercentBasis,
+  ctx?: FormatChartPointContext
+): string {
+  const mode: ChartLabelDisplayMode = labelMode ?? "value";
   const format = (style?.valueFormat ?? "none") as ValueFormatType;
   const symbol = style?.currencySymbol ?? "$";
   const scale = (style?.valueScale ?? "none") as ValueScaleType;
   const decimals = style?.decimals ?? 2;
   const useGrouping = style?.useGrouping !== false;
-  const formatMetricValue = (rawValue: number) =>
-    formatValue(Number(rawValue), format, symbol, scale, decimals, useGrouping);
-  const formatPercent = (rawValue: number, total: number) => {
-    const pct = total ? (Number(rawValue) / total) * 100 : 0;
+  const formatMetricValue = (v: number) =>
+    formatValue(Number(v), format, symbol, scale, decimals, useGrouping);
+  const formatPercentPart = (value: number, total: number) => {
+    const pct = total ? (Number(value) / total) * 100 : 0;
     return `${pct.toFixed(Math.min(1, decimals))}%`;
   };
-  return (value: number, ctx?: { chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } } }) => {
-    const firstDataset = ctx?.chart?.data?.datasets?.[0]?.data;
-    if ((labelMode === "percent" || labelMode === "both") && Array.isArray(firstDataset)) {
-      const total = firstDataset.reduce<number>((acc, current) => acc + Number(current), 0);
-      if (labelMode === "percent") return formatPercent(Number(value), total);
-      const valueText = formatMetricValue(Number(value));
-      const percentText = formatPercent(Number(value), total);
-      return `${valueText}\n${percentText}`;
-    }
-    return formatMetricValue(Number(value));
-  };
+
+  if (mode === "value") {
+    return formatMetricValue(rawValue);
+  }
+
+  const datasets = ctx?.chart?.data?.datasets;
+  if (!Array.isArray(datasets) || datasets.length === 0) {
+    return formatMetricValue(rawValue);
+  }
+
+  const di = typeof ctx?.dataIndex === "number" ? ctx.dataIndex : -1;
+  const dsi =
+    typeof ctx?.datasetIndex === "number" && ctx.datasetIndex >= 0 ? ctx.datasetIndex : 0;
+
+  let total: number;
+  if (di < 0) {
+    const first = datasets[0]?.data;
+    total = Array.isArray(first) ? sumFiniteNumbers(first) : 0;
+  } else {
+    total = resolvePercentDenominator(percentBasis, datasets, di, dsi);
+  }
+
+  if (mode === "percent") {
+    return formatPercentPart(rawValue, total);
+  }
+  if (mode === "both") {
+    const valueText = formatMetricValue(rawValue);
+    const percentText = formatPercentPart(rawValue, total);
+    return `${valueText}\n${percentText}`;
+  }
+  return formatMetricValue(rawValue);
+}
+
+export function getValueFormatter(
+  style?: ChartStyleConfig | null,
+  labelMode?: ChartLabelDisplayMode,
+  percentBasis: ChartPercentBasis = "grand_total"
+) {
+  return (value: number, ctx?: FormatChartPointContext) =>
+    formatChartPointDisplay(Number(value), style, labelMode ?? "value", percentBasis, ctx);
 }
 
 export type ChartLabelVisibilityMode = "all" | "auto" | "min_max";
@@ -364,10 +466,16 @@ export function createLegendLabelFilter(params: {
 export function buildChartOptions(
   type: "bar" | "line" | "pie" | "doughnut" | "horizontalBar",
   style?: ChartStyleConfig | null,
-  labelDisplayMode?: "percent" | "value" | "both"
+  labelDisplayMode?: ChartLabelDisplayMode,
+  chartPercentBasis: ChartPercentBasis = "grand_total"
 ): Record<string, unknown> {
   const padding = getLayoutPadding(style);
-  const formatter = getValueFormatter(style, type === "pie" || type === "doughnut" ? (labelDisplayMode || "percent") : "value");
+  const basis = normalizeChartPercentBasis(chartPercentBasis);
+  const effectiveLabelMode: ChartLabelDisplayMode =
+    type === "pie" || type === "doughnut"
+      ? labelDisplayMode || "percent"
+      : labelDisplayMode ?? "value";
+  const formatter = getValueFormatter(style, effectiveLabelMode, basis);
   const fontSize = style?.dataLabelFontSize ?? 12;
   const color = style?.dataLabelColor ?? "#374151";
   const tickFontSize = style?.fontSize ?? 11;
