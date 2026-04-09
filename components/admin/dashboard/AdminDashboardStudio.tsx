@@ -180,6 +180,9 @@ type AggregationConfig = {
   chartLegendVisible?: boolean;
   pieLegendVisible?: boolean;
   pieLegendResponsive?: boolean;
+  pieLegendMode?: "side" | "integrated";
+  pieIntegratedNameOrder?: "above" | "below";
+  pieSliceBorderWidth?: number;
   /** Tabla: nombre de columna en datos → encabezado mostrado. */
   tableColumnLabelOverrides?: Record<string, string>;
   /** Si la dimensión es fecha, agrupar por este nivel. */

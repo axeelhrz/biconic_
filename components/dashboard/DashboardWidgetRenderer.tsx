@@ -432,6 +432,8 @@ export function DashboardWidgetRenderer({
       labelVisibilityMaxCount?: number;
       pieLegendVisible?: boolean;
       pieLegendResponsive?: boolean;
+      pieLegendMode?: "side" | "integrated";
+      pieIntegratedNameOrder?: "above" | "below";
     } | undefined;
     const style: ChartStyleConfig | undefined = {
       ...mergeChartVisualStyle(widget.aggregationConfig as AggregationLike),
@@ -523,23 +525,26 @@ export function DashboardWidgetRenderer({
       const pieLegendResponsive = agg?.pieLegendResponsive === true;
       const effectiveLegendPosition =
         pieLegendResponsive && pieContainerWidth > 0 && pieContainerWidth < 480 ? "bottom" : baseLegendPosition;
+      const pieIntegrated = agg?.pieLegendMode === "integrated";
       const pieLegendVisible = agg?.pieLegendVisible !== false;
+      const useChartLegend = !pieIntegrated && pieLegendVisible;
       const labelCount = chartConfig?.labels?.length ?? 0;
-      const pieLegend = pieLegendVisible
+      const pieLegend = useChartLegend
         ? (buildPieDoughnutLegendShared(chartConfig ?? undefined, legendColor, {
             legendPosition: effectiveLegendPosition,
             labelCount,
           }) as Record<string, unknown>)
         : { display: false };
       const basePadding = getLayoutPadding(style);
-      const pieLayoutPadding = getPieDoughnutLayoutPadding(effectiveLegendPosition, basePadding);
+      const layoutLegendPosition = useChartLegend ? effectiveLegendPosition : "chartArea";
+      const pieLayoutPadding = getPieDoughnutLayoutPadding(layoutLegendPosition, basePadding);
       const cutout =
         type === "doughnut"
           ? agg?.chartDoughnutCutout != null && agg.chartDoughnutCutout !== ""
             ? agg.chartDoughnutCutout
             : "58%"
           : undefined;
-      const forceExteriorLabels = !pieLegendVisible;
+      const forceExteriorLabels = !pieIntegrated && !pieLegendVisible;
       const pieTooltipFormatter = getValueFormatter(style, labelMode);
       const tooltipPlugin = {
         ...(optionsBasePlugins.tooltip as Record<string, unknown> | undefined),
@@ -554,16 +559,38 @@ export function DashboardWidgetRenderer({
           },
         },
       };
-      const datalabelDisplayResolved = forceExteriorLabels
+      const nameOrder = agg?.pieIntegratedNameOrder === "below" ? "below" : "above";
+      const pieIntegratedFormatter =
+        pieIntegrated
+          ? (value: unknown, ctx: { chart?: { data?: { labels?: unknown[]; datasets?: Array<{ data?: unknown[] }> } }; dataIndex?: number }) => {
+              const chart = ctx.chart;
+              const idx = typeof ctx.dataIndex === "number" ? ctx.dataIndex : -1;
+              const labelsArr = chart?.data?.labels ?? [];
+              const name = idx >= 0 && idx < labelsArr.length ? String(labelsArr[idx] ?? "") : "";
+              const num = Number(value);
+              const valueStr = pieTooltipFormatter(num, { chart: ctx.chart as never });
+              if (!name) return valueStr;
+              return nameOrder === "above" ? `${name}\n${valueStr}` : `${valueStr}\n${name}`;
+            }
+          : undefined;
+      const datalabelDisplayResolved = pieIntegrated
         ? true
-        : showDataLabels === false
-          ? false
-          : createDataLabelDisplay({
-              mode: labelVisibilityMode,
-              labels: chartConfig?.labels,
-              datasets: chartConfig?.datasets,
-              maxVisible: labelMaxVisible,
-            });
+        : forceExteriorLabels
+          ? true
+          : showDataLabels === false
+            ? false
+            : createDataLabelDisplay({
+                mode: labelVisibilityMode,
+                labels: chartConfig?.labels,
+                datasets: chartConfig?.datasets,
+                maxVisible: labelMaxVisible,
+              });
+      const interiorLabelColor =
+        style?.dataLabelColor != null && String(style.dataLabelColor).trim() !== ""
+          ? style.dataLabelColor
+          : darkChartTheme
+            ? DATALABEL_COLOR_DARK
+            : undefined;
       const plugins = {
         ...optionsBasePlugins,
         ...(base.plugins as object),
@@ -572,25 +599,34 @@ export function DashboardWidgetRenderer({
         datalabels: {
           ...baseDatalabels,
           display: datalabelDisplayResolved,
-          ...(forceExteriorLabels
+          ...(pieIntegrated
             ? {
-                anchor: "end",
-                align: "end",
-                offset: 10,
+                anchor: "center",
+                align: "center",
+                offset: 0,
                 clamp: true,
-                ...(style?.dataLabelColor != null && String(style.dataLabelColor).trim() !== ""
-                  ? { color: style.dataLabelColor }
-                  : darkChartTheme
-                    ? { color: DATALABEL_COLOR_DARK }
-                    : { color: AXIS_COLOR }),
+                ...(pieIntegratedFormatter != null ? { formatter: pieIntegratedFormatter } : {}),
+                ...(interiorLabelColor != null ? { color: interiorLabelColor } : { color: darkChartTheme ? DATALABEL_COLOR_DARK : "#ffffff" }),
               }
-            : {
-                ...(style?.dataLabelColor
-                  ? { color: style.dataLabelColor }
-                  : darkChartTheme
-                    ? { color: DATALABEL_COLOR_DARK }
-                    : {}),
-              }),
+            : forceExteriorLabels
+              ? {
+                  anchor: "end",
+                  align: "end",
+                  offset: 10,
+                  clamp: true,
+                  ...(style?.dataLabelColor != null && String(style.dataLabelColor).trim() !== ""
+                    ? { color: style.dataLabelColor }
+                    : darkChartTheme
+                      ? { color: DATALABEL_COLOR_DARK }
+                      : { color: AXIS_COLOR }),
+                }
+              : {
+                  ...(style?.dataLabelColor
+                    ? { color: style.dataLabelColor }
+                    : darkChartTheme
+                      ? { color: DATALABEL_COLOR_DARK }
+                      : {}),
+                }),
         },
       };
       return {
@@ -598,9 +634,6 @@ export function DashboardWidgetRenderer({
         ...optionsBaseNoScales,
         layout: { padding: pieLayoutPadding },
         ...(cutout != null ? { cutout } : {}),
-        elements: {
-          arc: { borderWidth: 0 },
-        },
         plugins,
       };
     }

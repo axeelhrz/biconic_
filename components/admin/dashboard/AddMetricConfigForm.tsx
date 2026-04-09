@@ -100,6 +100,9 @@ export type AggregationConfigEdit = {
   chartLegendVisible?: boolean;
   pieLegendVisible?: boolean;
   pieLegendResponsive?: boolean;
+  pieLegendMode?: "side" | "integrated";
+  pieIntegratedNameOrder?: "above" | "below";
+  pieSliceBorderWidth?: number;
   /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
   chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
@@ -525,17 +528,70 @@ export function AddMetricConfigForm({
           </select>
         </div>
         {(form.type === "pie" || form.type === "doughnut") && (
-          <div>
-            <Label className="add-metric-label">Etiquetas</Label>
-            <select
-              value={form.labelDisplayMode || "percent"}
-              onChange={(e) => updateForm({ labelDisplayMode: e.target.value as "percent" | "value" | "both" })}
-              className="add-metric-select mt-1"
-            >
-              <option value="percent">Porcentaje</option>
-              <option value="value">Valor</option>
-              <option value="both">Valor + porcentaje</option>
-            </select>
+          <div className="space-y-3 rounded-lg border border-[var(--studio-border)] p-3">
+            <div>
+              <Label className="add-metric-label">Modo de leyenda</Label>
+              <select
+                value={agg.pieLegendMode === "integrated" ? "integrated" : "side"}
+                onChange={(e) =>
+                  updateAgg({
+                    pieLegendMode: e.target.value === "integrated" ? "integrated" : undefined,
+                    ...(e.target.value !== "integrated" ? { pieIntegratedNameOrder: undefined } : {}),
+                  })
+                }
+                className="add-metric-select mt-1"
+              >
+                <option value="side">Al costado del gráfico</option>
+                <option value="integrated">Integrada en porciones</option>
+              </select>
+            </div>
+            {agg.pieLegendMode === "integrated" && (
+              <div>
+                <Label className="add-metric-label">Orden en la porción</Label>
+                <select
+                  value={agg.pieIntegratedNameOrder === "below" ? "below" : "above"}
+                  onChange={(e) =>
+                    updateAgg({
+                      pieIntegratedNameOrder: e.target.value === "below" ? "below" : "above",
+                    })
+                  }
+                  className="add-metric-select mt-1"
+                >
+                  <option value="above">Nombre arriba, valor abajo</option>
+                  <option value="below">Valor arriba, nombre abajo</option>
+                </select>
+              </div>
+            )}
+            <div>
+              <Label className="add-metric-label">Borde entre porciones (px)</Label>
+              <Input
+                type="number"
+                min={0}
+                max={8}
+                placeholder="0"
+                value={agg.pieSliceBorderWidth === undefined ? "" : agg.pieSliceBorderWidth}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  updateAgg({
+                    pieSliceBorderWidth:
+                      v === "" ? undefined : Math.max(0, Math.min(8, parseInt(v, 10) || 0)),
+                  });
+                }}
+                className="add-metric-input mt-1 h-8 text-xs"
+              />
+            </div>
+            <div>
+              <Label className="add-metric-label">Etiquetas (valor en porción)</Label>
+              <select
+                value={form.labelDisplayMode || "percent"}
+                onChange={(e) => updateForm({ labelDisplayMode: e.target.value as "percent" | "value" | "both" })}
+                className="add-metric-select mt-1"
+              >
+                <option value="percent">Porcentaje</option>
+                <option value="value">Valor</option>
+                <option value="both">Valor + porcentaje</option>
+              </select>
+            </div>
           </div>
         )}
         {CHART_TYPES_FOR_LABELS.includes(form.type) && (
@@ -581,7 +637,8 @@ export function AddMetricConfigForm({
             />
           </div>
         )}
-        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(form.type) && (
+        {["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"].includes(form.type) &&
+          !(["pie", "doughnut"].includes(form.type) && agg.pieLegendMode === "integrated") && (
           <div>
             <Label className="add-metric-label">Posición de la leyenda</Label>
             <select

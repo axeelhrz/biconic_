@@ -513,7 +513,7 @@ export function toChartStyleConfig(input?: ChartFormatConfigInput | null): Chart
 /** Posición efectiva de la leyenda en torta/dona (tras preferencias y responsive). */
 export type PieDoughnutLegendPosition = "top" | "bottom" | "left" | "right" | "chartArea";
 
-const PIE_LEGEND_LABEL_MAX_CHARS = 80;
+const PIE_LEGEND_LABEL_MAX_CHARS = 120;
 
 function truncatePieLegendText(text: string): string {
   if (text.length <= PIE_LEGEND_LABEL_MAX_CHARS) return text;
@@ -537,7 +537,7 @@ export function getPieLegendMaxWidthScriptable(
       case "left":
       case "right":
       default:
-        return Math.max(160, Math.min(340, Math.floor(w * 0.38)));
+        return Math.max(180, Math.min(440, Math.floor(w * 0.46)));
     }
   };
 }
@@ -616,11 +616,12 @@ export function buildPieDoughnutLegendShared(
           const bg =
             (bgArr as string[])[i] ?? (typeof bgArr === "string" ? bgArr : "#0ea5e9");
           const text = truncatePieLegendText(String(label ?? ""));
+          const fill = typeof bg === "string" ? bg : "#0ea5e9";
           return {
             text,
-            fillStyle: typeof bg === "string" ? bg : "#0ea5e9",
-            strokeStyle: "#fff",
-            lineWidth: 1,
+            fillStyle: fill,
+            strokeStyle: fill,
+            lineWidth: 0,
             hidden: false,
             index: i,
             datasetIndex: 0,

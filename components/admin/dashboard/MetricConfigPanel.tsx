@@ -105,6 +105,12 @@ export type AggregationConfigEdit = {
   pieLegendVisible?: boolean;
   /** Torta/dona: bajo ~480px de ancho forzar leyenda abajo. */
   pieLegendResponsive?: boolean;
+  /** Torta/dona: leyenda al costado (Chart.js) vs nombre+valor dentro de la porción. */
+  pieLegendMode?: "side" | "integrated";
+  /** Con leyenda integrada: nombre arriba o abajo del valor/porcentaje. */
+  pieIntegratedNameOrder?: "above" | "below";
+  /** Torta/dona: grosor del borde entre porciones (px). 0 = sin separadores. */
+  pieSliceBorderWidth?: number;
   /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
   chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
@@ -953,9 +959,62 @@ export function MetricConfigPanel({
         {(((widget.aggregationConfig as any)?.chartType || widget.type) === "pie" || ((widget.aggregationConfig as any)?.chartType || widget.type) === "doughnut") && (
           <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]/40 p-3">
             <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
-              Con muchas categorías probá <strong className="text-[var(--studio-fg)]">leyenda abajo</strong> o{" "}
-              <strong className="text-[var(--studio-fg)]">desactivá la leyenda</strong> y usá etiquetas en las porciones. El tooltip siempre muestra el nombre completo.
+              Con muchas categorías probá <strong className="text-[var(--studio-fg)]">leyenda abajo</strong>,{" "}
+              <strong className="text-[var(--studio-fg)]">leyenda integrada en porciones</strong> o{" "}
+              <strong className="text-[var(--studio-fg)]">desactivá la leyenda</strong> y usá etiquetas exteriores. El tooltip siempre muestra el nombre completo.
             </p>
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Modo de leyenda</Label>
+              <select
+                value={agg.pieLegendMode === "integrated" ? "integrated" : "side"}
+                onChange={(e) =>
+                  updateAgg({
+                    pieLegendMode: e.target.value === "integrated" ? "integrated" : undefined,
+                    ...(e.target.value !== "integrated" ? { pieIntegratedNameOrder: undefined } : {}),
+                  })
+                }
+                className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+              >
+                <option value="side">Al costado del gráfico</option>
+                <option value="integrated">Integrada en porciones (nombre + valor)</option>
+              </select>
+            </div>
+            {agg.pieLegendMode === "integrated" && (
+              <div>
+                <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Orden en la porción</Label>
+                <select
+                  value={agg.pieIntegratedNameOrder === "below" ? "below" : "above"}
+                  onChange={(e) =>
+                    updateAgg({
+                      pieIntegratedNameOrder: e.target.value === "below" ? "below" : "above",
+                    })
+                  }
+                  className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                >
+                  <option value="above">Nombre arriba, valor abajo</option>
+                  <option value="below">Valor arriba, nombre abajo</option>
+                </select>
+              </div>
+            )}
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Borde entre porciones (px)</Label>
+              <Input
+                type="number"
+                min={0}
+                max={8}
+                placeholder="0"
+                value={agg.pieSliceBorderWidth === undefined ? "" : agg.pieSliceBorderWidth}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  updateAgg({
+                    pieSliceBorderWidth:
+                      v === "" ? undefined : Math.max(0, Math.min(8, parseInt(v, 10) || 0)),
+                  });
+                }}
+                className="mt-1.5 h-9 text-xs"
+              />
+              <p className="mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">0 = sin líneas entre porciones (predeterminado).</p>
+            </div>
             <div>
               <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Etiquetas en porciones</Label>
               <select
@@ -968,49 +1027,53 @@ export function MetricConfigPanel({
                 <option value="both">Valor + porcentaje</option>
               </select>
             </div>
-            <div>
-              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición de la leyenda</Label>
-              <select
-                value={agg.chartLegendPosition ?? ""}
-                onChange={(e) =>
-                  updateAgg({
-                    chartLegendPosition: (e.target.value || undefined) as AggregationConfigEdit["chartLegendPosition"],
-                  })
-                }
-                className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
-              >
-                <option value="">Predeterminada (derecha)</option>
-                {LEGEND_POSITION_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="pie-legend-visible"
-                checked={agg.pieLegendVisible !== false}
-                onChange={(e) => updateAgg({ pieLegendVisible: e.target.checked })}
-                className="rounded"
-              />
-              <Label htmlFor="pie-legend-visible" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
-                Mostrar leyenda
-              </Label>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="pie-legend-responsive"
-                checked={agg.pieLegendResponsive === true}
-                onChange={(e) => updateAgg({ pieLegendResponsive: e.target.checked ? true : undefined })}
-                className="rounded"
-              />
-              <Label htmlFor="pie-legend-responsive" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
-                En pantallas estrechas, leyenda abajo (ancho &lt; 480px)
-              </Label>
-            </div>
+            {agg.pieLegendMode !== "integrated" && (
+              <>
+                <div>
+                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición de la leyenda</Label>
+                  <select
+                    value={agg.chartLegendPosition ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartLegendPosition: (e.target.value || undefined) as AggregationConfigEdit["chartLegendPosition"],
+                      })
+                    }
+                    className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                  >
+                    <option value="">Predeterminada (derecha)</option>
+                    {LEGEND_POSITION_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="pie-legend-visible"
+                    checked={agg.pieLegendVisible !== false}
+                    onChange={(e) => updateAgg({ pieLegendVisible: e.target.checked })}
+                    className="rounded"
+                  />
+                  <Label htmlFor="pie-legend-visible" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                    Mostrar leyenda
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="pie-legend-responsive"
+                    checked={agg.pieLegendResponsive === true}
+                    onChange={(e) => updateAgg({ pieLegendResponsive: e.target.checked ? true : undefined })}
+                    className="rounded"
+                  />
+                  <Label htmlFor="pie-legend-responsive" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                    En pantallas estrechas, leyenda abajo (ancho &lt; 480px)
+                  </Label>
+                </div>
+              </>
+            )}
           </div>
         )}
         {showLabelOverrides && (

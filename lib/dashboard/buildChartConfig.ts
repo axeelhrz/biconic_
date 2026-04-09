@@ -386,6 +386,27 @@ export function getProcessedRowsForChart(
 
 const DEFAULT_PALETTE = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
 
+/** Borde entre porciones pie/dona: tono más oscuro que el relleno para separar sin blanco fijo. */
+function pieSliceBorderColorsFromBackgrounds(backgrounds: string[]): string[] {
+  return backgrounds.map((c) => {
+    let hex = String(c ?? "").trim();
+    if (hex.startsWith("#")) hex = hex.slice(1);
+    if (hex.length !== 6 || !/^[0-9a-f]+$/i.test(hex)) return "rgba(15, 23, 42, 0.35)";
+    const n = parseInt(hex, 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    const f = 0.72;
+    return `rgb(${Math.round(r * f)},${Math.round(g * f)},${Math.round(b * f)})`;
+  });
+}
+
+function resolvePieSliceBorderWidth(agg: BuildChartConfigWidget["aggregationConfig"]): number {
+  const raw = (agg as { pieSliceBorderWidth?: unknown } | undefined)?.pieSliceBorderWidth;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 0;
+  return Math.max(0, Math.min(8, Math.round(raw)));
+}
+
 /**
  * Construye la configuración del gráfico a partir de filas de datos y la configuración del widget.
  * Incluye ordenación (chartSortDirection, chartSortBy, chartAxisOrder) y ranking (chartRankingEnabled)
@@ -673,15 +694,17 @@ export function buildChartConfig(
   if (isPieOrDoughnut) {
     const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
     const firstYKey = yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
+    const sliceBw = resolvePieSliceBorderWidth(agg);
+    const bgColors = labels.map((l) => getColorStable(l));
     return {
       labels,
       datasets: [
         {
           label: datasetDisplayLabel(firstYKey!),
           data: rows.map((r) => Number((r as Record<string, unknown>)[firstYKey!] ?? 0)),
-          backgroundColor: labels.map((l) => getColorStable(l)),
-          borderColor: "#fff",
-          borderWidth: 2,
+          backgroundColor: bgColors,
+          borderColor: sliceBw > 0 ? pieSliceBorderColorsFromBackgrounds(bgColors) : bgColors,
+          borderWidth: sliceBw,
         },
       ],
     };
