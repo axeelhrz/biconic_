@@ -560,7 +560,7 @@ export function MetricConfigPanel({
             <>
               <TabsTrigger
                 value="appearance"
-                title="Leyenda, etiquetas de datos, colores, ejes y tipografía del gráfico"
+                title="Leyenda, etiquetas, colores, grosor de barras/líneas/cuadrícula, ejes y tipografía del gráfico"
                 className="px-2 py-1.5 text-xs data-[state=active]:bg-[var(--studio-accent-dim)] data-[state=active]:text-[var(--studio-accent)]"
               >
                 Gráfico
@@ -587,9 +587,10 @@ export function MetricConfigPanel({
                 <p className="text-xs leading-relaxed text-[var(--studio-fg)]">
                   Para la <strong className="text-[var(--studio-accent)]">ubicación de la leyenda</strong>,{" "}
                   <strong className="text-[var(--studio-accent)]">etiquetas sobre barras/líneas</strong>,{" "}
-                  <strong className="text-[var(--studio-accent)]">colores</strong> (serie, cuadrícula, ejes) y{" "}
+                  <strong className="text-[var(--studio-accent)]">colores</strong> (serie, cuadrícula, ejes),{" "}
+                  <strong className="text-[var(--studio-accent)]">grosor de barras, líneas de serie y cuadrícula</strong> y{" "}
                   <strong className="text-[var(--studio-accent)]">tipografía del gráfico</strong>, usá la pestaña{" "}
-                  <strong>Gráfico</strong>.
+                  <strong>Gráfico</strong> (sección <em>Colores, ejes y cuadrícula</em> y <em>Tipografía y espacio</em>).
                 </p>
                 <Button
                   type="button"
@@ -1225,9 +1226,10 @@ export function MetricConfigPanel({
             <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
               Acá definís <strong className="text-[var(--studio-fg)]">leyenda</strong>,{" "}
               <strong className="text-[var(--studio-fg)]">etiquetas sobre los datos</strong>,{" "}
-              <strong className="text-[var(--studio-fg)]">colores</strong> de la serie y de ejes/cuadrícula, y{" "}
-              <strong className="text-[var(--studio-fg)]">tipografía</strong> del dibujo (combo, barras, líneas, etc.). El fondo
-              y borde de la <em>tarjeta</em> se configuran en <strong>General</strong> → «Apariencia de esta tarjeta».
+              <strong className="text-[var(--studio-fg)]">colores</strong> de la serie y de ejes/cuadrícula,{" "}
+              <strong className="text-[var(--studio-fg)]">grosor de barras, líneas de serie y líneas de cuadrícula</strong> del
+              gráfico, y <strong className="text-[var(--studio-fg)]">tipografía</strong> del dibujo. El fondo y borde de la{" "}
+              <em>tarjeta</em> se configuran en <strong>General</strong> → «Apariencia de esta tarjeta».
             </p>
             {chartType === "map" && (
               <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
@@ -1600,6 +1602,62 @@ export function MetricConfigPanel({
                 className="h-8 w-10 rounded border border-[var(--studio-border)]"
               />
             </div>
+            <div className="mt-4 space-y-1 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
+              <Label className="text-xs font-medium text-[var(--studio-fg)]">Grosor en el gráfico</Label>
+              <p className="text-[10px] leading-snug text-[var(--studio-fg-muted)]">
+                Ancho de las barras, trazo de las líneas de datos y grosor de las líneas de la cuadrícula (no el borde de la tarjeta).
+              </p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Barras — ancho máx. (px)</Label>
+                  <Input
+                    type="number"
+                    min={4}
+                    max={120}
+                    value={agg.chartBarThickness ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartBarThickness: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="Auto"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Líneas de serie (px)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={16}
+                    value={agg.chartLineBorderWidth ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartLineBorderWidth: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="2"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Cuadrícula (px)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={6}
+                    value={agg.chartGridLineWidth ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartGridLineWidth: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="Predet."
+                  />
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1729,63 +1787,6 @@ export function MetricConfigPanel({
                 placeholder="16"
               />
             </div>
-            {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
-              <div className="space-y-1">
-                <p className="text-[10px] leading-snug text-[var(--studio-fg-muted)]">
-                  Grosor dentro del área del gráfico: barras, líneas de serie y cuadrícula.
-                </p>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <div>
-                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Barras — ancho máx. (px)</Label>
-                    <Input
-                      type="number"
-                      min={4}
-                      max={120}
-                      value={agg.chartBarThickness ?? ""}
-                      onChange={(e) =>
-                        updateAgg({
-                          chartBarThickness: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                        })
-                      }
-                      className="mt-0.5 h-8 text-xs"
-                      placeholder="Auto"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Líneas de serie (px)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={16}
-                      value={agg.chartLineBorderWidth ?? ""}
-                      onChange={(e) =>
-                        updateAgg({
-                          chartLineBorderWidth: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                        })
-                      }
-                      className="mt-0.5 h-8 text-xs"
-                      placeholder="2"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Cuadrícula (px)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={6}
-                      value={agg.chartGridLineWidth ?? ""}
-                      onChange={(e) =>
-                        updateAgg({
-                          chartGridLineWidth: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                        })
-                      }
-                      className="mt-0.5 h-8 text-xs"
-                      placeholder="Predet."
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
             {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
               <div className="grid grid-cols-2 gap-2">
                 <div>
