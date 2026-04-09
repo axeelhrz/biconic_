@@ -113,6 +113,18 @@ function yearFilterSelectDisplayValue(raw: unknown): string {
   return String(raw ?? "");
 }
 
+/** Estado previo de filtro multi → lista de strings alineada con `selectedArray` en la UI (incl. normalización MONTH). */
+function globalMultiPrevToSelectedStrings(operator: unknown, raw: unknown): string[] {
+  const selectedArrayRaw = Array.isArray(raw)
+    ? (raw as unknown[]).map((x) => String(x))
+    : raw != null && raw !== ""
+      ? [String(raw)]
+      : [];
+  return isMonthOperator(operator)
+    ? selectedArrayRaw.map((x) => String(normalizeMonthFilterStoredValue(operator, x)))
+    : selectedArrayRaw;
+}
+
 function globalMultiFilterTriggerLabel(operator: unknown, selected: string[], options: unknown[]): string {
   if (selected.length === 0) return "Todos";
   if (selected.length === 1) {
@@ -294,11 +306,33 @@ export function DashboardViewer({
     pagesMeta?: { id: string; name: string }[];
   } | null>(null);
   const stateRef = useRef({ widgets, setWidgets });
+  /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
+  const widgetLoadGenRef = useRef<Record<string, number>>({});
 
   const { data: etlData, error: etlDataError } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
+  const etlDataRef = useRef(etlData);
+  etlDataRef.current = etlData;
 
   const themeMerged = useMemo(() => mergeTheme(dashboardTheme), [dashboardTheme]);
   const accentColor = themeMerged.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor ?? "#0ea5e9";
+
+  /** Solo rehidratar layout/valores de filtro cuando cambia el layout guardado, no por nueva referencia de `etlData`. */
+  const layoutFingerprint = useMemo(() => {
+    if (initialWidgets?.length) return "__initial_props__";
+    const dashboard = (etlData as { dashboard?: { layout?: unknown; global_filters_config?: unknown; title?: string } })?.dashboard;
+    if (!dashboard) return "";
+    const layout = dashboard.layout as {
+      widgets?: { id?: string }[];
+      pages?: unknown;
+      activePageId?: string;
+    } | undefined;
+    const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
+    const widgetSig = rawWidgets.map((w) => String(w?.id ?? "")).join(",");
+    const gfsSig = JSON.stringify(dashboard.global_filters_config ?? []);
+    const pagesSig = JSON.stringify(layout?.pages ?? []);
+    const active = String(layout?.activePageId ?? "");
+    return `${widgetSig}|${gfsSig}|${pagesSig}|${active}|${String(dashboard.title ?? "")}`;
+  }, [etlData, initialWidgets]);
 
   useEffect(() => {
     stateRef.current.widgets = widgets;
@@ -328,7 +362,18 @@ export function DashboardViewer({
       }
       return;
     }
-    const dashboard = (etlData as any)?.dashboard;
+    const dashboard = (etlDataRef.current as { dashboard?: Record<string, unknown> } | null)?.dashboard as
+      | {
+          title?: string;
+          layout?: {
+            widgets?: Widget[];
+            theme?: Partial<DashboardTheme>;
+            pages?: { id: string; name?: string }[];
+            activePageId?: string;
+          };
+          global_filters_config?: AggregationFilter[];
+        }
+      | undefined;
     if (!dashboard) return;
     const layout = dashboard.layout as {
       widgets?: Widget[];
@@ -389,7 +434,7 @@ export function DashboardViewer({
       initialFv[gf.id] = v;
     }
     setFilterValues(initialFv);
-  }, [etlData, initialWidgets, initialTitle, initialGlobalFilters]);
+  }, [layoutFingerprint, initialWidgets, initialTitle, initialGlobalFilters]);
 
   // Cargar distinct values para cada filtro global; si el campo es dimensión semántica, usar tabla y columna física de la fuente primaria
   useEffect(() => {
@@ -492,6 +537,11 @@ export function DashboardViewer({
       // recrea el callback y el efecto [filterValues, loadDataForWidget, …] vuelve a disparar todo en bucle.
       const widget = stateRef.current.widgets.find((w) => w.id === widgetId);
       if (!widget || !etlData) return;
+      const genMap = widgetLoadGenRef.current;
+      genMap[widgetId] = (genMap[widgetId] ?? 0) + 1;
+      const myGen = genMap[widgetId]!;
+      const isStale = () => widgetLoadGenRef.current[widgetId] !== myGen;
+
       const etlId = (etlData as any)?.etl?.id;
       let fullTableName = getTableNameForWidget(widget);
       if (!fullTableName && etlId && !isPublic) {
@@ -514,13 +564,20 @@ export function DashboardViewer({
           // ignore
         }
       }
+      if (isStale()) return;
+
       if (!fullTableName) {
-        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        if (!isStale()) {
+          setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        }
         return;
       }
 
+      if (isStale()) return;
+
       setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: true } : w)));
       const safetyTimeout = setTimeout(() => {
+        if (widgetLoadGenRef.current[widgetId] !== myGen) return;
         setWidgets((prev) => prev.map((w) =>
           w.id === widgetId && w.isLoading ? { ...w, isLoading: false } : w
         ));
@@ -705,12 +762,16 @@ export function DashboardViewer({
             accentColor: chartAccent,
           });
 
+          if (isStale()) return;
+
           if (!loaded.hasData) {
-            setWidgets((prev) =>
-              prev.map((w) =>
-                w.id === widgetId ? { ...w, rows: [], config: { labels: [], datasets: [] }, isLoading: false } : w
-              )
-            );
+            if (!isStale()) {
+              setWidgets((prev) =>
+                prev.map((w) =>
+                  w.id === widgetId ? { ...w, rows: [], config: { labels: [], datasets: [] }, isLoading: false } : w
+                )
+              );
+            }
             return;
           }
 
@@ -720,19 +781,21 @@ export function DashboardViewer({
             type: inferType((sample as Record<string, unknown>)[k]),
           }));
 
-          setWidgets((prev) =>
-            prev.map((w) =>
-              w.id === widgetId
-                ? {
-                    ...w,
-                    config: loaded.chartConfig ?? { labels: [], datasets: [] },
-                    rows: loaded.processedRows,
-                    columns: columnsDetected,
-                    isLoading: false,
-                  }
-                : w
-            )
-          );
+          if (!isStale()) {
+            setWidgets((prev) =>
+              prev.map((w) =>
+                w.id === widgetId
+                  ? {
+                      ...w,
+                      config: loaded.chartConfig ?? { labels: [], datasets: [] },
+                      rows: loaded.processedRows,
+                      columns: columnsDetected,
+                      isLoading: false,
+                    }
+                  : w
+              )
+            );
+          }
         } else {
           const widgetForBuild = {
             type: widget.type,
@@ -754,12 +817,16 @@ export function DashboardViewer({
             rawExtraPayload: rawPayload,
           });
 
+          if (isStale()) return;
+
           if (!loaded.hasData) {
-            setWidgets((prev) =>
-              prev.map((w) =>
-                w.id === widgetId ? { ...w, rows: [], config: { labels: [], datasets: [] }, isLoading: false } : w
-              )
-            );
+            if (!isStale()) {
+              setWidgets((prev) =>
+                prev.map((w) =>
+                  w.id === widgetId ? { ...w, rows: [], config: { labels: [], datasets: [] }, isLoading: false } : w
+                )
+              );
+            }
             return;
           }
 
@@ -769,22 +836,26 @@ export function DashboardViewer({
             type: inferType((sample as Record<string, unknown>)[k]),
           }));
 
-          setWidgets((prev) =>
-            prev.map((w) =>
-              w.id === widgetId
-                ? {
-                    ...w,
-                    config: loaded.chartConfig ?? { labels: [], datasets: [] },
-                    rows: loaded.processedRows,
-                    columns: columnsDetected,
-                    isLoading: false,
-                  }
-                : w
-            )
-          );
+          if (!isStale()) {
+            setWidgets((prev) =>
+              prev.map((w) =>
+                w.id === widgetId
+                  ? {
+                      ...w,
+                      config: loaded.chartConfig ?? { labels: [], datasets: [] },
+                      rows: loaded.processedRows,
+                      columns: columnsDetected,
+                      isLoading: false,
+                    }
+                  : w
+              )
+            );
+          }
         }
       } catch {
-        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        if (!isStale()) {
+          setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        }
       } finally {
         clearTimeout(safetyTimeout);
       }
@@ -823,6 +894,7 @@ export function DashboardViewer({
   useEffect(() => {
     initialLoadedRef.current = false;
     setPageLayout(null);
+    widgetLoadGenRef.current = {};
   }, [dashboardId]);
 
   const handleFilterChange = useCallback((widgetId: string, value: unknown) => {
@@ -1155,10 +1227,18 @@ export function DashboardViewer({
                                 style={{ borderColor: "var(--platform-border)" }}
                                 checked={checked}
                                 onChange={(e) => {
-                                  const next = e.target.checked
-                                    ? [...selectedArray, s]
-                                    : selectedArray.filter((x) => x !== s);
-                                  setFilterValues((prev) => ({ ...prev, [gf.id]: next }));
+                                  setFilterValues((prev) => {
+                                    const cur = globalMultiPrevToSelectedStrings(
+                                      (gf as AggregationFilter).operator,
+                                      prev[gf.id]
+                                    );
+                                    const next = e.target.checked
+                                      ? cur.includes(s)
+                                        ? cur
+                                        : [...cur, s]
+                                      : cur.filter((x) => x !== s);
+                                    return { ...prev, [gf.id]: next };
+                                  });
                                 }}
                               />
                               <span>{monthFilterOptionLabel((gf as AggregationFilter).operator, v)}</span>
