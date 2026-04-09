@@ -26,6 +26,8 @@ export type AggregationLike = {
   chartBarThickness?: number;
   /** Grosor del trazo en series línea/área y combo (px). */
   chartLineBorderWidth?: number;
+  /** Grosor de la cuadrícula del área de trazado (px). */
+  chartGridLineWidth?: number;
   chartAxisTickColor?: string;
   chartCategoryTickMaxRotation?: number;
   chartCategoryTickMinRotation?: number;
@@ -135,6 +137,8 @@ export function mergeChartVisualStyle(
   if (barTh != null) out.barThickness = barTh;
   const lineBw = n(agg.chartLineBorderWidth);
   if (lineBw != null) out.lineBorderWidth = lineBw;
+  const gridLw = n(agg.chartGridLineWidth);
+  if (gridLw != null) out.gridLineWidth = gridLw;
   const fam = String(agg.chartFontFamily ?? "").trim();
   if (fam) out.chartFontFamily = fam;
   else if (themeFontFamily && String(themeFontFamily).trim() !== "") {

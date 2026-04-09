@@ -66,6 +66,7 @@ export type BuildChartConfigWidget = {
     ratioReuseMode?: boolean;
     chartBarThickness?: number;
     chartLineBorderWidth?: number;
+    chartGridLineWidth?: number;
     [key: string]: unknown;
   };
   source?: { labelField?: string };

@@ -101,6 +101,7 @@ export type AggregationConfigEdit = {
   chartLayoutPadding?: number;
   chartBarThickness?: number;
   chartLineBorderWidth?: number;
+  chartGridLineWidth?: number;
   chartAxisTickColor?: string;
   chartCategoryTickMaxRotation?: number;
   chartCategoryTickMinRotation?: number;
@@ -1729,38 +1730,59 @@ export function MetricConfigPanel({
               />
             </div>
             {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Grosor máx. barras (px)</Label>
-                  <Input
-                    type="number"
-                    min={4}
-                    max={120}
-                    value={agg.chartBarThickness ?? ""}
-                    onChange={(e) =>
-                      updateAgg({
-                        chartBarThickness: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                      })
-                    }
-                    className="mt-0.5 h-8 text-xs"
-                    placeholder="Auto"
-                  />
-                </div>
-                <div>
-                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Grosor de línea (px)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={16}
-                    value={agg.chartLineBorderWidth ?? ""}
-                    onChange={(e) =>
-                      updateAgg({
-                        chartLineBorderWidth: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                      })
-                    }
-                    className="mt-0.5 h-8 text-xs"
-                    placeholder="2"
-                  />
+              <div className="space-y-1">
+                <p className="text-[10px] leading-snug text-[var(--studio-fg-muted)]">
+                  Grosor dentro del área del gráfico: barras, líneas de serie y cuadrícula.
+                </p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div>
+                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Barras — ancho máx. (px)</Label>
+                    <Input
+                      type="number"
+                      min={4}
+                      max={120}
+                      value={agg.chartBarThickness ?? ""}
+                      onChange={(e) =>
+                        updateAgg({
+                          chartBarThickness: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                        })
+                      }
+                      className="mt-0.5 h-8 text-xs"
+                      placeholder="Auto"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Líneas de serie (px)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={16}
+                      value={agg.chartLineBorderWidth ?? ""}
+                      onChange={(e) =>
+                        updateAgg({
+                          chartLineBorderWidth: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                        })
+                      }
+                      className="mt-0.5 h-8 text-xs"
+                      placeholder="2"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Cuadrícula (px)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={6}
+                      value={agg.chartGridLineWidth ?? ""}
+                      onChange={(e) =>
+                        updateAgg({
+                          chartGridLineWidth: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                        })
+                      }
+                      className="mt-0.5 h-8 text-xs"
+                      placeholder="Predet."
+                    />
+                  </div>
                 </div>
               </div>
             )}

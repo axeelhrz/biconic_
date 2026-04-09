@@ -804,6 +804,9 @@ export function DashboardWidgetRenderer({
               drawOnChartArea: false,
               display: style?.gridYDisplay ?? true,
               color: style?.gridColor ?? (darkChartTheme ? GRID_COLOR_DARK : GRID_COLOR),
+              ...(style?.gridLineWidth != null && Number.isFinite(style.gridLineWidth)
+                ? { lineWidth: Math.max(0, Math.min(6, style.gridLineWidth)) }
+                : {}),
             },
             ...(syncAxes && {
               min: 0,

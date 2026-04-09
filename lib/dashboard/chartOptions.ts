@@ -58,6 +58,8 @@ export type ChartStyleConfig = {
   gridYDisplay?: boolean;
   /** Color de las líneas de cuadrícula (ej. #e2e8f0). */
   gridColor?: string;
+  /** Grosor (px) de las líneas de cuadrícula del área del gráfico. */
+  gridLineWidth?: number;
   /** Color de etiquetas de ejes (ticks). Si no se define, usa el tema claro/oscuro del visor. */
   axisTickColor?: string;
   /** Rotación máxima (grados) de etiquetas del eje categoría. */
@@ -414,8 +416,13 @@ export function buildChartOptions(
   if (type === "bar" || type === "horizontalBar" || type === "line") {
     const scales: Record<string, unknown> = {};
     const gridColor = style?.gridColor ?? "#eee";
-    const gridX = { display: style?.gridXDisplay ?? false, color: gridColor };
-    const gridY = { display: style?.gridYDisplay ?? true, color: gridColor };
+    const gridLineW =
+      style?.gridLineWidth != null && Number.isFinite(style.gridLineWidth)
+        ? Math.max(0, Math.min(6, style.gridLineWidth))
+        : undefined;
+    const gridLineOpts = gridLineW != null ? { lineWidth: gridLineW } : {};
+    const gridX = { display: style?.gridXDisplay ?? false, color: gridColor, ...gridLineOpts };
+    const gridY = { display: style?.gridYDisplay ?? true, color: gridColor, ...gridLineOpts };
     const axisXCategory = {
       display: style?.axisXVisible ?? true,
       reverse: style?.axisXReverse ?? false,
