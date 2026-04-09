@@ -42,6 +42,7 @@ const ALLOWED_OPERATORS = new Set([
   "MONTH",
   "YEAR",
   "DAY",
+  "YEAR_MONTH",
 ]);
 
 function toSqlLiteral(v: any): string {
@@ -107,7 +108,14 @@ export async function POST(req: NextRequest) {
           const op = (f.operator || "=").toUpperCase().trim();
 
           let fieldExpression;
-          if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "QUARTER" || op === "SEMESTER") {
+          if (
+            op === "MONTH" ||
+            op === "DAY" ||
+            op === "YEAR" ||
+            op === "QUARTER" ||
+            op === "SEMESTER" ||
+            op === "YEAR_MONTH"
+          ) {
             fieldExpression = `(
               CASE
                 WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, 'DD/MM/YYYY')
@@ -123,6 +131,7 @@ export async function POST(req: NextRequest) {
           }
 
           if (op === "MONTH") return buildMonthFilterSqlClause(fieldExpression, f.value);
+          if (op === "YEAR_MONTH") return buildMonthFilterSqlClause(fieldExpression, f.value);
           if (op === "YEAR")
             return `EXTRACT(YEAR FROM ${fieldExpression}) = ${Number(f.value)}`;
           if (op === "DAY") {

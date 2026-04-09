@@ -100,6 +100,23 @@ function isYearOperator(operator: unknown): boolean {
   return String(operator ?? "").toUpperCase() === "YEAR";
 }
 
+function isYearMonthOperator(operator: unknown): boolean {
+  return String(operator ?? "").toUpperCase() === "YEAR_MONTH";
+}
+
+/** Etiqueta legible para valores distinct tipo YYYY-MM (filtro año/mes). */
+function yearMonthFilterOptionLabel(value: unknown): string {
+  const t = String(value ?? "").trim();
+  const m = /^(\d{4})-(\d{1,2})$/.exec(t);
+  if (!m) return t;
+  const year = m[1]!;
+  const monthNum = parseInt(m[2]!, 10);
+  if (Number.isInteger(monthNum) && monthNum >= 1 && monthNum <= 12) {
+    return `${MONTH_LABELS_ES[monthNum - 1]} ${year}`;
+  }
+  return t;
+}
+
 /** Un año por filtro: valores heredados como multi (array) se conservan; en select único se reduce al primero. */
 function normalizeYearFilterStoredValue(operator: unknown, inputType: unknown, v: unknown): unknown {
   if (!isYearOperator(operator)) return v;
@@ -118,7 +135,13 @@ function yearFilterSelectDisplayValue(raw: unknown): string {
  * En aggregate-data estos operadores ya interpretan arrays (EXTRACT / buildMonthFilterSqlClause).
  * No deben sustituirse por IN genérico sobre la columna cruda.
  */
-const DATE_OPERATORS_WITH_MULTI_VALUE_SQL = new Set(["YEAR", "MONTH", "QUARTER", "SEMESTER"]);
+const DATE_OPERATORS_WITH_MULTI_VALUE_SQL = new Set([
+  "YEAR",
+  "MONTH",
+  "QUARTER",
+  "SEMESTER",
+  "YEAR_MONTH",
+]);
 
 function globalMultiPrevToSelectedStrings(operator: unknown, raw: unknown): string[] {
   const selectedArrayRaw = Array.isArray(raw)
@@ -136,7 +159,9 @@ function globalMultiFilterTriggerLabel(operator: unknown, selected: string[], op
   if (selected.length === 1) {
     const s = selected[0]!;
     const match = options.find((o) => String(o) === s);
-    return monthFilterOptionLabel(operator, match !== undefined ? match : s);
+    const raw = match !== undefined ? match : s;
+    if (isYearMonthOperator(operator)) return yearMonthFilterOptionLabel(raw);
+    return monthFilterOptionLabel(operator, raw);
   }
   return `${selected.length} seleccionados`;
 }
@@ -472,8 +497,6 @@ export function DashboardViewer({
         if (cancelled) break;
         try {
           const filterOp = String((gf as { operator?: string }).operator ?? "").toUpperCase();
-          /** El UI usa input type="month"; no hace falta lista de distinct. */
-          if (filterOp === "YEAR_MONTH") continue;
 
           const physicalField =
             datasetDimensions?.[gf.field!]?.[primarySourceId!] ?? gf.field!;
@@ -496,7 +519,12 @@ export function DashboardViewer({
             limit: 200,
           };
           if (isDateField) {
-            const t = dateDistinctTransforms.has(filterOp) ? filterOp : "YEAR";
+            const t =
+              filterOp === "YEAR_MONTH"
+                ? "MONTH"
+                : dateDistinctTransforms.has(filterOp)
+                  ? filterOp
+                  : "YEAR";
             body.transform = t;
           }
           const res = await fetch(distinctUrl, {
@@ -1158,6 +1186,7 @@ export function DashboardViewer({
               : rawDistinct;
             const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
             const isYearOp = isYearOperator((gf as AggregationFilter).operator);
+            const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
             const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
             const selectedArrayRaw = isMulti
               ? (Array.isArray(filterValues[gf.id]) ? filterValues[gf.id] : filterValues[gf.id] != null && filterValues[gf.id] !== "" ? [filterValues[gf.id]] : []) as string[]
@@ -1253,38 +1282,36 @@ export function DashboardViewer({
                                   });
                                 }}
                               />
-                              <span>{monthFilterOptionLabel((gf as AggregationFilter).operator, v)}</span>
+                              <span>
+                                {isYearMonthOp
+                                  ? yearMonthFilterOptionLabel(v)
+                                  : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
+                              </span>
                             </label>
                           );
                         })}
                       </div>
                     </PopoverContent>
                   </Popover>
-                ) : (gf as any).operator === "YEAR_MONTH" ? (
-                  <input
-                    type="month"
-                    className="rounded-md border px-2 py-1 text-sm w-36"
-                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
-                    value={String(filterValues[gf.id] ?? "").slice(0, 7)}
-                    onChange={(e) =>
-                      setFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value || undefined }))
-                    }
-                  />
-                ) : (((gf as any).inputType === "select" || isYearOp) && hasOptions) ? (
+                ) : (((gf as any).inputType === "select" || isYearOp || isYearMonthOp) && hasOptions) ? (
                   <select
                     className="rounded-md border px-2 py-1 text-sm min-w-[8rem]"
                     style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
                     value={
                       isYearOp
                         ? yearFilterSelectDisplayValue(filterValues[gf.id])
-                        : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, filterValues[gf.id])
+                        : isYearMonthOp
+                          ? String(filterValues[gf.id] ?? "")
+                          : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, filterValues[gf.id])
                     }
                     onChange={(e) => setFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value }))}
                   >
                     <option value="">Todos</option>
                     {(options as unknown[]).map((v) => (
                       <option key={String(v)} value={String(v)}>
-                        {monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
+                        {isYearMonthOp
+                          ? yearMonthFilterOptionLabel(v)
+                          : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
                       </option>
                     ))}
                   </select>

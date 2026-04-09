@@ -318,13 +318,7 @@ export async function POST(
             return `${semExpr} = ${s}`;
           }
           if (op === "YEAR_MONTH") {
-            const val = f.value == null ? "" : String(f.value).trim();
-            const match = /^(\d{4})-(\d{1,2})$/.exec(val);
-            if (!match) return "TRUE";
-            const y = parseInt(match[1]!, 10);
-            const m = parseInt(match[2]!, 10);
-            if (m < 1 || m > 12 || y < 1900 || y > 2100) return "TRUE";
-            return `EXTRACT(YEAR FROM ${fieldExpression}) = ${y} AND EXTRACT(MONTH FROM ${fieldExpression}) = ${m}`;
+            return buildMonthFilterSqlClause(fieldExpression, f.value);
           }
           if (op === "IN") {
             const list = (Array.isArray(f.value) ? f.value : [])
