@@ -1344,7 +1344,7 @@ export function AdminDashboardStudio({
         gridSpan = clampGridSpan(state.startSpan + spanDelta, state.startSpan);
       }
       if (state.edge === "s" || state.edge === "se") {
-        minHeight = Math.min(600, Math.max(200, state.startMinHeight + dy));
+        minHeight = Math.min(900, Math.max(200, state.startMinHeight + dy));
       }
       updateWidgetSize(state.widgetId, { ...(gridSpan != null && { gridSpan }), ...(minHeight != null && { minHeight }) });
     };

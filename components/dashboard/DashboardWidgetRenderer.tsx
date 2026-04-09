@@ -226,6 +226,7 @@ export function DashboardWidgetRenderer({
     if (widget.type === "filter" || widget.type === "text" || widget.type === "image" || widget.type === "map") return widget.type;
     return (aggType || widget.type) as WidgetChartType;
   }, [widget.type, widget.aggregationConfig]);
+  const isTableWidget = chartType === "table";
   const chartConfig = widget.config;
   const tableRows = widget.rows;
   const hasViz = useMemo(() => {
@@ -1008,6 +1009,13 @@ export function DashboardWidgetRenderer({
       className={`overflow-hidden border transition-all ${className}`}
       style={{
         minHeight: effectiveMinHeight,
+        ...(isTableWidget
+          ? {
+              height: effectiveMinHeight,
+              display: "flex",
+              flexDirection: "column",
+            }
+          : {}),
         background: "var(--platform-surface, #fff)",
         borderColor: "var(--platform-border, #e2e8f0)",
         borderWidth: "var(--platform-card-border-width, 1px)",
@@ -1021,7 +1029,14 @@ export function DashboardWidgetRenderer({
           </h3>
         </header>
       )}
-      <div className="relative flex flex-1 flex-col p-3" style={{ minHeight: hideHeader ? effectiveMinHeight - 12 : effectiveMinHeight - 52 }}>
+      <div
+        className={`relative flex flex-1 flex-col p-3${isTableWidget ? " min-h-0 overflow-hidden" : ""}`}
+        style={
+          isTableWidget
+            ? { flex: 1, minHeight: 0, overflow: "hidden" }
+            : { minHeight: hideHeader ? effectiveMinHeight - 12 : effectiveMinHeight - 52 }
+        }
+      >
         {isLoading && (
           <div
             className="absolute inset-0 z-10 flex items-center justify-center rounded-b-xl"
@@ -1079,29 +1094,39 @@ export function DashboardWidgetRenderer({
               </div>
             )}
             {chartType === "table" && Array.isArray(tableRows) && tableRows.length > 0 && (
-              <div className="overflow-auto text-xs">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b text-left" style={{ borderColor: "var(--platform-border)" }}>
-                      {tableColumnOrder.map((k) => (
-                        <th key={k} className="py-1.5 pr-2 font-medium" style={{ color: "var(--platform-fg-muted)" }}>
-                          {String(tableHeaderLabels?.[k] ?? "").trim() || k}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableRows.slice(0, 10).map((row, i) => (
-                      <tr key={i} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
-                        {tableColumnOrder.map((columnKey) => (
-                          <td key={columnKey} className="py-1.5 pr-2" style={{ color: "var(--platform-fg)" }}>
-                            {formatTableCellValue(columnKey, row[columnKey])}
-                          </td>
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <div className="min-h-0 flex-1 overflow-auto rounded-md border text-xs" style={{ borderColor: "var(--platform-border)" }}>
+                  <table className="w-full min-w-max">
+                    <thead>
+                      <tr className="border-b text-left" style={{ borderColor: "var(--platform-border)" }}>
+                        {tableColumnOrder.map((k) => (
+                          <th
+                            key={k}
+                            className="sticky top-0 z-[1] py-1.5 pr-2 font-medium"
+                            style={{
+                              color: "var(--platform-fg-muted)",
+                              background: "var(--platform-surface, #fff)",
+                              boxShadow: "inset 0 -1px 0 var(--platform-border, #e2e8f0)",
+                            }}
+                          >
+                            {String(tableHeaderLabels?.[k] ?? "").trim() || k}
+                          </th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {tableRows.map((row, i) => (
+                        <tr key={i} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
+                          {tableColumnOrder.map((columnKey) => (
+                            <td key={columnKey} className="py-1.5 pr-2" style={{ color: "var(--platform-fg)" }}>
+                              {formatTableCellValue(columnKey, row[columnKey])}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
             {chartType === "text" && (
@@ -1246,7 +1271,7 @@ export function DashboardWidgetRenderer({
               </div>
             )}
             {showTechnicalPreview && widget.diagnosticPreview && (
-              <details className="mt-3 rounded-md border border-[var(--platform-border)] bg-[var(--platform-bg-elevated,transparent)]">
+              <details className="mt-3 shrink-0 rounded-md border border-[var(--platform-border)] bg-[var(--platform-bg-elevated,transparent)]">
                 <summary className="cursor-pointer px-3 py-2 text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
                   Vista previa técnica
                 </summary>

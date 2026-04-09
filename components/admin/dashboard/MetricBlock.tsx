@@ -38,7 +38,9 @@ const HEIGHT_OPTIONS = [
   { value: 360, label: "Mediana (360px)" },
   { value: 440, label: "Grande (440px)" },
   { value: 520, label: "Extra grande (520px)" },
-  { value: 600, label: "Máxima (600px)" },
+  { value: 600, label: "Muy grande (600px)" },
+  { value: 720, label: "Alta (720px)" },
+  { value: 900, label: "Máxima (900px)" },
 ] as const;
 
 const SPAN_OPTIONS = [
