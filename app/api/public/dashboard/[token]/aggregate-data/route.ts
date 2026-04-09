@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import postgres from "postgres";
 import { createServiceRoleClient } from "@/lib/supabase/service";
-import { enrichRowsWithGeo, type GeoCacheClient, type GeoHints } from "@/lib/geo/geo-enrichment";
+import {
+  coerceGeoComponentOverrides,
+  coerceGeoOverridesByXLabel,
+  enrichRowsWithGeo,
+  type GeoCacheClient,
+  type GeoComponentOverrides,
+  type GeoHints,
+} from "@/lib/geo/geo-enrichment";
 import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
 
 // --- Interfaces (Copied from internal route) ---
@@ -37,6 +44,8 @@ interface AggregationRequest {
   chartXAxis?: string;
   geoHints?: GeoHints;
   mapDefaultCountry?: string;
+  geoComponentOverrides?: GeoComponentOverrides;
+  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
 }
 
 // --- Constantes ---
@@ -411,6 +420,8 @@ export async function POST(
           chartXAxis: body.chartXAxis ?? body.dimension ?? body.dimensions?.[0],
           geoHints: body.geoHints,
           mapDefaultCountry: typeof body.mapDefaultCountry === "string" ? body.mapDefaultCountry : undefined,
+          geoComponentOverrides: coerceGeoComponentOverrides(body.geoComponentOverrides),
+          geoOverridesByXLabel: coerceGeoOverridesByXLabel(body.geoOverridesByXLabel),
           cacheClient: supabase as unknown as GeoCacheClient,
         })
       : mappedResults;

@@ -14,6 +14,7 @@ import {
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./DashboardWidgetRenderer";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
 import {
   expandAnalysisMetricsForFetch,
   type SavedMetricForExpand,
@@ -254,6 +255,8 @@ type AggregationConfig = {
   };
   analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
   mapDefaultCountry?: string;
+  geoComponentOverrides?: GeoComponentOverrides;
+  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
 };
 
 export type Widget = DashboardWidgetRendererWidget & {

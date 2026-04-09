@@ -54,6 +54,17 @@ type GeoComponent = {
   address?: string;
 };
 
+/** Valores fijos que sustituyen país/provincia/ciudad inferidos antes de geocodificar. */
+export type GeoComponentOverrides = Partial<Pick<GeoComponent, "country" | "province" | "city">>;
+
+export type GeoInferencePreview = {
+  components: GeoComponent;
+  countryField?: string;
+  provinceField?: string;
+  cityField?: string;
+  addressField?: string;
+};
+
 type GeoCacheRow = {
   cache_key: string;
   query_text: string;
@@ -103,6 +114,10 @@ export type EnrichRowsWithGeoOptions = {
   cacheClient?: GeoCacheClient | null;
   /** Si la fila no trae país, se añade a la consulta de geocodificación (ej. «Argentina»). */
   mapDefaultCountry?: string;
+  /** Sustituye componentes inferidos en todas las filas (texto no vacío). */
+  geoComponentOverrides?: GeoComponentOverrides;
+  /** Por etiqueta del eje X (comparación case-insensitive); se aplica después del override global. */
+  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
 };
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -149,6 +164,15 @@ const getExistingCoordinates = (row: Record<string, unknown>, hints?: GeoHints):
   };
 };
 
+function resolveGeoFieldKeys(candidates: string[], geoHints?: GeoHints) {
+  return {
+    countryField: geoHints?.countryField ?? findKeyByRegex(candidates, GEO_KEYWORDS.country),
+    provinceField: geoHints?.provinceField ?? findKeyByRegex(candidates, GEO_KEYWORDS.province),
+    cityField: geoHints?.cityField ?? findKeyByRegex(candidates, GEO_KEYWORDS.city),
+    addressField: geoHints?.addressField ?? findKeyByRegex(candidates, GEO_KEYWORDS.address),
+  };
+}
+
 const inferGeoComponents = (
   row: Record<string, unknown>,
   keys: string[],
@@ -156,18 +180,107 @@ const inferGeoComponents = (
   geoHints?: GeoHints
 ): GeoComponent => {
   const candidates = Array.from(new Set([...dimList, ...keys]));
-  const countryField = geoHints?.countryField ?? findKeyByRegex(candidates, GEO_KEYWORDS.country);
-  const provinceField = geoHints?.provinceField ?? findKeyByRegex(candidates, GEO_KEYWORDS.province);
-  const cityField = geoHints?.cityField ?? findKeyByRegex(candidates, GEO_KEYWORDS.city);
-  const addressField = geoHints?.addressField ?? findKeyByRegex(candidates, GEO_KEYWORDS.address);
-
+  const f = resolveGeoFieldKeys(candidates, geoHints);
   return {
-    country: getTextFromField(row, countryField),
-    province: getTextFromField(row, provinceField),
-    city: getTextFromField(row, cityField),
-    address: getTextFromField(row, addressField),
+    country: getTextFromField(row, f.countryField),
+    province: getTextFromField(row, f.provinceField),
+    city: getTextFromField(row, f.cityField),
+    address: getTextFromField(row, f.addressField),
   };
 };
+
+/** Vista previa de columnas detectadas y valores para una fila (editor de mapas). */
+export function getGeoInferencePreview(
+  row: Record<string, unknown>,
+  keys: string[],
+  dimList: string[],
+  geoHints?: GeoHints
+): GeoInferencePreview {
+  const candidates = Array.from(new Set([...dimList, ...keys]));
+  const f = resolveGeoFieldKeys(candidates, geoHints);
+  return {
+    components: {
+      country: getTextFromField(row, f.countryField),
+      province: getTextFromField(row, f.provinceField),
+      city: getTextFromField(row, f.cityField),
+      address: getTextFromField(row, f.addressField),
+    },
+    countryField: f.countryField,
+    provinceField: f.provinceField,
+    cityField: f.cityField,
+    addressField: f.addressField,
+  };
+}
+
+function mergeGeoComponentPatches(base: GeoComponent, patch: GeoComponentOverrides | undefined): GeoComponent {
+  if (!patch) return base;
+  const out: GeoComponent = { ...base };
+  if (asNonEmptyText(patch.country)) out.country = String(patch.country).trim();
+  if (asNonEmptyText(patch.province)) out.province = String(patch.province).trim();
+  if (asNonEmptyText(patch.city)) out.city = String(patch.city).trim();
+  return out;
+}
+
+function lookupGeoOverrideByXLabel(
+  xLabel: string | undefined,
+  map: Record<string, GeoComponentOverrides> | undefined
+): GeoComponentOverrides | undefined {
+  if (!map || xLabel == null) return undefined;
+  const t = String(xLabel).trim();
+  if (!t) return undefined;
+  const low = t.toLowerCase();
+  for (const [k, v] of Object.entries(map)) {
+    if (k.trim().toLowerCase() === low) return v;
+  }
+  return undefined;
+}
+
+/** Coerción segura desde JSON del body de aggregate-data. */
+export function coerceGeoComponentOverrides(input: unknown): GeoComponentOverrides | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const o = input as Record<string, unknown>;
+  const out: GeoComponentOverrides = {};
+  if (typeof o.country === "string") out.country = o.country;
+  if (typeof o.province === "string") out.province = o.province;
+  if (typeof o.city === "string") out.city = o.city;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function coerceGeoOverridesByXLabel(input: unknown): Record<string, GeoComponentOverrides> | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const src = input as Record<string, unknown>;
+  const out: Record<string, GeoComponentOverrides> = {};
+  for (const [k, v] of Object.entries(src)) {
+    const patch = coerceGeoComponentOverrides(v);
+    if (patch) out[k] = patch;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Para armar el body desde el cliente (solo strings no vacíos). */
+export function compactGeoComponentOverridesForRequest(
+  o: GeoComponentOverrides | undefined
+): GeoComponentOverrides | undefined {
+  if (!o) return undefined;
+  const out: GeoComponentOverrides = {};
+  if (typeof o.country === "string" && o.country.trim()) out.country = o.country.trim();
+  if (typeof o.province === "string" && o.province.trim()) out.province = o.province.trim();
+  if (typeof o.city === "string" && o.city.trim()) out.city = o.city.trim();
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function compactGeoOverridesByXLabelForRequest(
+  m: Record<string, GeoComponentOverrides> | undefined
+): Record<string, GeoComponentOverrides> | undefined {
+  if (!m) return undefined;
+  const out: Record<string, GeoComponentOverrides> = {};
+  for (const [k, v] of Object.entries(m)) {
+    const ck = k.trim();
+    const patch = compactGeoComponentOverridesForRequest(v);
+    if (ck && patch) out[ck] = patch;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 const buildGeoQueryCandidates = (parts: GeoComponent): string[] => {
   const full = [parts.address, parts.city, parts.province, parts.country].filter(Boolean).join(", ");
@@ -334,7 +447,16 @@ const resolveCoordinates = async (
 };
 
 export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Promise<Record<string, unknown>[]> {
-  const { rows, dimList = [], chartXAxis, geoHints, cacheClient, mapDefaultCountry } = options;
+  const {
+    rows,
+    dimList = [],
+    chartXAxis,
+    geoHints,
+    cacheClient,
+    mapDefaultCountry,
+    geoComponentOverrides,
+    geoOverridesByXLabel,
+  } = options;
   const defaultCountry = mapDefaultCountry?.trim() || undefined;
   const argentinaMode = isArgentinaDefaultCountry(defaultCountry);
   const nominatimCc = mapDefaultCountryToNominatimCountryCodes(defaultCountry);
@@ -360,7 +482,11 @@ export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Prom
       continue;
     }
 
-    const components = inferGeoComponents(r, keys, dimList, geoHints);
+    let components = inferGeoComponents(r, keys, dimList, geoHints);
+    components = mergeGeoComponentPatches(components, geoComponentOverrides);
+    const xLabForOverride = label?.trim();
+    const xOv = lookupGeoOverrideByXLabel(xLabForOverride, geoOverridesByXLabel);
+    if (xOv) components = mergeGeoComponentPatches(components, xOv);
     const withCountry =
       components.country || !defaultCountry ? components : { ...components, country: defaultCountry };
 

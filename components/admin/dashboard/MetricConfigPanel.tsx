@@ -11,6 +11,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AdminFieldSelector from "./AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
+import {
+  getGeoInferencePreview,
+  type GeoComponentOverrides,
+} from "@/lib/geo/geo-enrichment";
 import { DashboardThemeFormSections, mergeCardThemePatch } from "./DashboardThemeFormSections";
 
 export type MetricConditionEdit = {
@@ -112,6 +116,9 @@ export type AggregationConfigEdit = {
     latField?: string;
     lonField?: string;
   };
+  mapDefaultCountry?: string;
+  geoComponentOverrides?: GeoComponentOverrides;
+  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   /** Tabla: clave de columna → texto del encabezado. */
   tableColumnLabelOverrides?: Record<string, string>;
 };
@@ -150,6 +157,7 @@ const CHART_TYPES: { value: string; label: string }[] = [
   { value: "table", label: "Tabla" },
   { value: "combo", label: "Combo (barras + línea)" },
   { value: "scatter", label: "Dispersión" },
+  { value: "map", label: "Mapa" },
 ];
 
 /** Incluye apiladas: mismas opciones de apariencia que barras/líneas. */
@@ -183,6 +191,8 @@ type MetricConfigPanelProps = {
   dashboardTheme?: DashboardTheme;
   /** Etiquetas de datasets del preview (colores por serie además de chartYAxes). */
   previewChartDatasetLabels?: string[];
+  /** Filas del preview del widget (p. ej. inferencia de geocodificación en mapas). */
+  previewRows?: Record<string, unknown>[];
   etlData: ETLDataResponse | null;
   etlLoading: boolean;
   onUpdate: (patch: Partial<MetricConfigWidget>) => void;
@@ -220,6 +230,7 @@ export function MetricConfigPanel({
   widget,
   dashboardTheme,
   previewChartDatasetLabels = [],
+  previewRows = [],
   etlData,
   etlLoading,
   onUpdate,
@@ -385,6 +396,87 @@ export function MetricConfigPanel({
   const addTableColOverride = () => {
     if (Object.prototype.hasOwnProperty.call(agg.tableColumnLabelOverrides ?? {}, "")) return;
     updateAgg({ tableColumnLabelOverrides: { ...(agg.tableColumnLabelOverrides ?? {}), "": "" } });
+  };
+
+  const dimListForGeo = useMemo(() => {
+    const d = agg.dimensions?.length
+      ? agg.dimensions
+      : ([agg.dimension, agg.dimension2].filter(Boolean) as string[]);
+    return d.map((x) => String(x ?? "").trim()).filter(Boolean);
+  }, [agg.dimensions, agg.dimension, agg.dimension2]);
+
+  const geoInferencePreview = useMemo(() => {
+    if (chartType !== "map") return null;
+    if (!previewRows || previewRows.length === 0) return null;
+    const row = previewRows[0] as Record<string, unknown>;
+    return getGeoInferencePreview(row, Object.keys(row), dimListForGeo, agg.geoHints);
+  }, [chartType, previewRows, dimListForGeo, agg.geoHints]);
+
+  const geoByLabelEntries = useMemo(
+    () => Object.entries(agg.geoOverridesByXLabel ?? {}),
+    [agg.geoOverridesByXLabel]
+  );
+  const [geoXLabelDrafts, setGeoXLabelDrafts] = useState<Record<string, string>>({});
+
+  const setGeoHintSelect = (field: keyof NonNullable<AggregationConfigEdit["geoHints"]>, value: string) => {
+    const prev = { ...(agg.geoHints ?? {}) } as Record<string, string>;
+    if (value.trim()) prev[field] = value.trim();
+    else delete prev[field];
+    updateAgg({ geoHints: Object.keys(prev).length ? (prev as AggregationConfigEdit["geoHints"]) : undefined });
+  };
+
+  const setGlobalGeoOverride = (field: keyof GeoComponentOverrides, value: string) => {
+    const next = { ...(agg.geoComponentOverrides ?? {}) };
+    if (value.trim()) next[field] = value.trim();
+    else delete next[field];
+    updateAgg({ geoComponentOverrides: Object.keys(next).length ? next : undefined });
+  };
+
+  const setGeoByLabelPatch = (labelKey: string, field: keyof GeoComponentOverrides, value: string) => {
+    const cur = { ...(agg.geoOverridesByXLabel ?? {}) };
+    const prevPatch = cur[labelKey] ?? {};
+    const merged = { ...prevPatch };
+    if (value.trim()) merged[field] = value.trim();
+    else delete merged[field];
+    if (Object.keys(merged).length === 0) delete cur[labelKey];
+    else cur[labelKey] = merged;
+    updateAgg({ geoOverridesByXLabel: Object.keys(cur).length ? cur : undefined });
+  };
+
+  const commitGeoXLabelDraft = (oldKey: string) => {
+    const draft = geoXLabelDrafts[oldKey];
+    if (typeof draft !== "string") return;
+    const normalized = draft.trim();
+    setGeoXLabelDrafts((prev) => {
+      const n = { ...prev };
+      delete n[oldKey];
+      return n;
+    });
+    if (normalized === "" || normalized === oldKey) return;
+    const cur = { ...(agg.geoOverridesByXLabel ?? {}) };
+    const patch = cur[oldKey];
+    if (!patch) return;
+    delete cur[oldKey];
+    cur[normalized] = patch;
+    updateAgg({ geoOverridesByXLabel: Object.keys(cur).length ? cur : undefined });
+  };
+
+  const removeGeoByLabelRow = (labelKey: string) => {
+    const cur = { ...(agg.geoOverridesByXLabel ?? {}) };
+    delete cur[labelKey];
+    setGeoXLabelDrafts((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, labelKey)) return prev;
+      const n = { ...prev };
+      delete n[labelKey];
+      return n;
+    });
+    updateAgg({ geoOverridesByXLabel: Object.keys(cur).length ? cur : undefined });
+  };
+
+  const addGeoByLabelRow = () => {
+    const cur = agg.geoOverridesByXLabel ?? {};
+    if (Object.prototype.hasOwnProperty.call(cur, "")) return;
+    updateAgg({ geoOverridesByXLabel: { ...cur, "": {} } });
   };
 
   const addSavedMetric = (saved: SavedMetricPanel) => {
@@ -625,6 +717,178 @@ export function MetricConfigPanel({
                   <Plus className="mr-1.5 h-3.5 w-3.5" />
                   Añadir columna
                 </Button>
+              </div>
+            )}
+
+            {((widget.aggregationConfig as any)?.chartType || widget.type) === "map" && (
+              <div className="space-y-4 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
+                <p className="text-xs font-semibold text-[var(--studio-fg)]">Ubicación (geocodificación)</p>
+                <p className="text-[11px] leading-snug text-[var(--studio-fg-muted)]">
+                  Coincide con el servidor: inferencia por nombre de columna y <code className="text-[10px]">geoHints</code>. Podés forzar país / provincia / ciudad y reglas por etiqueta del eje X (valor de la fila en el mapa).
+                </p>
+                {!previewRows || previewRows.length === 0 ? (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Cargá datos con «Actualizar datos» para ver la detección automática en una fila de ejemplo.
+                  </p>
+                ) : geoInferencePreview ? (
+                  <div className="space-y-1.5 rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/60 p-2 text-[11px]">
+                    <p className="font-medium text-[var(--studio-fg-muted)]">Detectado (fila de ejemplo)</p>
+                    <div className="grid gap-1 text-[var(--studio-fg)]">
+                      <div>
+                        <span className="text-[var(--studio-fg-muted)]">País:</span>{" "}
+                        {geoInferencePreview.components.country ?? "—"}
+                        {geoInferencePreview.countryField ? (
+                          <span className="text-[var(--studio-fg-muted)]"> · columna {geoInferencePreview.countryField}</span>
+                        ) : null}
+                      </div>
+                      <div>
+                        <span className="text-[var(--studio-fg-muted)]">Provincia / estado:</span>{" "}
+                        {geoInferencePreview.components.province ?? "—"}
+                        {geoInferencePreview.provinceField ? (
+                          <span className="text-[var(--studio-fg-muted)]"> · columna {geoInferencePreview.provinceField}</span>
+                        ) : null}
+                      </div>
+                      <div>
+                        <span className="text-[var(--studio-fg-muted)]">Localidad / ciudad:</span>{" "}
+                        {geoInferencePreview.components.city ?? "—"}
+                        {geoInferencePreview.cityField ? (
+                          <span className="text-[var(--studio-fg-muted)]"> · columna {geoInferencePreview.cityField}</span>
+                        ) : null}
+                      </div>
+                      {geoInferencePreview.addressField ? (
+                        <div className="text-[var(--studio-fg-muted)]">
+                          Dirección (columna {geoInferencePreview.addressField}):{" "}
+                          {geoInferencePreview.components.address ?? "—"}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Mapear columnas (opcional)</p>
+                  {(
+                    [
+                      ["countryField", "País"],
+                      ["provinceField", "Provincia / estado"],
+                      ["cityField", "Ciudad / localidad"],
+                      ["addressField", "Dirección"],
+                      ["latField", "Latitud"],
+                      ["lonField", "Longitud"],
+                    ] as const
+                  ).map(([key, lab]) => (
+                    <div key={key} className="flex flex-col gap-1">
+                      <Label className="text-[10px] text-[var(--studio-fg-muted)]">{lab}</Label>
+                      <select
+                        value={(agg.geoHints?.[key] as string | undefined) ?? ""}
+                        onChange={(e) => setGeoHintSelect(key, e.target.value)}
+                        className="h-8 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs text-[var(--studio-fg)]"
+                      >
+                        <option value="">Inferir automáticamente</option>
+                        {fields.map((f) => (
+                          <option key={`${key}-${f}`} value={f}>
+                            {f}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+
+                <div>
+                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">País por defecto</Label>
+                  <Input
+                    value={agg.mapDefaultCountry ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        mapDefaultCountry: e.target.value === "" ? undefined : e.target.value,
+                      })
+                    }
+                    className="mt-1 h-9 rounded-lg border-[var(--studio-border)]"
+                    placeholder="Ej. Argentina si la fila no trae país"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Forzar valores (todas las filas)</p>
+                  <Input
+                    value={agg.geoComponentOverrides?.country ?? ""}
+                    onChange={(e) => setGlobalGeoOverride("country", e.target.value)}
+                    className="h-8 rounded-lg text-xs"
+                    placeholder="Forzar país"
+                  />
+                  <Input
+                    value={agg.geoComponentOverrides?.province ?? ""}
+                    onChange={(e) => setGlobalGeoOverride("province", e.target.value)}
+                    className="h-8 rounded-lg text-xs"
+                    placeholder="Forzar provincia / estado"
+                  />
+                  <Input
+                    value={agg.geoComponentOverrides?.city ?? ""}
+                    onChange={(e) => setGlobalGeoOverride("city", e.target.value)}
+                    className="h-8 rounded-lg text-xs"
+                    placeholder="Forzar localidad / ciudad"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Corrección por etiqueta del mapa (eje X)</p>
+                  <p className="text-[10px] text-[var(--studio-fg-muted)]">
+                    La clave debe coincidir con el valor mostrado en el eje X (comparación sin distinguir mayúsculas).
+                  </p>
+                  <div className="space-y-2">
+                    {geoByLabelEntries.map(([labelKey, patch]) => (
+                      <div
+                        key={labelKey}
+                        className="flex flex-col gap-2 rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/50 p-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={geoXLabelDrafts[labelKey] ?? labelKey}
+                            onChange={(e) =>
+                              setGeoXLabelDrafts((prev) => ({ ...prev, [labelKey]: e.target.value }))
+                            }
+                            onBlur={() => commitGeoXLabelDraft(labelKey)}
+                            placeholder="Etiqueta eje X"
+                            className="h-8 flex-1 text-xs"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0 text-red-500"
+                            onClick={() => removeGeoByLabelRow(labelKey)}
+                            aria-label="Quitar"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        <Input
+                          value={patch.country ?? ""}
+                          onChange={(e) => setGeoByLabelPatch(labelKey, "country", e.target.value)}
+                          className="h-8 text-xs"
+                          placeholder="País (opcional)"
+                        />
+                        <Input
+                          value={patch.province ?? ""}
+                          onChange={(e) => setGeoByLabelPatch(labelKey, "province", e.target.value)}
+                          className="h-8 text-xs"
+                          placeholder="Provincia (opcional)"
+                        />
+                        <Input
+                          value={patch.city ?? ""}
+                          onChange={(e) => setGeoByLabelPatch(labelKey, "city", e.target.value)}
+                          className="h-8 text-xs"
+                          placeholder="Ciudad (opcional)"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={addGeoByLabelRow}>
+                    <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    Añadir regla por etiqueta
+                  </Button>
+                </div>
               </div>
             )}
 

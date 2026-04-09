@@ -29,6 +29,14 @@ import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
 import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
+import {
+  coerceGeoComponentOverrides,
+  coerceGeoOverridesByXLabel,
+  getGeoInferencePreview,
+  compactGeoComponentOverridesForRequest,
+  compactGeoOverridesByXLabelForRequest,
+  type GeoComponentOverrides,
+} from "@/lib/geo/geo-enrichment";
 
 // Reserved for future UI (e.g. aggregate function selector)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -526,6 +534,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartGridColor, setChartGridColor] = useState<string>("");
   /** Mapa: país por defecto para geocodificación cuando la fila no incluye país. */
   const [mapDefaultCountry, setMapDefaultCountry] = useState<string>("");
+  const [geoComponentOverrides, setGeoComponentOverrides] = useState<GeoComponentOverrides>({});
+  const [geoOverridesByXLabel, setGeoOverridesByXLabel] = useState<Record<string, GeoComponentOverrides>>({});
+  const [etlGeoXLabelDrafts, setEtlGeoXLabelDrafts] = useState<Record<string, string>>({});
   const [chartAxisXVisible, setChartAxisXVisible] = useState(true);
   const [chartAxisYVisible, setChartAxisYVisible] = useState(true);
   const [chartScalePerMetric, setChartScalePerMetric] = useState<Record<string, { min?: number; max?: number; step?: number }>>({});
@@ -670,6 +681,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartGridYDisplay(true);
     setChartGridColor("");
     setMapDefaultCountry("");
+    setGeoComponentOverrides({});
+    setGeoOverridesByXLabel({});
+    setEtlGeoXLabelDrafts({});
     setChartAxisXVisible(true);
     setChartAxisYVisible(true);
     setShowDataLabels(true);
@@ -1572,6 +1586,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         setAnalysisDateFormat("short");
       }
       setMapDefaultCountry(typeof (cfg as { mapDefaultCountry?: string }).mapDefaultCountry === "string" ? String((cfg as { mapDefaultCountry: string }).mapDefaultCountry) : "");
+      setGeoComponentOverrides(coerceGeoComponentOverrides((cfg as { geoComponentOverrides?: unknown }).geoComponentOverrides) ?? {});
+      setGeoOverridesByXLabel(coerceGeoOverridesByXLabel((cfg as { geoOverridesByXLabel?: unknown }).geoOverridesByXLabel) ?? {});
+      setEtlGeoXLabelDrafts({});
       const first = (cfg.metrics ?? [saved.metric])[0];
       setFormMetric(first ? { ...first, id: first.id || `m-${Date.now()}` } : { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" });
     } else {
@@ -1621,6 +1638,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setInterHighlight(true);
       setAnalysisDateFormat("short");
       setMapDefaultCountry("");
+      setGeoComponentOverrides({});
+      setGeoOverridesByXLabel({});
+      setEtlGeoXLabelDrafts({});
       setFormMetric({ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` });
     }
     setPreviewData(null);
@@ -1755,6 +1775,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return Object.keys(hints).length > 0 ? hints : undefined;
   }, [columnRoles, formDimensions]);
 
+  const mapGeoInferencePreview = useMemo(() => {
+    if (formChartType !== "map" || !previewData || previewData.length === 0) return null;
+    const row = previewData[0] as Record<string, unknown>;
+    return getGeoInferencePreview(row, Object.keys(row), formDimensions, geoHints);
+  }, [formChartType, previewData, formDimensions, geoHints]);
+
   const fetchPreview = useCallback(async () => {
     if (effectiveFormMetrics.length === 0) return;
     setPreviewLoading(true);
@@ -1885,6 +1911,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         if (chartXAxis) body.chartXAxis = chartXAxis;
         if (geoHints && Object.keys(geoHints).length > 0) body.geoHints = geoHints;
         if (formChartType === "map" && mapDefaultCountry.trim()) body.mapDefaultCountry = mapDefaultCountry.trim();
+        if (formChartType === "map") {
+          const gco = compactGeoComponentOverridesForRequest(geoComponentOverrides);
+          const gxl = compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel);
+          if (gco) (body as Record<string, unknown>).geoComponentOverrides = gco;
+          if (gxl) (body as Record<string, unknown>).geoOverridesByXLabel = gxl;
+        }
       }
       const res = await fetch("/api/dashboard/aggregate-data", {
         method: "POST",
@@ -1932,6 +1964,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartXAxis,
     geoHints,
     mapDefaultCountry,
+    geoComponentOverrides,
+    geoOverridesByXLabel,
   ]);
 
   const fetchPreviewRef = useRef(fetchPreview);
@@ -2926,6 +2960,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       interHighlight: interHighlight === false ? false : undefined,
       analysisDateDisplayFormat: analysisDateFormat,
       ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
+      ...(formChartType === "map" && compactGeoComponentOverridesForRequest(geoComponentOverrides)
+        ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(geoComponentOverrides) }
+        : {}),
+      ...(formChartType === "map" && compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel)
+        ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
+        : {}),
     };
     let expr = (firstMetric as { expression?: string }).expression;
     const alias = (firstMetric.alias || "").trim();
@@ -3200,6 +3240,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       interHighlight: interHighlight === false ? false : undefined,
       analysisDateDisplayFormat: analysisDateFormat,
       ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
+      ...(formChartType === "map" && compactGeoComponentOverridesForRequest(geoComponentOverrides)
+        ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(geoComponentOverrides) }
+        : {}),
+      ...(formChartType === "map" && compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel)
+        ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
+        : {}),
     };
     const item: SavedMetricForm = {
       id: `sm-${Date.now()}`,
@@ -3311,10 +3357,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             : undefined,
       analysisDateDisplayFormat: analysisDateFormat,
       ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
+      ...(formChartType === "map" && compactGeoComponentOverridesForRequest(geoComponentOverrides)
+        ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(geoComponentOverrides) }
+        : {}),
+      ...(formChartType === "map" && compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel)
+        ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
+        : {}),
     };
   }, [
     analysisDateFormat,
     mapDefaultCountry,
+    geoComponentOverrides,
+    geoOverridesByXLabel,
     analysisSelectedMetricIds,
     formDimensions,
     formChartType,
@@ -3539,6 +3593,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         setAnalysisDateFormat("short");
       }
       setMapDefaultCountry(typeof a.mapDefaultCountry === "string" ? a.mapDefaultCountry : "");
+      setGeoComponentOverrides(coerceGeoComponentOverrides((a as { geoComponentOverrides?: unknown }).geoComponentOverrides) ?? {});
+      setGeoOverridesByXLabel(coerceGeoOverridesByXLabel((a as { geoOverridesByXLabel?: unknown }).geoOverridesByXLabel) ?? {});
+      setEtlGeoXLabelDrafts({});
       prevAnalysisSelectionSigRef.current = [...(Array.isArray(a.metricIds) ? (a.metricIds as string[]) : [])].sort().join("|");
       lastChartTypeForMappingRef.current = null;
       setWizard("D");
@@ -5652,20 +5709,232 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     })}
                   </div>
                   {formChartType === "map" && (
-                    <div className="mt-4 space-y-2">
-                      <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
-                        País por defecto (geocodificación)
-                      </Label>
-                      <Input
-                        value={mapDefaultCountry}
-                        onChange={(e) => setMapDefaultCountry(e.target.value)}
-                        placeholder="Ej. Argentina — si las filas no traen país"
-                        className="max-w-md rounded-xl"
-                        style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                      />
-                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                        Se usa al buscar coordenadas en OpenStreetMap cuando falta una columna de país. Opcional.
-                      </p>
+                    <div className="mt-4 space-y-4">
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
+                          País por defecto (geocodificación)
+                        </Label>
+                        <Input
+                          value={mapDefaultCountry}
+                          onChange={(e) => setMapDefaultCountry(e.target.value)}
+                          placeholder="Ej. Argentina — si las filas no traen país"
+                          className="max-w-md rounded-xl"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                        />
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                          Se usa al buscar coordenadas en OpenStreetMap cuando falta una columna de país. Opcional.
+                        </p>
+                      </div>
+                      {mapGeoInferencePreview ? (
+                        <div
+                          className="rounded-xl border p-3 text-xs space-y-1"
+                          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+                        >
+                          <p className="font-medium" style={{ color: "var(--platform-fg)" }}>
+                            Detección automática (primera fila del preview)
+                          </p>
+                          <p style={{ color: "var(--platform-fg-muted)" }}>
+                            País: {mapGeoInferencePreview.components.country ?? "—"}
+                            {mapGeoInferencePreview.countryField ? ` · ${mapGeoInferencePreview.countryField}` : ""}
+                          </p>
+                          <p style={{ color: "var(--platform-fg-muted)" }}>
+                            Provincia: {mapGeoInferencePreview.components.province ?? "—"}
+                            {mapGeoInferencePreview.provinceField ? ` · ${mapGeoInferencePreview.provinceField}` : ""}
+                          </p>
+                          <p style={{ color: "var(--platform-fg-muted)" }}>
+                            Ciudad: {mapGeoInferencePreview.components.city ?? "—"}
+                            {mapGeoInferencePreview.cityField ? ` · ${mapGeoInferencePreview.cityField}` : ""}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                          En el paso Análisis, «Actualizar vista previa» muestra aquí qué país/provincia/ciudad se infieren.
+                        </p>
+                      )}
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
+                          Forzar país / provincia / ciudad (todas las filas)
+                        </Label>
+                        <Input
+                          value={geoComponentOverrides.country ?? ""}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setGeoComponentOverrides((prev) => {
+                              const n = { ...prev };
+                              if (v.trim()) n.country = v;
+                              else delete n.country;
+                              return n;
+                            });
+                          }}
+                          placeholder="País"
+                          className="max-w-md rounded-xl"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                        />
+                        <Input
+                          value={geoComponentOverrides.province ?? ""}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setGeoComponentOverrides((prev) => {
+                              const n = { ...prev };
+                              if (v.trim()) n.province = v;
+                              else delete n.province;
+                              return n;
+                            });
+                          }}
+                          placeholder="Provincia / estado"
+                          className="max-w-md rounded-xl"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                        />
+                        <Input
+                          value={geoComponentOverrides.city ?? ""}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setGeoComponentOverrides((prev) => {
+                              const n = { ...prev };
+                              if (v.trim()) n.city = v;
+                              else delete n.city;
+                              return n;
+                            });
+                          }}
+                          placeholder="Localidad / ciudad"
+                          className="max-w-md rounded-xl"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>
+                          Corrección por etiqueta del mapa (eje X)
+                        </Label>
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                          La clave coincide con el valor del eje X (sin distinguir mayúsculas).
+                        </p>
+                        <div className="space-y-2">
+                          {Object.entries(geoOverridesByXLabel).map(([labelKey, patch]) => (
+                            <div
+                              key={labelKey}
+                              className="rounded-lg border p-2 space-y-2"
+                              style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
+                            >
+                              <div className="flex gap-2 items-center">
+                                <Input
+                                  value={etlGeoXLabelDrafts[labelKey] ?? labelKey}
+                                  onChange={(e) =>
+                                    setEtlGeoXLabelDrafts((prev) => ({ ...prev, [labelKey]: e.target.value }))
+                                  }
+                                  onBlur={(e) => {
+                                    const normalized = e.target.value.trim();
+                                    setEtlGeoXLabelDrafts((prev) => {
+                                      const n = { ...prev };
+                                      delete n[labelKey];
+                                      return n;
+                                    });
+                                    if (normalized === "" || normalized === labelKey) return;
+                                    setGeoOverridesByXLabel((prev) => {
+                                      const cur = { ...prev };
+                                      const p = cur[labelKey];
+                                      if (!p) return prev;
+                                      delete cur[labelKey];
+                                      cur[normalized] = p;
+                                      return cur;
+                                    });
+                                  }}
+                                  placeholder="Etiqueta eje X"
+                                  className="flex-1 rounded-lg text-xs h-9"
+                                  style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="shrink-0 h-9"
+                                  onClick={() => {
+                                    setGeoOverridesByXLabel((prev) => {
+                                      const n = { ...prev };
+                                      delete n[labelKey];
+                                      return n;
+                                    });
+                                    setEtlGeoXLabelDrafts((prev) => {
+                                      if (!Object.prototype.hasOwnProperty.call(prev, labelKey)) return prev;
+                                      const x = { ...prev };
+                                      delete x[labelKey];
+                                      return x;
+                                    });
+                                  }}
+                                >
+                                  Quitar
+                                </Button>
+                              </div>
+                              <Input
+                                value={patch.country ?? ""}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setGeoOverridesByXLabel((prev) => {
+                                    const cur = { ...prev };
+                                    const prevPatch = { ...(cur[labelKey] ?? {}) };
+                                    if (v.trim()) prevPatch.country = v;
+                                    else delete prevPatch.country;
+                                    if (Object.keys(prevPatch).length === 0) delete cur[labelKey];
+                                    else cur[labelKey] = prevPatch;
+                                    return cur;
+                                  });
+                                }}
+                                placeholder="País"
+                                className="rounded-lg text-xs h-8"
+                                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                              />
+                              <Input
+                                value={patch.province ?? ""}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setGeoOverridesByXLabel((prev) => {
+                                    const cur = { ...prev };
+                                    const prevPatch = { ...(cur[labelKey] ?? {}) };
+                                    if (v.trim()) prevPatch.province = v;
+                                    else delete prevPatch.province;
+                                    if (Object.keys(prevPatch).length === 0) delete cur[labelKey];
+                                    else cur[labelKey] = prevPatch;
+                                    return cur;
+                                  });
+                                }}
+                                placeholder="Provincia"
+                                className="rounded-lg text-xs h-8"
+                                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                              />
+                              <Input
+                                value={patch.city ?? ""}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setGeoOverridesByXLabel((prev) => {
+                                    const cur = { ...prev };
+                                    const prevPatch = { ...(cur[labelKey] ?? {}) };
+                                    if (v.trim()) prevPatch.city = v;
+                                    else delete prevPatch.city;
+                                    if (Object.keys(prevPatch).length === 0) delete cur[labelKey];
+                                    else cur[labelKey] = prevPatch;
+                                    return cur;
+                                  });
+                                }}
+                                placeholder="Ciudad"
+                                className="rounded-lg text-xs h-8"
+                                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="rounded-xl"
+                          style={{ borderColor: "var(--platform-border)" }}
+                          onClick={() => {
+                            if (Object.prototype.hasOwnProperty.call(geoOverridesByXLabel, "")) return;
+                            setGeoOverridesByXLabel((prev) => ({ ...prev, "": {} }));
+                          }}
+                        >
+                          Añadir regla por etiqueta
+                        </Button>
+                      </div>
                     </div>
                   )}
                   <div className="mt-6 flex justify-between">

@@ -1,4 +1,8 @@
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import {
+  compactGeoComponentOverridesForRequest,
+  compactGeoOverridesByXLabelForRequest,
+} from "@/lib/geo/geo-enrichment";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget, type ChartConfig } from "@/lib/dashboard/buildChartConfig";
 import { resolveWidgetAggregationForDisplay } from "@/lib/dashboard/widgetRenderParity";
 
@@ -42,6 +46,8 @@ type AggregationConfigLike = {
     latField?: string;
     lonField?: string;
   };
+  geoComponentOverrides?: { country?: string; province?: string; city?: string };
+  geoOverridesByXLabel?: Record<string, { country?: string; province?: string; city?: string }>;
 };
 
 type WidgetLike = BuildChartConfigWidget & {
@@ -220,6 +226,12 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       ...(agg?.geoHints ? { geoHints: agg.geoHints } : {}),
       ...(typeof agg?.mapDefaultCountry === "string" && agg.mapDefaultCountry.trim()
         ? { mapDefaultCountry: agg.mapDefaultCountry.trim() }
+        : {}),
+      ...(compactGeoComponentOverridesForRequest(agg?.geoComponentOverrides)
+        ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(agg.geoComponentOverrides) }
+        : {}),
+      ...(compactGeoOverridesByXLabelForRequest(agg?.geoOverridesByXLabel)
+        ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(agg.geoOverridesByXLabel) }
         : {}),
       ...(aggregateExtraPayload ?? {}),
     };

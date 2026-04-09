@@ -291,6 +291,10 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
     chartRankingDirection: cfg.chartRankingDirection,
     dateGroupByGranularity: cfg.dateGroupByGranularity,
     dateRangeFilter: cfg.dateRangeFilter,
+    geoHints: cfg.geoHints,
+    mapDefaultCountry: cfg.mapDefaultCountry,
+    geoComponentOverrides: cfg.geoComponentOverrides,
+    geoOverridesByXLabel: cfg.geoOverridesByXLabel,
   };
 }
 

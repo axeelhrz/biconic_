@@ -41,6 +41,10 @@ import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buil
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
 import {
+  compactGeoComponentOverridesForRequest,
+  compactGeoOverridesByXLabelForRequest,
+} from "@/lib/geo/geo-enrichment";
+import {
   clampGridSpan,
   computeAddMetricPackedPlacement,
   computeDashboardGridPlacementsPacked,
@@ -192,6 +196,8 @@ type AggregationConfig = {
   };
   analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
   mapDefaultCountry?: string;
+  geoComponentOverrides?: { country?: string; province?: string; city?: string };
+  geoOverridesByXLabel?: Record<string, { country?: string; province?: string; city?: string }>;
 };
 type StudioWidget = {
   id: string;
@@ -824,6 +830,12 @@ export function AdminDashboardStudio({
             ...(aggForLoad.geoHints ? { geoHints: aggForLoad.geoHints } : {}),
             ...(typeof aggForLoad.mapDefaultCountry === "string" && aggForLoad.mapDefaultCountry.trim()
               ? { mapDefaultCountry: aggForLoad.mapDefaultCountry.trim() }
+              : {}),
+            ...(compactGeoComponentOverridesForRequest(aggForLoad.geoComponentOverrides)
+              ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(aggForLoad.geoComponentOverrides) }
+              : {}),
+            ...(compactGeoOverridesByXLabelForRequest(aggForLoad.geoOverridesByXLabel)
+              ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(aggForLoad.geoOverridesByXLabel) }
               : {}),
             metrics: metricsPayload,
             filters: [...mappedWidgetFilters, ...mappedGlobalFilters],
@@ -2143,6 +2155,7 @@ export function AdminDashboardStudio({
                   ?.map((d) => String((d as { label?: string }).label ?? "").trim())
                   .filter(Boolean) ?? []
               }
+              previewRows={selectedWidgetForPanel.rows}
               widget={{
                 id: selectedWidgetForPanel.id,
                 type: selectedWidgetForPanel.type,

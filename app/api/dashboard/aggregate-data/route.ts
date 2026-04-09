@@ -9,7 +9,14 @@ import type { Database } from "@/lib/supabase/database.types";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
-import { enrichRowsWithGeo, type GeoCacheClient, type GeoHints } from "@/lib/geo/geo-enrichment";
+import {
+  coerceGeoComponentOverrides,
+  coerceGeoOverridesByXLabel,
+  enrichRowsWithGeo,
+  type GeoCacheClient,
+  type GeoComponentOverrides,
+  type GeoHints,
+} from "@/lib/geo/geo-enrichment";
 
 // --- Interfaces ---
 interface MetricCondition {
@@ -83,6 +90,8 @@ interface AggregationRequest {
   geoHints?: GeoHints;
   /** País por defecto para geocodificación cuando la fila no incluye país. */
   mapDefaultCountry?: string;
+  geoComponentOverrides?: GeoComponentOverrides;
+  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
 }
 
 // --- Constantes ---
@@ -1689,6 +1698,8 @@ export async function POST(req: NextRequest) {
           chartXAxis: body.chartXAxis ?? body.dimension ?? body.dimensions?.[0],
           geoHints: body.geoHints,
           mapDefaultCountry: typeof body.mapDefaultCountry === "string" ? body.mapDefaultCountry : undefined,
+          geoComponentOverrides: coerceGeoComponentOverrides(body.geoComponentOverrides),
+          geoOverridesByXLabel: coerceGeoOverridesByXLabel(body.geoOverridesByXLabel),
           cacheClient,
         })
       : sortedResults;

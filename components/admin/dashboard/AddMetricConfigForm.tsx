@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import AdminFieldSelector from "./AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
+import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
 
 export type MetricConditionEdit = {
   field: string;
@@ -113,6 +114,8 @@ export type AggregationConfigEdit = {
     latField?: string;
     lonField?: string;
   };
+  geoComponentOverrides?: GeoComponentOverrides;
+  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   tableColumnLabelOverrides?: Record<string, string>;
 };
 
@@ -200,6 +203,8 @@ export type SavedMetricAggregationConfig = {
     latField?: string;
     lonField?: string;
   };
+  geoComponentOverrides?: GeoComponentOverrides;
+  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string };
   interCrossFilter?: boolean;
   interCrossFilterFields?: string[];
