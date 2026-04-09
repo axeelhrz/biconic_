@@ -585,6 +585,12 @@
   border-left: 1px solid var(--studio-border);
 }
 
+/* Panel de métrica en modal (sin barra lateral) */
+.studio-metric-config-dialog .metric-config-panel {
+  border-left: none;
+  box-shadow: none;
+}
+
 .metric-config-panel header {
   border-bottom: 1px solid var(--studio-border);
   background: var(--studio-surface);

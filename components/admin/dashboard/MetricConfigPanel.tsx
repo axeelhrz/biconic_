@@ -541,14 +541,14 @@ export function MetricConfigPanel({
   );
 
   return (
-    <aside className="metric-config-panel flex h-full w-full max-w-[380px] flex-col border-l border-[var(--studio-border)] bg-[var(--studio-bg-elevated)] shadow-xl">
+    <div className="metric-config-panel flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-[var(--studio-bg-elevated)]">
       <header className="flex flex-shrink-0 items-center justify-between border-b border-[var(--studio-border)] bg-[var(--studio-surface)] px-4 py-3">
         <h3 className="text-sm font-semibold tracking-tight text-[var(--studio-fg)]">Configurar métrica</h3>
         <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)] hover:text-[var(--studio-fg)]" onClick={onClose} aria-label="Cerrar">
           <X className="h-4 w-4" />
         </Button>
       </header>
-      <Tabs value={panelTab} onValueChange={setPanelTab} className="flex min-h-0 min-w-0 flex-1 flex-col px-3 pt-3">
+      <Tabs value={panelTab} onValueChange={setPanelTab} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-3 pt-3">
         <TabsList className="mb-2 h-auto w-full flex-shrink-0 flex-wrap justify-start gap-1 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] p-1">
           <TabsTrigger
             value="general"
@@ -2427,6 +2427,6 @@ export function MetricConfigPanel({
           ) : null}
         </div>
       </Tabs>
-    </aside>
+    </div>
   );
 }

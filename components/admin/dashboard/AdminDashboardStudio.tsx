@@ -37,7 +37,11 @@ import {
   expandAnalysisMetricsForFetch,
   expandSavedMetricsWithGlobalRefs,
 } from "@/lib/metrics/expandSavedMetricsForAnalysis";
-import { buildChartConfig, getProcessedRowsForChart } from "@/lib/dashboard/buildChartConfig";
+import {
+  buildChartConfig,
+  getProcessedRowsForChart,
+  type BuildChartConfigWidget,
+} from "@/lib/dashboard/buildChartConfig";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
 import {
@@ -1491,6 +1495,7 @@ export function AdminDashboardStudio({
   const handleMetricPanelUpdate = useCallback(
     (patch: Partial<MetricConfigWidget>) => {
       if (!selectedId) return;
+      const nonChartStudioTypes = new Set(["table", "filter", "text", "image", "map"]);
       setWidgets((prev) =>
         prev.map((w) => {
           if (w.id !== selectedId) return w;
@@ -1501,6 +1506,28 @@ export function AdminDashboardStudio({
               ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
               ...patch.aggregationConfig,
             } as AggregationConfig;
+            const rows = w.rows;
+            if (
+              !nonChartStudioTypes.has(w.type) &&
+              Array.isArray(rows) &&
+              rows.length > 0 &&
+              next.aggregationConfig
+            ) {
+              const widgetForBuild: BuildChartConfigWidget = {
+                type: w.type,
+                aggregationConfig: next.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
+                source: w.source,
+                color: (w as { color?: string }).color,
+              };
+              try {
+                const processed = getProcessedRowsForChart(rows as Record<string, unknown>[], widgetForBuild);
+                const accent = String((w as { color?: string }).color ?? "").trim();
+                const cfg = buildChartConfig(processed, widgetForBuild, accent);
+                if (cfg) next.config = cfg as ChartConfig;
+              } catch {
+                /* mantener config anterior si el preview local falla */
+              }
+            }
           }
           if (patchImg != null) {
             next.imageConfig = { ...(w.imageConfig ?? {}), ...patchImg };
@@ -2028,7 +2055,7 @@ export function AdminDashboardStudio({
         onDeletePage={deletePage}
         readOnly={embeddedPreview}
       />
-      <main className="studio-main flex min-h-0 flex-1 flex-row overflow-hidden">
+      <main className="studio-main flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
         {widgetsForCurrentPage.length === 0 && sortedWidgets.length === 0 ? (
           <StudioEmptyState
@@ -2220,60 +2247,76 @@ export function AdminDashboardStudio({
           </div>
         )}
         </div>
-        {!embeddedPreview &&
-          mode !== "presentar" &&
-          selectedWidgetForPanel &&
-          selectedWidgetForPanel.type !== "filter" && (
-            <MetricConfigPanel
-              dashboardTheme={dashboardTheme}
-              previewChartDatasetLabels={
-                selectedWidgetForPanel.config?.datasets
-                  ?.map((d) => String((d as { label?: string }).label ?? "").trim())
-                  .filter(Boolean) ?? []
-              }
-              previewRows={selectedWidgetForPanel.rows}
-              widget={{
-                id: selectedWidgetForPanel.id,
-                type: selectedWidgetForPanel.type,
-                title: selectedWidgetForPanel.title,
-                gridSpan: selectedWidgetForPanel.gridSpan,
-                minHeight: selectedWidgetForPanel.minHeight,
-                aggregationConfig: (selectedWidgetForPanel.aggregationConfig ?? {
-                  enabled: false,
-                  metrics: [],
-                }) as AggregationConfigEdit,
-                labelDisplayMode: selectedWidgetForPanel.labelDisplayMode,
-                color: selectedWidgetForPanel.color as string | undefined,
-                kpiSecondaryLabel: selectedWidgetForPanel.kpiSecondaryLabel,
-                kpiSecondaryValue: selectedWidgetForPanel.kpiSecondaryValue,
-                kpiCaption: selectedWidgetForPanel.kpiCaption,
-                excludeGlobalFilters: selectedWidgetForPanel.excludeGlobalFilters,
-                dataSourceId: selectedWidgetForPanel.dataSourceId,
-                cardTheme: selectedWidgetForPanel.cardTheme,
-                imageUrl: selectedWidgetForPanel.imageUrl,
-                imageConfig: selectedWidgetForPanel.imageConfig,
-                fixedGrid: selectedWidgetForPanel.fixedGrid,
-                zIndex: selectedWidgetForPanel.zIndex,
-                headerIconUrl: selectedWidgetForPanel.headerIconUrl,
-                headerIconKey: selectedWidgetForPanel.headerIconKey,
-                contentIconPosition: selectedWidgetForPanel.contentIconPosition,
-                hideWidgetHeader: selectedWidgetForPanel.hideWidgetHeader,
-                content: selectedWidgetForPanel.content,
-              }}
-              etlData={etlData}
-              etlLoading={etlLoading}
-              onUpdate={handleMetricPanelUpdate}
-              onLoadData={() => void loadMetricData(selectedWidgetForPanel.id)}
-              onClose={() => setSelectedId(null)}
-              savedMetrics={savedMetrics.map((s) => ({
-                id: s.id,
-                name: s.name,
-                metric: s.metric,
-                aggregationConfig: s.aggregationConfig,
-              }))}
-            />
-          )}
       </main>
+
+      {!embeddedPreview && mode !== "presentar" && (
+        <Dialog
+          open={Boolean(selectedWidgetForPanel && selectedWidgetForPanel.type !== "filter")}
+          onOpenChange={(open) => {
+            if (!open) setSelectedId(null);
+          }}
+        >
+          <DialogContent
+            showCloseButton={false}
+            aria-describedby={undefined}
+            className="studio-metric-config-dialog border border-[var(--studio-border)] bg-[var(--studio-bg-elevated)] p-0 gap-0 shadow-2xl sm:max-w-3xl w-[min(100vw-1.5rem,42rem)] max-h-[min(92vh,880px)] overflow-hidden flex flex-col"
+          >
+            <DialogHeader className="sr-only">
+              <DialogTitle>Configurar métrica</DialogTitle>
+            </DialogHeader>
+            {selectedWidgetForPanel && selectedWidgetForPanel.type !== "filter" && (
+              <MetricConfigPanel
+                dashboardTheme={dashboardTheme}
+                previewChartDatasetLabels={
+                  selectedWidgetForPanel.config?.datasets
+                    ?.map((d) => String((d as { label?: string }).label ?? "").trim())
+                    .filter(Boolean) ?? []
+                }
+                previewRows={selectedWidgetForPanel.rows}
+                widget={{
+                  id: selectedWidgetForPanel.id,
+                  type: selectedWidgetForPanel.type,
+                  title: selectedWidgetForPanel.title,
+                  gridSpan: selectedWidgetForPanel.gridSpan,
+                  minHeight: selectedWidgetForPanel.minHeight,
+                  aggregationConfig: (selectedWidgetForPanel.aggregationConfig ?? {
+                    enabled: false,
+                    metrics: [],
+                  }) as AggregationConfigEdit,
+                  labelDisplayMode: selectedWidgetForPanel.labelDisplayMode,
+                  color: selectedWidgetForPanel.color as string | undefined,
+                  kpiSecondaryLabel: selectedWidgetForPanel.kpiSecondaryLabel,
+                  kpiSecondaryValue: selectedWidgetForPanel.kpiSecondaryValue,
+                  kpiCaption: selectedWidgetForPanel.kpiCaption,
+                  excludeGlobalFilters: selectedWidgetForPanel.excludeGlobalFilters,
+                  dataSourceId: selectedWidgetForPanel.dataSourceId,
+                  cardTheme: selectedWidgetForPanel.cardTheme,
+                  imageUrl: selectedWidgetForPanel.imageUrl,
+                  imageConfig: selectedWidgetForPanel.imageConfig,
+                  fixedGrid: selectedWidgetForPanel.fixedGrid,
+                  zIndex: selectedWidgetForPanel.zIndex,
+                  headerIconUrl: selectedWidgetForPanel.headerIconUrl,
+                  headerIconKey: selectedWidgetForPanel.headerIconKey,
+                  contentIconPosition: selectedWidgetForPanel.contentIconPosition,
+                  hideWidgetHeader: selectedWidgetForPanel.hideWidgetHeader,
+                  content: selectedWidgetForPanel.content,
+                }}
+                etlData={etlData}
+                etlLoading={etlLoading}
+                onUpdate={handleMetricPanelUpdate}
+                onLoadData={() => void loadMetricData(selectedWidgetForPanel.id)}
+                onClose={() => setSelectedId(null)}
+                savedMetrics={savedMetrics.map((s) => ({
+                  id: s.id,
+                  name: s.name,
+                  metric: s.metric,
+                  aggregationConfig: s.aggregationConfig,
+                }))}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
 
       <Dialog
         open={addMetricOpen}
