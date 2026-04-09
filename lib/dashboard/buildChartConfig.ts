@@ -10,7 +10,12 @@ import {
   parseDateLike,
   type AnalysisDateDisplayFormat,
   type DateGranularity,
+  type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
+
+function aggregationDateParseOpts(agg?: { dateSlashOrder?: string }): ParseDateLikeOptions {
+  return { slashDateOrder: agg?.dateSlashOrder === "MDY" ? "MDY" : "DMY" };
+}
 
 export type ChartConfig = {
   labels: string[];
@@ -55,6 +60,8 @@ export type BuildChartConfigWidget = {
     chartSortBy?: string;
     chartSortByMetric?: string;
     chartAxisOrder?: string;
+    /** DMY = día/mes (default); MDY = mes/día (US) para barras ambiguas `4/1/2024`. */
+    dateSlashOrder?: "DMY" | "MDY";
     ratioReuseMode?: boolean;
     [key: string]: unknown;
   };
@@ -271,6 +278,7 @@ export function getProcessedRowsForChart(
 ): Record<string, unknown>[] {
   if (!Array.isArray(dataArray) || dataArray.length === 0) return [];
   const agg = widget.aggregationConfig;
+  const dateParseOpts = aggregationDateParseOpts(agg);
   const axis = resolveWidgetAxisKeys(dataArray, widget);
   if (!axis) return [...dataArray];
   const { xKey, yKeys, resultKeys } = axis;
@@ -315,10 +323,10 @@ export function getProcessedRowsForChart(
       const va = (a as Record<string, unknown>)[xKey];
       const vb = (b as Record<string, unknown>)[xKey];
       const ta =
-        parseDateLike(va)?.getTime() ??
+        parseDateLike(va, dateParseOpts)?.getTime() ??
         (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
       const tb =
-        parseDateLike(vb)?.getTime() ??
+        parseDateLike(vb, dateParseOpts)?.getTime() ??
         (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
       if (!Number.isNaN(ta) && !Number.isNaN(tb)) {
         const dirDate = axisOrder === "date_desc" ? -1 : 1;
@@ -351,8 +359,12 @@ export function getProcessedRowsForChart(
         const vb = (b as Record<string, unknown>)[xKey];
         const sortAsDate = axisOrder === "date_asc" || axisOrder === "date_desc" || (axisOrder === "alpha" && isTemporalXAxis);
         if (sortAsDate) {
-          const ta = parseDateLike(va)?.getTime() ?? (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
-          const tb = parseDateLike(vb)?.getTime() ?? (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
+          const ta =
+            parseDateLike(va, dateParseOpts)?.getTime() ??
+            (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
+          const tb =
+            parseDateLike(vb, dateParseOpts)?.getTime() ??
+            (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
           if (!Number.isNaN(ta) && !Number.isNaN(tb)) {
             const dirDate = axisOrder === "date_desc" ? -1 : 1;
             return (ta - tb) * dirDate;
@@ -420,6 +432,7 @@ export function buildChartConfig(
   const axis = resolveWidgetAxisKeys(dataArray, widget);
   if (!axis) return undefined;
   const { xKey, yKeys, resultKeys } = axis;
+  const dateParseOpts = aggregationDateParseOpts(agg);
 
   const overrides = agg?.chartLabelOverrides;
   const labelOverride = (v: string): string => {
@@ -438,7 +451,7 @@ export function buildChartConfig(
   const shouldTreatXAsDate =
     !!configuredGranularity ||
     (normalizedDateDim !== "" && normalizedDateDim === normalizedXKey) ||
-    dataArray.some((r) => parseDateLike((r as Record<string, unknown>)[xKey]) != null);
+    dataArray.some((r) => parseDateLike((r as Record<string, unknown>)[xKey], dateParseOpts) != null);
   const dateDisplayFmt = agg?.analysisDateDisplayFormat as AnalysisDateDisplayFormat | undefined;
   const formatXLabel = (value: unknown): string => {
     const raw = String(value ?? "");
@@ -446,7 +459,7 @@ export function buildChartConfig(
     if (overridden !== raw) return overridden;
     if (!shouldTreatXAsDate) return overridden;
     const granularity = configuredGranularity ?? "day";
-    const formatted = formatAnalysisDateForChart(value, granularity, dateDisplayFmt, overridden);
+    const formatted = formatAnalysisDateForChart(value, granularity, dateDisplayFmt, overridden, dateParseOpts);
     return formatted ?? overridden;
   };
 
@@ -528,10 +541,10 @@ export function buildChartConfig(
       const va = (a as Record<string, unknown>)[xKey];
       const vb = (b as Record<string, unknown>)[xKey];
       const ta =
-        parseDateLike(va)?.getTime() ??
+        parseDateLike(va, dateParseOpts)?.getTime() ??
         (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
       const tb =
-        parseDateLike(vb)?.getTime() ??
+        parseDateLike(vb, dateParseOpts)?.getTime() ??
         (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
       if (!Number.isNaN(ta) && !Number.isNaN(tb)) {
         const dirDate = axisOrder === "date_desc" ? -1 : 1;
@@ -565,8 +578,12 @@ export function buildChartConfig(
         const vb = (b as Record<string, unknown>)[xKey];
         const sortAsDate = axisOrder === "date_asc" || axisOrder === "date_desc" || (axisOrder === "alpha" && shouldTreatXAsDate);
         if (sortAsDate) {
-          const ta = parseDateLike(va)?.getTime() ?? (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
-          const tb = parseDateLike(vb)?.getTime() ?? (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
+          const ta =
+            parseDateLike(va, dateParseOpts)?.getTime() ??
+            (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
+          const tb =
+            parseDateLike(vb, dateParseOpts)?.getTime() ??
+            (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
           if (!Number.isNaN(ta) && !Number.isNaN(tb)) {
             const dirDate = axisOrder === "date_desc" ? -1 : 1;
             return (ta - tb) * dirDate;

@@ -46,6 +46,7 @@ interface AggregationRequest {
   mapDefaultCountry?: string;
   geoComponentOverrides?: GeoComponentOverrides;
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
+  dateSlashOrder?: "DMY" | "MDY";
 }
 
 // --- Constantes ---
@@ -94,6 +95,7 @@ export async function POST(
     const token = awaitedParams["token"];
     const body: AggregationRequest = await req.json();
     const requestedChartType = String(body.chartType ?? "").trim().toLowerCase();
+    const dateSlashFmt = body.dateSlashOrder === "MDY" ? "MM/DD/YYYY" : "DD/MM/YYYY";
 
     if (!token) {
       return NextResponse.json({ error: "Token required" }, { status: 400 });
@@ -269,7 +271,7 @@ export async function POST(
           if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "QUARTER" || op === "SEMESTER" || op === "YEAR_MONTH") {
             fieldExpression = `(
               CASE
-                WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, 'DD/MM/YYYY')
+                WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, '${dateSlashFmt}')
                 WHEN "${safeField}"::text LIKE '%, % de % de %' THEN to_date("${safeField}"::text, 'Day, DD "de" Month "de" YYYY')
                 ELSE "${safeField}"::date
               END

@@ -37,6 +37,8 @@ type AggregationConfigLike = {
   chartType?: string;
   chartXAxis?: string;
   analysisDateDisplayFormat?: string;
+  /** Coherente con parseo de fechas texto DD/MM vs MM/DD. */
+  dateSlashOrder?: "DMY" | "MDY";
   mapDefaultCountry?: string;
   geoHints?: {
     countryField?: string;
@@ -233,6 +235,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       ...(compactGeoOverridesByXLabelForRequest(agg?.geoOverridesByXLabel)
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(agg.geoOverridesByXLabel) }
         : {}),
+      dateSlashOrder: agg?.dateSlashOrder === "MDY" ? "MDY" : "DMY",
       ...(aggregateExtraPayload ?? {}),
     };
 

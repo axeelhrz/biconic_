@@ -1,5 +1,12 @@
 export type DateGranularity = "day" | "week" | "month" | "quarter" | "semester" | "year";
 
+/** Orden día/mes en cadenas ambiguas tipo `4/1/2024` (DMY = 4 ene, MDY = 1 abr). */
+export type DateSlashOrder = "DMY" | "MDY";
+
+export type ParseDateLikeOptions = {
+  slashDateOrder?: DateSlashOrder;
+};
+
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
@@ -13,7 +20,42 @@ function safeDateFromParts(year: number, month1: number, day: number): Date | nu
   return dt;
 }
 
-export function parseDateLike(value: unknown): Date | null {
+/** Deriva orden slash desde el formato de columna del ETL (p. ej. MM/DD/YYYY). */
+export function dateSlashOrderFromColumnFormat(format?: string | null): DateSlashOrder {
+  return String(format ?? "").trim() === "MM/DD/YYYY" ? "MDY" : "DMY";
+}
+
+/** Resuelve orden slash para una columna concreta en `columnDisplay`. */
+export function dateSlashOrderForNamedColumn(
+  columnDisplay: Record<string, { format?: string }> | undefined,
+  columnName: string | undefined
+): DateSlashOrder {
+  if (!columnName?.trim() || !columnDisplay) return "DMY";
+  const t = columnName.trim();
+  const direct = columnDisplay[t];
+  if (direct) return dateSlashOrderFromColumnFormat(direct.format);
+  const found = Object.entries(columnDisplay).find(([k]) => k.toLowerCase() === t.toLowerCase());
+  return dateSlashOrderFromColumnFormat(found?.[1]?.format);
+}
+
+/**
+ * Parsea `d/m/y` con barras: si un token es >12, el orden queda fijado; si ambos ≤12, usa `slashDateOrder` (por defecto DMY).
+ */
+function parseAmbiguousSlashDate(a: number, b: number, year: number, order: DateSlashOrder): Date | null {
+  if (a > 12) {
+    return safeDateFromParts(year, b, a);
+  }
+  if (b > 12) {
+    return safeDateFromParts(year, a, b);
+  }
+  if (order === "MDY") {
+    return safeDateFromParts(year, a, b);
+  }
+  return safeDateFromParts(year, b, a);
+}
+
+export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): Date | null {
+  const slashOrder: DateSlashOrder = options?.slashDateOrder === "MDY" ? "MDY" : "DMY";
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return null;
@@ -24,7 +66,7 @@ export function parseDateLike(value: unknown): Date | null {
   const raw = value.trim();
   if (!raw) return null;
 
-  // MM/yyyy
+  // MM/yyyy (mes inequívoco)
   const my = raw.match(/^(\d{1,2})\/(\d{4})$/);
   if (my) {
     const month = Number(my[1]);
@@ -40,13 +82,13 @@ export function parseDateLike(value: unknown): Date | null {
     return safeDateFromParts(year, month, 1);
   }
 
-  // dd/MM/yyyy
-  const dmy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (dmy) {
-    const day = Number(dmy[1]);
-    const month = Number(dmy[2]);
-    const year = Number(dmy[3]);
-    return safeDateFromParts(year, month, day);
+  // d/m/y o m/d/y con año de 4 dígitos
+  const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const a = Number(slash[1]);
+    const b = Number(slash[2]);
+    const year = Number(slash[3]);
+    return parseAmbiguousSlashDate(a, b, year, slashOrder);
   }
 
   // yyyy-MM-dd with optional time
@@ -75,9 +117,10 @@ export function parseDateLike(value: unknown): Date | null {
 export function formatDateByGranularity(
   value: unknown,
   granularity: DateGranularity,
-  fallback?: string
+  fallback?: string,
+  parseOpts?: ParseDateLikeOptions
 ): string | null {
-  const dt = parseDateLike(value);
+  const dt = parseDateLike(value, parseOpts);
   if (!dt) return fallback ?? null;
 
   const year = dt.getUTCFullYear();
@@ -105,12 +148,13 @@ export function formatAnalysisDateForChart(
   value: unknown,
   granularity: DateGranularity,
   displayFormat: AnalysisDateDisplayFormat | undefined,
-  fallback?: string
+  fallback?: string,
+  parseOpts?: ParseDateLikeOptions
 ): string | null {
   if (displayFormat == null) {
-    return formatDateByGranularity(value, granularity, fallback);
+    return formatDateByGranularity(value, granularity, fallback, parseOpts);
   }
-  const dt = parseDateLike(value);
+  const dt = parseDateLike(value, parseOpts);
   if (!dt) return fallback ?? null;
 
   const year = dt.getUTCFullYear();
@@ -125,6 +169,5 @@ export function formatAnalysisDateForChart(
   if (displayFormat === "short") {
     return `${pad2(day)}/${pad2(month)}/${year}`;
   }
-  return formatDateByGranularity(value, granularity, fallback);
+  return formatDateByGranularity(value, granularity, fallback, parseOpts);
 }
-

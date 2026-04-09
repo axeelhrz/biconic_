@@ -7,7 +7,12 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { Database } from "@/lib/supabase/database.types";
 import { createServiceRoleClient } from "@/lib/supabase/service";
-import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
+import {
+  formatDateByGranularity,
+  parseDateLike,
+  type DateGranularity,
+  type ParseDateLikeOptions,
+} from "@/lib/dashboard/dateFormatting";
 import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
 import {
   coerceGeoComponentOverrides,
@@ -92,6 +97,8 @@ interface AggregationRequest {
   mapDefaultCountry?: string;
   geoComponentOverrides?: GeoComponentOverrides;
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
+  /** DMY = DD/MM/YYYY (default); MDY = MM/DD/YYYY para texto con barras ambiguo. */
+  dateSlashOrder?: "DMY" | "MDY";
 }
 
 // --- Constantes ---
@@ -208,13 +215,14 @@ function safeNumericCast(expr: string): string {
   return `(CASE WHEN (${e})::text ~ ${pattern} THEN ((${e})::text)::numeric ELSE NULL END)`;
 }
 
-/** Parseo robusto de fechas para columnas texto/date/timestamp. Soporta DD/MM/YYYY y YYYY-MM-DD (con o sin hora). */
-function safeDateCast(expr: string): string {
+/** Parseo robusto de columnas texto/date/timestamp. Barras: DD/MM o MM/DD según `slashOrder`. */
+function safeDateCast(expr: string, slashOrder: "DMY" | "MDY"): string {
   const e = expr.trim();
+  const slashFmt = slashOrder === "MDY" ? "MM/DD/YYYY" : "DD/MM/YYYY";
   return `(
     CASE
       WHEN ${e} IS NULL THEN NULL
-      WHEN trim((${e})::text) ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(trim((${e})::text), 'DD/MM/YYYY')
+      WHEN trim((${e})::text) ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(trim((${e})::text), '${slashFmt}')
       WHEN trim((${e})::text) ~ '^\\d{1,2}-\\d{1,2}-\\d{4}$' THEN to_date(trim((${e})::text), 'DD-MM-YYYY')
       WHEN trim((${e})::text) ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(trim((${e})::text), 'YYYY-MM-DD')
       WHEN trim((${e})::text) ~ '^\\d{4}-\\d{2}-\\d{2}[ T].*$' THEN (trim((${e})::text))::timestamp::date
@@ -656,6 +664,8 @@ export async function POST(req: NextRequest) {
       );
     }
     const requestedChartType = String(body.chartType ?? "").trim().toLowerCase();
+    const dateSlashOrder: "DMY" | "MDY" = body.dateSlashOrder === "MDY" ? "MDY" : "DMY";
+    const dateParseOpts: ParseDateLikeOptions = { slashDateOrder: dateSlashOrder };
 
     if (!Array.isArray(body.metrics) || body.metrics.length === 0) {
       return NextResponse.json(
@@ -1143,7 +1153,7 @@ export async function POST(req: NextRequest) {
 
     if (body.dateGroupBy?.field && body.dateGroupBy?.granularity) {
       const dgCol = quotedColumn(body.dateGroupBy.field);
-      const dgDateExpr = safeDateCast(dgCol);
+      const dgDateExpr = safeDateCast(dgCol, dateSlashOrder);
       const gran = body.dateGroupBy.granularity.toLowerCase().replace(/[^a-z]/g, "");
       const validGranList = ["day", "week", "month", "quarter", "semester", "year"];
       const validGran = validGranList.includes(gran) ? gran : "month";
@@ -1215,7 +1225,7 @@ export async function POST(req: NextRequest) {
       const dr = body.dateRangeFilter;
       if (!dr?.field) return "";
       const drCol = quotedColumn(dr.field);
-      const drDateExpr = safeDateCast(drCol);
+      const drDateExpr = safeDateCast(drCol, dateSlashOrder);
       if (dr.from != null && dr.to != null) {
         const from = String(dr.from).trim().replace(/'/g, "''");
         const to = String(dr.to).trim().replace(/'/g, "''");
@@ -1249,7 +1259,7 @@ export async function POST(req: NextRequest) {
             op === "YEAR_MONTH" ||
             useDateExprForYearLike
           ) {
-            fieldExpression = safeDateCast(col);
+            fieldExpression = safeDateCast(col, dateSlashOrder);
           } else {
             fieldExpression =
               f.cast === "numeric"
@@ -1520,7 +1530,7 @@ export async function POST(req: NextRequest) {
 
     // 6b. Comparación temporal: segundo query período anterior y merge
     if (body.comparePeriod && dimList.length > 0 && body.dateDimension) {
-      const dateColExpr = safeDateCast(quotedColumn(body.dateDimension));
+      const dateColExpr = safeDateCast(quotedColumn(body.dateDimension), dateSlashOrder);
       const now = new Date();
       let prevStart: string;
       let prevEnd: string;
@@ -1642,7 +1652,8 @@ export async function POST(req: NextRequest) {
           const normalized = formatDateByGranularity(
             current,
             body.dateGroupBy.granularity as DateGranularity,
-            current
+            current,
+            dateParseOpts
           );
           if (normalized != null) newRow[key] = normalized;
         }
@@ -1678,8 +1689,8 @@ export async function POST(req: NextRequest) {
         ? [...mappedResults].sort((a, b) => {
             const va = (a as Record<string, unknown>)[temporalKey];
             const vb = (b as Record<string, unknown>)[temporalKey];
-            const ta = parseDateLike(va)?.getTime() ?? NaN;
-            const tb = parseDateLike(vb)?.getTime() ?? NaN;
+            const ta = parseDateLike(va, dateParseOpts)?.getTime() ?? NaN;
+            const tb = parseDateLike(vb, dateParseOpts)?.getTime() ?? NaN;
             if (!Number.isNaN(ta) && !Number.isNaN(tb)) return (ta - tb) * directionMultiplier;
             return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true }) * directionMultiplier;
           })

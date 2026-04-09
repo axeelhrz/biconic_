@@ -36,6 +36,7 @@ import {
   parseDateLike,
   type AnalysisDateDisplayFormat,
   type DateGranularity,
+  type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
@@ -491,7 +492,10 @@ export function DashboardWidgetRenderer({
     const xAxisKey = String(agg?.chartXAxis ?? "").trim().toLowerCase();
     const dateDimensionKey = String(agg?.dateDimension ?? "").trim().toLowerCase();
     const dateGranularity = agg?.dateGroupByGranularity;
-    const hasTemporalLabels = (chartConfig?.labels ?? []).some((label) => parseDateLike(label) != null);
+    const dateParseOpts: ParseDateLikeOptions = {
+      slashDateOrder: (agg as { dateSlashOrder?: string }).dateSlashOrder === "MDY" ? "MDY" : "DMY",
+    };
+    const hasTemporalLabels = (chartConfig?.labels ?? []).some((label) => parseDateLike(label, dateParseOpts) != null);
     const shouldFormatDateAxis =
       !!dateGranularity ||
       (xAxisKey !== "" && dateDimensionKey !== "" && xAxisKey === dateDimensionKey) ||
@@ -500,7 +504,7 @@ export function DashboardWidgetRenderer({
     const formatTemporalLabel = (raw: unknown): string => {
       const base = String(raw ?? "");
       if (!shouldFormatDateAxis) return base;
-      const formatted = formatAnalysisDateForChart(raw, dateGranularity ?? "day", dateDisplayFmt, base);
+      const formatted = formatAnalysisDateForChart(raw, dateGranularity ?? "day", dateDisplayFmt, base, dateParseOpts);
       return formatted ?? base;
     };
     if (type === "pie" || type === "doughnut") {
@@ -828,6 +832,9 @@ export function DashboardWidgetRenderer({
         const s = String(value ?? "");
         const found = categoryLabels.indexOf(s);
         if (found >= 0) return formatTemporalLabel(categoryLabels[found]);
+        if (Number.isFinite(tickIndex) && tickIndex >= 0 && tickIndex < categoryLabels.length) {
+          return formatTemporalLabel(categoryLabels[tickIndex]);
+        }
         return formatTemporalLabel(s || value);
       };
       const patchedCategoryScale = {

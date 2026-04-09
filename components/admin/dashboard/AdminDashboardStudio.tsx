@@ -195,6 +195,7 @@ type AggregationConfig = {
     lonField?: string;
   };
   analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
+  dateSlashOrder?: "DMY" | "MDY";
   mapDefaultCountry?: string;
   geoComponentOverrides?: { country?: string; province?: string; city?: string };
   geoOverridesByXLabel?: Record<string, { country?: string; province?: string; city?: string }>;

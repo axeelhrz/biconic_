@@ -105,6 +105,8 @@ export type AggregationConfigEdit = {
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
   analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
+  /** Texto con `/` ambiguo: DMY = día/mes (AR/EU); MDY = mes/día (US). */
+  dateSlashOrder?: "DMY" | "MDY";
   mapDefaultCountry?: string;
   geoHints?: {
     countryField?: string;
@@ -194,6 +196,8 @@ export type SavedMetricAggregationConfig = {
   chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
   analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
+  /** Texto con `/` ambiguo: DMY = día/mes (AR/EU); MDY = mes/día (US). */
+  dateSlashOrder?: "DMY" | "MDY";
   mapDefaultCountry?: string;
   geoHints?: {
     countryField?: string;
@@ -364,6 +368,7 @@ export function AddMetricConfigForm({
         chartAxisXVisible: (cfg as { chartAxisXVisible?: boolean }).chartAxisXVisible,
         chartAxisYVisible: (cfg as { chartAxisYVisible?: boolean }).chartAxisYVisible,
         dateGroupByGranularity: (cfg as { dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year" }).dateGroupByGranularity,
+        dateSlashOrder: (cfg as { dateSlashOrder?: "DMY" | "MDY" }).dateSlashOrder,
       });
     } else {
       updateAgg({
@@ -888,6 +893,15 @@ export function AddMetricConfigForm({
                       <option value="quarter">Trimestre</option>
                       <option value="semester">Semestre</option>
                       <option value="year">Año</option>
+                    </select>
+                    <Label className="add-metric-label text-[11px] mt-2 block">Fechas texto con / (import)</Label>
+                    <select
+                      value={agg.dateSlashOrder ?? "DMY"}
+                      onChange={(e) => updateAgg({ dateSlashOrder: e.target.value as "DMY" | "MDY" })}
+                      className="add-metric-select mt-0.5 h-8 text-xs w-full"
+                    >
+                      <option value="DMY">DD/MM/YYYY (día primero)</option>
+                      <option value="MDY">MM/DD/YYYY (mes primero, US)</option>
                     </select>
                   </div>
                 )}

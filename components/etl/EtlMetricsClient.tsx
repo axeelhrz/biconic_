@@ -26,7 +26,12 @@ import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
-import { formatDateByGranularity, parseDateLike, type DateGranularity } from "@/lib/dashboard/dateFormatting";
+import {
+  dateSlashOrderForNamedColumn,
+  formatDateByGranularity,
+  parseDateLike,
+  type DateGranularity,
+} from "@/lib/dashboard/dateFormatting";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
 import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
 import {
@@ -1339,16 +1344,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         const s = String(value).trim();
         if (!/^\d{4}-\d{2}-\d{2}/.test(s) && !/^\d{1,2}\/\d{1,2}\/\d{4}/.test(s)) return null;
       }
+      const parseOpts = {
+        slashDateOrder: dateSlashOrderForNamedColumn(data?.columnDisplay, columnKey || undefined),
+      };
       const normalizedGranularity = (
         analysisGranularity && ["day", "week", "month", "quarter", "semester", "year"].includes(analysisGranularity)
           ? analysisGranularity
           : null
       ) as DateGranularity | null;
       if (isDateCol && normalizedGranularity) {
-        const byGranularity = formatDateByGranularity(value, normalizedGranularity);
+        const byGranularity = formatDateByGranularity(value, normalizedGranularity, undefined, parseOpts);
         if (byGranularity != null) return byGranularity;
       }
-      const date = parseDateLike(value);
+      const date = parseDateLike(value, parseOpts);
       if (!date) return null;
       const pad = (n: number) => String(n).padStart(2, "0");
       const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
@@ -1358,7 +1366,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (analysisDateFormat === "datetime") return `${pad(date.getUTCDate())}/${pad(date.getUTCMonth() + 1)}/${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
       return `${pad(date.getUTCDate())}/${pad(date.getUTCMonth() + 1)}/${date.getUTCFullYear()}`;
     },
-    [timeColumn, dateFields, analysisDateFormat, analysisGranularity]
+    [timeColumn, dateFields, analysisDateFormat, analysisGranularity, data?.columnDisplay]
   );
 
   const formatSampleCell = (col: string, value: unknown): string => {
@@ -1909,6 +1917,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (useAnalysisConfig) {
         body.chartType = formChartType;
         if (chartXAxis) body.chartXAxis = chartXAxis;
+        body.dateSlashOrder = dateSlashOrderForNamedColumn(data?.columnDisplay, timeColumn || undefined);
         if (geoHints && Object.keys(geoHints).length > 0) body.geoHints = geoHints;
         if (formChartType === "map" && mapDefaultCountry.trim()) body.mapDefaultCountry = mapDefaultCountry.trim();
         if (formChartType === "map") {
@@ -1966,6 +1975,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     mapDefaultCountry,
     geoComponentOverrides,
     geoOverridesByXLabel,
+    data?.columnDisplay,
   ]);
 
   const fetchPreviewRef = useRef(fetchPreview);
@@ -2103,6 +2113,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartSortByMetric,
         chartAxisOrder,
         labelVisibilityMode,
+        dateSlashOrder: dateSlashOrderForNamedColumn(data?.columnDisplay, timeColumn || undefined),
       },
     };
   }, [
@@ -2114,6 +2125,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartYAxes,
     chartSeriesField,
     timeColumn,
+    data?.columnDisplay,
     chartSeriesColors,
     chartLabelOverrides,
     chartDatasetLabelOverrides,
@@ -2144,10 +2156,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       ? keys.find((k) => String(k).trim().toLowerCase() === normalizedTimeColumn)
       : undefined;
     const sampledRows = previewProcessedRows.slice(0, 80);
+    const chronoParseOpts = {
+      slashDateOrder: dateSlashOrderForNamedColumn(data?.columnDisplay, timeColumn || undefined),
+    };
     const inferredTemporalKey = keys
       .map((key) => ({
         key,
-        score: sampledRows.reduce((acc, row) => (parseDateLike((row as Record<string, unknown>)[key]) ? acc + 1 : acc), 0),
+        score: sampledRows.reduce(
+          (acc, row) => (parseDateLike((row as Record<string, unknown>)[key], chronoParseOpts) ? acc + 1 : acc),
+          0
+        ),
       }))
       .sort((a, b) => b.score - a.score)[0];
     const temporalKey = explicitTemporalKey ?? (inferredTemporalKey && inferredTemporalKey.score >= 2 ? inferredTemporalKey.key : undefined);
@@ -2156,12 +2174,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return [...previewProcessedRows].sort((a, b) => {
       const va = (a as Record<string, unknown>)[temporalKey];
       const vb = (b as Record<string, unknown>)[temporalKey];
-      const ta = parseDateLike(va)?.getTime() ?? NaN;
-      const tb = parseDateLike(vb)?.getTime() ?? NaN;
+      const ta = parseDateLike(va, chronoParseOpts)?.getTime() ?? NaN;
+      const tb = parseDateLike(vb, chronoParseOpts)?.getTime() ?? NaN;
       if (!Number.isNaN(ta) && !Number.isNaN(tb)) return (ta - tb) * direction;
       return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true }) * direction;
     });
-  }, [previewProcessedRows, timeColumn, previewDateOrder]);
+  }, [previewProcessedRows, timeColumn, previewDateOrder, data?.columnDisplay]);
 
   const previewChartConfig = useMemo(() => {
     if (!previewData || previewData.length === 0) return null;
@@ -2959,6 +2977,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       interTooltipFields: interTooltipFields.length > 0 ? interTooltipFields : undefined,
       interHighlight: interHighlight === false ? false : undefined,
       analysisDateDisplayFormat: analysisDateFormat,
+      dateSlashOrder: dateSlashOrderForNamedColumn(data?.columnDisplay, timeColumn || undefined),
       ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
       ...(formChartType === "map" && compactGeoComponentOverridesForRequest(geoComponentOverrides)
         ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(geoComponentOverrides) }
@@ -3239,6 +3258,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       interTooltipFields: interTooltipFields.length > 0 ? interTooltipFields : undefined,
       interHighlight: interHighlight === false ? false : undefined,
       analysisDateDisplayFormat: analysisDateFormat,
+      dateSlashOrder: dateSlashOrderForNamedColumn(data?.columnDisplay, timeColumn || undefined),
       ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
       ...(formChartType === "map" && compactGeoComponentOverridesForRequest(geoComponentOverrides)
         ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(geoComponentOverrides) }
