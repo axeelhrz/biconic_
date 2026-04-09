@@ -585,7 +585,36 @@
   border-left: 1px solid var(--studio-border);
 }
 
-/* Panel de métrica en modal (sin barra lateral) */
+/*
+ * Modal «Configurar métrica»: el contenido del Dialog vive en un portal bajo <body>,
+ * fuera de .studio-page / .admin-dashboard-studio, así que las variables --studio-*
+ * no heredan y los fondos con var() quedan vacíos (transparentes). Redefinimos tokens
+ * y forzamos fondo opaco en el propio [data-slot="dialog-content"].
+ */
+.studio-metric-config-dialog[data-slot="dialog-content"] {
+  --studio-bg: #08080b;
+  --studio-bg-elevated: #0e0e12;
+  --studio-surface: #141419;
+  --studio-surface-hover: #1a1a20;
+  --studio-fg: #f4f4f5;
+  --studio-fg-muted: #a1a1aa;
+  --studio-muted: #71717a;
+  --studio-border: rgba(255, 255, 255, 0.06);
+  --studio-border-strong: rgba(255, 255, 255, 0.1);
+  --studio-accent: #22d3ee;
+  --studio-accent-dim: rgba(34, 211, 238, 0.15);
+  --studio-accent-glow: rgba(34, 211, 238, 0.25);
+  --studio-success: #34d399;
+  --studio-warning: #fbbf24;
+  --studio-danger: #f87171;
+  --studio-radius: 20px;
+  --studio-radius-sm: 14px;
+  --studio-radius-lg: 24px;
+  background-color: #0e0e12 !important;
+  color: var(--studio-fg);
+  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+}
+
 .studio-metric-config-dialog .metric-config-panel {
   border-left: none;
   box-shadow: none;
