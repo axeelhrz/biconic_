@@ -1,5 +1,5 @@
-import ViewerDashboardsSection from "@/components/viewer/dashboard/ViewerDashboardsSection";
+import ViewerHomeSection from "@/components/viewer/home/ViewerHomeSection";
 
 export default function Page() {
-  return <ViewerDashboardsSection />;
+  return <ViewerHomeSection />;
 }

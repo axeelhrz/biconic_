@@ -7,7 +7,18 @@ import { createClient } from "@/lib/supabase/client";
 import { LogoutButton } from "@/components/logout-button";
 import { useUserRole } from "@/hooks/useUserRole";
 
-const navLinks = [{ href: "/viewer/dashboard", label: "Dashboards" }];
+const navLinks = [
+  { href: "/viewer", label: "Panel", match: "exact" as const },
+  { href: "/viewer/dashboard", label: "Dashboards", match: "prefix" as const },
+  { href: "/viewer/profile", label: "Perfil", match: "prefix" as const },
+];
+
+function appRoleLabel(appRole: string | null): string {
+  if (appRole === "VIEWER") return "Usuario";
+  if (appRole === "CREATOR") return "Creador";
+  if (appRole === "APP_ADMIN") return "Administrador";
+  return appRole ?? "Usuario";
+}
 
 export default function ViewerDashboardHeader() {
   const pathname = usePathname();
@@ -66,7 +77,7 @@ export default function ViewerDashboardHeader() {
   return (
     <header className="box-border flex items-center justify-between w-full max-w-[1390px] h-14 px-16 py-2.5 mx-auto my-4 bg-[#FDFDFD] border border-[#ECECEC] rounded-full">
       <Link
-        href="/"
+        href="/viewer"
         className="flex items-center gap-3 text-2xl font-bold italic text-[#00030A] no-underline"
       >
         <div className="relative w-[42px] h-5 bg-gradient-to-r from-[#23E3B4] via-[#40EF8E] to-[#02B8D1] rounded-[10px]">
@@ -76,7 +87,10 @@ export default function ViewerDashboardHeader() {
       </Link>
       <nav className="flex items-center gap-5">
         {navLinks.map((link) => {
-          const isActive = pathname.startsWith(link.href);
+          const isActive =
+            link.match === "exact"
+              ? pathname === link.href || pathname === `${link.href}/`
+              : pathname.startsWith(link.href);
           const base =
             "px-4 py-2 text-sm font-normal rounded-full transition-colors duration-300";
           const active =
@@ -120,7 +134,7 @@ export default function ViewerDashboardHeader() {
                   {userName}
                 </span>
                 <span className="text-sm font-medium leading-4 text-[#54565B]">
-                  {userRole ?? "Usuario"}
+                  {appRoleLabel(userRole)}
                 </span>
               </div>
             </Link>

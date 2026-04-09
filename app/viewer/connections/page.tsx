@@ -1,5 +1,5 @@
-import ViewerConnectionsSection from "@/components/viewer/connections/ViewerConnectionsSection";
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <ViewerConnectionsSection />;
+  redirect("/viewer/dashboard");
 }

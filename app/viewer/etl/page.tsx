@@ -1,5 +1,5 @@
-import ViewerEtlSection from "@/components/viewer/etl/ViewerEtlSection";
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <ViewerEtlSection />;
+  redirect("/viewer/dashboard");
 }

@@ -20,8 +20,8 @@ export function useUserRole() {
         // Si hay un usuario, consultamos su perfil para obtener el rol
         const { data, error } = await supabase
           .from("profiles")
-          .select("role")
-          .eq("id", user.id) // La clave es usar user.id para buscar en la tabla profiles
+          .select("app_role")
+          .eq("id", user.id)
           .single();
 
         if (error && error.code !== "PGRST116") {
@@ -30,7 +30,7 @@ export function useUserRole() {
         }
 
         if (mounted) {
-          setRole(data?.role || null);
+          setRole((data as { app_role?: string } | null)?.app_role ?? null);
         }
       }
 

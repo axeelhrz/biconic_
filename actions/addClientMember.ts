@@ -1,5 +1,14 @@
 "use server";
 
+/**
+ * Invoca la Edge Function `add-client-member` en Supabase.
+ *
+ * Contrato esperado (validar en el código de la función en el proyecto Supabase):
+ * - Crear usuario Auth y fila en `profiles` con `app_role = 'VIEWER'` (usuario final).
+ * - Insertar `client_members` con `client_id = existingClientId`, enlace al `user_id`
+ *   creado y `is_active` coherente con el alta.
+ * Sin esto, el middleware enviará al usuario a `/viewer` pero no verá datos de empresa.
+ */
 // Server Action to invoke the Supabase Edge Function `add-client-member`.
 // Authorizes user, calls the function with the provided payload, and returns a
 // consistent Spanish response shape.
