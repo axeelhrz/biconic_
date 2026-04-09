@@ -250,6 +250,7 @@ type StudioWidget = {
   filterConfig?: { label?: string; field?: string; operator?: string; inputType?: string; scopeMetricIds?: string[] };
   headerIconUrl?: string;
   headerIconKey?: string;
+  contentIconPosition?: "topLeft" | "topRight" | "bottomLeft" | "bottomRight" | "center";
   hideWidgetHeader?: boolean;
   [key: string]: unknown;
 };
@@ -2166,6 +2167,7 @@ export function AdminDashboardStudio({
                         imageConfig: w.imageConfig,
                         headerIconUrl: w.headerIconUrl,
                         headerIconKey: w.headerIconKey,
+                        contentIconPosition: w.contentIconPosition,
                         hideWidgetHeader: w.hideWidgetHeader,
                         content: w.content,
                         chartStyle: buildResolvedChartStyle(
@@ -2251,6 +2253,7 @@ export function AdminDashboardStudio({
                 zIndex: selectedWidgetForPanel.zIndex,
                 headerIconUrl: selectedWidgetForPanel.headerIconUrl,
                 headerIconKey: selectedWidgetForPanel.headerIconKey,
+                contentIconPosition: selectedWidgetForPanel.contentIconPosition,
                 hideWidgetHeader: selectedWidgetForPanel.hideWidgetHeader,
                 content: selectedWidgetForPanel.content,
               }}

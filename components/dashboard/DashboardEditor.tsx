@@ -23,6 +23,10 @@ import {
 } from "@/lib/dashboard/gridLayout";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
+import {
+  CONTENT_ICON_POSITION_OPTIONS,
+  type ContentIconPosition,
+} from "@/components/dashboard/DashboardWidgetRenderer";
 
 type AggregationFilter = {
   id: string;
@@ -367,9 +371,9 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                 />
               </div>
               <div className="space-y-2">
-                <Label className="text-xs text-[var(--platform-fg-muted)]">Icono en cabecera</Label>
+                <Label className="text-xs text-[var(--platform-fg-muted)]">Icono sobre el gráfico / KPI</Label>
                 <p className="text-[11px] text-[var(--platform-fg-muted)]">
-                  Icono representativo o imagen por URL (el icono elegido tiene prioridad).
+                  Se dibuja sobre el área de datos, no junto al título. El icono tiene prioridad sobre la URL.
                 </p>
                 <div className="flex flex-wrap gap-1.5">
                   <button
@@ -420,6 +424,26 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                   placeholder="O URL de imagen (https://…)"
                   className="border-[var(--platform-border)] text-sm"
                 />
+                {(selected.headerIconKey || (selected.headerIconUrl ?? "").trim()) && (
+                  <div>
+                    <Label className="text-xs text-[var(--platform-fg-muted)]">Posición en el área del gráfico</Label>
+                    <select
+                      className="mt-1 h-9 w-full rounded-md border border-[var(--platform-border)] bg-[var(--platform-bg)] px-3 text-sm"
+                      value={selected.contentIconPosition ?? "topLeft"}
+                      onChange={(e) =>
+                        updateWidget(selected.id, {
+                          contentIconPosition: e.target.value as ContentIconPosition,
+                        })
+                      }
+                    >
+                      {CONTENT_ICON_POSITION_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
               <label className="flex cursor-pointer items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
                 <Checkbox

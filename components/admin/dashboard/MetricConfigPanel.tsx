@@ -23,6 +23,7 @@ import {
   DASHBOARD_GRID_COLUMN_COUNT,
 } from "@/lib/dashboard/gridLayout";
 import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
+import { CONTENT_ICON_POSITION_OPTIONS, type ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
 
 export type MetricConditionEdit = {
   field: string;
@@ -175,8 +176,9 @@ export type MetricConfigWidget = {
   fixedGrid?: DashboardFixedGrid;
   zIndex?: number;
   headerIconUrl?: string;
-  /** Clave de icono predefinido (Lucide); prioridad sobre URL en la cabecera. */
+  /** Clave de icono predefinido (Lucide); prioridad sobre URL en el área del gráfico. */
   headerIconKey?: string;
+  contentIconPosition?: ContentIconPosition;
   hideWidgetHeader?: boolean;
 };
 
@@ -608,9 +610,9 @@ export function MetricConfigPanel({
             </div>
 
             <div className="space-y-2">
-              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Icono en cabecera</Label>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Icono sobre el gráfico / KPI</Label>
               <p className="text-[11px] text-[var(--studio-fg-muted)]">
-                Elegí un icono representativo o dejá solo una URL de imagen (el icono elegido tiene prioridad).
+                Se muestra encima del área de datos (no en el título). El icono elegido tiene prioridad sobre la URL.
               </p>
               <div className="flex flex-wrap gap-1.5">
                 <button
@@ -660,6 +662,24 @@ export function MetricConfigPanel({
                 placeholder="O pegá URL de imagen (https://…)"
                 className="h-9 rounded-lg border-[var(--studio-border)] text-sm"
               />
+              {(widget.headerIconKey || (widget.headerIconUrl ?? "").trim()) && (
+                <div>
+                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición en el área del gráfico</Label>
+                  <select
+                    className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+                    value={widget.contentIconPosition ?? "topLeft"}
+                    onChange={(e) =>
+                      onUpdate({ contentIconPosition: e.target.value as ContentIconPosition })
+                    }
+                  >
+                    {CONTENT_ICON_POSITION_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Checkbox

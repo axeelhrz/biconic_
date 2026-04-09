@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { toChartStyleConfig } from "@/lib/dashboard/chartOptions";
-import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 
 export type MetricBlockState = "estable" | "alerta" | "cambio";
 
@@ -182,21 +181,7 @@ export function MetricBlock({
     >
       <header className="metric-block-header flex flex-shrink-0 items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            {widgetForRenderer?.headerIconKey ? (
-              <DashboardPresetHeaderIcon
-                iconKey={widgetForRenderer.headerIconKey}
-                className="h-5 w-5 shrink-0 text-[var(--studio-accent)]"
-              />
-            ) : widgetForRenderer?.headerIconUrl ? (
-              <img
-                src={widgetForRenderer.headerIconUrl}
-                alt=""
-                className="h-5 w-5 shrink-0 rounded object-contain"
-              />
-            ) : null}
-            <h3 className="metric-block-title min-w-0 truncate">{title}</h3>
-          </div>
+          <h3 className="metric-block-title truncate">{title}</h3>
           {purpose && (
             <p className="mt-0.5 truncate text-[var(--studio-text-small)] text-[var(--studio-fg-muted)]">{purpose}</p>
           )}

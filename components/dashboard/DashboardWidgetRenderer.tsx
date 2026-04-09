@@ -101,6 +101,17 @@ export type FilterWidgetConfig = {
   scopeMetricIds?: string[];
 };
 
+/** Posición del icono / mini imagen sobre el área de visualización (no en la cabecera de la tarjeta). */
+export type ContentIconPosition = "topLeft" | "topRight" | "bottomLeft" | "bottomRight" | "center";
+
+export const CONTENT_ICON_POSITION_OPTIONS: { value: ContentIconPosition; label: string }[] = [
+  { value: "topLeft", label: "Arriba izquierda" },
+  { value: "topRight", label: "Arriba derecha" },
+  { value: "bottomLeft", label: "Abajo izquierda" },
+  { value: "bottomRight", label: "Abajo derecha" },
+  { value: "center", label: "Centro" },
+];
+
 export interface DashboardWidgetRendererWidget {
   id: string;
   type: WidgetChartType;
@@ -128,10 +139,12 @@ export interface DashboardWidgetRendererWidget {
     opacity?: number;
   };
   imageUrl?: string;
-  /** Miniatura junto al título de la tarjeta */
+  /** Mini imagen decorativa en el área del gráfico (ver `contentIconPosition`). */
   headerIconUrl?: string;
   /** Icono Lucide predefinido (ver `HEADER_PRESET_ICONS`); tiene prioridad sobre `headerIconUrl`. */
   headerIconKey?: string;
+  /** Dónde dibujar el icono / mini imagen sobre el área del gráfico, KPI, tabla, etc. */
+  contentIconPosition?: ContentIconPosition;
   /** Oculta el encabezado con título (útil en widgets solo visuales) */
   hideWidgetHeader?: boolean;
   aggregationConfig?: { chartType?: string; [key: string]: unknown };
@@ -142,6 +155,51 @@ export interface DashboardWidgetRendererWidget {
     capturedAt?: string;
   };
   [key: string]: unknown;
+}
+
+function contentIconPositionClass(pos: ContentIconPosition | undefined): string {
+  switch (pos ?? "topLeft") {
+    case "topRight":
+      return "right-3 top-3";
+    case "bottomLeft":
+      return "left-3 bottom-3";
+    case "bottomRight":
+      return "right-3 bottom-3";
+    case "center":
+      return "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2";
+    default:
+      return "left-3 top-3";
+  }
+}
+
+function ContentAreaIconOverlay({ widget }: { widget: DashboardWidgetRendererWidget }) {
+  const preset = widget.headerIconKey;
+  const url = widget.headerIconUrl?.trim();
+  if (!preset && !url) return null;
+  const pos = (widget.contentIconPosition as ContentIconPosition | undefined) ?? "topLeft";
+  return (
+    <div
+      className={`pointer-events-none absolute z-[4] ${contentIconPositionClass(pos)}`}
+      aria-hidden
+    >
+      <div
+        className="rounded-lg border p-1 shadow-sm"
+        style={{
+          borderColor: "var(--platform-border, #e2e8f0)",
+          background: "var(--platform-surface, #fff)",
+        }}
+      >
+        {preset ? (
+          <DashboardPresetHeaderIcon
+            iconKey={preset}
+            className="h-7 w-7 text-[var(--platform-accent,#0ea5e9)]"
+          />
+        ) : (
+          <img src={url!} alt="" className="h-7 w-7 rounded object-contain" />
+        )}
+      </div>
+    </div>
+  );
 }
 
 const AXIS_COLOR = "var(--platform-fg-muted, #64748b)";
@@ -1035,23 +1093,9 @@ export function DashboardWidgetRenderer({
     >
       {showCardHeader && (
         <header className="flex flex-shrink-0 items-center justify-between gap-2 border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            {widget.headerIconKey ? (
-              <DashboardPresetHeaderIcon
-                iconKey={widget.headerIconKey}
-                className="h-6 w-6 shrink-0 text-[var(--platform-accent,#0ea5e9)]"
-              />
-            ) : widget.headerIconUrl ? (
-              <img
-                src={widget.headerIconUrl}
-                alt=""
-                className="h-6 w-6 shrink-0 rounded object-contain"
-              />
-            ) : null}
-            <h3 className="truncate text-sm font-semibold" style={{ color: "var(--platform-fg, #0f172a)" }}>
-              {widget.title}
-            </h3>
-          </div>
+          <h3 className="min-w-0 truncate text-sm font-semibold" style={{ color: "var(--platform-fg, #0f172a)" }}>
+            {widget.title}
+          </h3>
         </header>
       )}
       <div
@@ -1070,6 +1114,7 @@ export function DashboardWidgetRenderer({
             <Loader2 className="h-8 w-8 animate-spin" style={{ color: "var(--platform-accent, #0ea5e9)" }} />
           </div>
         )}
+        {!isLoading && <ContentAreaIconOverlay widget={widget} />}
         {!hasViz && !isLoading && chartType !== "filter" && (
           <div className="flex flex-1 flex-col items-center justify-center py-8 text-center text-sm" style={{ color: "var(--platform-fg-muted, #64748b)" }}>
             Sin datos
