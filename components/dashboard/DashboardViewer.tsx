@@ -114,6 +114,12 @@ function yearFilterSelectDisplayValue(raw: unknown): string {
 }
 
 /** Estado previo de filtro multi → lista de strings alineada con `selectedArray` en la UI (incl. normalización MONTH). */
+/**
+ * En aggregate-data estos operadores ya interpretan arrays (EXTRACT / buildMonthFilterSqlClause).
+ * No deben sustituirse por IN genérico sobre la columna cruda.
+ */
+const DATE_OPERATORS_WITH_MULTI_VALUE_SQL = new Set(["YEAR", "MONTH", "QUARTER", "SEMESTER"]);
+
 function globalMultiPrevToSelectedStrings(operator: unknown, raw: unknown): string[] {
   const selectedArrayRaw = Array.isArray(raw)
     ? (raw as unknown[]).map((x) => String(x))
@@ -630,7 +636,10 @@ export function DashboardViewer({
             const physicalField = mapDatasetField(f.field);
             const useIn =
               rawOp === "IN" ||
-              (rawOpUpper !== "YEAR" && inputT === "multi" && Array.isArray(v) && v.length > 0);
+              (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper) &&
+                inputT === "multi" &&
+                Array.isArray(v) &&
+                v.length > 0);
             const op = useIn ? "IN" : rawOp;
             const value: unknown = op === "IN" ? (Array.isArray(v) ? v : [v]) : v;
             mappedGlobalFilters.push({ ...f, field: physicalField, operator: op, value });
@@ -665,7 +674,10 @@ export function DashboardViewer({
           const physicalFw = mapDatasetField(fc.field);
           const useInFw =
             rawOpFw === "IN" ||
-            (rawOpFwUpper !== "YEAR" && fc.inputType === "multi" && Array.isArray(v) && v.length > 0);
+            (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpFwUpper) &&
+              fc.inputType === "multi" &&
+              Array.isArray(v) &&
+              v.length > 0);
           const opFw = useInFw ? "IN" : rawOpFw;
           const valueFw: unknown = opFw === "IN" ? (Array.isArray(v) ? v : [v]) : v;
           mappedGlobalFilters.push({
