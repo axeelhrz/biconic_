@@ -33,7 +33,11 @@ import {
 } from "@/lib/dashboard/dashboardExport";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { computeDashboardGridPlacementsPacked, DASHBOARD_GRID_ROW_UNIT_PX } from "@/lib/dashboard/gridLayout";
+import {
+  type DashboardFixedGrid,
+  computeDashboardGridPlacementsPacked,
+  DASHBOARD_GRID_ROW_UNIT_PX,
+} from "@/lib/dashboard/gridLayout";
 import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
 
 /** Meses 1–12 para filtro global MONTH (sin año en la UI). */
@@ -276,6 +280,10 @@ export type Widget = DashboardWidgetRendererWidget & {
   pageId?: string;
   /** Overrides visuales respecto a `layout.theme` (solo esta tarjeta). */
   cardTheme?: Partial<DashboardTheme>;
+  /** Celda fija en la rejilla (1-based); si existe, no se empaqueta automáticamente. */
+  fixedGrid?: DashboardFixedGrid;
+  /** Apilamiento respecto a otras tarjetas (solapamiento con fixedGrid). */
+  zIndex?: number;
 };
 
 /** Coincide con la página activa; corrige legado "page-1" vs id real de la primera página. */
@@ -573,7 +581,12 @@ export function DashboardViewer({
       // Leer widgets desde ref: si dependemos de `widgets`, cada setWidgets tras cargar datos
       // recrea el callback y el efecto [filterValues, loadDataForWidget, …] vuelve a disparar todo en bucle.
       const widget = stateRef.current.widgets.find((w) => w.id === widgetId);
-      if (!widget || !etlData) return;
+      if (!widget) return;
+      if (widget.type === "text" || widget.type === "image") {
+        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        return;
+      }
+      if (!etlData) return;
       const genMap = widgetLoadGenRef.current;
       genMap[widgetId] = (genMap[widgetId] ?? 0) + 1;
       const myGen = genMap[widgetId]!;
@@ -908,7 +921,7 @@ export function DashboardViewer({
 
   const reloadAll = useCallback(() => {
     stateRef.current.widgets.forEach((w) => {
-      if (w.type === "filter") return;
+      if (w.type === "filter" || w.type === "text" || w.type === "image") return;
       if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
       loadDataForWidget(w.id);
     });
@@ -918,7 +931,7 @@ export function DashboardViewer({
     if (!etlData || widgets.length === 0) return;
     const timer = setTimeout(() => {
       stateRef.current.widgets.forEach((w) => {
-        if (w.type === "filter") return;
+        if (w.type === "filter" || w.type === "text" || w.type === "image") return;
         if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
         loadDataForWidget(w.id);
       });
@@ -1384,6 +1397,7 @@ export function DashboardViewer({
                     flexDirection: "column",
                     minHeight: 0,
                     position: "relative",
+                    zIndex: typeof (widget as Widget).zIndex === "number" ? (widget as Widget).zIndex : 0,
                     ...cellThemeVars,
                   }}
                 >

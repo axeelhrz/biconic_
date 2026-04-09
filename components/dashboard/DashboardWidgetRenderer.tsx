@@ -39,6 +39,7 @@ import {
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 
@@ -123,8 +124,16 @@ export interface DashboardWidgetRendererWidget {
     width?: number;
     height?: number;
     objectFit?: "contain" | "cover" | "fill" | "none" | "scale-down";
+    /** 0–1, p. ej. watermark sobre el lienzo */
+    opacity?: number;
   };
   imageUrl?: string;
+  /** Miniatura junto al título de la tarjeta */
+  headerIconUrl?: string;
+  /** Icono Lucide predefinido (ver `HEADER_PRESET_ICONS`); tiene prioridad sobre `headerIconUrl`. */
+  headerIconKey?: string;
+  /** Oculta el encabezado con título (útil en widgets solo visuales) */
+  hideWidgetHeader?: boolean;
   aggregationConfig?: { chartType?: string; [key: string]: unknown };
   diagnosticPreview?: {
     endpoint: string;
@@ -1004,6 +1013,8 @@ export function DashboardWidgetRenderer({
     pieContainerWidth,
   ]);
 
+  const showCardHeader = !hideHeader && !widget.hideWidgetHeader;
+
   return (
     <Card
       className={`overflow-hidden border transition-all ${className}`}
@@ -1022,11 +1033,25 @@ export function DashboardWidgetRenderer({
         borderRadius: "var(--platform-card-radius, 0.75rem)",
       }}
     >
-      {!hideHeader && (
+      {showCardHeader && (
         <header className="flex flex-shrink-0 items-center justify-between gap-2 border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
-          <h3 className="truncate text-sm font-semibold" style={{ color: "var(--platform-fg, #0f172a)" }}>
-            {widget.title}
-          </h3>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {widget.headerIconKey ? (
+              <DashboardPresetHeaderIcon
+                iconKey={widget.headerIconKey}
+                className="h-6 w-6 shrink-0 text-[var(--platform-accent,#0ea5e9)]"
+              />
+            ) : widget.headerIconUrl ? (
+              <img
+                src={widget.headerIconUrl}
+                alt=""
+                className="h-6 w-6 shrink-0 rounded object-contain"
+              />
+            ) : null}
+            <h3 className="truncate text-sm font-semibold" style={{ color: "var(--platform-fg, #0f172a)" }}>
+              {widget.title}
+            </h3>
+          </div>
         </header>
       )}
       <div
@@ -1034,7 +1059,7 @@ export function DashboardWidgetRenderer({
         style={
           isTableWidget
             ? { flex: 1, minHeight: 0, overflow: "hidden" }
-            : { minHeight: hideHeader ? effectiveMinHeight - 12 : effectiveMinHeight - 52 }
+            : { minHeight: showCardHeader ? effectiveMinHeight - 52 : effectiveMinHeight - 12 }
         }
       >
         {isLoading && (
@@ -1134,6 +1159,7 @@ export function DashboardWidgetRenderer({
             )}
             {chartType === "image" && widget.imageUrl && (
               <div className="flex flex-1 items-center justify-center overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element -- URLs arbitrarias del layout */}
                 <img
                   src={widget.imageUrl as string}
                   alt={widget.title}
@@ -1142,8 +1168,17 @@ export function DashboardWidgetRenderer({
                     width: widget.imageConfig?.width,
                     height: widget.imageConfig?.height,
                     objectFit: widget.imageConfig?.objectFit ?? "contain",
+                    opacity:
+                      widget.imageConfig?.opacity != null && Number.isFinite(widget.imageConfig.opacity)
+                        ? Math.min(1, Math.max(0, widget.imageConfig.opacity))
+                        : 1,
                   }}
                 />
+              </div>
+            )}
+            {chartType === "image" && !widget.imageUrl && (
+              <div className="flex flex-1 flex-col items-center justify-center py-6 text-center text-sm" style={{ color: "var(--platform-fg-muted, #64748b)" }}>
+                Sin URL de imagen
               </div>
             )}
             {chartType === "filter" && widget.filterConfig && (

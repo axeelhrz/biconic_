@@ -16,7 +16,13 @@ import {
 } from "@/types/dashboard";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
-import { clampGridSpan, DASHBOARD_GRID_COLUMN_COUNT } from "@/lib/dashboard/gridLayout";
+import {
+  clampGridSpan,
+  DASHBOARD_GRID_COLUMN_COUNT,
+  type DashboardFixedGrid,
+} from "@/lib/dashboard/gridLayout";
+import { Checkbox } from "@/components/ui/checkbox";
+import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
 
 type AggregationFilter = {
   id: string;
@@ -58,6 +64,7 @@ const WIDGET_TYPES: { type: Widget["type"]; label: string }[] = [
   { type: "combo", label: "Combo" },
   { type: "filter", label: "Filtro" },
   { type: "text", label: "Texto" },
+  { type: "image", label: "Imagen" },
 ];
 
 const AGG_FUNCS = [
@@ -73,7 +80,14 @@ function createDefaultWidget(type: Widget["type"]): Widget {
   return {
     id,
     type,
-    title: type === "filter" ? "Filtro" : type === "text" ? "Texto" : "Nuevo widget",
+    title:
+      type === "filter"
+        ? "Filtro"
+        : type === "text"
+          ? "Texto"
+          : type === "image"
+            ? "Imagen"
+            : "Nuevo widget",
     x: 0,
     y: 0,
     w: 4,
@@ -92,6 +106,13 @@ function createDefaultWidget(type: Widget["type"]): Widget {
         }
       : {}),
     ...(type === "text" ? { content: "" } : {}),
+    ...(type === "image"
+      ? {
+          imageUrl: "",
+          imageConfig: { objectFit: "contain" as const, opacity: 1 },
+          zIndex: 0,
+        }
+      : {}),
   } as Widget;
 }
 
@@ -345,7 +366,158 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                   className="mt-1 border-[var(--platform-border)]"
                 />
               </div>
-              {selected.type !== "text" && selected.type !== "filter" && selected.aggregationConfig && (
+              <div className="space-y-2">
+                <Label className="text-xs text-[var(--platform-fg-muted)]">Icono en cabecera</Label>
+                <p className="text-[11px] text-[var(--platform-fg-muted)]">
+                  Icono representativo o imagen por URL (el icono elegido tiene prioridad).
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    title="Sin icono"
+                    onClick={() => updateWidget(selected.id, { headerIconKey: undefined })}
+                    className={`flex h-9 min-w-[2.25rem] items-center justify-center rounded-md border px-2 text-[11px] font-medium ${
+                      !selected.headerIconKey
+                        ? "border-[var(--platform-accent)] bg-[var(--platform-accent)]/15 text-[var(--platform-accent)]"
+                        : "border-[var(--platform-border)] text-[var(--platform-fg-muted)] hover:bg-[var(--platform-bg)]"
+                    }`}
+                  >
+                    —
+                  </button>
+                  {HEADER_PRESET_ICONS.map(({ key, label, Icon }) => {
+                    const active = selected.headerIconKey === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        title={label}
+                        onClick={() =>
+                          updateWidget(selected.id, {
+                            headerIconKey: key,
+                            headerIconUrl: undefined,
+                          })
+                        }
+                        className={`flex h-9 w-9 items-center justify-center rounded-md border transition-colors ${
+                          active
+                            ? "border-[var(--platform-accent)] bg-[var(--platform-accent)]/15 text-[var(--platform-accent)]"
+                            : "border-[var(--platform-border)] text-[var(--platform-fg-muted)] hover:bg-[var(--platform-bg)]"
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" aria-hidden />
+                      </button>
+                    );
+                  })}
+                </div>
+                <Input
+                  value={selected.headerIconUrl ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    updateWidget(selected.id, {
+                      headerIconUrl: v || undefined,
+                      ...(v.trim() ? { headerIconKey: undefined } : {}),
+                    });
+                  }}
+                  placeholder="O URL de imagen (https://…)"
+                  className="border-[var(--platform-border)] text-sm"
+                />
+              </div>
+              <label className="flex cursor-pointer items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                <Checkbox
+                  checked={!!selected.hideWidgetHeader}
+                  onCheckedChange={(c) => updateWidget(selected.id, { hideWidgetHeader: c === true })}
+                />
+                <span>Ocultar cabecera de la tarjeta</span>
+              </label>
+              <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)" }}>
+                <p className="text-xs font-medium text-[var(--platform-fg-muted)]">Layout en rejilla</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[10px] text-[var(--platform-fg-muted)]">Ancho (columnas)</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={DASHBOARD_GRID_COLUMN_COUNT}
+                      value={clampGridSpan(selected.gridSpan, 2)}
+                      onChange={(e) =>
+                        updateWidget(selected.id, { gridSpan: clampGridSpan(e.target.valueAsNumber, 2) })
+                      }
+                      className="mt-0.5 h-8 border-[var(--platform-border)] text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-[var(--platform-fg-muted)]">Alto mín. (px)</Label>
+                    <Input
+                      type="number"
+                      min={120}
+                      max={2000}
+                      value={selected.minHeight ?? 240}
+                      onChange={(e) => updateWidget(selected.id, { minHeight: e.target.valueAsNumber || 240 })}
+                      className="mt-0.5 h-8 border-[var(--platform-border)] text-sm"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-[10px] text-[var(--platform-fg-muted)]">z-index (capas / solapamiento)</Label>
+                  <Input
+                    type="number"
+                    value={selected.zIndex ?? 0}
+                    onChange={(e) =>
+                      updateWidget(selected.id, { zIndex: Number.isFinite(e.target.valueAsNumber) ? e.target.valueAsNumber : 0 })
+                    }
+                    className="mt-0.5 h-8 border-[var(--platform-border)] text-sm"
+                  />
+                </div>
+                <label className="flex cursor-pointer items-center gap-2 text-xs" style={{ color: "var(--platform-fg)" }}>
+                  <Checkbox
+                    checked={!!selected.fixedGrid}
+                    onCheckedChange={(c) => {
+                      if (c === true) {
+                        const fg: DashboardFixedGrid = {
+                          col: 1,
+                          row: 1,
+                          colSpan: clampGridSpan(selected.gridSpan, 2),
+                          rowSpan: 4,
+                        };
+                        updateWidget(selected.id, { fixedGrid: fg });
+                      } else {
+                        updateWidget(selected.id, { fixedGrid: undefined });
+                      }
+                    }}
+                  />
+                  <span>Posición fija (columna/fila en la rejilla)</span>
+                </label>
+                {selected.fixedGrid && (
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    {(["col", "row", "colSpan", "rowSpan"] as const).map((key) => (
+                      <div key={key}>
+                        <Label className="text-[10px] text-[var(--platform-fg-muted)]">
+                          {key === "col"
+                            ? "Col (1-based)"
+                            : key === "row"
+                              ? "Fila (1-based)"
+                              : key === "colSpan"
+                                ? "Span columnas"
+                                : "Span filas"}
+                        </Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={key === "col" || key === "colSpan" ? DASHBOARD_GRID_COLUMN_COUNT : 99}
+                          value={selected.fixedGrid![key]}
+                          onChange={(e) => {
+                            const n = Math.max(1, e.target.valueAsNumber || 1);
+                            updateWidget(selected.id, {
+                              fixedGrid: { ...selected.fixedGrid!, [key]: n },
+                            });
+                          }}
+                          className="mt-0.5 h-8 border-[var(--platform-border)] text-sm"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {selected.type !== "text" && selected.type !== "filter" && selected.type !== "image" && selected.aggregationConfig && (
                 <>
                   <div>
                     <Label className="text-xs text-[var(--platform-fg-muted)]">Dimensión (eje X / categoría)</Label>
@@ -436,6 +608,96 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                     onChange={(e) => updateWidget(selected.id, { content: e.target.value })}
                     placeholder="Escribe aquí..."
                   />
+                </div>
+              )}
+              {selected.type === "image" && (
+                <div className="space-y-3">
+                  <div>
+                    <Label className="text-xs text-[var(--platform-fg-muted)]">URL de la imagen</Label>
+                    <Input
+                      value={selected.imageUrl ?? ""}
+                      onChange={(e) => updateWidget(selected.id, { imageUrl: e.target.value })}
+                      placeholder="https://… o data:image/…"
+                      className="mt-1 border-[var(--platform-border)] text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-[var(--platform-fg-muted)]">Ajuste (object-fit)</Label>
+                    <select
+                      className="mt-1 h-9 w-full rounded-md border border-[var(--platform-border)] bg-[var(--platform-bg)] px-3 text-sm"
+                      value={selected.imageConfig?.objectFit ?? "contain"}
+                      onChange={(e) =>
+                        updateWidget(selected.id, {
+                          imageConfig: {
+                            ...selected.imageConfig,
+                            objectFit: e.target.value as NonNullable<typeof selected.imageConfig>["objectFit"],
+                          },
+                        })
+                      }
+                    >
+                      <option value="contain">contain</option>
+                      <option value="cover">cover</option>
+                      <option value="fill">fill</option>
+                      <option value="none">none</option>
+                      <option value="scale-down">scale-down</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs text-[var(--platform-fg-muted)]">Ancho img (px, opc.)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={selected.imageConfig?.width ?? ""}
+                        onChange={(e) =>
+                          updateWidget(selected.id, {
+                            imageConfig: {
+                              ...selected.imageConfig,
+                              width: e.target.value === "" ? undefined : e.target.valueAsNumber,
+                            },
+                          })
+                        }
+                        className="mt-1 border-[var(--platform-border)] text-sm"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-[var(--platform-fg-muted)]">Alto img (px, opc.)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={selected.imageConfig?.height ?? ""}
+                        onChange={(e) =>
+                          updateWidget(selected.id, {
+                            imageConfig: {
+                              ...selected.imageConfig,
+                              height: e.target.value === "" ? undefined : e.target.valueAsNumber,
+                            },
+                          })
+                        }
+                        className="mt-1 border-[var(--platform-border)] text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs text-[var(--platform-fg-muted)]">Opacidad (0–1)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={selected.imageConfig?.opacity ?? 1}
+                      onChange={(e) => {
+                        const v = e.target.valueAsNumber;
+                        updateWidget(selected.id, {
+                          imageConfig: {
+                            ...selected.imageConfig,
+                            opacity: Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1,
+                          },
+                        });
+                      }}
+                      className="mt-1 border-[var(--platform-border)] text-sm"
+                    />
+                  </div>
                 </div>
               )}
             </div>

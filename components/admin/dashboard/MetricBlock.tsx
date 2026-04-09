@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { toChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 
 export type MetricBlockState = "estable" | "alerta" | "cambio";
 
@@ -59,7 +60,7 @@ type MetricBlockProps = {
   state?: MetricBlockState;
   insight?: string;
   chartConfig?: ChartConfig | null;
-  chartType?: "bar" | "horizontalBar" | "stackedColumn" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter" | "map";
+  chartType?: "bar" | "horizontalBar" | "stackedColumn" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter" | "map" | "image";
   isLoading?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
@@ -127,13 +128,16 @@ export function MetricBlock({
   canMoveDown = false,
 }: MetricBlockProps) {
   const hasViz = useMemo(() => {
+    if (chartType === "image") {
+      return String(widgetForRenderer?.imageUrl ?? "").trim().length > 0;
+    }
     if (chartType === "kpi") {
       return kpiValue != null
         || (Array.isArray(widgetForRenderer?.rows) && widgetForRenderer.rows.length > 0);
     }
     if (chartType === "table") return Array.isArray(tableRows) && tableRows.length > 0;
     return chartConfig?.labels?.length && (chartConfig.datasets?.length ?? 0) > 0;
-  }, [chartType, chartConfig, kpiValue, tableRows, widgetForRenderer?.rows]);
+  }, [chartType, chartConfig, kpiValue, tableRows, widgetForRenderer?.rows, widgetForRenderer?.imageUrl]);
 
   const fallbackWidget = useMemo<DashboardWidgetRendererWidget>(() => {
     const kpiAsNumber = typeof kpiValue === "number" ? kpiValue : Number(kpiValue);
@@ -178,7 +182,21 @@ export function MetricBlock({
     >
       <header className="metric-block-header flex flex-shrink-0 items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <h3 className="metric-block-title truncate">{title}</h3>
+          <div className="flex min-w-0 items-center gap-2">
+            {widgetForRenderer?.headerIconKey ? (
+              <DashboardPresetHeaderIcon
+                iconKey={widgetForRenderer.headerIconKey}
+                className="h-5 w-5 shrink-0 text-[var(--studio-accent)]"
+              />
+            ) : widgetForRenderer?.headerIconUrl ? (
+              <img
+                src={widgetForRenderer.headerIconUrl}
+                alt=""
+                className="h-5 w-5 shrink-0 rounded object-contain"
+              />
+            ) : null}
+            <h3 className="metric-block-title min-w-0 truncate">{title}</h3>
+          </div>
           {purpose && (
             <p className="mt-0.5 truncate text-[var(--studio-text-small)] text-[var(--studio-fg-muted)]">{purpose}</p>
           )}
@@ -240,6 +258,7 @@ export function MetricBlock({
                   <DropdownMenuSeparator className="my-1.5 bg-[var(--studio-border)]" />
                 </>
               )}
+              {chartType !== "image" && (
               <DropdownMenuItem
                 className="metric-block-dropdown-item flex items-center gap-3 rounded-lg px-3 py-2.5 mx-1.5 my-0.5 text-sm text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
                 onClick={(e) => { e.stopPropagation(); onRun?.(); }}
@@ -249,6 +268,7 @@ export function MetricBlock({
                 </span>
                 <span>Actualizar datos</span>
               </DropdownMenuItem>
+              )}
               {onSizeChange && (
                 <>
                   <DropdownMenuSeparator className="my-1.5 bg-[var(--studio-border)]" />
@@ -314,8 +334,14 @@ export function MetricBlock({
         )}
         {!hasViz && !isLoading && (
           <div className="studio-viz-placeholder flex flex-1 flex-col items-center justify-center rounded-[var(--studio-radius-sm)] py-10 text-center">
-            <p className="text-[13px]">{readOnly ? "Sin datos" : "Ejecutá para ver datos"}</p>
-            {!readOnly && (
+            <p className="text-[13px]">
+              {readOnly
+                ? "Sin datos"
+                : chartType === "image"
+                  ? "Indicá la URL de la imagen en el panel"
+                  : "Ejecutá para ver datos"}
+            </p>
+            {!readOnly && chartType !== "image" && (
             <Button
               variant="ghost"
               size="sm"

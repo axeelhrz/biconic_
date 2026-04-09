@@ -17,6 +17,12 @@ import {
 } from "@/lib/geo/geo-enrichment";
 import { DashboardThemeFormSections, mergeCardThemePatch } from "./DashboardThemeFormSections";
 import { MapChartAppearanceFields } from "./MapChartAppearanceFields";
+import {
+  type DashboardFixedGrid,
+  clampGridSpan,
+  DASHBOARD_GRID_COLUMN_COUNT,
+} from "@/lib/dashboard/gridLayout";
+import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
 
 export type MetricConditionEdit = {
   field: string;
@@ -158,6 +164,20 @@ export type MetricConfigWidget = {
   dataSourceId?: string | null;
   /** Tema visual solo para esta tarjeta (opcional). */
   cardTheme?: Partial<DashboardTheme>;
+  imageUrl?: string;
+  imageConfig?: {
+    width?: number;
+    height?: number;
+    objectFit?: "contain" | "cover" | "fill" | "none" | "scale-down";
+    opacity?: number;
+  };
+  content?: string;
+  fixedGrid?: DashboardFixedGrid;
+  zIndex?: number;
+  headerIconUrl?: string;
+  /** Clave de icono predefinido (Lucide); prioridad sobre URL en la cabecera. */
+  headerIconKey?: string;
+  hideWidgetHeader?: boolean;
 };
 
 export type SavedMetricPanel = { id: string; name: string; metric: AggregationMetricEdit };
@@ -587,6 +607,164 @@ export function MetricConfigPanel({
               />
             </div>
 
+            <div className="space-y-2">
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Icono en cabecera</Label>
+              <p className="text-[11px] text-[var(--studio-fg-muted)]">
+                Elegí un icono representativo o dejá solo una URL de imagen (el icono elegido tiene prioridad).
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  title="Sin icono predefinido"
+                  onClick={() => onUpdate({ headerIconKey: undefined })}
+                  className={`flex h-9 min-w-[2.25rem] items-center justify-center rounded-lg border px-2 text-[11px] font-medium transition-colors ${
+                    !widget.headerIconKey
+                      ? "border-[var(--studio-accent)] bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
+                      : "border-[var(--studio-border)] text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)]"
+                  }`}
+                >
+                  —
+                </button>
+                {HEADER_PRESET_ICONS.map(({ key, label, Icon }) => {
+                  const active = widget.headerIconKey === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      title={label}
+                      onClick={() =>
+                        onUpdate({
+                          headerIconKey: key,
+                          headerIconUrl: undefined,
+                        })
+                      }
+                      className={`flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${
+                        active
+                          ? "border-[var(--studio-accent)] bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
+                          : "border-[var(--studio-border)] text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)] hover:text-[var(--studio-fg)]"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" aria-hidden />
+                    </button>
+                  );
+                })}
+              </div>
+              <Input
+                value={widget.headerIconUrl ?? ""}
+                onChange={(e) =>
+                  onUpdate({
+                    headerIconUrl: e.target.value || undefined,
+                    ...(e.target.value.trim() ? { headerIconKey: undefined } : {}),
+                  })
+                }
+                placeholder="O pegá URL de imagen (https://…)"
+                className="h-9 rounded-lg border-[var(--studio-border)] text-sm"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="hide-widget-header"
+                checked={!!widget.hideWidgetHeader}
+                onCheckedChange={(c) => onUpdate({ hideWidgetHeader: c === true })}
+              />
+              <Label htmlFor="hide-widget-header" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                Ocultar cabecera de la tarjeta
+              </Label>
+            </div>
+
+            {widget.type === "image" ? (
+              <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/50 p-3">
+                <p className="text-xs font-semibold text-[var(--studio-fg)]">Imagen</p>
+                <div>
+                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">URL</Label>
+                  <Input
+                    value={widget.imageUrl ?? ""}
+                    onChange={(e) => onUpdate({ imageUrl: e.target.value })}
+                    placeholder="https://… o data:image/…"
+                    className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Object-fit</Label>
+                  <select
+                    className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                    value={widget.imageConfig?.objectFit ?? "contain"}
+                    onChange={(e) =>
+                      onUpdate({
+                        imageConfig: {
+                          ...widget.imageConfig,
+                          objectFit: e.target.value as NonNullable<typeof widget.imageConfig>["objectFit"],
+                        },
+                      })
+                    }
+                  >
+                    <option value="contain">contain</option>
+                    <option value="cover">cover</option>
+                    <option value="fill">fill</option>
+                    <option value="none">none</option>
+                    <option value="scale-down">scale-down</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[10px] text-[var(--studio-fg-muted)]">Ancho (px)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={widget.imageConfig?.width ?? ""}
+                      onChange={(e) =>
+                        onUpdate({
+                          imageConfig: {
+                            ...widget.imageConfig,
+                            width: e.target.value === "" ? undefined : e.target.valueAsNumber,
+                          },
+                        })
+                      }
+                      className="mt-1 h-8 rounded-lg border-[var(--studio-border)] text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-[var(--studio-fg-muted)]">Alto (px)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={widget.imageConfig?.height ?? ""}
+                      onChange={(e) =>
+                        onUpdate({
+                          imageConfig: {
+                            ...widget.imageConfig,
+                            height: e.target.value === "" ? undefined : e.target.valueAsNumber,
+                          },
+                        })
+                      }
+                      className="mt-1 h-8 rounded-lg border-[var(--studio-border)] text-sm"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Opacidad (0–1)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={widget.imageConfig?.opacity ?? 1}
+                    onChange={(e) => {
+                      const v = e.target.valueAsNumber;
+                      onUpdate({
+                        imageConfig: {
+                          ...widget.imageConfig,
+                          opacity: Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1,
+                        },
+                      });
+                    }}
+                    className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {showDataTabs ? (
             <div>
               <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tipo de gráfico</Label>
               <select
@@ -607,6 +785,7 @@ export function MetricConfigPanel({
                 ))}
               </select>
             </div>
+            ) : null}
 
             <div>
               <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columnas en grid</Label>
@@ -622,6 +801,90 @@ export function MetricConfigPanel({
                 <option value={5}>5</option>
                 <option value={6}>6 (ancho completo)</option>
               </select>
+            </div>
+
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Alto mínimo (px)</Label>
+              <Input
+                type="number"
+                min={120}
+                max={2000}
+                value={widget.minHeight ?? 280}
+                onChange={(e) => onUpdate({ minHeight: e.target.valueAsNumber || 280 })}
+                className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
+              />
+            </div>
+
+            <div>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">z-index (capas)</Label>
+              <Input
+                type="number"
+                value={widget.zIndex ?? 0}
+                onChange={(e) =>
+                  onUpdate({
+                    zIndex: Number.isFinite(e.target.valueAsNumber) ? e.target.valueAsNumber : 0,
+                  })
+                }
+                className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
+              />
+            </div>
+
+            <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="fixed-grid-studio"
+                  checked={!!widget.fixedGrid}
+                  onCheckedChange={(c) => {
+                    if (c === true) {
+                      const fg: DashboardFixedGrid = {
+                        col: 1,
+                        row: 1,
+                        colSpan: clampGridSpan(widget.gridSpan, 2),
+                        rowSpan: 4,
+                      };
+                      onUpdate({ fixedGrid: fg });
+                    } else {
+                      onUpdate({ fixedGrid: undefined });
+                    }
+                  }}
+                />
+                <Label htmlFor="fixed-grid-studio" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                  Posición fija (columna/fila en la rejilla)
+                </Label>
+              </div>
+              {widget.fixedGrid ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {(["col", "row", "colSpan", "rowSpan"] as const).map((key) => {
+                    const fg = widget.fixedGrid as DashboardFixedGrid;
+                    return (
+                    <div key={key}>
+                      <Label className="text-[10px] text-[var(--studio-fg-muted)]">
+                        {key === "col"
+                          ? "Col (1-based)"
+                          : key === "row"
+                            ? "Fila (1-based)"
+                            : key === "colSpan"
+                              ? "Span columnas"
+                              : "Span filas"}
+                      </Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={key === "col" || key === "colSpan" ? DASHBOARD_GRID_COLUMN_COUNT : 99}
+                        value={fg[key]}
+                        onChange={(e) => {
+                          const n = Math.max(1, e.target.valueAsNumber || 1);
+                          onUpdate({
+                            fixedGrid: { ...fg, [key]: n },
+                          });
+                        }}
+                        className="mt-0.5 h-8 rounded-lg border-[var(--studio-border)] text-sm"
+                      />
+                    </div>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
 
             {sources && sources.length > 1 ? (

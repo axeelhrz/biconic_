@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
-import { Plus, Check, BarChart2, Pencil } from "lucide-react";
+import { Plus, Check, BarChart2, Pencil, ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,6 +47,7 @@ import {
 import {
   clampGridSpan,
   computeAddMetricPackedPlacement,
+  type DashboardFixedGrid,
   computeDashboardGridPlacementsPacked,
 } from "@/lib/dashboard/gridLayout";
 import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
@@ -236,6 +237,20 @@ type StudioWidget = {
   dataSourceId?: string | null;
   /** Overrides visuales respecto al tema global del layout. */
   cardTheme?: Partial<DashboardTheme>;
+  fixedGrid?: DashboardFixedGrid;
+  zIndex?: number;
+  imageUrl?: string;
+  imageConfig?: {
+    width?: number;
+    height?: number;
+    objectFit?: "contain" | "cover" | "fill" | "none" | "scale-down";
+    opacity?: number;
+  };
+  content?: string;
+  filterConfig?: { label?: string; field?: string; operator?: string; inputType?: string; scopeMetricIds?: string[] };
+  headerIconUrl?: string;
+  headerIconKey?: string;
+  hideWidgetHeader?: boolean;
   [key: string]: unknown;
 };
 
@@ -273,6 +288,7 @@ const SUPPORTED_CHART_TYPES = [
   "combo",
   "scatter",
   "map",
+  "image",
 ] as const;
 type SupportedChartType = typeof SUPPORTED_CHART_TYPES[number];
 
@@ -620,6 +636,10 @@ export function AdminDashboardStudio({
     async (widgetId: string) => {
       const widget = widgets.find((w) => w.id === widgetId);
       if (!widget || !etlData) return;
+      if (widget.type === "image" || widget.type === "text") {
+        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        return;
+      }
       const tableName = await getTableName(widget);
       if (!tableName) {
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
@@ -1051,7 +1071,9 @@ export function AdminDashboardStudio({
   }, [layoutLoaded, etlData, etlLoading, savedMetrics.length, widgets, loadMetricData]);
 
   const runAllMetrics = useCallback(async () => {
-    const toRun = activePageId ? widgets.filter((w) => (w.pageId ?? "page-1") === activePageId) : widgets;
+    const toRun = (activePageId ? widgets.filter((w) => (w.pageId ?? "page-1") === activePageId) : widgets).filter(
+      (w) => w.type !== "image" && w.type !== "text"
+    );
     if (toRun.length === 0) return;
     setIsRunning(true);
     try {
@@ -1296,6 +1318,32 @@ export function AdminDashboardStudio({
     setAddMetricStep("list");
   }, []);
 
+  const addImageWidgetToDashboard = useCallback(() => {
+    const pageId = activePageId ?? "page-1";
+    const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === pageId);
+    const newWidget: StudioWidget = {
+      id: `w-img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type: "image",
+      title: "Imagen",
+      x: 0,
+      y: 0,
+      w: 400,
+      h: 280,
+      gridOrder: currentPageWidgets.length,
+      gridSpan: 2,
+      minHeight: 240,
+      pageId,
+      imageUrl: "",
+      imageConfig: { objectFit: "contain", opacity: 1 },
+      zIndex: 0,
+    };
+    const newWidgets = [...widgets, newWidget];
+    setWidgets(newWidgets);
+    setSelectedId(newWidget.id);
+    setIsDirty(true);
+    void saveDashboard({ widgets: newWidgets });
+  }, [widgets, activePageId, saveDashboard]);
+
   const closeAddMetricModal = useCallback(() => {
     setAddMetricOpen(false);
     setAddMetricStep("list");
@@ -1442,12 +1490,16 @@ export function AdminDashboardStudio({
       setWidgets((prev) =>
         prev.map((w) => {
           if (w.id !== selectedId) return w;
-          const next: StudioWidget = { ...w, ...patch };
+          const { imageConfig: patchImg, ...restPatch } = patch;
+          const next: StudioWidget = { ...w, ...restPatch };
           if (patch.aggregationConfig != null) {
             next.aggregationConfig = {
               ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
               ...patch.aggregationConfig,
             } as AggregationConfig;
+          }
+          if (patchImg != null) {
+            next.imageConfig = { ...(w.imageConfig ?? {}), ...patchImg };
           }
           return next;
         })
@@ -1570,6 +1622,14 @@ export function AdminDashboardStudio({
               </button>
             </span>
           ))}
+          <button
+            type="button"
+            onClick={() => addImageWidgetToDashboard()}
+            className="inline-flex items-center gap-1 rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 py-1 text-xs font-medium text-[var(--studio-fg)] hover:bg-[var(--studio-bg-elevated)]"
+          >
+            <ImageIcon className="h-3.5 w-3.5" aria-hidden />
+            Añadir imagen
+          </button>
           <select
             className="rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1 text-xs text-[var(--studio-fg)]"
             value=""
@@ -2041,6 +2101,7 @@ export function AdminDashboardStudio({
                       gridColumn,
                       gridRow,
                       minHeight: minH,
+                      zIndex: typeof w.zIndex === "number" ? w.zIndex : 0,
                       ...studioBlockCellChromeStyle(effectiveTheme),
                     }}
                   >
@@ -2101,6 +2162,12 @@ export function AdminDashboardStudio({
                         kpiSecondaryLabel: w.kpiSecondaryLabel,
                         kpiSecondaryValue: w.kpiSecondaryValue,
                         kpiCaption: w.kpiCaption,
+                        imageUrl: w.imageUrl,
+                        imageConfig: w.imageConfig,
+                        headerIconUrl: w.headerIconUrl,
+                        headerIconKey: w.headerIconKey,
+                        hideWidgetHeader: w.hideWidgetHeader,
+                        content: w.content,
                         chartStyle: buildResolvedChartStyle(
                           w.aggregationConfig,
                           w.chartStyle as ChartStyleConfig | null | undefined,
@@ -2178,6 +2245,14 @@ export function AdminDashboardStudio({
                 excludeGlobalFilters: selectedWidgetForPanel.excludeGlobalFilters,
                 dataSourceId: selectedWidgetForPanel.dataSourceId,
                 cardTheme: selectedWidgetForPanel.cardTheme,
+                imageUrl: selectedWidgetForPanel.imageUrl,
+                imageConfig: selectedWidgetForPanel.imageConfig,
+                fixedGrid: selectedWidgetForPanel.fixedGrid,
+                zIndex: selectedWidgetForPanel.zIndex,
+                headerIconUrl: selectedWidgetForPanel.headerIconUrl,
+                headerIconKey: selectedWidgetForPanel.headerIconKey,
+                hideWidgetHeader: selectedWidgetForPanel.hideWidgetHeader,
+                content: selectedWidgetForPanel.content,
               }}
               etlData={etlData}
               etlLoading={etlLoading}

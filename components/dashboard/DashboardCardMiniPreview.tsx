@@ -69,6 +69,8 @@ type LayoutWidget = {
   aggregationConfig?: AggregationConfig;
   chartStyle?: ChartStyleConfig;
   cardTheme?: Partial<DashboardTheme>;
+  imageUrl?: string;
+  imageConfig?: DashboardWidgetRendererWidget["imageConfig"];
 };
 
 type LayoutData = {
@@ -135,6 +137,27 @@ async function loadWidgetData(
     ...themeToWrapperBackground(effectiveTheme),
   } as CSSProperties;
   const cellChartDark = resolveDarkChartTheme(effectiveTheme, true);
+
+  if (type === "image") {
+    const url = String(widget.imageUrl ?? "").trim();
+    return {
+      id,
+      title,
+      type: "image",
+      hasData: !!url,
+      gridSpan,
+      cellStyle,
+      cellChartDark,
+      rendererWidget: {
+        id,
+        title,
+        type: "image" as const,
+        imageUrl: url,
+        imageConfig: widget.imageConfig,
+        minHeight: 130,
+      },
+    };
+  }
 
   if (!source) {
     return {

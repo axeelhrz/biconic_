@@ -2,6 +2,17 @@
 export const DASHBOARD_GRID_COLUMN_COUNT = 6;
 
 /**
+ * Celda explícita en la rejilla CSS (1-based col/row, como en `grid-column` / `grid-row`).
+ * Varios widgets pueden compartir la misma región (solapamiento); el orden visual usa `zIndex` en el contenedor.
+ */
+export type DashboardFixedGrid = {
+  col: number;
+  row: number;
+  colSpan: number;
+  rowSpan: number;
+};
+
+/**
  * Altura nominal por pista de fila implícita del grid (empaquetado 2D).
  * Debe coincidir con `grid-auto-rows` en CSS del studio y de la vista cliente.
  */
@@ -45,6 +56,18 @@ export function clampGridSpan(raw: number | undefined | null, defaultSpan = 2): 
   return Math.min(DASHBOARD_GRID_COLUMN_COUNT, Math.max(1, Math.round(base)));
 }
 
+/** Normaliza `fixedGrid` al rango válido de columnas y spans mínimos. */
+export function clampDashboardFixedGrid(fg: DashboardFixedGrid, cols: number): DashboardFixedGrid {
+  const colSpan = Math.min(cols, Math.max(1, Math.round(Number(fg.colSpan) || 1)));
+  const rowSpan = Math.max(1, Math.round(Number(fg.rowSpan) || 1));
+  let col = Math.max(1, Math.round(Number(fg.col) || 1));
+  let row = Math.max(1, Math.round(Number(fg.row) || 1));
+  if (col + colSpan - 1 > cols) {
+    col = Math.max(1, cols - colSpan + 1);
+  }
+  return { col, row, colSpan, rowSpan };
+}
+
 export function computeDashboardGridPlacements<T extends { gridSpan?: number }>(
   ordered: T[]
 ): { widget: T; row: number; col: number; span: number }[] {
@@ -78,11 +101,19 @@ function defaultWidgetMinHeight(w: { minHeight?: number }): number {
   return Number.isFinite(n) && n > 0 ? n : 280;
 }
 
+type PackedLayoutWidget = {
+  gridSpan?: number;
+  minHeight?: number;
+  fixedGrid?: DashboardFixedGrid | null;
+};
+
 /**
  * Coloca widgets en una rejilla de `cols` columnas rellenando huecos:
  * cada ítem ocupa `span` columnas y `rowSpan` filas según `minHeight`.
+ * Si `fixedGrid` está definido, el widget no se empaqueta: usa la celda indicada (puede solaparse con otros fijos).
+ * Las celdas ocupadas por `fixedGrid` se reservan antes del empaquetado del resto.
  */
-export function computeDashboardGridPlacementsPacked<T extends { gridSpan?: number; minHeight?: number }>(
+export function computeDashboardGridPlacementsPacked<T extends PackedLayoutWidget>(
   ordered: T[],
   cols: number = DASHBOARD_GRID_COLUMN_COUNT,
   rowUnitPx: number = DASHBOARD_GRID_ROW_UNIT_PX,
@@ -113,8 +144,26 @@ export function computeDashboardGridPlacementsPacked<T extends { gridSpan?: numb
     }
   };
 
+  for (const w of ordered) {
+    if (!w.fixedGrid || typeof w.fixedGrid !== "object") continue;
+    const fg = clampDashboardFixedGrid(w.fixedGrid, cols);
+    mark(fg.row - 1, fg.col - 1, fg.colSpan, fg.rowSpan);
+  }
+
   const out: PackedGridPlacement<T>[] = [];
   for (const w of ordered) {
+    if (w.fixedGrid && typeof w.fixedGrid === "object") {
+      const fg = clampDashboardFixedGrid(w.fixedGrid, cols);
+      out.push({
+        widget: w,
+        gridColumn: `${fg.col} / span ${fg.colSpan}`,
+        gridRow: `${fg.row} / span ${fg.rowSpan}`,
+        span: fg.colSpan,
+        rowSpan: fg.rowSpan,
+      });
+      continue;
+    }
+
     const span = clampGridSpan(w.gridSpan, 2);
     const mh = defaultWidgetMinHeight(w);
     const rowSpan = minRowSpanForMinHeight(mh, rowUnitPx, rowGapPx);
@@ -141,7 +190,7 @@ export function computeDashboardGridPlacementsPacked<T extends { gridSpan?: numb
 
 /** Ubicación empaquetada para la celda «Añadir métrica» (después de los widgets reales). */
 export function computeAddMetricPackedPlacement(
-  orderedWidgets: { gridSpan?: number; minHeight?: number }[],
+  orderedWidgets: PackedLayoutWidget[],
   cols: number = DASHBOARD_GRID_COLUMN_COUNT,
   rowUnitPx: number = DASHBOARD_GRID_ROW_UNIT_PX,
   rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT,
