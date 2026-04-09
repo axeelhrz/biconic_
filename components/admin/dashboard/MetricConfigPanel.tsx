@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import type { DashboardTheme } from "@/types/dashboard";
 import { mergeCardTheme, mergeTheme } from "@/types/dashboard";
-import { X, Trash2, Play, BookmarkPlus, Plus } from "lucide-react";
+import { X, Trash2, Play, BookmarkPlus, Plus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -237,6 +237,8 @@ type MetricConfigPanelProps = {
   previewRows?: Record<string, unknown>[];
   etlData: ETLDataResponse | null;
   etlLoading: boolean;
+  /** Carga de datos de esta métrica (aggregate/raw) en el estudio */
+  metricDataLoading?: boolean;
   onUpdate: (patch: Partial<MetricConfigWidget>) => void;
   onLoadData: () => void;
   onClose: () => void;
@@ -275,6 +277,7 @@ export function MetricConfigPanel({
   previewRows = [],
   etlData,
   etlLoading,
+  metricDataLoading = false,
   onUpdate,
   onLoadData,
   onClose,
@@ -1209,12 +1212,23 @@ export function MetricConfigPanel({
                   </Label>
                 </div>
                 <Button
-                  className="mt-2 h-10 w-full border border-[rgba(34,211,238,0.3)] bg-[var(--studio-accent-dim)] font-medium text-[var(--studio-accent)] hover:bg-[rgba(34,211,238,0.25)] hover:text-[var(--studio-accent)]"
+                  type="button"
+                  aria-busy={etlLoading || metricDataLoading}
+                  className="metric-config-refresh-btn mt-2 h-10 w-full border border-[rgba(34,211,238,0.3)] bg-[var(--studio-accent-dim)] font-medium text-[var(--studio-accent)] transition-all duration-200 hover:bg-[rgba(34,211,238,0.25)] hover:text-[var(--studio-accent)] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-80"
                   onClick={onLoadData}
-                  disabled={!etlData || etlLoading}
+                  disabled={!etlData || etlLoading || metricDataLoading}
                 >
-                  <Play className="mr-2 h-4 w-4" />
-                  Actualizar datos
+                  {etlLoading || metricDataLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                      Actualizando…
+                    </>
+                  ) : (
+                    <>
+                      <Play className="mr-2 h-4 w-4 shrink-0" aria-hidden />
+                      Actualizar datos
+                    </>
+                  )}
                 </Button>
               </>
             ) : null}

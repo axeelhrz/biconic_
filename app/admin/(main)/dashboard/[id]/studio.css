@@ -640,6 +640,20 @@
   color: var(--studio-fg-muted) !important;
 }
 
+/* Botón «Actualizar datos» en el panel: pulso suave mientras carga */
+@keyframes metric-refresh-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(34, 211, 238, 0.08);
+  }
+}
+.metric-config-refresh-btn[aria-busy="true"] {
+  animation: metric-refresh-glow 1.25s ease-in-out infinite;
+}
+
 /* Menú de tres puntos del header — se renderiza en portal, estilos explícitos para que sea visible */
 .studio-header-menu-content {
   background: #141419 !important;

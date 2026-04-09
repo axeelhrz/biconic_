@@ -2303,6 +2303,7 @@ export function AdminDashboardStudio({
                 }}
                 etlData={etlData}
                 etlLoading={etlLoading}
+                metricDataLoading={!!selectedWidgetForPanel.isLoading}
                 onUpdate={handleMetricPanelUpdate}
                 onLoadData={() => void loadMetricData(selectedWidgetForPanel.id)}
                 onClose={() => setSelectedId(null)}
