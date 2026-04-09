@@ -170,6 +170,8 @@ type AggregationConfig = {
   chartDataLabelColor?: string;
   chartAxisFontSize?: number;
   chartLayoutPadding?: number;
+  chartBarThickness?: number;
+  chartLineBorderWidth?: number;
   chartAxisTickColor?: string;
   chartCategoryTickMaxRotation?: number;
   chartCategoryTickMinRotation?: number;

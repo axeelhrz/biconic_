@@ -99,6 +99,8 @@ export type AggregationConfigEdit = {
   chartDataLabelColor?: string;
   chartAxisFontSize?: number;
   chartLayoutPadding?: number;
+  chartBarThickness?: number;
+  chartLineBorderWidth?: number;
   chartAxisTickColor?: string;
   chartCategoryTickMaxRotation?: number;
   chartCategoryTickMinRotation?: number;
@@ -1726,6 +1728,42 @@ export function MetricConfigPanel({
                 placeholder="16"
               />
             </div>
+            {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Grosor máx. barras (px)</Label>
+                  <Input
+                    type="number"
+                    min={4}
+                    max={120}
+                    value={agg.chartBarThickness ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartBarThickness: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="Auto"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Grosor de línea (px)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={16}
+                    value={agg.chartLineBorderWidth ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartLineBorderWidth: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="2"
+                  />
+                </div>
+              </div>
+            )}
             {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
               <div className="grid grid-cols-2 gap-2">
                 <div>

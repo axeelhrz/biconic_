@@ -90,6 +90,8 @@ export type AggregationConfigEdit = {
   chartDataLabelColor?: string;
   chartAxisFontSize?: number;
   chartLayoutPadding?: number;
+  chartBarThickness?: number;
+  chartLineBorderWidth?: number;
   chartAxisTickColor?: string;
   chartCategoryTickMaxRotation?: number;
   chartCategoryTickMinRotation?: number;
@@ -196,6 +198,8 @@ export type SavedMetricAggregationConfig = {
   chartAxisXVisible?: boolean;
   chartAxisYVisible?: boolean;
   chartStackBySeries?: boolean;
+  chartBarThickness?: number;
+  chartLineBorderWidth?: number;
   chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
   analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
@@ -721,6 +725,42 @@ export function AddMetricConfigForm({
                   className="add-metric-input mt-0.5 h-8 text-xs"
                 />
               </div>
+              {["bar", "horizontalBar", "stackedColumn", "line", "area", "combo", "scatter"].includes(form.type) && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Grosor máx. barras (px)</Label>
+                    <Input
+                      type="number"
+                      min={4}
+                      max={120}
+                      value={agg.chartBarThickness ?? ""}
+                      onChange={(e) =>
+                        updateAgg({
+                          chartBarThickness: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                        })
+                      }
+                      className="add-metric-input mt-0.5 h-8 text-xs"
+                      placeholder="Auto"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-[var(--studio-fg-muted)]">Grosor de línea (px)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={16}
+                      value={agg.chartLineBorderWidth ?? ""}
+                      onChange={(e) =>
+                        updateAgg({
+                          chartLineBorderWidth: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                        })
+                      }
+                      className="add-metric-input mt-0.5 h-8 text-xs"
+                      placeholder="2"
+                    />
+                  </div>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <Label className="text-[11px] text-[var(--studio-fg-muted)]">Color etiquetas de dato</Label>
                 <input

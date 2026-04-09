@@ -26,6 +26,7 @@ export type ChartConfig = {
     hoverBackgroundColor?: string | string[];
     borderColor?: string | string[];
     borderWidth?: number;
+    maxBarThickness?: number;
     fill?: boolean;
     type?: "bar" | "line";
     yAxisID?: string;
@@ -63,6 +64,8 @@ export type BuildChartConfigWidget = {
     /** DMY = día/mes (default); MDY = mes/día (US) para barras ambiguas `4/1/2024`. */
     dateSlashOrder?: "DMY" | "MDY";
     ratioReuseMode?: boolean;
+    chartBarThickness?: number;
+    chartLineBorderWidth?: number;
     [key: string]: unknown;
   };
   source?: { labelField?: string };
@@ -407,6 +410,18 @@ function resolvePieSliceBorderWidth(agg: BuildChartConfigWidget["aggregationConf
   return Math.max(0, Math.min(8, Math.round(raw)));
 }
 
+function resolveChartMaxBarThickness(agg: BuildChartConfigWidget["aggregationConfig"] | undefined): number | undefined {
+  const raw = agg?.chartBarThickness;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+  return Math.max(4, Math.min(120, Math.round(raw)));
+}
+
+function resolveChartLineBorderWidth(agg: BuildChartConfigWidget["aggregationConfig"] | undefined): number {
+  const raw = agg?.chartLineBorderWidth;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 2;
+  return Math.max(0, Math.min(16, raw));
+}
+
 /**
  * Construye la configuración del gráfico a partir de filas de datos y la configuración del widget.
  * Incluye ordenación (chartSortDirection, chartSortBy, chartAxisOrder) y ranking (chartRankingEnabled)
@@ -522,6 +537,9 @@ export function buildChartConfig(
 
   let rows = [...dataArray];
   const resolvedType = (agg?.chartType as string) || widget.type;
+  const maxBarThicknessPx = resolveChartMaxBarThickness(agg);
+  const barThicknessOpts = maxBarThicknessPx != null ? { maxBarThickness: maxBarThicknessPx } : {};
+  const lineStrokeW = resolveChartLineBorderWidth(agg);
 
   // Ranking: top N por métrica (resolver metric_N a yKeys[N] cuando la API devuelve alias)
   const isTemporalXAxis = shouldApplyTemporalRankingRule(dataArray, xKey, agg);
@@ -655,6 +673,7 @@ export function buildChartConfig(
       backgroundColor: getColor(sv, idx) + "99",
       borderColor: getColor(sv, idx),
       borderWidth: 2,
+      ...barThicknessOpts,
       ...(stackedBySeriesEnabled ? { stack: "series" } : {}),
       ...(resolvedType === "combo" ? { type: "bar" as const, yAxisID: "y" as const } : {}),
     }));
@@ -677,7 +696,7 @@ export function buildChartConfig(
             data: uniqueX.map((xv) => sumByXSecondary.get(xv) ?? 0),
             backgroundColor: getColor(secondaryMetricKey, seriesValues.length) + "20",
             borderColor: getColor(secondaryMetricKey, seriesValues.length),
-            borderWidth: 2,
+            borderWidth: lineStrokeW,
             type: "line",
             fill: false,
             yAxisID: "y1",
@@ -727,13 +746,14 @@ export function buildChartConfig(
           borderWidth: 2,
           type: "bar",
           yAxisID: "y",
+          ...barThicknessOpts,
         },
         {
           label: label1,
           data: rows.map((r) => Number((r as Record<string, unknown>)[y1] ?? 0)),
           backgroundColor: getColor(y1, 1) + "20",
           borderColor: getColor(y1, 1),
-          borderWidth: 2,
+          borderWidth: lineStrokeW,
           type: "line",
           fill: false,
           yAxisID: "y1",
@@ -759,6 +779,7 @@ export function buildChartConfig(
           backgroundColor: barColors.map((c) => c + "99"),
           borderColor: barColors,
           borderWidth: 2,
+          ...barThicknessOpts,
         },
       ],
     };
@@ -767,12 +788,16 @@ export function buildChartConfig(
     labels,
     datasets: yKeys.map((yKey, idx) => {
       const displayLabel = datasetDisplayLabel(yKey);
+      const isLineLike = resolvedType === "line" || resolvedType === "area";
+      const isBarLike =
+        resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "stackedColumn";
       return {
         label: displayLabel,
         data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
         backgroundColor: (resolvedType === "area" ? getColor(yKey, idx) + "40" : getColor(yKey, idx) + "99"),
         borderColor: getColor(yKey, idx),
-        borderWidth: resolvedType === "line" || resolvedType === "area" ? 2 : 1,
+        borderWidth: isLineLike ? lineStrokeW : 1,
+        ...(isBarLike ? barThicknessOpts : {}),
         ...(resolvedType === "area" ? { fill: true } : {}),
       };
     }),

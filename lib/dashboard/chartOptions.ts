@@ -452,7 +452,6 @@ export function buildChartOptions(
       scales,
       ...(type === "bar" || type === "horizontalBar"
         ? {
-            barThickness: style?.barThickness,
             borderRadius: style?.barBorderRadius ?? 4,
           }
         : {}),

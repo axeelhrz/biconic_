@@ -1044,7 +1044,17 @@ export function DashboardWidgetRenderer({
           },
         }),
       };
-      const baseReturn = { ...optionsBase, ...built, plugins, scales: patchedScales };
+      const builtForChart =
+        chartType === "combo"
+          ? {
+              ...built,
+              elements: {
+                line: { borderWidth: style?.lineBorderWidth ?? 2 },
+                point: { radius: style?.pointRadius ?? 3 },
+              },
+            }
+          : built;
+      const baseReturn = { ...optionsBase, ...builtForChart, plugins, scales: patchedScales };
       if (comboScales) {
         return {
           ...baseReturn,

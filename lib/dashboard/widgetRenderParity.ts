@@ -22,6 +22,10 @@ export type AggregationLike = {
   chartDataLabelColor?: string;
   chartAxisFontSize?: number;
   chartLayoutPadding?: number;
+  /** Ancho máximo de barra (px); se aplica como maxBarThickness en datasets. */
+  chartBarThickness?: number;
+  /** Grosor del trazo en series línea/área y combo (px). */
+  chartLineBorderWidth?: number;
   chartAxisTickColor?: string;
   chartCategoryTickMaxRotation?: number;
   chartCategoryTickMinRotation?: number;
@@ -127,6 +131,10 @@ export function mergeChartVisualStyle(
   if (rotMin != null) out.categoryTickMinRotation = rotMin;
   const maxTicks = n(agg.chartCategoryMaxTicks);
   if (maxTicks != null) out.categoryMaxTicks = maxTicks;
+  const barTh = n(agg.chartBarThickness);
+  if (barTh != null) out.barThickness = barTh;
+  const lineBw = n(agg.chartLineBorderWidth);
+  if (lineBw != null) out.lineBorderWidth = lineBw;
   const fam = String(agg.chartFontFamily ?? "").trim();
   if (fam) out.chartFontFamily = fam;
   else if (themeFontFamily && String(themeFontFamily).trim() !== "") {
