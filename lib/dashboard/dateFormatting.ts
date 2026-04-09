@@ -32,6 +32,14 @@ export function parseDateLike(value: unknown): Date | null {
     return safeDateFromParts(year, month, 1);
   }
 
+  // yyyy-MM (periodo mes; inequívoco frente a dd/MM vs MM/dd)
+  const ym = raw.match(/^(\d{4})-(\d{1,2})$/);
+  if (ym) {
+    const year = Number(ym[1]);
+    const month = Number(ym[2]);
+    return safeDateFromParts(year, month, 1);
+  }
+
   // dd/MM/yyyy
   const dmy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (dmy) {
@@ -77,7 +85,7 @@ export function formatDateByGranularity(
   const day = dt.getUTCDate();
 
   if (granularity === "year") return String(year);
-  if (granularity === "month") return `${pad2(month)}/${year}`;
+  if (granularity === "month") return `${year}-${pad2(month)}`;
   if (granularity === "quarter") return `T${Math.floor((month - 1) / 3) + 1}/${year}`;
   if (granularity === "semester") return `S${month <= 6 ? 1 : 2}/${year}`;
   // day and week: show canonical calendar date

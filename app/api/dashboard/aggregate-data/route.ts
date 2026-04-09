@@ -1146,7 +1146,7 @@ export async function POST(req: NextRequest) {
         if (validGran === "year") {
           dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'YYYY')`;
         } else if (validGran === "month") {
-          dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'MM/YYYY')`;
+          dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'YYYY-MM')`;
         } else if (validGran === "quarter") {
           dateGroupByDisplayExpr = `('T' || EXTRACT(QUARTER FROM ${dateGroupByExpr})::text || '/' || EXTRACT(YEAR FROM ${dateGroupByExpr})::text)`;
         } else {
@@ -1360,7 +1360,7 @@ export async function POST(req: NextRequest) {
           dateFieldNormalized.includes(requestedSortNormalized)
         );
       if (temporalSortRequested) {
-        // Evita ordenar por alias display (MM/YYYY) y fuerza orden cronológico real.
+        // Evita ordenar por alias display (p. ej. YYYY-MM) y fuerza orden cronológico real.
         orderByField = dateGroupByExpr;
       }
       const dimMatch = dimList.find((d) => normalizeStr(d) === requestedSortNormalized);
@@ -1663,7 +1663,7 @@ export async function POST(req: NextRequest) {
     const directionMultiplier =
       (body.orderBy?.direction || "ASC").toString().toUpperCase() === "DESC" ? -1 : 1;
 
-    // Defensa final: evita que el preview quede en orden lexicográfico MM/YYYY por configuraciones heredadas.
+    // Defensa final: evita orden lexicográfico incorrecto en etiquetas de periodo por configuraciones heredadas.
     const sortedResults =
       body.dateGroupBy?.field && requestedTemporalSort && temporalKey
         ? [...mappedResults].sort((a, b) => {
