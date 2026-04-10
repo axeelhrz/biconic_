@@ -94,6 +94,18 @@ function normalizeLooseKey(s: string): string {
   return s.toLowerCase().replace(/[\s-]+/g, "_").replace(/_+/g, "_");
 }
 
+/** Celda de muestra que parece métrica numérica (incl. strings desde PG); evita tratar IDs largos solo-dígitos como número. */
+function sampleValueLooksLikeMetricNumber(value: unknown): boolean {
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "string") return false;
+  const t = value.trim();
+  if (t === "") return false;
+  const n = Number(t);
+  if (!Number.isFinite(n)) return false;
+  if (/^\d+$/.test(t) && t.length >= 12) return false;
+  return true;
+}
+
 /**
  * Alinea un alias de chartYAxes con la clave real en las filas (API puede devolver otro casing,
  * guiones bajos vs espacios, etc.). Sin esto solo se grafica la primera métrica que hace match exacto.
@@ -235,7 +247,9 @@ export function resolveWidgetAxisKeys(
       });
   }
   if (!hasExplicitYAxes && yKeys.length === 0) {
-    const numKeys = resultKeys.filter((k) => typeof (sample as Record<string, unknown>)[k] === "number");
+    const numKeys = resultKeys.filter((k) =>
+      sampleValueLooksLikeMetricNumber((sample as Record<string, unknown>)[k])
+    );
     yKeys = numKeys.length > 0 ? numKeys : resultKeys.filter((k) => k !== xKey).slice(0, 1);
   }
   yKeys = yKeys.filter((k) => k !== xKey);

@@ -278,9 +278,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
 
   const processedRows = type === "table" ? getProcessedRowsForChart(rows, chartWidget) : rows;
   const chartConfig = type === "table" ? undefined : buildChartConfig(rows, chartWidget, accentColor);
-  const hasChartData = type === "kpi"
-    ? processedRows.length > 0
-    : type === "table"
+  const hasChartData =
+    type === "kpi" || type === "table" || type === "map"
       ? processedRows.length > 0
       : !!(chartConfig?.labels?.length && (chartConfig.datasets?.length ?? 0) > 0);
 
