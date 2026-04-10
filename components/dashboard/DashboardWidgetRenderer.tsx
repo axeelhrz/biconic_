@@ -1174,6 +1174,7 @@ export function DashboardWidgetRenderer({
         ...(isTableWidget
           ? {
               height: effectiveMinHeight,
+              minHeight: 0,
               display: "flex",
               flexDirection: "column",
             }
@@ -1258,7 +1259,10 @@ export function DashboardWidgetRenderer({
             )}
             {chartType === "table" && Array.isArray(tableRows) && tableRows.length > 0 && (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <div className="min-h-0 flex-1 overflow-auto rounded-md border text-xs" style={{ borderColor: "var(--platform-border)" }}>
+                <div
+                  className="dashboard-widget-table-scroll min-h-0 min-w-0 flex-1 overflow-auto rounded-md border text-xs"
+                  style={{ borderColor: "var(--platform-border)" }}
+                >
                   <table className="w-full min-w-max">
                     <thead>
                       <tr className="border-b text-left" style={{ borderColor: "var(--platform-border)" }}>

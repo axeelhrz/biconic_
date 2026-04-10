@@ -360,6 +360,15 @@
   color: var(--client-text);
 }
 
+[data-theme="client"] .dashboard-widget-table-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
 [data-theme="client"] .client-view-widget-header {
   padding: 0.4rem 0.6rem;
   border-bottom: 1px solid var(--client-border);
