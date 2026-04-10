@@ -109,6 +109,116 @@ function isYearMonthOperator(operator: unknown): boolean {
   return String(operator ?? "").toUpperCase() === "YEAR_MONTH";
 }
 
+function isDayOperator(operator: unknown): boolean {
+  return String(operator ?? "").toUpperCase() === "DAY";
+}
+
+function normFilterFieldKey(field: string): string {
+  return String(field ?? "").trim().toLowerCase();
+}
+
+/** Año y mes (1–12) desde filtros globales/widgets del mismo campo; `m` null si no hay mes elegido. */
+function collectYearMonthForSemanticField(
+  field: string,
+  globalFilters: AggregationFilter[],
+  filterValues: Record<string, unknown>,
+  extraSources?: Array<{ field: string; operator: string; value: unknown }>
+): { y: number; m: number | null } {
+  const nk = normFilterFieldKey(field);
+  const matches = (f: string) => normFilterFieldKey(f) === nk;
+  const list: Array<{ field: string; operator: string; value: unknown }> = [
+    ...globalFilters.map((g) => ({
+      field: g.field,
+      operator: String(g.operator ?? ""),
+      value:
+        filterValues[g.id] !== undefined ? filterValues[g.id] : (g as AggregationFilter & { value?: unknown }).value,
+    })),
+    ...(extraSources ?? []),
+  ];
+  for (const s of list) {
+    if (!matches(s.field)) continue;
+    if (String(s.operator).toUpperCase() !== "YEAR_MONTH") continue;
+    const fv = s.value;
+    if (fv == null || fv === "") continue;
+    const t = String(fv).trim();
+    const ym = /^(\d{4})-(\d{1,2})$/.exec(t);
+    if (ym) {
+      const y = Number(ym[1]);
+      const mo = Number(ym[2]);
+      if (Number.isFinite(y) && y >= 1900 && y <= 2100 && Number.isFinite(mo) && mo >= 1 && mo <= 12) {
+        return { y, m: mo };
+      }
+    }
+  }
+  let y: number | null = null;
+  let mo: number | null = null;
+  for (const s of list) {
+    if (!matches(s.field)) continue;
+    const op = String(s.operator).toUpperCase();
+    const fv = s.value;
+    if (op === "YEAR" && fv != null && fv !== "") {
+      const n = Number(fv);
+      if (Number.isFinite(n) && n >= 1900 && n <= 2100) y = n;
+    }
+    if (op === "MONTH" && fv != null && fv !== "") {
+      const n = Number(String(fv).trim());
+      if (Number.isFinite(n) && n >= 1 && n <= 12) mo = Math.round(n);
+    }
+  }
+  const now = new Date();
+  return { y: y ?? now.getFullYear(), m: mo };
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** Días 1..último del mes según año/mes elegidos en el mismo campo (o 1..31 si no hay mes). */
+function getGlobalDayFilterOptions(
+  field: string,
+  globalFilters: AggregationFilter[],
+  filterValues: Record<string, unknown>
+): number[] {
+  const { y, m } = collectYearMonthForSemanticField(field, globalFilters, filterValues);
+  if (m != null && m >= 1 && m <= 12) {
+    const last = new Date(y, m, 0).getDate();
+    return Array.from({ length: last }, (_, i) => i + 1);
+  }
+  return Array.from({ length: 31 }, (_, i) => i + 1);
+}
+
+function composeDayFilterIsoDate(
+  dayField: string,
+  dayPart: string,
+  globalFilters: AggregationFilter[],
+  filterValues: Record<string, unknown>,
+  extraSources?: Array<{ field: string; operator: string; value: unknown }>
+): string | null {
+  const d = parseInt(String(dayPart).trim(), 10);
+  if (!Number.isFinite(d) || d < 1 || d > 31) return null;
+  const { y, m } = collectYearMonthForSemanticField(dayField, globalFilters, filterValues, extraSources);
+  const monthUse = m ?? new Date().getMonth() + 1;
+  const last = new Date(y, monthUse, 0).getDate();
+  if (d > last) return null;
+  return `${y}-${pad2(monthUse)}-${pad2(d)}`;
+}
+
+/** Valor guardado `YYYY-MM-DD` → número de día para el select. */
+function normalizeDayFilterStoredValueForUi(operator: unknown, v: unknown): unknown {
+  if (!isDayOperator(operator)) return v;
+  if (typeof v !== "string") return v;
+  const t = v.trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+  if (iso) return String(parseInt(iso[3]!, 10));
+  return v;
+}
+
+function dayFilterSelectDisplayValue(operator: unknown, raw: unknown): string {
+  if (!isDayOperator(operator)) return String(raw ?? "");
+  const n = normalizeDayFilterStoredValueForUi(operator, raw);
+  return String(n ?? "");
+}
+
 /** Etiqueta legible para valores distinct tipo YYYY-MM (filtro año/mes). */
 function yearMonthFilterOptionLabel(value: unknown): string {
   const t = String(value ?? "").trim();
@@ -154,9 +264,13 @@ function globalMultiPrevToSelectedStrings(operator: unknown, raw: unknown): stri
     : raw != null && raw !== ""
       ? [String(raw)]
       : [];
-  return isMonthOperator(operator)
-    ? selectedArrayRaw.map((x) => String(normalizeMonthFilterStoredValue(operator, x)))
-    : selectedArrayRaw;
+  if (isMonthOperator(operator)) {
+    return selectedArrayRaw.map((x) => String(normalizeMonthFilterStoredValue(operator, x)));
+  }
+  if (isDayOperator(operator)) {
+    return selectedArrayRaw.map((x) => String(normalizeDayFilterStoredValueForUi(operator, x)));
+  }
+  return selectedArrayRaw;
 }
 
 function globalMultiFilterTriggerLabel(operator: unknown, selected: string[], options: unknown[]): string {
@@ -166,6 +280,7 @@ function globalMultiFilterTriggerLabel(operator: unknown, selected: string[], op
     const match = options.find((o) => String(o) === s);
     const raw = match !== undefined ? match : s;
     if (isYearMonthOperator(operator)) return yearMonthFilterOptionLabel(raw);
+    if (isDayOperator(operator)) return `Día ${raw}`;
     return monthFilterOptionLabel(operator, raw);
   }
   return `${selected.length} seleccionados`;
@@ -358,6 +473,17 @@ export function DashboardViewer({
   const themeMerged = useMemo(() => mergeTheme(dashboardTheme), [dashboardTheme]);
   const accentColor = themeMerged.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor ?? "#0ea5e9";
 
+  const globalFilterDateMeta = useMemo(() => {
+    const dataSources = (etlData as { dataSources?: { id: string; fields?: { date?: string[] } }[]; primarySourceId?: string })
+      ?.dataSources;
+    const primarySourceId =
+      (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id ?? "";
+    const primaryDateFields =
+      dataSources?.[0]?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
+    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
+    return { primarySourceId, primaryDateFields, datasetDimensions };
+  }, [etlData]);
+
   /** Solo rehidratar layout/valores de filtro cuando cambia el layout guardado, no por nueva referencia de `etlData`. */
   const layoutFingerprint = useMemo(() => {
     if (initialWidgets?.length) return "__initial_props__";
@@ -398,6 +524,7 @@ export function DashboardViewer({
             (gf as AggregationFilter).inputType,
             v
           );
+          v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
           initialFv[gf.id] = v;
         }
         setFilterValues(initialFv);
@@ -473,6 +600,7 @@ export function DashboardViewer({
         (gf as AggregationFilter).inputType,
         v
       );
+      v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
       initialFv[gf.id] = v;
     }
     setFilterValues(initialFv);
@@ -522,6 +650,9 @@ export function DashboardViewer({
                 [gf.id]: [...GLOBAL_MONTH_FILTER_VALUES],
               }));
             }
+            continue;
+          }
+          if (filterOp === "DAY" && isDateField) {
             continue;
           }
           const body: { tableName: string; field: string; limit: number; transform?: string } = {
@@ -658,6 +789,14 @@ export function DashboardViewer({
             .map((w) => String((w as { filterConfig?: { field?: string } }).filterConfig?.field ?? ""))
         );
 
+        const pageSourcesForDay = stateRef.current.widgets
+          .filter((w) => w.type === "filter" && (w as Widget).filterConfig?.field && pageOf(w) === targetPage)
+          .map((w) => ({
+            field: (w as Widget).filterConfig!.field!,
+            operator: String((w as Widget).filterConfig!.operator ?? "="),
+            value: filterValues[w.id],
+          }));
+
         const mappedGlobalFilters: AggregationFilter[] = [];
         if (!(widget as Widget & { excludeGlobalFilters?: boolean }).excludeGlobalFilters) {
           for (const f of globalFilters) {
@@ -674,6 +813,24 @@ export function DashboardViewer({
             const inputT = f.inputType;
             if (rawOpUpper === "YEAR" && Array.isArray(v) && v.length > 0 && inputT !== "multi") {
               v = v[0];
+            }
+            if (rawOpUpper === "DAY") {
+              if (Array.isArray(v)) {
+                const mappedIso = (v as unknown[])
+                  .map((part) =>
+                    composeDayFilterIsoDate(f.field, String(part), globalFilters, filterValues, pageSourcesForDay)
+                  )
+                  .filter((x): x is string => x != null);
+                if (mappedIso.length === 0) continue;
+                v = mappedIso;
+              } else {
+                const t = String(v).trim();
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) {
+                  const iso = composeDayFilterIsoDate(f.field, t, globalFilters, filterValues, pageSourcesForDay);
+                  if (iso == null) continue;
+                  v = iso;
+                }
+              }
             }
             const isSemantic = datasetDimensions && f.field in datasetDimensions;
             if (isSemantic && widgetSourceId && !datasetDimensions![f.field]?.[widgetSourceId]) continue;
@@ -702,6 +859,24 @@ export function DashboardViewer({
           const rawOpFwUpper = String(rawOpFw).toUpperCase();
           if (rawOpFwUpper === "YEAR" && Array.isArray(v) && v.length > 0 && fc.inputType !== "multi") {
             v = v[0];
+          }
+          if (rawOpFwUpper === "DAY") {
+            if (Array.isArray(v)) {
+              const mappedIsoW = (v as unknown[])
+                .map((part) =>
+                  composeDayFilterIsoDate(fc.field, String(part), globalFilters, filterValues, pageSourcesForDay)
+                )
+                .filter((x): x is string => x != null);
+              if (mappedIsoW.length === 0) continue;
+              v = mappedIsoW;
+            } else {
+              const tw = String(v).trim();
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(tw)) {
+                const isoW = composeDayFilterIsoDate(fc.field, tw, globalFilters, filterValues, pageSourcesForDay);
+                if (isoW == null) continue;
+                v = isoW;
+              }
+            }
           }
           const scopeIds = fc.scopeMetricIds;
           if (Array.isArray(scopeIds) && scopeIds.length > 0) {
@@ -1194,12 +1369,20 @@ export function DashboardViewer({
         >
           {globalFilters.map((gf) => {
             const label = (gf as any).label || gf.field;
+            const physicalGf =
+              globalFilterDateMeta.datasetDimensions?.[gf.field!]?.[globalFilterDateMeta.primarySourceId] ??
+              gf.field!;
+            const isDateFieldGf = globalFilterDateMeta.primaryDateFields.some(
+              (d: string) => (d || "").toLowerCase() === String(physicalGf || "").toLowerCase()
+            );
             const rawDistinct = (globalFilterDistinctValues[gf.id] ?? (gf as any).distinctValues) as unknown[] | undefined;
             const options = isMonthOperator((gf as AggregationFilter).operator)
               ? Array.isArray(rawDistinct) && rawDistinct.length > 0
                 ? rawDistinct
                 : [...GLOBAL_MONTH_FILTER_VALUES]
-              : rawDistinct;
+              : isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf
+                ? getGlobalDayFilterOptions(gf.field!, globalFilters, filterValues)
+                : rawDistinct;
             const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
             const isYearOp = isYearOperator((gf as AggregationFilter).operator);
             const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
@@ -1301,7 +1484,9 @@ export function DashboardViewer({
                               <span>
                                 {isYearMonthOp
                                   ? yearMonthFilterOptionLabel(v)
-                                  : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
+                                  : isDayOperator((gf as AggregationFilter).operator)
+                                    ? `Día ${v}`
+                                    : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
                               </span>
                             </label>
                           );
@@ -1309,7 +1494,11 @@ export function DashboardViewer({
                       </div>
                     </PopoverContent>
                   </Popover>
-                ) : (((gf as any).inputType === "select" || isYearOp || isYearMonthOp) && hasOptions) ? (
+                ) : (((gf as any).inputType === "select" ||
+                  isYearOp ||
+                  isYearMonthOp ||
+                  (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf)) &&
+                  hasOptions) ? (
                   <select
                     className="rounded-md border px-2 py-1 text-sm min-w-[8rem]"
                     style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
@@ -1318,7 +1507,9 @@ export function DashboardViewer({
                         ? yearFilterSelectDisplayValue(filterValues[gf.id])
                         : isYearMonthOp
                           ? String(filterValues[gf.id] ?? "")
-                          : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, filterValues[gf.id])
+                          : isDayOperator((gf as AggregationFilter).operator)
+                            ? dayFilterSelectDisplayValue((gf as AggregationFilter).operator, filterValues[gf.id])
+                            : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, filterValues[gf.id])
                     }
                     onChange={(e) => setFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value }))}
                   >
@@ -1327,7 +1518,9 @@ export function DashboardViewer({
                       <option key={String(v)} value={String(v)}>
                         {isYearMonthOp
                           ? yearMonthFilterOptionLabel(v)
-                          : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
+                          : isDayOperator((gf as AggregationFilter).operator)
+                            ? `Día ${v}`
+                            : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
                       </option>
                     ))}
                   </select>
