@@ -361,7 +361,8 @@
 }
 
 [data-theme="client"] .dashboard-widget-table-scroll {
-  flex: 1 1 0;
+  /* flex-basis 0 + flex anidado podía dejar altura 0 en la zona scroll */
+  flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   overflow: auto;

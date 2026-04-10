@@ -1174,7 +1174,7 @@ export function DashboardWidgetRenderer({
         ...(isTableWidget
           ? {
               height: effectiveMinHeight,
-              minHeight: 0,
+              minHeight: effectiveMinHeight,
               display: "flex",
               flexDirection: "column",
             }
