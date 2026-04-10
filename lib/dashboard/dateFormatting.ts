@@ -161,6 +161,38 @@ export function parseIsoYearMonthForLabel(value: unknown): { year: number; month
 }
 
 /**
+ * `d/m/y` ambiguo (ambos tokens ≤12): en agregación mensual suele guardarse el **día 1** del mes.
+ * Elige DMY o MDY según cuál interpretación cae en el día 1 UTC; si ambas o ninguna, usa `parseOpts`.
+ */
+export function resolveMonthYearFromAmbiguousSlash(
+  raw: string,
+  parseOpts?: ParseDateLikeOptions
+): { year: number; month: number } | null {
+  const t = raw.trim();
+  const slash = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!slash) return null;
+  const a = Number(slash[1]);
+  const b = Number(slash[2]);
+  const y = Number(slash[3]);
+  if (![a, b, y].every((n) => Number.isFinite(n))) return null;
+  if (a > 12 || b > 12) return null;
+  const dmy = parseDateLike(t, { slashDateOrder: "DMY" });
+  const mdy = parseDateLike(t, { slashDateOrder: "MDY" });
+  if (!dmy || !mdy) return null;
+  const dmyFirst = dmy.getUTCDate() === 1;
+  const mdyFirst = mdy.getUTCDate() === 1;
+  if (dmyFirst && !mdyFirst) {
+    return { year: dmy.getUTCFullYear(), month: dmy.getUTCMonth() + 1 };
+  }
+  if (mdyFirst && !dmyFirst) {
+    return { year: mdy.getUTCFullYear(), month: mdy.getUTCMonth() + 1 };
+  }
+  const preferred = parseDateLike(t, parseOpts);
+  if (!preferred) return null;
+  return { year: preferred.getUTCFullYear(), month: preferred.getUTCMonth() + 1 };
+}
+
+/**
  * Formatea valores de eje / etiqueta temporal según el formato de visualización elegido en el análisis.
  * Si `displayFormat` es undefined, usa `formatDateByGranularity`.
  */
@@ -177,6 +209,20 @@ export function formatAnalysisDateForChart(
   if (displayFormat === "monthYear") {
     const ymp = parseIsoYearMonthForLabel(value);
     if (ymp) return `${MONTH_NAMES_SHORT[ymp.month - 1] ?? ""} ${ymp.year}`.trim();
+    if (typeof value === "string") {
+      const slashYmp = resolveMonthYearFromAmbiguousSlash(value, parseOpts);
+      if (slashYmp) return `${MONTH_NAMES_SHORT[slashYmp.month - 1] ?? ""} ${slashYmp.year}`.trim();
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const ms = value > 1e12 ? value : value * 1000;
+      const nd = new Date(ms);
+      if (!Number.isNaN(nd.getTime())) {
+        return `${MONTH_NAMES_SHORT[nd.getUTCMonth()] ?? ""} ${nd.getUTCFullYear()}`.trim();
+      }
+    }
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      return `${MONTH_NAMES_SHORT[value.getUTCMonth()] ?? ""} ${value.getUTCFullYear()}`.trim();
+    }
   }
   const dt = parseDateLike(value, parseOpts);
   if (!dt) return fallback ?? null;

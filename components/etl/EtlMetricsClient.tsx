@@ -31,6 +31,7 @@ import {
   formatDateByGranularity,
   parseDateLike,
   parseIsoYearMonthForLabel,
+  resolveMonthYearFromAmbiguousSlash,
   type DateGranularity,
 } from "@/lib/dashboard/dateFormatting";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
@@ -1362,10 +1363,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         if (byGranularity != null) return byGranularity;
       }
       if (analysisDateFormat === "monthYear") {
+        const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
         const ymp = parseIsoYearMonthForLabel(value);
-        if (ymp) {
-          const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-          return `${months[ymp.month - 1] ?? ""} ${ymp.year}`.trim();
+        if (ymp) return `${months[ymp.month - 1] ?? ""} ${ymp.year}`.trim();
+        if (typeof value === "string") {
+          const slashYmp = resolveMonthYearFromAmbiguousSlash(value, parseOpts);
+          if (slashYmp) return `${months[slashYmp.month - 1] ?? ""} ${slashYmp.year}`.trim();
         }
       }
       const date = parseDateLike(value, parseOpts);

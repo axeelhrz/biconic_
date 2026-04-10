@@ -992,6 +992,20 @@ export function DashboardWidgetRenderer({
       const categoryLabels = chartConfig?.labels ?? [];
       const formatCategoryAxisTick = (value: unknown, tickIndex: number): string => {
         if (categoryLabels.length === 0) return formatTemporalLabel(value);
+        const s = String(value ?? "").trim();
+        const looksLikeDateToken =
+          /^\d{4}-\d{1,2}/.test(s) ||
+          /^\d{4}-\d{1,2}-\d{1,2}/.test(s) ||
+          /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s) ||
+          /^\d{1,2}\/\d{4}$/.test(s);
+        if (looksLikeDateToken) {
+          const found = categoryLabels.findIndex((lab) => String(lab).trim() === s);
+          if (found >= 0) return formatTemporalLabel(categoryLabels[found]);
+          if (Number.isFinite(tickIndex) && tickIndex >= 0 && tickIndex < categoryLabels.length) {
+            return formatTemporalLabel(categoryLabels[tickIndex]);
+          }
+          return formatTemporalLabel(s || value);
+        }
         let idx = -1;
         if (typeof value === "number" && Number.isFinite(value)) idx = Math.trunc(value);
         else {
@@ -999,7 +1013,6 @@ export function DashboardWidgetRenderer({
           if (Number.isFinite(n)) idx = Math.trunc(n);
         }
         if (idx >= 0 && idx < categoryLabels.length) return formatTemporalLabel(categoryLabels[idx]);
-        const s = String(value ?? "");
         const found = categoryLabels.indexOf(s);
         if (found >= 0) return formatTemporalLabel(categoryLabels[found]);
         if (Number.isFinite(tickIndex) && tickIndex >= 0 && tickIndex < categoryLabels.length) {
