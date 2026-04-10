@@ -44,6 +44,7 @@ import {
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { DashboardTextWidget } from "./DashboardTextWidget";
@@ -295,11 +296,10 @@ export function DashboardWidgetRenderer({
   showTechnicalPreview = false,
 }: DashboardWidgetRendererProps) {
   const effectiveMinHeight = widget.minHeight ?? minHeight;
-  const chartType = useMemo(() => {
-    const aggType = String((widget.aggregationConfig as { chartType?: string } | undefined)?.chartType ?? "").trim() as WidgetChartType;
-    if (widget.type === "filter" || widget.type === "text" || widget.type === "image" || widget.type === "map") return widget.type;
-    return (aggType || widget.type) as WidgetChartType;
-  }, [widget.type, widget.aggregationConfig]);
+  const chartType = useMemo(
+    () => effectiveWidgetChartType(widget) as WidgetChartType,
+    [widget.type, widget.aggregationConfig]
+  );
   const isTableWidget = chartType === "table";
   const chartConfig = widget.config;
   const tableRows = widget.rows;

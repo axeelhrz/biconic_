@@ -4,6 +4,7 @@ import {
   compactGeoOverridesByXLabelForRequest,
 } from "@/lib/geo/geo-enrichment";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget, type ChartConfig } from "@/lib/dashboard/buildChartConfig";
+import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 import { resolveWidgetAggregationForDisplay } from "@/lib/dashboard/widgetRenderParity";
 
 type AggregationMetric = {
@@ -158,8 +159,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
   } = params;
 
   const agg = widget.aggregationConfig;
-  /** Paridad con buildChartConfig (agg.chartType gana sobre type del nodo). Evita pedir/renderizar como "bar" cuando el layout guardó solo chartType horizontalBar, etc. */
-  const type = String(agg?.chartType ?? widget.type ?? "bar").trim() || "bar";
+  /** Paridad con `DashboardWidgetRenderer`: evita `chartType: ""` → forzar "bar" y vaciar filas en vista previa. */
+  const type = effectiveWidgetChartType(widget);
   const hasAgg = !!(agg?.enabled && (agg.metrics?.length ?? 0) > 0);
 
   let rows: Record<string, unknown>[] = [];
