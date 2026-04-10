@@ -211,8 +211,9 @@ export function resolveWidgetAxisKeys(
     const valueType = typeof (sample as Record<string, unknown>)[k];
     return valueType === "string" || valueType === "number";
   });
+  /** Misma inferencia que barras verticales: sin esto, horizontalBar queda sin eje categoría si dim/chartXAxis no matchean filas (vista previa / API con nombres físicos). */
   const xKey = isHorizontalBar
-    ? chartXAxisKey ?? explicitDimensionKey
+    ? chartXAxisKey ?? explicitDimensionKey ?? inferredDimensionKey
     : chartXAxisKey ?? explicitDimensionKey ?? inferredDimensionKey ?? resultKeys[0];
   let yKeys: string[] = [];
   const hasExplicitYAxes = Array.isArray(agg?.chartYAxes) && agg.chartYAxes.length > 0;

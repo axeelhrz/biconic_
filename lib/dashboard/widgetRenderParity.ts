@@ -304,5 +304,19 @@ export function resolveWidgetAggregationForDisplay<
     const m = mapKey(agg.dateDimension) ?? orig;
     if (m) next.dateDimension = pickKeyInRow(m, orig);
   }
+  if (typeof agg.chartRankingMetric === "string") {
+    const orig = String(agg.chartRankingMetric).trim();
+    if (orig) {
+      const m = mapKey(agg.chartRankingMetric) ?? orig;
+      next.chartRankingMetric = pickKeyInRow(m, orig);
+    }
+  }
+  if (typeof agg.chartSortByMetric === "string") {
+    const orig = String(agg.chartSortByMetric).trim();
+    if (orig) {
+      const m = mapKey(agg.chartSortByMetric) ?? orig;
+      next.chartSortByMetric = pickKeyInRow(m, orig);
+    }
+  }
   return { ...widget, aggregationConfig: next as W["aggregationConfig"] };
 }

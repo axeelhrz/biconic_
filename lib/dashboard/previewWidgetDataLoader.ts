@@ -157,8 +157,9 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     rawExtraPayload,
   } = params;
 
-  const type = widget.type ?? "bar";
   const agg = widget.aggregationConfig;
+  /** Paridad con buildChartConfig (agg.chartType gana sobre type del nodo). Evita pedir/renderizar como "bar" cuando el layout guardó solo chartType horizontalBar, etc. */
+  const type = String(agg?.chartType ?? widget.type ?? "bar").trim() || "bar";
   const hasAgg = !!(agg?.enabled && (agg.metrics?.length ?? 0) > 0);
 
   let rows: Record<string, unknown>[] = [];
