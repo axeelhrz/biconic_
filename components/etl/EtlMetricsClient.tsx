@@ -30,6 +30,7 @@ import {
   dateSlashOrderForNamedColumn,
   formatDateByGranularity,
   parseDateLike,
+  parseIsoYearMonthForLabel,
   type DateGranularity,
 } from "@/lib/dashboard/dateFormatting";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
@@ -1359,6 +1360,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (isDateCol && normalizedGranularity) {
         const byGranularity = formatDateByGranularity(value, normalizedGranularity, undefined, parseOpts);
         if (byGranularity != null) return byGranularity;
+      }
+      if (analysisDateFormat === "monthYear") {
+        const ymp = parseIsoYearMonthForLabel(value);
+        if (ymp) {
+          const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+          return `${months[ymp.month - 1] ?? ""} ${ymp.year}`.trim();
+        }
       }
       const date = parseDateLike(value, parseOpts);
       if (!date) return null;

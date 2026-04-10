@@ -141,6 +141,26 @@ export type AnalysisDateDisplayFormat = "short" | "monthYear" | "year" | "dateti
 const MONTH_NAMES_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
 /**
+ * Extrae año y mes desde `YYYY-MM` o prefijo `YYYY-MM-DD` / ISO (`…T…`), sin `Date`.
+ * Así las etiquetas "Mes año" no dependen de zonas horarias ni de `new Date(string)` ambiguos.
+ */
+export function parseIsoYearMonthForLabel(value: unknown): { year: number; month: number } | null {
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  const m = /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?(?:[Tt ].*)?$/.exec(raw);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return null;
+  if (m[3] != null) {
+    const day = Number(m[3]);
+    if (!Number.isFinite(day) || day < 1 || day > 31) return null;
+  }
+  return { year, month };
+}
+
+/**
  * Formatea valores de eje / etiqueta temporal según el formato de visualización elegido en el análisis.
  * Si `displayFormat` es undefined, usa `formatDateByGranularity`.
  */
@@ -153,6 +173,10 @@ export function formatAnalysisDateForChart(
 ): string | null {
   if (displayFormat == null) {
     return formatDateByGranularity(value, granularity, fallback, parseOpts);
+  }
+  if (displayFormat === "monthYear") {
+    const ymp = parseIsoYearMonthForLabel(value);
+    if (ymp) return `${MONTH_NAMES_SHORT[ymp.month - 1] ?? ""} ${ymp.year}`.trim();
   }
   const dt = parseDateLike(value, parseOpts);
   if (!dt) return fallback ?? null;
