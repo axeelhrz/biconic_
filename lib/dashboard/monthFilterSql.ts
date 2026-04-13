@@ -4,7 +4,12 @@
  */
 export function buildMonthFilterSqlClause(fieldExpression: string, value: unknown): string {
   const yearMonthClause = (raw: string): string | null => {
-    const match = /^(\d{4})-(\d{1,2})$/.exec(String(raw ?? "").trim());
+    const t = String(raw ?? "").trim();
+    let match = /^(\d{4})-(\d{1,2})$/.exec(t);
+    if (!match) {
+      // Distinct/API: "2025-04-01", ISO con hora, etc. → usar año-mes del prefijo.
+      match = /^(\d{4})-(\d{1,2})(?:-\d{1,2})?(?:[Tt ].*)?$/.exec(t);
+    }
     if (!match) return null;
     const y = parseInt(match[1]!, 10);
     const m = parseInt(match[2]!, 10);

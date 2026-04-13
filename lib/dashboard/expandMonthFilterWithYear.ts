@@ -12,6 +12,10 @@ export const DATE_OPERATORS_WITH_MULTI_VALUE_SQL = new Set([
 
 const YM_RE = /^(\d{4})-(\d{1,2})$/;
 
+function normFieldKey(field: string): string {
+  return String(field ?? "").trim().toLowerCase();
+}
+
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -57,9 +61,11 @@ export function expandMonthFilterValueWithYear(
   if (parts.length === 0) return rawVal;
 
   const monthNums: number[] = [];
+  const ctxField = normFieldKey(ctx.field);
   for (const p of parts) {
     const s = String(p ?? "").trim();
-    if (YM_RE.test(s)) {
+    // Ya viene año-mes explícito (distinct YYYY-MM o fecha ISO) → no mezclar con expansión 1–12 + YEAR.
+    if (YM_RE.test(s) || /^\d{4}-\d{1,2}(?:-\d{1,2})?(?:[Tt ].*)?$/.test(s)) {
       return rawVal;
     }
     const n = Number(p);
@@ -72,7 +78,7 @@ export function expandMonthFilterValueWithYear(
   const uniqueMonths = [...new Set(monthNums)];
 
   const yearFilter = globalFilters.find(
-    (g) => g.field === ctx.field && String(g.operator ?? "").toUpperCase() === "YEAR"
+    (g) => normFieldKey(g.field) === ctxField && String(g.operator ?? "").toUpperCase() === "YEAR"
   );
   if (!yearFilter) return rawVal;
 
@@ -101,10 +107,11 @@ export function expandMonthValueWithYearFromFilters(
   const parts = Array.isArray(monthValue) ? monthValue : [monthValue];
   if (parts.length === 0) return monthValue;
 
+  const fk = normFieldKey(field);
   const monthNums: number[] = [];
   for (const p of parts) {
     const s = String(p ?? "").trim();
-    if (YM_RE.test(s)) return monthValue;
+    if (YM_RE.test(s) || /^\d{4}-\d{1,2}(?:-\d{1,2})?(?:[Tt ].*)?$/.test(s)) return monthValue;
     const n = Number(p);
     if (Number.isFinite(n) && n >= 1 && n <= 12) monthNums.push(Math.round(n));
     else return monthValue;
@@ -113,7 +120,7 @@ export function expandMonthValueWithYearFromFilters(
   const uniqueMonths = [...new Set(monthNums)];
 
   const yearFilter = allFilters.find(
-    (g) => g.field === field && String(g.operator ?? "").toUpperCase() === "YEAR"
+    (g) => normFieldKey(g.field) === fk && String(g.operator ?? "").toUpperCase() === "YEAR"
   );
   if (!yearFilter || yearFilter.value === "" || yearFilter.value == null) return monthValue;
 
