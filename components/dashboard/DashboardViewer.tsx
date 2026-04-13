@@ -43,6 +43,7 @@ import {
   DATE_OPERATORS_WITH_MULTI_VALUE_SQL,
   expandMonthFilterValueWithYear,
 } from "@/lib/dashboard/expandMonthFilterWithYear";
+import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
 
 /** Meses 1–12 para filtro global MONTH (sin año en la UI). */
 const GLOBAL_MONTH_FILTER_VALUES = [
@@ -888,9 +889,15 @@ export function DashboardViewer({
               if (v === "" || v == null) continue;
               if (Array.isArray(v) && v.length === 0) continue;
             }
-            const isSemantic = datasetDimensions && f.field in datasetDimensions;
-            if (isSemantic && widgetSourceId && !datasetDimensions![f.field]?.[widgetSourceId]) continue;
-            const physicalField = mapDatasetField(f.field);
+            const physicalField = resolveAggregationFilterPhysicalField({
+              filterSemanticOrPhysicalField: f.field,
+              operatorUpper: rawOpUpper,
+              datasetDimensions,
+              sourceId: widgetSourceId,
+              agg: aggConfig ?? null,
+              mapDatasetField,
+            });
+            if (physicalField == null) continue;
             const useIn =
               rawOp === "IN" ||
               (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper) &&
@@ -953,9 +960,15 @@ export function DashboardViewer({
               (mid !== "" && allowed.has(mid)) || mids.some((id) => allowed.has(String(id)));
             if (!applies) continue;
           }
-          const isSemanticFw = datasetDimensions && fc.field in datasetDimensions;
-          if (isSemanticFw && widgetSourceId && !datasetDimensions![fc.field]?.[widgetSourceId]) continue;
-          const physicalFw = mapDatasetField(fc.field);
+          const physicalFw = resolveAggregationFilterPhysicalField({
+            filterSemanticOrPhysicalField: fc.field,
+            operatorUpper: rawOpFwUpper,
+            datasetDimensions,
+            sourceId: widgetSourceId,
+            agg: aggConfig ?? null,
+            mapDatasetField,
+          });
+          if (physicalFw == null) continue;
           const useInFw =
             rawOpFw === "IN" ||
             (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpFwUpper) &&

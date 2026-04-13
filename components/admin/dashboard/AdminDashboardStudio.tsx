@@ -59,6 +59,7 @@ import {
   DATE_OPERATORS_WITH_MULTI_VALUE_SQL,
   expandMonthFilterValueWithYear,
 } from "@/lib/dashboard/expandMonthFilterWithYear";
+import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
 import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
@@ -708,9 +709,15 @@ export function AdminDashboardStudio({
             }
             if (v === "" || v == null) continue;
             if (Array.isArray(v) && v.length === 0) continue;
-            const isSemantic = datasetDimensions && f.field in datasetDimensions;
-            if (isSemantic && sourceId && !datasetDimensions![f.field]?.[sourceId]) continue;
-            const physicalField = mapDatasetField(f.field);
+            const physicalField = resolveAggregationFilterPhysicalField({
+              filterSemanticOrPhysicalField: f.field,
+              operatorUpper: rawOpUpper,
+              datasetDimensions,
+              sourceId,
+              agg: agg ?? null,
+              mapDatasetField,
+            });
+            if (physicalField == null) continue;
             const useIn =
               rawOp === "IN" ||
               (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper) &&
