@@ -74,6 +74,14 @@ export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): D
     return safeDateFromParts(year, month, 1);
   }
 
+  // MM-yyyy (mismo significado; no confundir con yyyy-MM ni con d-m-y)
+  const myHyphen = raw.match(/^(\d{1,2})-(\d{4})$/);
+  if (myHyphen) {
+    const month = Number(myHyphen[1]);
+    const year = Number(myHyphen[2]);
+    return safeDateFromParts(year, month, 1);
+  }
+
   // yyyy-MM (periodo mes; inequívoco frente a dd/MM vs MM/dd)
   const ym = raw.match(/^(\d{4})-(\d{1,2})$/);
   if (ym) {
@@ -88,6 +96,15 @@ export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): D
     const a = Number(slash[1]);
     const b = Number(slash[2]);
     const year = Number(slash[3]);
+    return parseAmbiguousSlashDate(a, b, year, slashOrder);
+  }
+
+  // d-m-y o m-d-y (evita new Date(), que suele tratar 01-08-2024 como 8 ene en MDY)
+  const hyphenFull = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (hyphenFull) {
+    const a = Number(hyphenFull[1]);
+    const b = Number(hyphenFull[2]);
+    const year = Number(hyphenFull[3]);
     return parseAmbiguousSlashDate(a, b, year, slashOrder);
   }
 
@@ -155,10 +172,22 @@ function parseSlashMonthYearForLabel(raw: string): { year: number; month: number
     const year = Number(my[2]);
     if (month >= 1 && month <= 12 && year >= 1000 && year <= 9999) return { year, month };
   }
+  const myH = /^(\d{1,2})-(\d{4})$/.exec(t);
+  if (myH) {
+    const month = Number(myH[1]);
+    const year = Number(myH[2]);
+    if (month >= 1 && month <= 12 && year >= 1000 && year <= 9999) return { year, month };
+  }
   const ym = /^(\d{4})\/(\d{1,2})$/.exec(t);
   if (ym) {
     const year = Number(ym[1]);
     const month = Number(ym[2]);
+    if (month >= 1 && month <= 12 && year >= 1000 && year <= 9999) return { year, month };
+  }
+  const ymH = /^(\d{4})-(\d{1,2})$/.exec(t);
+  if (ymH) {
+    const year = Number(ymH[1]);
+    const month = Number(ymH[2]);
     if (month >= 1 && month <= 12 && year >= 1000 && year <= 9999) return { year, month };
   }
   return null;
@@ -190,10 +219,12 @@ export function resolveMonthYearFromAmbiguousSlash(
 ): { year: number; month: number } | null {
   const t = raw.trim();
   const slash = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!slash) return null;
-  const a = Number(slash[1]);
-  const b = Number(slash[2]);
-  const y = Number(slash[3]);
+  const hyphen = slash ? null : t.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  const parts = slash ?? hyphen;
+  if (!parts) return null;
+  const a = Number(parts[1]);
+  const b = Number(parts[2]);
+  const y = Number(parts[3]);
   if (![a, b, y].every((n) => Number.isFinite(n))) return null;
   if (a > 12 || b > 12) return null;
   const dmy = parseDateLike(t, { slashDateOrder: "DMY" });
