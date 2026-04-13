@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import type { DashboardTheme } from "@/types/dashboard";
 import { mergeCardTheme, mergeTheme } from "@/types/dashboard";
 import { X, Trash2, Play, BookmarkPlus, Plus, Loader2 } from "lucide-react";
@@ -25,6 +25,11 @@ import {
 import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
 import { CONTENT_ICON_POSITION_OPTIONS, type ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
 import type { ChartLabelDisplayMode, ChartPercentBasis } from "@/lib/dashboard/chartOptions";
+import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import {
+  ChartLabelOverridesSection,
+  ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS,
+} from "@/components/admin/dashboard/ChartLabelOverridesSection";
 
 export type MetricConditionEdit = {
   field: string;
@@ -126,6 +131,10 @@ export type AggregationConfigEdit = {
   chartStackBySeries?: boolean;
   /** Si la dimensión es una columna fecha, agrupar por este nivel. */
   dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
+  /** Cómo mostrar fechas en el eje (paridad con análisis / buildChartConfig). */
+  analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
+  /** Fechas con `/` ambiguas: DMY vs MDY. */
+  dateSlashOrder?: "DMY" | "MDY";
   geoHints?: {
     countryField?: string;
     provinceField?: string;
@@ -317,6 +326,43 @@ export function MetricConfigPanel({
     (s) => s.id === (widget.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id)
   );
   const fields = selectedSource?.fields?.all ?? etlData?.fields?.all ?? [];
+  const dateFieldList = selectedSource?.fields?.date ?? etlData?.fields?.date ?? [];
+  const isDimensionDateField =
+    !!agg.dimension &&
+    dateFieldList.some((d: string) => (d || "").toLowerCase() === String(agg.dimension || "").toLowerCase());
+  const previewAxisRawValues = useMemo(() => {
+    if (!previewRows?.length || !agg.enabled || !showLabelOverrides) return [];
+    const w: BuildChartConfigWidget = {
+      type: widget.type,
+      aggregationConfig: {
+        ...agg,
+        chartType: (agg.chartType as string) || widget.type,
+        enabled: true,
+      },
+      color: widget.color,
+    };
+    const axis = resolveWidgetAxisKeys(previewRows, w);
+    if (!axis) return [];
+    const uniq = new Set<string>();
+    for (const row of previewRows) {
+      const v = (row as Record<string, unknown>)[axis.xKey];
+      const s = String(v ?? "").trim();
+      if (s) uniq.add(s);
+    }
+    return [...uniq].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [previewRows, widget.type, widget.color, chartType, agg, showLabelOverrides]);
+  const fillChartLabelOverridesFromPreview = useCallback(() => {
+    const next = { ...(agg.chartLabelOverrides ?? {}) };
+    for (const raw of previewAxisRawValues) {
+      if (!Object.prototype.hasOwnProperty.call(next, raw)) next[raw] = raw;
+    }
+    onUpdate({
+      aggregationConfig: {
+        ...agg,
+        chartLabelOverrides: Object.keys(next).length ? next : undefined,
+      },
+    });
+  }, [agg, previewAxisRawValues, onUpdate]);
 
   const updateAgg = (patch: Partial<AggregationConfigEdit>) => {
     onUpdate({
@@ -2095,21 +2141,57 @@ export function MetricConfigPanel({
                         fieldType="all"
                         placeholder="Campo..."
                       />
-                      {agg.dimension && (etlData?.dataSources?.find((s) => s.id === (widget.dataSourceId ?? etlData?.primarySourceId))?.fields?.date ?? etlData?.fields?.date ?? []).some((d: string) => (d || "").toLowerCase() === (agg.dimension || "").toLowerCase()) && (
-                        <div>
-                          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Nivel de fecha (agrupar por)</Label>
-                          <select
-                            value={agg.dateGroupByGranularity ?? "month"}
-                            onChange={(e) => updateAgg({ dateGroupByGranularity: e.target.value as "day" | "month" | "quarter" | "semester" | "year" })}
-                            className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-                          >
-                            <option value="day">Día</option>
-                            <option value="week">Semana</option>
-                            <option value="month">Mes</option>
-                            <option value="quarter">Trimestre</option>
-                            <option value="semester">Semestre</option>
-                            <option value="year">Año</option>
-                          </select>
+                      {isDimensionDateField && (
+                        <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)]/30 p-3">
+                          <div>
+                            <Label className="text-[11px] text-[var(--studio-fg-muted)]">Nivel de fecha (agrupar por)</Label>
+                            <select
+                              value={agg.dateGroupByGranularity ?? "month"}
+                              onChange={(e) =>
+                                updateAgg({ dateGroupByGranularity: e.target.value as "day" | "month" | "quarter" | "semester" | "year" })
+                              }
+                              className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
+                            >
+                              <option value="day">Día</option>
+                              <option value="week">Semana</option>
+                              <option value="month">Mes</option>
+                              <option value="quarter">Trimestre</option>
+                              <option value="semester">Semestre</option>
+                              <option value="year">Año</option>
+                            </select>
+                          </div>
+                          <div>
+                            <Label className="text-[11px] text-[var(--studio-fg-muted)]">Formato de etiquetas de fecha</Label>
+                            <select
+                              value={agg.analysisDateDisplayFormat ?? ""}
+                              onChange={(e) =>
+                                updateAgg({
+                                  analysisDateDisplayFormat: (e.target.value || undefined) as AggregationConfigEdit["analysisDateDisplayFormat"],
+                                })
+                              }
+                              className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
+                            >
+                              {ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS.map((o) => (
+                                <option key={o.value || "default"} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="mt-1 text-[10px] text-[var(--studio-fg-muted)]">
+                              Si un mes se ve mal con «Mes y año», probá «Predeterminado» o «Corta»; podés corregir cada valor abajo.
+                            </p>
+                          </div>
+                          <div>
+                            <Label className="text-[11px] text-[var(--studio-fg-muted)]">Fechas texto con / (import ambiguo)</Label>
+                            <select
+                              value={agg.dateSlashOrder ?? "DMY"}
+                              onChange={(e) => updateAgg({ dateSlashOrder: e.target.value as "DMY" | "MDY" })}
+                              className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
+                            >
+                              <option value="DMY">DD/MM/YYYY (día primero)</option>
+                              <option value="MDY">MM/DD/YYYY (mes primero, US)</option>
+                            </select>
+                          </div>
                         </div>
                       )}
                       <AdminFieldSelector
@@ -2391,6 +2473,29 @@ export function MetricConfigPanel({
                           ))}
                         </div>
                       </div>
+                      {showLabelOverrides && (
+                        <div className="border-t border-[var(--studio-border)] pt-4">
+                          <ChartLabelOverridesSection
+                            title={isDimensionDateField ? "Texto manual del eje (fechas y categorías)" : "Renombrar etiquetas en el gráfico"}
+                            description={
+                              isDimensionDateField
+                                ? "La columna izquierda debe coincidir con el valor exacto que devuelve la API (ej. 2025-04 o 2025-04-01). La derecha es lo que verás en el gráfico. Cargá datos con «Actualizar» y usá «Rellenar desde vista previa»."
+                                : "Reemplazá el valor que viene de los datos por el texto a mostrar (eje X, porciones, leyenda)."
+                            }
+                            entries={labelOverridesEntries}
+                            rawDrafts={labelOverrideRawDrafts}
+                            onRawDraftChange={(rawKey, value) =>
+                              setLabelOverrideRawDrafts((prev) => ({ ...prev, [rawKey]: value }))
+                            }
+                            onCommitRawDraft={commitLabelOverrideRawDraft}
+                            onDisplayChange={(rawKey, display) => setLabelOverride(rawKey, rawKey, display)}
+                            onRemove={removeLabelOverride}
+                            onAdd={addLabelOverride}
+                            onFillFromPreview={fillChartLabelOverridesFromPreview}
+                            fillFromPreviewDisabled={previewAxisRawValues.length === 0}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </>
@@ -2453,43 +2558,17 @@ export function MetricConfigPanel({
               </div>
               {showLabelOverrides && (
                 <div className="border-t border-[var(--studio-border)] pt-4">
-                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Renombrar etiquetas en el gráfico</Label>
-                  <p className="mb-2 mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">
-                    Reemplazá el valor que viene de los datos por el texto a mostrar (eje de categorías, porciones, leyenda).
+                  <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+                    Para renombrar valores del eje (incluidas fechas: clave = valor exacto de la API, texto = lo mostrado), usá la pestaña{" "}
+                    <button
+                      type="button"
+                      className="font-medium text-[var(--studio-accent)] underline"
+                      onClick={() => setPanelTab("data")}
+                    >
+                      Datos
+                    </button>
+                    , sección al final de la agregación.
                   </p>
-                  <div className="space-y-2">
-                    {labelOverridesEntries.map(([raw, display], idx) => (
-                      <div key={`override-${idx}-${raw}`} className="flex items-center gap-2">
-                        <Input
-                          value={labelOverrideRawDrafts[raw] ?? raw}
-                          onChange={(e) => setLabelOverrideRawDrafts((prev) => ({ ...prev, [raw]: e.target.value }))}
-                          onBlur={() => commitLabelOverrideRawDraft(raw, display)}
-                          placeholder="Valor original (ej. Q1)"
-                          className="h-8 flex-1 text-xs"
-                        />
-                        <span className="text-xs text-[var(--studio-fg-muted)]">→</span>
-                        <Input
-                          value={display}
-                          onChange={(e) => setLabelOverride(raw, raw, e.target.value)}
-                          placeholder="Nombre a mostrar"
-                          className="h-8 flex-1 text-xs"
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0 text-red-500"
-                          onClick={() => removeLabelOverride(raw)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                  <Button type="button" variant="outline" size="sm" className="mt-2 h-8 text-xs" onClick={addLabelOverride}>
-                    <Plus className="mr-1.5 h-3.5 w-3.5" />
-                    Añadir etiqueta
-                  </Button>
                 </div>
               )}
             </TabsContent>

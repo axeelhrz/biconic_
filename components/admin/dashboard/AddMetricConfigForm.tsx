@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { ChevronLeft, Trash2, BookmarkPlus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,11 @@ import AdminFieldSelector from "./AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
 import type { ChartLabelDisplayMode, ChartPercentBasis } from "@/lib/dashboard/chartOptions";
+import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import {
+  ChartLabelOverridesSection,
+  ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS,
+} from "@/components/admin/dashboard/ChartLabelOverridesSection";
 
 export type MetricConditionEdit = {
   field: string;
@@ -281,6 +286,8 @@ type AddMetricConfigFormProps = {
   savedMetrics?: SavedMetricForm[];
   /** Guardar la definición de una métrica para reutilizarla después */
   onSaveMetricAsTemplate?: (name: string, metric: AggregationMetricEdit) => void;
+  /** Filas de preview (p. ej. estudio) para rellenar etiquetas del eje X */
+  previewRows?: Record<string, unknown>[];
 };
 
 export function AddMetricConfigForm({
@@ -290,6 +297,7 @@ export function AddMetricConfigForm({
   onBack,
   savedMetrics = [],
   onSaveMetricAsTemplate,
+  previewRows = [],
 }: AddMetricConfigFormProps) {
   const [form, setForm] = useState<AddMetricFormConfig>(initialValues);
   const [saveTemplateName, setSaveTemplateName] = useState<{ index: number; name: string } | null>(null);
@@ -423,7 +431,7 @@ export function AddMetricConfigForm({
     updateAgg({ filters: filters.filter((_, i) => i !== index) });
   };
 
-  const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "scatter"];
+  const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "stackedColumn", "line", "area", "pie", "doughnut", "combo", "scatter"];
   const showLabelOverrides = CHART_TYPES_FOR_LABELS.includes(form.type);
   const labelOverridesEntries = useMemo(() => Object.entries(agg.chartLabelOverrides ?? {}), [agg.chartLabelOverrides]);
   const [labelOverrideRawDrafts, setLabelOverrideRawDrafts] = useState<Record<string, string>>({});
@@ -464,6 +472,43 @@ export function AddMetricConfigForm({
     if (Object.prototype.hasOwnProperty.call(agg.chartLabelOverrides ?? {}, "")) return;
     updateAgg({ chartLabelOverrides: { ...(agg.chartLabelOverrides ?? {}), "": "" } });
   };
+
+  const dateFieldListForAgg = selectedSource?.fields?.date ?? etlData?.fields?.date ?? [];
+  const isDimensionDateField =
+    !!agg.dimension &&
+    dateFieldListForAgg.some((d: string) => (d || "").toLowerCase() === String(agg.dimension || "").toLowerCase());
+
+  const previewAxisRawValues = useMemo(() => {
+    if (!previewRows?.length || !agg.enabled || !showLabelOverrides) return [];
+    const w: BuildChartConfigWidget = {
+      type: form.type,
+      aggregationConfig: {
+        ...agg,
+        chartType: (agg.chartType as string) || form.type,
+        enabled: true,
+      },
+      color: form.color,
+    };
+    const axis = resolveWidgetAxisKeys(previewRows, w);
+    if (!axis) return [];
+    const uniq = new Set<string>();
+    for (const row of previewRows) {
+      const v = (row as Record<string, unknown>)[axis.xKey];
+      const s = String(v ?? "").trim();
+      if (s) uniq.add(s);
+    }
+    return [...uniq].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [previewRows, form.type, form.color, agg, showLabelOverrides]);
+
+  const fillChartLabelOverridesFromPreview = useCallback(() => {
+    const next = { ...(agg.chartLabelOverrides ?? {}) };
+    for (const raw of previewAxisRawValues) {
+      if (!Object.prototype.hasOwnProperty.call(next, raw)) next[raw] = raw;
+    }
+    updateAgg({
+      chartLabelOverrides: Object.keys(next).length ? next : undefined,
+    });
+  }, [agg.chartLabelOverrides, previewAxisRawValues, updateAgg]);
 
   const orderFields = agg.enabled
     ? [agg.dimension, agg.dimension2, agg.dateDimension, ...metrics.map((m) => m.alias || m.field)].filter(Boolean) as string[]
@@ -990,37 +1035,24 @@ export function AddMetricConfigForm({
           </div>
         )}
         {showLabelOverrides && (
-          <div>
-            <Label className="add-metric-label">Nombres de etiquetas en el gráfico</Label>
-            <p className="text-[11px] text-[var(--studio-fg-muted)] mt-0.5 mb-2">Reemplazar el valor de los datos por el texto a mostrar (eje X, porciones, leyenda).</p>
-            <div className="space-y-2">
-              {labelOverridesEntries.map(([raw, display], idx) => (
-                <div key={`override-${idx}-${raw}`} className="flex gap-2 items-center">
-                  <Input
-                    value={labelOverrideRawDrafts[raw] ?? raw}
-                    onChange={(e) => setLabelOverrideRawDrafts((prev) => ({ ...prev, [raw]: e.target.value }))}
-                    onBlur={() => commitLabelOverrideRawDraft(raw, display)}
-                    placeholder="Valor original (ej. Q1)"
-                    className="h-8 text-xs flex-1"
-                  />
-                  <span className="text-[var(--studio-fg-muted)] text-xs">→</span>
-                  <Input
-                    value={display}
-                    onChange={(e) => setLabelOverride(raw, raw, e.target.value)}
-                    placeholder="Nombre a mostrar"
-                    className="h-8 text-xs flex-1"
-                  />
-                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500" onClick={() => removeLabelOverride(raw)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-            <Button type="button" variant="outline" size="sm" className="mt-2 h-8 text-xs" onClick={addLabelOverride}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Añadir etiqueta
-            </Button>
-          </div>
+          <ChartLabelOverridesSection
+            useAddMetricStyles
+            title={isDimensionDateField ? "Texto manual del eje (fechas y categorías)" : "Nombres de etiquetas en el gráfico"}
+            description={
+              isDimensionDateField
+                ? "La columna izquierda debe coincidir con el valor exacto que devuelve la API (ej. 2025-04). La derecha es lo que verás en el gráfico."
+                : "Reemplazá el valor de los datos por el texto a mostrar (eje X, porciones, leyenda)."
+            }
+            entries={labelOverridesEntries}
+            rawDrafts={labelOverrideRawDrafts}
+            onRawDraftChange={(rawKey, value) => setLabelOverrideRawDrafts((prev) => ({ ...prev, [rawKey]: value }))}
+            onCommitRawDraft={commitLabelOverrideRawDraft}
+            onDisplayChange={(rawKey, display) => setLabelOverride(rawKey, rawKey, display)}
+            onRemove={removeLabelOverride}
+            onAdd={addLabelOverride}
+            onFillFromPreview={previewRows.length > 0 ? fillChartLabelOverridesFromPreview : undefined}
+            fillFromPreviewDisabled={previewAxisRawValues.length === 0}
+          />
         )}
         {form.type === "kpi" && (
           <div className="space-y-2">
@@ -1072,6 +1104,22 @@ export function AddMetricConfigForm({
                     >
                       <option value="DMY">DD/MM/YYYY (día primero)</option>
                       <option value="MDY">MM/DD/YYYY (mes primero, US)</option>
+                    </select>
+                    <Label className="add-metric-label text-[11px] mt-2 block">Formato de etiquetas de fecha</Label>
+                    <select
+                      value={agg.analysisDateDisplayFormat ?? ""}
+                      onChange={(e) =>
+                        updateAgg({
+                          analysisDateDisplayFormat: (e.target.value || undefined) as AggregationConfigEdit["analysisDateDisplayFormat"],
+                        })
+                      }
+                      className="add-metric-select mt-0.5 h-8 text-xs w-full"
+                    >
+                      {ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS.map((o) => (
+                        <option key={o.value || "default"} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 )}
