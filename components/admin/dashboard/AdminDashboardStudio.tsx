@@ -60,6 +60,7 @@ import {
   expandMonthFilterValueWithYear,
 } from "@/lib/dashboard/expandMonthFilterWithYear";
 import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
+import { pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
 import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
@@ -835,12 +836,19 @@ export function AdminDashboardStudio({
           const widgetEtlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
           const widgetDateFields = sourceId ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.date ?? etlData?.fields?.date ?? []) : (etlData?.fields?.date ?? []);
           const primaryDimension = dimensions[0] ?? aggForLoad.dimension;
-          const isDateDimension = primaryDimension && widgetDateFields.some((d: string) => (d || "").toLowerCase() === (primaryDimension || "").toLowerCase());
           const dateGroupByGranularity = (aggForLoad as { dateGroupByGranularity?: string }).dateGroupByGranularity;
+          const dateGroupBySourceField = pickDateGroupBySourceField(aggForLoad) ?? primaryDimension;
+          const isDateDimension =
+            dateGroupBySourceField &&
+            widgetDateFields.some((d: string) => (d || "").toLowerCase() === (dateGroupBySourceField || "").toLowerCase());
           const metricAliasesForApi = metricsPayload.map((m: Record<string, unknown>) => m.alias as string).filter(Boolean);
           const isTemporalAxis =
             !!dateGroupByGranularity ||
-            !!(primaryDimension && aggForLoad.dateDimension && String(primaryDimension).trim().toLowerCase() === String(aggForLoad.dateDimension ?? "").trim().toLowerCase()) ||
+            !!(
+              dateGroupBySourceField &&
+              aggForLoad.dateDimension &&
+              String(dateGroupBySourceField).trim().toLowerCase() === String(aggForLoad.dateDimension ?? "").trim().toLowerCase()
+            ) ||
             !!isDateDimension;
           const rankingLimit = aggForLoad.chartRankingEnabled && aggForLoad.chartRankingTop && aggForLoad.chartRankingTop > 0 && !isTemporalAxis
             ? aggForLoad.chartRankingTop
@@ -906,7 +914,10 @@ export function AdminDashboardStudio({
             cumulative: aggForLoad.cumulative || "none",
             comparePeriod: aggForLoad.comparePeriod || undefined,
             dateDimension: aggForLoad.dateDimension || undefined,
-            ...(dateGroupByGranularity && primaryDimension && { dateGroupBy: { field: primaryDimension, granularity: dateGroupByGranularity } }),
+            ...(dateGroupByGranularity &&
+              dateGroupBySourceField && {
+                dateGroupBy: { field: dateGroupBySourceField, granularity: dateGroupByGranularity },
+              }),
             ...((aggForLoad as { dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string } }).dateRangeFilter && {
               dateRangeFilter: (aggForLoad as { dateRangeFilter: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter,
             }),

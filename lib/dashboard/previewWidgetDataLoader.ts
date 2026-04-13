@@ -6,6 +6,7 @@ import {
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget, type ChartConfig } from "@/lib/dashboard/buildChartConfig";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 import { resolveWidgetAggregationForDisplay } from "@/lib/dashboard/widgetRenderParity";
+import { pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
 
 type AggregationMetric = {
   id?: string;
@@ -170,7 +171,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       ...m,
       field: mapField(m.field, sourceId, datasetDimensions),
     }));
-    const primaryDim = dimensions[0] ?? agg?.dimension;
+    const primaryDim = pickDateGroupBySourceField(agg) ?? dimensions[0] ?? agg?.dimension;
     const dateGroupByGranularity = agg?.dateGroupByGranularity;
     /**
      * Paridad con EtlMetricsClient.fetchPreview: Top N solo en buildChartConfig/getProcessedRowsForChart.

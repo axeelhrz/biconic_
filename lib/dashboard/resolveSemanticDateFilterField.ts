@@ -1,9 +1,15 @@
 /**
  * Cuando un filtro global usa un campo semántico sin mapeo para el origen del widget,
  * el visor omitía el filtro por completo. Para gráficos con dateGroupBy, el eje temporal
- * sí se resuelve a columna física: reutilizamos esa dimensión primaria para MONTH/DAY/etc.
+ * sí se resuelve a columna física: reutilizamos esa dimensión (dateDimension / chartXAxis / primaria).
  * Paridad de operadores con `aggregate-data` (expresión safeDateCast).
  */
+import {
+  pickDateGroupBySourceField,
+  primaryDimensionForDateGroupBy,
+  type AggLikeForDateGroupByField,
+} from "@/lib/dashboard/dateGroupBySourceField";
+
 export const DATE_PART_OPERATORS_FOR_SEMANTIC_AXIS_FALLBACK = new Set([
   "MONTH",
   "DAY",
@@ -13,18 +19,9 @@ export const DATE_PART_OPERATORS_FOR_SEMANTIC_AXIS_FALLBACK = new Set([
   "YEAR_MONTH",
 ]);
 
-export type AggForDateAxisFallback = {
-  dateGroupByGranularity?: string;
-  dimension?: string;
-  dimensions?: string[];
-};
+export type AggForDateAxisFallback = AggLikeForDateGroupByField;
 
-export function primaryDimensionForDateGroupBy(agg: AggForDateAxisFallback | null | undefined): string | undefined {
-  const dims = agg?.dimensions?.length ? agg.dimensions : [];
-  const first = dims[0] ?? agg?.dimension;
-  const s = typeof first === "string" ? first.trim() : "";
-  return s || undefined;
-}
+export { primaryDimensionForDateGroupBy };
 
 /**
  * Campo físico para el body de aggregate-data, o null si el filtro no debe enviarse.
@@ -54,8 +51,8 @@ export function resolveAggregationFilterPhysicalField(options: {
     return null;
   }
 
-  const primary = primaryDimensionForDateGroupBy(agg);
-  if (!primary) return null;
-  const physical = mapDatasetField(primary);
+  const dateAxisSource = pickDateGroupBySourceField(agg) ?? primaryDimensionForDateGroupBy(agg);
+  if (!dateAxisSource) return null;
+  const physical = mapDatasetField(dateAxisSource);
   return physical.trim() ? physical : null;
 }

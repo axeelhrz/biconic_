@@ -144,9 +144,29 @@ const MONTH_NAMES_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago
  * Extrae año y mes desde `YYYY-MM` o prefijo `YYYY-MM-DD` / ISO (`…T…`), sin `Date`.
  * Así las etiquetas "Mes año" no dependen de zonas horarias ni de `new Date(string)` ambiguos.
  */
+/**
+ * `MM/YYYY` o `YYYY/MM` (sin día): inequívoco para etiquetas «Mes año».
+ */
+function parseSlashMonthYearForLabel(raw: string): { year: number; month: number } | null {
+  const t = raw.trim().replace(/^\uFEFF/, "");
+  const my = /^(\d{1,2})\/(\d{4})$/.exec(t);
+  if (my) {
+    const month = Number(my[1]);
+    const year = Number(my[2]);
+    if (month >= 1 && month <= 12 && year >= 1000 && year <= 9999) return { year, month };
+  }
+  const ym = /^(\d{4})\/(\d{1,2})$/.exec(t);
+  if (ym) {
+    const year = Number(ym[1]);
+    const month = Number(ym[2]);
+    if (month >= 1 && month <= 12 && year >= 1000 && year <= 9999) return { year, month };
+  }
+  return null;
+}
+
 export function parseIsoYearMonthForLabel(value: unknown): { year: number; month: number } | null {
   if (typeof value !== "string") return null;
-  const raw = value.trim();
+  const raw = value.trim().replace(/^\uFEFF/, "");
   if (!raw) return null;
   const m = /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?(?:[Tt ].*)?$/.exec(raw);
   if (!m) return null;
@@ -210,6 +230,8 @@ export function formatAnalysisDateForChart(
     const ymp = parseIsoYearMonthForLabel(value);
     if (ymp) return `${MONTH_NAMES_SHORT[ymp.month - 1] ?? ""} ${ymp.year}`.trim();
     if (typeof value === "string") {
+      const slashMy = parseSlashMonthYearForLabel(value);
+      if (slashMy) return `${MONTH_NAMES_SHORT[slashMy.month - 1] ?? ""} ${slashMy.year}`.trim();
       const slashYmp = resolveMonthYearFromAmbiguousSlash(value, parseOpts);
       if (slashYmp) return `${MONTH_NAMES_SHORT[slashYmp.month - 1] ?? ""} ${slashYmp.year}`.trim();
     }
@@ -217,10 +239,14 @@ export function formatAnalysisDateForChart(
       const ms = value > 1e12 ? value : value * 1000;
       const nd = new Date(ms);
       if (!Number.isNaN(nd.getTime())) {
+        const fromIso = parseIsoYearMonthForLabel(nd.toISOString());
+        if (fromIso) return `${MONTH_NAMES_SHORT[fromIso.month - 1] ?? ""} ${fromIso.year}`.trim();
         return `${MONTH_NAMES_SHORT[nd.getUTCMonth()] ?? ""} ${nd.getUTCFullYear()}`.trim();
       }
     }
     if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      const fromIso = parseIsoYearMonthForLabel(value.toISOString());
+      if (fromIso) return `${MONTH_NAMES_SHORT[fromIso.month - 1] ?? ""} ${fromIso.year}`.trim();
       return `${MONTH_NAMES_SHORT[value.getUTCMonth()] ?? ""} ${value.getUTCFullYear()}`.trim();
     }
   }
