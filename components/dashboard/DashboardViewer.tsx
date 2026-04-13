@@ -286,6 +286,27 @@ function globalMultiFilterTriggerLabel(operator: unknown, selected: string[], op
   return `${selected.length} seleccionados`;
 }
 
+/** Copia profunda de valores de filtro (claves string → primitivos o arrays). */
+function cloneFilterValuesRecord(src: Record<string, unknown>): Record<string, unknown> {
+  try {
+    return structuredClone(src);
+  } catch {
+    try {
+      return JSON.parse(JSON.stringify(src)) as Record<string, unknown>;
+    } catch {
+      return { ...src };
+    }
+  }
+}
+
+function filterRecordsEqualShallowJson(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) {
+    if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) return false;
+  }
+  return true;
+}
+
 // Types compatible with persisted layout and API
 type AggregationFilter = {
   id: string;
@@ -434,6 +455,11 @@ export interface DashboardViewerProps {
   backLabel?: string;
   variant?: "default" | "admin";
   hideHeader?: boolean;
+  /**
+   * `onButton`: los filtros solo aplican al pulsar "Aplicar filtros".
+   * `onChange`: recarga al cambiar cada control (comportamiento anterior).
+   */
+  filterCommitMode?: "onChange" | "onButton";
 }
 
 export function DashboardViewer({
@@ -447,12 +473,15 @@ export function DashboardViewer({
   backLabel = "Volver al Editor",
   variant = "default",
   hideHeader = false,
+  filterCommitMode = "onButton",
 }: DashboardViewerProps) {
   const [title, setTitle] = useState("Dashboard");
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<AggregationFilter[]>([]);
   const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>(() => ({ ...DEFAULT_DASHBOARD_THEME }));
   const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
+  const [filterDraft, setFilterDraft] = useState<Record<string, unknown>>({});
+  const [filterApplied, setFilterApplied] = useState<Record<string, unknown>>({});
   const [globalFilterDistinctValues, setGlobalFilterDistinctValues] = useState<Record<string, unknown[]>>({});
   const canvasExportRef = useRef<HTMLDivElement>(null);
   const [exportBusy, setExportBusy] = useState(false);
@@ -469,6 +498,17 @@ export function DashboardViewer({
   const { data: etlData, error: etlDataError } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
   const etlDataRef = useRef(etlData);
   etlDataRef.current = etlData;
+
+  const uiFilterValues = filterCommitMode === "onButton" ? filterDraft : filterValues;
+  const filtersForDataLoad = filterCommitMode === "onButton" ? filterApplied : filterValues;
+
+  const setUiFilterValues = useCallback(
+    (action: React.SetStateAction<Record<string, unknown>>) => {
+      if (filterCommitMode === "onButton") setFilterDraft(action);
+      else setFilterValues(action);
+    },
+    [filterCommitMode]
+  );
 
   const themeMerged = useMemo(() => mergeTheme(dashboardTheme), [dashboardTheme]);
   const accentColor = themeMerged.accentColor ?? DEFAULT_DASHBOARD_THEME.accentColor ?? "#0ea5e9";
@@ -527,7 +567,17 @@ export function DashboardViewer({
           v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
           initialFv[gf.id] = v;
         }
-        setFilterValues(initialFv);
+        if (filterCommitMode === "onButton") {
+          setFilterDraft(initialFv);
+          setFilterApplied(initialFv);
+        } else {
+          setFilterValues(initialFv);
+        }
+      } else if (filterCommitMode === "onButton") {
+        setFilterDraft({});
+        setFilterApplied({});
+      } else {
+        setFilterValues({});
       }
       return;
     }
@@ -603,8 +653,13 @@ export function DashboardViewer({
       v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
       initialFv[gf.id] = v;
     }
-    setFilterValues(initialFv);
-  }, [layoutFingerprint, initialWidgets, initialTitle, initialGlobalFilters]);
+    if (filterCommitMode === "onButton") {
+      setFilterDraft(initialFv);
+      setFilterApplied(initialFv);
+    } else {
+      setFilterValues(initialFv);
+    }
+  }, [layoutFingerprint, initialWidgets, initialTitle, initialGlobalFilters, filterCommitMode]);
 
   // Cargar distinct values para cada filtro global; si el campo es dimensión semántica, usar tabla y columna física de la fuente primaria
   useEffect(() => {
@@ -710,7 +765,7 @@ export function DashboardViewer({
   const loadDataForWidget = useCallback(
     async (widgetId: string) => {
       // Leer widgets desde ref: si dependemos de `widgets`, cada setWidgets tras cargar datos
-      // recrea el callback y el efecto [filterValues, loadDataForWidget, …] vuelve a disparar todo en bucle.
+      // recrea el callback y el efecto [filtersForDataLoad, loadDataForWidget, …] vuelve a disparar todo en bucle.
       const widget = stateRef.current.widgets.find((w) => w.id === widgetId);
       if (!widget) return;
       if (widget.type === "text" || widget.type === "image") {
@@ -794,7 +849,7 @@ export function DashboardViewer({
           .map((w) => ({
             field: (w as Widget).filterConfig!.field!,
             operator: String((w as Widget).filterConfig!.operator ?? "="),
-            value: filterValues[w.id],
+            value: filtersForDataLoad[w.id],
           }));
 
         const mappedGlobalFilters: AggregationFilter[] = [];
@@ -805,7 +860,7 @@ export function DashboardViewer({
             }
             if (fieldsWithWidgets.has(f.field)) continue;
             let v =
-              filterValues[f.id] !== undefined ? filterValues[f.id] : (f as AggregationFilter & { value?: unknown }).value;
+              filtersForDataLoad[f.id] !== undefined ? filtersForDataLoad[f.id] : (f as AggregationFilter & { value?: unknown }).value;
             if (v === "" || v == null) continue;
             if (Array.isArray(v) && v.length === 0) continue;
             const rawOp = f.operator || "=";
@@ -818,7 +873,7 @@ export function DashboardViewer({
               if (Array.isArray(v)) {
                 const mappedIso = (v as unknown[])
                   .map((part) =>
-                    composeDayFilterIsoDate(f.field, String(part), globalFilters, filterValues, pageSourcesForDay)
+                    composeDayFilterIsoDate(f.field, String(part), globalFilters, filtersForDataLoad, pageSourcesForDay)
                   )
                   .filter((x): x is string => x != null);
                 if (mappedIso.length === 0) continue;
@@ -826,7 +881,7 @@ export function DashboardViewer({
               } else {
                 const t = String(v).trim();
                 if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) {
-                  const iso = composeDayFilterIsoDate(f.field, t, globalFilters, filterValues, pageSourcesForDay);
+                  const iso = composeDayFilterIsoDate(f.field, t, globalFilters, filtersForDataLoad, pageSourcesForDay);
                   if (iso == null) continue;
                   v = iso;
                 }
@@ -852,7 +907,7 @@ export function DashboardViewer({
         );
         for (const fw of filterWidgetsOnPage) {
           const fc = (fw as Widget).filterConfig!;
-          let v = filterValues[fw.id];
+          let v = filtersForDataLoad[fw.id];
           if (v === "" || v == null) continue;
           if (Array.isArray(v) && v.length === 0) continue;
           const rawOpFw = fc.operator || "=";
@@ -864,7 +919,7 @@ export function DashboardViewer({
             if (Array.isArray(v)) {
               const mappedIsoW = (v as unknown[])
                 .map((part) =>
-                  composeDayFilterIsoDate(fc.field, String(part), globalFilters, filterValues, pageSourcesForDay)
+                  composeDayFilterIsoDate(fc.field, String(part), globalFilters, filtersForDataLoad, pageSourcesForDay)
                 )
                 .filter((x): x is string => x != null);
               if (mappedIsoW.length === 0) continue;
@@ -872,7 +927,7 @@ export function DashboardViewer({
             } else {
               const tw = String(v).trim();
               if (!/^\d{4}-\d{2}-\d{2}$/.test(tw)) {
-                const isoW = composeDayFilterIsoDate(fc.field, tw, globalFilters, filterValues, pageSourcesForDay);
+                const isoW = composeDayFilterIsoDate(fc.field, tw, globalFilters, filtersForDataLoad, pageSourcesForDay);
                 if (isoW == null) continue;
                 v = isoW;
               }
@@ -1091,7 +1146,7 @@ export function DashboardViewer({
         clearTimeout(safetyTimeout);
       }
     },
-    [etlData, globalFilters, filterValues, apiEndpoints, getTableNameForWidget, isPublic, accentColor, pageLayout]
+    [etlData, globalFilters, filtersForDataLoad, apiEndpoints, getTableNameForWidget, isPublic, accentColor, pageLayout]
   );
 
   const reloadAll = useCallback(() => {
@@ -1112,7 +1167,7 @@ export function DashboardViewer({
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [filterValues, loadDataForWidget, etlData, pageLayout]);
+  }, [filtersForDataLoad, loadDataForWidget, etlData, pageLayout]);
 
   const initialLoadedRef = useRef(false);
   useEffect(() => {
@@ -1129,8 +1184,8 @@ export function DashboardViewer({
   }, [dashboardId]);
 
   const handleFilterChange = useCallback((widgetId: string, value: unknown) => {
-    setFilterValues((prev) => ({ ...prev, [widgetId]: value }));
-  }, []);
+    setUiFilterValues((prev) => ({ ...prev, [widgetId]: value }));
+  }, [setUiFilterValues]);
 
   const orderedWidgets = useMemo(() => {
     let list = widgets;
@@ -1162,6 +1217,21 @@ export function DashboardViewer({
     () => computeDashboardGridPlacementsPacked(orderedWidgets, packCols, undefined, packRowGapPx),
     [orderedWidgets, packCols, packRowGapPx]
   );
+
+  const hasFilterWidgetsOnActivePage = useMemo(
+    () => orderedWidgets.some((w) => w.type === "filter"),
+    [orderedWidgets]
+  );
+
+  const filtersPendingCommit = useMemo(
+    () => filterCommitMode === "onButton" && !filterRecordsEqualShallowJson(filterDraft, filterApplied),
+    [filterCommitMode, filterDraft, filterApplied]
+  );
+
+  const commitAppliedFilters = useCallback(() => {
+    if (filterCommitMode !== "onButton") return;
+    setFilterApplied(cloneFilterValuesRecord(filterDraft));
+  }, [filterCommitMode, filterDraft]);
 
   const runExportExcel = useCallback(async () => {
     setExportBusy(true);
@@ -1218,7 +1288,7 @@ export function DashboardViewer({
       };
       const labels: string[] = [];
       for (const gf of globalFilters) {
-        const userValue = filterValues[gf.id];
+        const userValue = filtersForDataLoad[gf.id];
         const isEmpty =
           userValue === "" ||
           userValue === null ||
@@ -1240,7 +1310,7 @@ export function DashboardViewer({
       if (labels.length > 0) out[widget.id] = labels;
     }
     return out;
-  }, [etlData, orderedWidgets, globalFilters, filterValues]);
+  }, [etlData, orderedWidgets, globalFilters, filtersForDataLoad]);
 
   const rootClassName = variant === "admin" ? "admin-dashboard-view gap-5" : "gap-0";
   /** Tema cliente: no depende de hideHeader (vista previa admin oculta el h1 pero mantiene branding). */
@@ -1362,9 +1432,10 @@ export function DashboardViewer({
           })}
         </div>
       )}
-      {globalFilters.length > 0 && (
+      {(globalFilters.length > 0 ||
+        (filterCommitMode === "onButton" && hasFilterWidgetsOnActivePage)) && (
         <div
-          className="flex flex-shrink-0 flex-wrap items-center gap-4 px-4 py-2"
+          className={`flex flex-shrink-0 flex-wrap items-center gap-4 px-4 py-2${globalFilters.length === 0 ? " justify-end" : ""}`}
           style={{ background: "var(--platform-bg, var(--client-bg, #f8fafc))", borderBottom: "1px solid var(--platform-border)" }}
         >
           {globalFilters.map((gf) => {
@@ -1381,14 +1452,18 @@ export function DashboardViewer({
                 ? rawDistinct
                 : [...GLOBAL_MONTH_FILTER_VALUES]
               : isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf
-                ? getGlobalDayFilterOptions(gf.field!, globalFilters, filterValues)
+                ? getGlobalDayFilterOptions(gf.field!, globalFilters, uiFilterValues)
                 : rawDistinct;
             const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
             const isYearOp = isYearOperator((gf as AggregationFilter).operator);
             const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
             const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
             const selectedArrayRaw = isMulti
-              ? (Array.isArray(filterValues[gf.id]) ? filterValues[gf.id] : filterValues[gf.id] != null && filterValues[gf.id] !== "" ? [filterValues[gf.id]] : []) as string[]
+              ? (Array.isArray(uiFilterValues[gf.id])
+                  ? uiFilterValues[gf.id]
+                  : uiFilterValues[gf.id] != null && uiFilterValues[gf.id] !== ""
+                    ? [uiFilterValues[gf.id]]
+                    : []) as string[]
               : [];
             const selectedArray = isMonthOperator((gf as AggregationFilter).operator)
               ? selectedArrayRaw.map((x) => String(normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, x)))
@@ -1436,7 +1511,7 @@ export function DashboardViewer({
                           size="sm"
                           className="h-7 text-xs rounded-md"
                           style={{ borderColor: "var(--platform-border)" }}
-                          onClick={() => setFilterValues((prev) => ({ ...prev, [gf.id]: [...options].map(String) }))}
+                          onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: [...options].map(String) }))}
                         >
                           Seleccionar todo
                         </Button>
@@ -1446,7 +1521,7 @@ export function DashboardViewer({
                           size="sm"
                           className="h-7 text-xs rounded-md"
                           style={{ borderColor: "var(--platform-border)" }}
-                          onClick={() => setFilterValues((prev) => ({ ...prev, [gf.id]: [] }))}
+                          onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: [] }))}
                         >
                           Deseleccionar todo
                         </Button>
@@ -1467,7 +1542,7 @@ export function DashboardViewer({
                                 style={{ borderColor: "var(--platform-border)" }}
                                 checked={checked}
                                 onChange={(e) => {
-                                  setFilterValues((prev) => {
+                                  setUiFilterValues((prev) => {
                                     const cur = globalMultiPrevToSelectedStrings(
                                       (gf as AggregationFilter).operator,
                                       prev[gf.id]
@@ -1504,14 +1579,14 @@ export function DashboardViewer({
                     style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
                     value={
                       isYearOp
-                        ? yearFilterSelectDisplayValue(filterValues[gf.id])
+                        ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
                         : isYearMonthOp
-                          ? String(filterValues[gf.id] ?? "")
+                          ? String(uiFilterValues[gf.id] ?? "")
                           : isDayOperator((gf as AggregationFilter).operator)
-                            ? dayFilterSelectDisplayValue((gf as AggregationFilter).operator, filterValues[gf.id])
-                            : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, filterValues[gf.id])
+                            ? dayFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
+                            : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
                     }
-                    onChange={(e) => setFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value }))}
+                    onChange={(e) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value }))}
                   >
                     <option value="">Todos</option>
                     {(options as unknown[]).map((v) => (
@@ -1529,13 +1604,35 @@ export function DashboardViewer({
                     type={(gf as any).inputType === "number" ? "number" : (gf as any).inputType === "date" ? "date" : "text"}
                     className="rounded-md border px-2 py-1 text-sm w-32"
                     style={{ borderColor: "var(--platform-border)" }}
-                    value={String(filterValues[gf.id] ?? "")}
-                    onChange={(e) => setFilterValues((prev) => ({ ...prev, [gf.id]: (gf as any).inputType === "number" ? e.target.valueAsNumber : e.target.value }))}
+                    value={String(uiFilterValues[gf.id] ?? "")}
+                    onChange={(e) =>
+                      setUiFilterValues((prev) => ({
+                        ...prev,
+                        [gf.id]: (gf as any).inputType === "number" ? e.target.valueAsNumber : e.target.value,
+                      }))
+                    }
                   />
                 )}
               </div>
             );
           })}
+          {filterCommitMode === "onButton" && (
+            <div className={globalFilters.length > 0 ? "ml-auto flex shrink-0 items-center pt-1 sm:pt-0" : "flex shrink-0 items-center"}>
+              <Button
+                type="button"
+                size="sm"
+                className="h-9 rounded-md px-4 text-sm font-medium"
+                style={{
+                  background: "var(--platform-accent, var(--client-accent, #0ea5e9))",
+                  color: "#08080b",
+                }}
+                disabled={!filtersPendingCommit}
+                onClick={commitAppliedFilters}
+              >
+                Aplicar filtros
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1614,7 +1711,7 @@ export function DashboardViewer({
                       chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
                     } as DashboardWidgetRendererWidget}
                     isLoading={widget.isLoading === true}
-                    filterValue={filterValues[widget.id]}
+                    filterValue={uiFilterValues[widget.id]}
                     onFilterChange={handleFilterChange}
                     minHeight={widget.minHeight ?? 280}
                     darkChartTheme={resolveDarkChartTheme(effectiveTheme, true)}
