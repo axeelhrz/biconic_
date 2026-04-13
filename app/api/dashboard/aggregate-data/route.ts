@@ -14,6 +14,7 @@ import {
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
 import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
+import { expandMonthValueWithYearFromFilters } from "@/lib/dashboard/expandMonthFilterWithYear";
 import {
   coerceGeoComponentOverrides,
   coerceGeoOverridesByXLabel,
@@ -1268,7 +1269,8 @@ export async function POST(req: NextRequest) {
           }
 
           if (op === "MONTH") {
-            return buildMonthFilterSqlClause(fieldExpression, f.value);
+            const monthVal = expandMonthValueWithYearFromFilters(f.field, f.value, validFilters);
+            return buildMonthFilterSqlClause(fieldExpression, monthVal);
           }
           if (op === "YEAR") {
             if (Array.isArray(f.value)) {

@@ -56,6 +56,10 @@ import {
 } from "@/lib/dashboard/gridLayout";
 import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
 import {
+  DATE_OPERATORS_WITH_MULTI_VALUE_SQL,
+  expandMonthFilterValueWithYear,
+} from "@/lib/dashboard/expandMonthFilterWithYear";
+import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
   resolveDarkChartTheme,
@@ -678,23 +682,41 @@ export function AdminDashboardStudio({
             .map((w) => String((w as { filterConfig?: { field?: string } }).filterConfig?.field ?? ""))
         );
         const mappedGlobalFilters: GlobalFilter[] = [];
+        const globalFilterValuesById = Object.fromEntries(globalFilters.map((x) => [x.id, x.value])) as Record<
+          string,
+          unknown
+        >;
         if (!widget.excludeGlobalFilters) {
           for (const f of globalFilters) {
             if (f.applyTo === "selected" && Array.isArray(f.applyToWidgetIds) && f.applyToWidgetIds.length > 0) {
               if (!f.applyToWidgetIds.includes(widgetId)) continue;
             }
             if (fieldsWithWidgets.has(f.field)) continue;
-            const v = f.value;
+            let v: unknown = f.value;
+            const rawOp = f.operator || "=";
+            const rawOpUpper = String(rawOp).toUpperCase();
+            const inputT = f.inputType;
+            if (rawOpUpper === "YEAR" && Array.isArray(v) && v.length > 0 && inputT !== "multi") {
+              v = v[0];
+            }
+            if (rawOpUpper === "MONTH") {
+              v = expandMonthFilterValueWithYear(globalFilters, globalFilterValuesById, {
+                field: f.field,
+                operator: f.operator,
+                value: v,
+              });
+            }
             if (v === "" || v == null) continue;
             if (Array.isArray(v) && v.length === 0) continue;
             const isSemantic = datasetDimensions && f.field in datasetDimensions;
             if (isSemantic && sourceId && !datasetDimensions![f.field]?.[sourceId]) continue;
             const physicalField = mapDatasetField(f.field);
-            const rawOp = f.operator || "=";
-            const inputT = f.inputType;
             const useIn =
               rawOp === "IN" ||
-              (inputT === "multi" && Array.isArray(v) && v.length > 0);
+              (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper) &&
+                inputT === "multi" &&
+                Array.isArray(v) &&
+                v.length > 0);
             const op = useIn ? "IN" : rawOp;
             const value: unknown =
               op === "IN" ? (Array.isArray(v) ? v : [v]) : v;

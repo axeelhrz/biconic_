@@ -10,6 +10,7 @@ import {
   type GeoHints,
 } from "@/lib/geo/geo-enrichment";
 import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
+import { expandMonthValueWithYearFromFilters } from "@/lib/dashboard/expandMonthFilterWithYear";
 
 // --- Interfaces (Copied from internal route) ---
 interface Metric {
@@ -284,7 +285,8 @@ export async function POST(
           }
 
           if (op === "MONTH") {
-            return buildMonthFilterSqlClause(fieldExpression, f.value);
+            const monthVal = expandMonthValueWithYearFromFilters(f.field, f.value, validFilters);
+            return buildMonthFilterSqlClause(fieldExpression, monthVal);
           }
           if (op === "YEAR") {
             if (Array.isArray(f.value)) {

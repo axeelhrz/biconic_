@@ -39,6 +39,10 @@ import {
   DASHBOARD_GRID_ROW_UNIT_PX,
 } from "@/lib/dashboard/gridLayout";
 import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
+import {
+  DATE_OPERATORS_WITH_MULTI_VALUE_SQL,
+  expandMonthFilterValueWithYear,
+} from "@/lib/dashboard/expandMonthFilterWithYear";
 
 /** Meses 1–12 para filtro global MONTH (sin año en la UI). */
 const GLOBAL_MONTH_FILTER_VALUES = [
@@ -246,18 +250,6 @@ function yearFilterSelectDisplayValue(raw: unknown): string {
 }
 
 /** Estado previo de filtro multi → lista de strings alineada con `selectedArray` en la UI (incl. normalización MONTH). */
-/**
- * En aggregate-data estos operadores ya interpretan arrays (EXTRACT / buildMonthFilterSqlClause).
- * No deben sustituirse por IN genérico sobre la columna cruda.
- */
-const DATE_OPERATORS_WITH_MULTI_VALUE_SQL = new Set([
-  "YEAR",
-  "MONTH",
-  "QUARTER",
-  "SEMESTER",
-  "YEAR_MONTH",
-]);
-
 function globalMultiPrevToSelectedStrings(operator: unknown, raw: unknown): string[] {
   const selectedArrayRaw = Array.isArray(raw)
     ? (raw as unknown[]).map((x) => String(x))
@@ -887,6 +879,15 @@ export function DashboardViewer({
                 }
               }
             }
+            if (rawOpUpper === "MONTH") {
+              v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
+                field: f.field,
+                operator: f.operator,
+                value: v,
+              });
+              if (v === "" || v == null) continue;
+              if (Array.isArray(v) && v.length === 0) continue;
+            }
             const isSemantic = datasetDimensions && f.field in datasetDimensions;
             if (isSemantic && widgetSourceId && !datasetDimensions![f.field]?.[widgetSourceId]) continue;
             const physicalField = mapDatasetField(f.field);
@@ -932,6 +933,15 @@ export function DashboardViewer({
                 v = isoW;
               }
             }
+          }
+          if (rawOpFwUpper === "MONTH") {
+            v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
+              field: fc.field,
+              operator: fc.operator,
+              value: v,
+            });
+            if (v === "" || v == null) continue;
+            if (Array.isArray(v) && v.length === 0) continue;
           }
           const scopeIds = fc.scopeMetricIds;
           if (Array.isArray(scopeIds) && scopeIds.length > 0) {
