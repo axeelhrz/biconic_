@@ -9,6 +9,14 @@ export type DashboardRowForOverview = {
   clientId: string;
 };
 
+function toPublishedFlag(row: { published?: unknown; visibility?: unknown }): boolean {
+  if (typeof row.published === "boolean") return row.published;
+  const visibility = String(row.visibility ?? "")
+    .trim()
+    .toLowerCase();
+  return visibility === "public" || visibility === "published" || visibility === "publicado";
+}
+
 export default async function Page() {
   const supabase = await createClient();
 
@@ -25,7 +33,7 @@ export default async function Page() {
     supabase.from("connections").select("*", { count: "exact", head: true }),
     supabase
       .from("dashboard")
-      .select("id, title, published, client_id, clients(company_name)")
+      .select("id, title, visibility, client_id, clients(company_name)")
       .order("created_at", { ascending: false }),
   ]);
 
@@ -34,7 +42,7 @@ export default async function Page() {
       ? dashData.map((d: any) => ({
           id: d.id,
           title: d.title ?? "Sin título",
-          published: !!d.published,
+          published: toPublishedFlag(d),
           clientName: d.clients?.company_name ?? "—",
           clientId: d.client_id != null ? String(d.client_id) : "",
         }))

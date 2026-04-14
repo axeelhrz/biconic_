@@ -63,8 +63,7 @@ ChartJS.register(
   ArcElement,
   Tooltip,
   Legend,
-  Filler,
-  ChartDataLabels
+  Filler
 );
 
 export type WidgetChartType =
@@ -295,6 +294,7 @@ export function DashboardWidgetRenderer({
   hideHeader = false,
   showTechnicalPreview = false,
 }: DashboardWidgetRendererProps) {
+  const chartPlugins = useMemo(() => [ChartDataLabels], []);
   const effectiveMinHeight = widget.minHeight ?? minHeight;
   const chartType = useMemo(
     () => effectiveWidgetChartType(widget) as WidgetChartType,
@@ -1414,7 +1414,11 @@ export function DashboardWidgetRenderer({
                 style={{ height: Math.max(220, (effectiveMinHeight ?? 240) - 72) }}
               >
                 {(chartType === "bar" || chartType === "stackedColumn" || chartType === "combo") && (
-                  <Bar data={(chartType === "combo" && effectiveChartData ? effectiveChartData : chartConfig) as never} options={chartOptions as never} />
+                  <Bar
+                    data={(chartType === "combo" && effectiveChartData ? effectiveChartData : chartConfig) as never}
+                    options={chartOptions as never}
+                    plugins={chartPlugins}
+                  />
                 )}
                 {chartType === "horizontalBar" && (
                   (() => {
@@ -1433,18 +1437,19 @@ export function DashboardWidgetRenderer({
                         },
                       },
                     };
-                    return <Bar data={chartConfig as never} options={horizontalOptions as never} />;
+                    return <Bar data={chartConfig as never} options={horizontalOptions as never} plugins={chartPlugins} />;
                   })()
                 )}
                 {(chartType === "line" || chartType === "area") && (
                   <Line
                     data={chartType === "area" ? { ...chartConfig, datasets: chartConfig.datasets.map((ds) => ({ ...ds, fill: true })) } as never : chartConfig as never}
                     options={chartOptions as never}
+                    plugins={chartPlugins}
                   />
                 )}
-                {chartType === "pie" && <Pie data={chartConfig as never} options={chartOptions as never} />}
-                {chartType === "doughnut" && <Doughnut data={chartConfig as never} options={chartOptions as never} />}
-                {chartType === "scatter" && <Scatter data={chartConfig as never} options={chartOptions as never} />}
+                {chartType === "pie" && <Pie data={chartConfig as never} options={chartOptions as never} plugins={chartPlugins} />}
+                {chartType === "doughnut" && <Doughnut data={chartConfig as never} options={chartOptions as never} plugins={chartPlugins} />}
+                {chartType === "scatter" && <Scatter data={chartConfig as never} options={chartOptions as never} plugins={chartPlugins} />}
               </div>
             )}
             {showTechnicalPreview && widget.diagnosticPreview && (
