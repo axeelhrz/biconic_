@@ -141,8 +141,10 @@ export default function ViewerDashboardsSection() {
             </div>
           ) : null}
           <div className="rounded-xl border border-[var(--platform-border)] bg-[var(--platform-surface)] px-5 py-6 text-center text-sm text-[var(--platform-fg-muted)]">
-            Aún no tenés dashboards compartidos. Cuando tu administrador te
-            asigne acceso, aparecerán aquí agrupados por cliente.
+            Acá se listan los dashboards publicados de tu empresa (mismo
+            cliente) y los que te compartan con permiso. Si no ves ninguno,
+            pedí que publiquen el dashboard o que te den acceso desde
+            compartir.
           </div>
         </div>
       ) : (

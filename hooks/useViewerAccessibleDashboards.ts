@@ -210,7 +210,7 @@ export function useViewerAccessibleDashboards() {
         ]);
         const unionIds = Array.from(allIdsSet);
 
-        let allRows: SupabaseDashboardRow[] = [...ownRows];
+        let sharedByIdRows: SupabaseDashboardRow[] = [];
         const missingIds = unionIds.filter((id) => !ownIds.includes(id));
         if (missingIds.length > 0) {
           const { data: sharedRows, error: sharedErr } = await supabase
@@ -219,14 +219,44 @@ export function useViewerAccessibleDashboards() {
             .in("id", missingIds);
           if (sharedErr) throw sharedErr;
           if (sharedRows && Array.isArray(sharedRows)) {
-            allRows = allRows.concat(sharedRows as SupabaseDashboardRow[]);
+            sharedByIdRows = sharedRows as SupabaseDashboardRow[];
           }
         }
 
+        /** Dashboards del mismo cliente, publicados, sin requerir fila en `dashboard_has_client_permissions`. */
+        let clientPublishedRows: SupabaseDashboardRow[] = [];
+        if (userClientIds.size > 0) {
+          const { data: clientDashData, error: clientDashErr } = await supabase
+            .from("dashboard")
+            .select("*")
+            .in("client_id", Array.from(userClientIds));
+          if (clientDashErr) throw clientDashErr;
+          clientPublishedRows = ((clientDashData ?? []) as SupabaseDashboardRow[]).filter(
+            (r) => dashboardPublishedStatusFromRow(r) === "Publicado"
+          );
+        }
+
+        const rowById = new Map<string, SupabaseDashboardRow>();
+        for (const r of ownRows) rowById.set(String(r.id), r);
+        for (const r of sharedByIdRows) rowById.set(String(r.id), r);
+        for (const r of clientPublishedRows) rowById.set(String(r.id), r);
+        const allRows = Array.from(rowById.values());
+
         const filteredRows = allRows.filter((row) => {
-          const isOwner = row.user_id === user.id;
-          if (isOwner) return true;
-          return sharedDashboardIdSet.has(String(row.id));
+          if (row.user_id === user.id) return true;
+          if (sharedDashboardIdSet.has(String(row.id))) return true;
+          const cid =
+            row.client_id != null && String(row.client_id).trim() !== ""
+              ? String(row.client_id)
+              : null;
+          if (
+            cid &&
+            userClientIds.has(cid) &&
+            dashboardPublishedStatusFromRow(row) === "Publicado"
+          ) {
+            return true;
+          }
+          return false;
         });
 
         const mappedList: Dashboard[] = filteredRows.map((row) => {

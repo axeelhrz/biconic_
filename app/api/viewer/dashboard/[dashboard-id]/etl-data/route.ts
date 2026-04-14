@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
 
 export async function GET(
   request: NextRequest,
@@ -46,18 +47,19 @@ export async function GET(
     if (dashboard.user_id === user.id) {
       hasAccess = true;
     } else {
-      // Buscar memberships del usuario
+      // Membresías activas (cliente + id para permisos explícitos)
       const { data: members, error: membersErr } = await supabase
         .from("client_members")
-        .select("id")
-        .eq("user_id", user.id);
+        .select("id, client_id")
+        .eq("user_id", user.id)
+        .eq("is_active", true);
       if (membersErr) {
         return NextResponse.json(
           { ok: false, error: "Error verificando permisos" },
           { status: 500 }
         );
       }
-      const memberIds = (members ?? []).map((m: any) => m.id);
+      const memberIds = (members ?? []).map((m: { id: string }) => m.id);
       if (memberIds.length > 0) {
         const { data: perms, error: permsErr } = await supabase
           .from("dashboard_has_client_permissions")
@@ -72,6 +74,29 @@ export async function GET(
           );
         }
         if (perms && perms.length > 0) {
+          hasAccess = true;
+        }
+      }
+      // Portal cliente: dashboard del mismo cliente y publicado (sin fila de permiso)
+      if (!hasAccess) {
+        const dash = dashboard as {
+          client_id?: string | null;
+          status?: string | null;
+          published?: boolean | null;
+          visibility?: string | null;
+        };
+        const cid =
+          dash.client_id != null && String(dash.client_id).trim() !== ""
+            ? String(dash.client_id)
+            : null;
+        const memberClientIds = new Set(
+          (members ?? []).map((m: { client_id: string }) => String(m.client_id))
+        );
+        if (
+          cid &&
+          memberClientIds.has(cid) &&
+          dashboardPublishedStatusFromRow(dash) === "Publicado"
+        ) {
           hasAccess = true;
         }
       }
