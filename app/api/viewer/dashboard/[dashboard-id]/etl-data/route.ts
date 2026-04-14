@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
+import { CLIENT_MEMBER_ACTIVE_OR_FILTER } from "@/lib/client-members/clientMembershipActive";
 
 export async function GET(
   request: NextRequest,
@@ -52,7 +53,7 @@ export async function GET(
         .from("client_members")
         .select("id, client_id")
         .eq("user_id", user.id)
-        .eq("is_active", true);
+        .or(CLIENT_MEMBER_ACTIVE_OR_FILTER);
       if (membersErr) {
         return NextResponse.json(
           { ok: false, error: "Error verificando permisos" },

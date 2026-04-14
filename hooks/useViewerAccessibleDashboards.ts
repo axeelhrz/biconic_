@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Dashboard } from "@/components/dashboard/DashboardCard";
 import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
+import { CLIENT_MEMBER_ACTIVE_OR_FILTER } from "@/lib/client-members/clientMembershipActive";
 
 export type ViewerCompanySummary = {
   clientId: string;
@@ -133,7 +134,7 @@ export function useViewerAccessibleDashboards() {
           `
           )
           .eq("user_id", user.id)
-          .eq("is_active", true);
+          .or(CLIENT_MEMBER_ACTIVE_OR_FILTER);
         if (cmErr) throw cmErr;
 
         const memberships = (cmData ?? []) as Array<{

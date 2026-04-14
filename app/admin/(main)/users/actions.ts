@@ -1,6 +1,7 @@
 "use server";
 
 import type { Database } from "@/lib/supabase/database.types";
+import { CLIENT_MEMBER_ACTIVE_OR_FILTER } from "@/lib/client-members/clientMembershipActive";
 
 // Server Actions para el panel de administración de usuarios.
 // Ya conectadas a Supabase con fallback a mock en desarrollo.
@@ -138,7 +139,8 @@ export async function getAdminUsers(
       const { data: members } = await supabase
         .from("client_members")
         .select("id, user_id, role, client_id, clients(id, company_name)")
-        .in("user_id", userIds);
+        .in("user_id", userIds)
+        .or(CLIENT_MEMBER_ACTIVE_OR_FILTER);
 
       const clientIds = (members ?? []).map((m) => m.client_id);
 

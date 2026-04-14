@@ -1,6 +1,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { CLIENT_MEMBER_ACTIVE_OR_FILTER } from "@/lib/client-members/clientMembershipActive";
 import { Building2 } from "lucide-react";
 import type { ViewerCompanySummary } from "@/hooks/useViewerAccessibleDashboards";
 
@@ -67,7 +68,7 @@ export default function ViewerProfileSection() {
           `
           )
           .eq("user_id", user.id)
-          .eq("is_active", true);
+          .or(CLIENT_MEMBER_ACTIVE_OR_FILTER);
 
         if (!mounted) return;
 
