@@ -36,6 +36,8 @@ export interface Dashboard {
   // New fields for sharing logic
   clientId?: string;
   ownerId?: string;
+  /** Nombre del cliente (p. ej. en vista VIEWER agrupada por empresa) */
+  clientLabel?: string;
   /** Si existe, se muestra la previsualización del layout en lugar de la imagen por defecto */
   layout?: DashboardLayoutPreview | null;
 }
@@ -67,7 +69,17 @@ export default function DashboardCard({
   href,
   onDelete,
 }: DashboardCardProps) {
-  const { id, title, imageUrl, status, description, views, owner, layout } = dashboard;
+  const {
+    id,
+    title,
+    imageUrl,
+    status,
+    description,
+    views,
+    owner,
+    layout,
+    clientLabel,
+  } = dashboard;
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const activePageId = layout?.activePageId ?? layout?.pages?.[0]?.id;
   const hasLayoutPreview = Array.isArray(layout?.widgets)
@@ -118,6 +130,15 @@ export default function DashboardCard({
         {/* Contenido de la Tarjeta */}
         <div className="flex flex-col gap-2.5 p-5">
           <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>{title}</h3>
+
+          {clientLabel ? (
+            <p
+              className="text-xs font-medium -mt-1"
+              style={{ color: "var(--platform-fg-muted)" }}
+            >
+              {clientLabel}
+            </p>
+          ) : null}
 
           {/* Badge de Estado */}
           <span

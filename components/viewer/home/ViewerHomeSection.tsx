@@ -108,13 +108,19 @@ export default function ViewerHomeSection() {
                     className="flex items-start gap-3 rounded-xl border border-[#ECECEC] bg-white p-4"
                   >
                     <Building2 className="h-5 w-5 text-[#225659] shrink-0 mt-0.5" />
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <p className="font-medium text-[#00030A]">{c.name}</p>
                       {c.memberRole ? (
                         <p className="text-xs text-[#54565B] mt-0.5 capitalize">
                           Rol en cliente: {c.memberRole}
                         </p>
                       ) : null}
+                      <Link
+                        href={`/viewer/dashboard?client=${encodeURIComponent(c.clientId)}`}
+                        className="mt-2 inline-block text-xs font-medium text-[#225659] no-underline hover:underline"
+                      >
+                        Ver dashboards de {c.name}
+                      </Link>
                     </div>
                   </li>
                 ))}

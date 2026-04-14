@@ -2,15 +2,17 @@
 import DashboardCard, {
   type Dashboard,
 } from "@/components/dashboard/DashboardCard";
-
-type FilterType = "todos" | "publicados" | "borradores";
+import {
+  filterViewerDashboards,
+  type ViewerDashboardFilter,
+} from "@/components/viewer/dashboard/filterViewerDashboards";
 
 interface ViewerDashboardGridProps {
   dashboards: Dashboard[];
   loading: boolean;
   error: string | null;
   searchQuery?: string;
-  filter?: FilterType;
+  filter?: ViewerDashboardFilter;
 }
 
 export default function ViewerDashboardGrid({
@@ -48,20 +50,11 @@ export default function ViewerDashboardGrid({
     );
   }
 
-  const normalizedQuery = searchQuery.trim().toLowerCase();
-  const filtered = dashboards.filter((d) => {
-    const matchesQuery = normalizedQuery
-      ? d.title.toLowerCase().includes(normalizedQuery) ||
-        d.description.toLowerCase().includes(normalizedQuery)
-      : true;
-    const matchesFilter =
-      filter === "todos"
-        ? true
-        : filter === "publicados"
-          ? d.status === "Publicado"
-          : d.status === "Borrador";
-    return matchesQuery && matchesFilter;
-  });
+  const filtered = filterViewerDashboards(
+    dashboards,
+    searchQuery,
+    filter
+  );
 
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">

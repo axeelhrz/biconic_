@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Dashboard } from "@/components/dashboard/DashboardCard";
 
@@ -8,6 +8,12 @@ export type ViewerCompanySummary = {
   clientId: string;
   name: string;
   memberRole: string | null;
+};
+
+export type ViewerDashboardGroup = {
+  clientId: string | null;
+  clientLabel: string;
+  dashboards: Dashboard[];
 };
 
 type SupabaseDashboardRow = {
@@ -56,6 +62,33 @@ function mapRowToDashboard(row: SupabaseDashboardRow): Dashboard {
     clientId: row.client_id ?? undefined,
     ownerId: row.user_id ?? undefined,
   };
+}
+
+function buildDashboardGroups(
+  enriched: Dashboard[],
+  companies: ViewerCompanySummary[]
+): ViewerDashboardGroup[] {
+  const memberClientIds = new Set(companies.map((c) => c.clientId));
+  const sorted = [...companies].sort((a, b) =>
+    a.name.localeCompare(b.name, "es", { sensitivity: "base" })
+  );
+  const groups: ViewerDashboardGroup[] = sorted.map((c) => ({
+    clientId: c.clientId,
+    clientLabel: c.name,
+    dashboards: enriched.filter((d) => d.clientId === c.clientId),
+  }));
+
+  const others = enriched.filter(
+    (d) => !d.clientId || !memberClientIds.has(d.clientId)
+  );
+  if (others.length > 0) {
+    groups.push({
+      clientId: null,
+      clientLabel: "Otros",
+      dashboards: others,
+    });
+  }
+  return groups;
 }
 
 export function useViewerAccessibleDashboards() {
@@ -207,18 +240,43 @@ export function useViewerAccessibleDashboards() {
     };
   }, []);
 
-  const publishedCount = dashboards.filter(
+  const clientNameByClientId = useMemo(() => {
+    return Object.fromEntries(
+      companies.map((c) => [c.clientId, c.name] as const)
+    ) as Record<string, string>;
+  }, [companies]);
+
+  const dashboardsWithLabels = useMemo((): Dashboard[] => {
+    return dashboards.map((d) => ({
+      ...d,
+      clientLabel:
+        d.clientId && clientNameByClientId[d.clientId]
+          ? clientNameByClientId[d.clientId]
+          : undefined,
+    }));
+  }, [dashboards, clientNameByClientId]);
+
+  const dashboardGroups = useMemo(
+    () => buildDashboardGroups(dashboardsWithLabels, companies),
+    [dashboardsWithLabels, companies]
+  );
+
+  const publishedCount = dashboardsWithLabels.filter(
     (d) => d.status === "Publicado"
   ).length;
-  const draftCount = dashboards.filter((d) => d.status === "Borrador").length;
+  const draftCount = dashboardsWithLabels.filter(
+    (d) => d.status === "Borrador"
+  ).length;
 
   return {
-    dashboards,
+    dashboards: dashboardsWithLabels,
     companies,
+    clientNameByClientId,
+    dashboardGroups,
     loading,
     error,
     publishedCount,
     draftCount,
-    totalCount: dashboards.length,
+    totalCount: dashboardsWithLabels.length,
   };
 }
