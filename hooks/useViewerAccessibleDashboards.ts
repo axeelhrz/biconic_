@@ -30,6 +30,11 @@ type SupabaseDashboardRow = {
   client_id?: string | null;
 };
 
+type DashboardPermissionRow = {
+  dashboard_id?: string | null;
+  client_member_id?: string | null;
+};
+
 function clientDisplayName(row: {
   company_name?: string | null;
   individual_full_name?: string | null;
@@ -169,17 +174,36 @@ export function useViewerAccessibleDashboards() {
         if (ownErr) throw ownErr;
         const ownRows = (ownData as SupabaseDashboardRow[] | null) ?? [];
 
-        let sharedDashboardIds: string[] = [];
+        let sharedPermissionRows: DashboardPermissionRow[] = [];
         if (memberIds.length > 0) {
           const { data: permData, error: permErr } = await supabase
             .from("dashboard_has_client_permissions")
-            .select("dashboard_id,is_active")
+            .select("dashboard_id,client_member_id,is_active")
             .in("client_member_id", memberIds)
             .eq("is_active", true);
           if (permErr) throw permErr;
-          sharedDashboardIds = (permData ?? [])
-            .map((p: { dashboard_id?: string | null }) => p?.dashboard_id)
-            .filter((v): v is string => typeof v === "string");
+          sharedPermissionRows = (permData ?? []) as DashboardPermissionRow[];
+        }
+
+        const memberClientByMemberId = new Map(
+          memberships.map((m) => [String(m.id), String(m.client_id)] as const)
+        );
+        const sharedDashboardIds = sharedPermissionRows
+          .map((p) => p.dashboard_id)
+          .filter((v): v is string => typeof v === "string");
+        const sharedDashboardIdSet = new Set(sharedDashboardIds.map(String));
+        const accessClientIdsByDashboardId = new Map<string, Set<string>>();
+        for (const perm of sharedPermissionRows) {
+          const dashboardId = perm.dashboard_id ? String(perm.dashboard_id) : "";
+          const memberId = perm.client_member_id
+            ? String(perm.client_member_id)
+            : "";
+          if (!dashboardId || !memberId) continue;
+          const clientId = memberClientByMemberId.get(memberId);
+          if (!clientId) continue;
+          const prev = accessClientIdsByDashboardId.get(dashboardId) ?? new Set();
+          prev.add(clientId);
+          accessClientIdsByDashboardId.set(dashboardId, prev);
         }
 
         const ownIds = ownRows.map((r) => String(r.id));
@@ -202,16 +226,24 @@ export function useViewerAccessibleDashboards() {
           }
         }
 
-        const allowedClient = userClientIds;
         const filteredRows = allRows.filter((row) => {
           const isOwner = row.user_id === user.id;
           if (isOwner) return true;
-          const cid = row.client_id ? String(row.client_id) : null;
-          if (!cid || allowedClient.size === 0) return false;
-          return allowedClient.has(cid);
+          return sharedDashboardIdSet.has(String(row.id));
         });
 
-        const mappedList: Dashboard[] = filteredRows.map(mapRowToDashboard);
+        const mappedList: Dashboard[] = filteredRows.map((row) => {
+          const base = mapRowToDashboard(row);
+          if (row.user_id === user.id) return base;
+          const accessClientIds = accessClientIdsByDashboardId.get(String(row.id));
+          if (!accessClientIds || accessClientIds.size === 0) return base;
+          const currentClientId = base.clientId;
+          if (currentClientId && userClientIds.has(currentClientId)) return base;
+          return {
+            ...base,
+            clientId: Array.from(accessClientIds)[0],
+          };
+        });
         const deduped = Array.from(
           mappedList
             .reduce((m, d) => m.set(d.id, d), new Map<string, Dashboard>())
