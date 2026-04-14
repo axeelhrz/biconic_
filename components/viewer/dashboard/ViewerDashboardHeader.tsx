@@ -75,13 +75,23 @@ export default function ViewerDashboardHeader() {
   const isLoading = isUserLoading || isRoleLoading;
 
   return (
-    <header className="box-border flex items-center justify-between w-full max-w-[1390px] h-14 px-16 py-2.5 mx-auto my-4 bg-[#FDFDFD] border border-[#ECECEC] rounded-full">
+    <header
+      className="box-border flex items-center justify-between w-full max-w-[1390px] h-14 px-16 py-2.5 mx-auto my-4 border rounded-full"
+      style={{
+        background: "var(--platform-surface)",
+        borderColor: "var(--platform-border)",
+      }}
+    >
       <Link
         href="/viewer"
-        className="flex items-center gap-3 text-2xl font-bold italic text-[#00030A] no-underline"
+        className="flex items-center gap-3 text-2xl font-bold italic no-underline"
+        style={{ color: "var(--platform-fg)" }}
       >
         <div className="relative w-[42px] h-5 bg-gradient-to-r from-[#23E3B4] via-[#40EF8E] to-[#02B8D1] rounded-[10px]">
-          <div className="absolute top-1/2 left-5 w-3.5 h-3.5 bg-[#FDFDFD] rounded-full -translate-y-1/2" />
+          <div
+            className="absolute top-1/2 left-5 w-3.5 h-3.5 rounded-full -translate-y-1/2"
+            style={{ background: "var(--platform-surface)" }}
+          />
         </div>
         <span>biconic</span>
       </Link>
@@ -94,8 +104,8 @@ export default function ViewerDashboardHeader() {
           const base =
             "px-4 py-2 text-sm font-normal rounded-full transition-colors duration-300";
           const active =
-            "text-white bg-gradient-to-b from-[#191B24] via-[#242D34] to-[#225659]";
-          const inactive = "text-[#00030A]";
+            "text-[var(--platform-accent-fg)] bg-[var(--platform-accent)]";
+          const inactive = "text-[var(--platform-fg-muted)] hover:text-[var(--platform-fg)]";
           return (
             <Link
               key={link.label}
@@ -110,10 +120,10 @@ export default function ViewerDashboardHeader() {
       <div className="flex items-center gap-2.5">
         {isLoading ? (
           <div className="animate-pulse flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-gray-200 rounded-full" />
+            <div className="w-8 h-8 rounded-full bg-[var(--platform-surface-hover)]" />
             <div className="flex flex-col gap-1.5">
-              <div className="w-24 h-4 bg-gray-200 rounded" />
-              <div className="w-16 h-3 bg-gray-200 rounded" />
+              <div className="w-24 h-4 rounded bg-[var(--platform-surface-hover)]" />
+              <div className="w-16 h-3 rounded bg-[var(--platform-surface-hover)]" />
             </div>
           </div>
         ) : userName ? (
@@ -130,10 +140,16 @@ export default function ViewerDashboardHeader() {
                 height={32}
               />
               <div className="flex flex-col">
-                <span className="text-base font-medium leading-5 text-[#00030A]">
+                <span
+                  className="text-base font-medium leading-5"
+                  style={{ color: "var(--platform-fg)" }}
+                >
                   {userName}
                 </span>
-                <span className="text-sm font-medium leading-4 text-[#54565B]">
+                <span
+                  className="text-sm font-medium leading-4"
+                  style={{ color: "var(--platform-fg-muted)" }}
+                >
                   {appRoleLabel(userRole)}
                 </span>
               </div>
@@ -152,12 +168,18 @@ export default function ViewerDashboardHeader() {
               height={32}
             />
             <div className="flex flex-col">
-              <span className="text-base font-medium leading-5 text-[#00030A]">
+              <span
+                className="text-base font-medium leading-5"
+                style={{ color: "var(--platform-fg)" }}
+              >
                 <Link href="/auth/login" className="underline">
                   Iniciar sesión
                 </Link>
               </span>
-              <span className="text-sm font-medium leading-4 text-[#54565B]">
+              <span
+                className="text-sm font-medium leading-4"
+                style={{ color: "var(--platform-fg-muted)" }}
+              >
                 Invitado
               </span>
             </div>

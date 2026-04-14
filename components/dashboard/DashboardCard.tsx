@@ -199,7 +199,8 @@ export default function DashboardCard({
 
                 {/* Botón Compartir */}
                 <button
-                className="text-[#54565B] hover:text-black"
+                className="transition-colors"
+                style={{ color: "var(--platform-fg-muted)" }}
                 onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -211,7 +212,8 @@ export default function DashboardCard({
                 </button>
 
                 <button
-                className="text-[#54565B] hover:text-black"
+                className="transition-colors"
+                style={{ color: "var(--platform-fg-muted)" }}
                 onClick={(e) => {
                     // Evita navegar cuando se hace click en el botón de opciones
                     e.preventDefault();

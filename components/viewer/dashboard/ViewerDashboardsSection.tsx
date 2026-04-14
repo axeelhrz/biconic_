@@ -88,7 +88,13 @@ export default function ViewerDashboardsSection() {
   );
 
   return (
-    <div className="flex flex-col box-border w-full max-w-[1390px] px-10 py-8 mx-auto bg-[#FDFDFD] border border-[#ECECEC] rounded-[30px] gap-4">
+    <div
+      className="flex flex-col box-border w-full max-w-[1390px] px-10 py-8 mx-auto border rounded-[30px] gap-4"
+      style={{
+        background: "var(--platform-bg-elevated)",
+        borderColor: "var(--platform-border)",
+      }}
+    >
       <DashboardSectionHeader
         title="Dashboards"
         subtitle={`Modo visualización · ${appRoleLabel(role)}`}
@@ -114,17 +120,17 @@ export default function ViewerDashboardsSection() {
         <div className="flex flex-col gap-6">
           {companies.length > 0 ? (
             <div>
-              <h2 className="text-base font-semibold text-[#00030A] mb-3">
+              <h2 className="text-base font-semibold text-[var(--platform-fg)] mb-3">
                 Clientes asignados
               </h2>
-              <ul className="flex flex-col gap-2 text-sm text-[#54565B]">
+              <ul className="flex flex-col gap-2 text-sm text-[var(--platform-fg-muted)]">
                 {companies.map((c) => (
                   <li key={c.clientId} id={viewerSectionDomId(c.clientId)}>
-                    <span className="font-medium text-[#00030A]">{c.name}</span>
+                    <span className="font-medium text-[var(--platform-fg)]">{c.name}</span>
                     {" · "}
                     <Link
                       href={`/viewer/dashboard?client=${encodeURIComponent(c.clientId)}`}
-                      className="text-[#225659] underline underline-offset-2"
+                      className="text-[var(--platform-accent)] underline underline-offset-2"
                     >
                       Ir a la sección
                     </Link>
@@ -133,7 +139,7 @@ export default function ViewerDashboardsSection() {
               </ul>
             </div>
           ) : null}
-          <div className="rounded-xl border border-[#ECECEC] bg-white px-5 py-6 text-center text-sm text-[#54565B]">
+          <div className="rounded-xl border border-[var(--platform-border)] bg-[var(--platform-surface)] px-5 py-6 text-center text-sm text-[var(--platform-fg-muted)]">
             Aún no tenés dashboards compartidos. Cuando tu administrador te
             asigne acceso, aparecerán aquí agrupados por cliente.
           </div>
@@ -152,11 +158,11 @@ export default function ViewerDashboardsSection() {
                 id={sectionId}
                 className={`scroll-mt-28 rounded-2xl border border-transparent p-1 -m-1 transition-shadow ${
                   isHighlighted
-                    ? "border-[#225659]/30 shadow-[0_0_0_3px_rgba(34,86,89,0.12)]"
+                    ? "border-[var(--platform-accent)]/30 shadow-[0_0_0_3px_rgba(35,227,180,0.15)]"
                     : ""
                 }`}
               >
-                <h2 className="text-base font-semibold text-[#00030A] mb-4">
+                <h2 className="text-base font-semibold text-[var(--platform-fg)] mb-4">
                   {group.clientLabel}
                 </h2>
                 <ViewerDashboardGrid

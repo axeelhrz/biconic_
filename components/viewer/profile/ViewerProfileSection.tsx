@@ -114,20 +114,26 @@ export default function ViewerProfileSection() {
   }, []);
 
   return (
-    <div className="flex flex-col box-border w-full max-w-[800px] px-10 py-8 mx-auto bg-[#FDFDFD] border border-[#ECECEC] rounded-[30px] gap-6">
-      <h1 className="text-2xl font-semibold">Mi perfil</h1>
-      <p className="text-sm text-[#54565B]">
+    <div
+      className="flex flex-col box-border w-full max-w-[800px] px-10 py-8 mx-auto border rounded-[30px] gap-6"
+      style={{
+        background: "var(--platform-bg-elevated)",
+        borderColor: "var(--platform-border)",
+      }}
+    >
+      <h1 className="text-2xl font-semibold text-[var(--platform-fg)]">Mi perfil</h1>
+      <p className="text-sm text-[var(--platform-fg-muted)]">
         Datos de tu cuenta y de la organización a la que perteneces.
       </p>
 
       {loading ? (
         <div className="space-y-3 animate-pulse">
-          <div className="h-4 w-48 bg-gray-200 rounded" />
-          <div className="h-4 w-64 bg-gray-200 rounded" />
+          <div className="h-4 w-48 rounded bg-[var(--platform-surface)]" />
+          <div className="h-4 w-64 rounded bg-[var(--platform-surface)]" />
         </div>
       ) : (
         <>
-          <div className="flex flex-col gap-2 text-sm">
+          <div className="flex flex-col gap-2 text-sm text-[var(--platform-fg)]">
             <p>
               <span className="font-medium">Email:</span> {email ?? "—"}
             </p>
@@ -146,12 +152,12 @@ export default function ViewerProfileSection() {
           </div>
 
           <div>
-            <h2 className="text-lg font-semibold text-[#00030A] mb-2 flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-[var(--platform-fg)] mb-2 flex items-center gap-2">
               <Building2 className="h-5 w-5" />
               Empresa{companies.length !== 1 ? "s" : ""}
             </h2>
             {companies.length === 0 ? (
-              <p className="text-sm text-[#54565B]">
+              <p className="text-sm text-[var(--platform-fg-muted)]">
                 No hay empresa vinculada. Si deberías ver una organización aquí,
                 contacta al administrador.
               </p>
@@ -160,11 +166,11 @@ export default function ViewerProfileSection() {
                 {companies.map((c) => (
                   <li
                     key={c.clientId}
-                    className="rounded-xl border border-[#ECECEC] bg-white px-4 py-3 text-sm"
+                    className="rounded-xl border border-[var(--platform-border)] bg-[var(--platform-surface)] px-4 py-3 text-sm"
                   >
-                    <span className="font-medium text-[#00030A]">{c.name}</span>
+                    <span className="font-medium text-[var(--platform-fg)]">{c.name}</span>
                     {c.memberRole ? (
-                      <span className="block text-xs text-[#54565B] mt-1 capitalize">
+                      <span className="block text-xs text-[var(--platform-fg-muted)] mt-1 capitalize">
                         Rol en cliente: {c.memberRole}
                       </span>
                     ) : null}

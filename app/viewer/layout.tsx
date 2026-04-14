@@ -10,8 +10,11 @@ export default function ViewerLayout({
   return (
     <>
       <ViewerDashboardHeader />
-      <main className="flex flex-col items-center bg-[#F4F6FA] overflow-hidden">
-        <div className="flex-1 w-full flex flex-col items-center overflow-hidden">
+      <main
+        className="flex flex-col items-center overflow-hidden"
+        style={{ background: "var(--platform-bg)" }}
+      >
+        <div className="flex-1 w-full flex flex-col items-center overflow-hidden biconic-platform-content">
           <div className="flex-1 flex flex-col w-full max-w-[1400px] overflow-hidden">
             {children}
           </div>
