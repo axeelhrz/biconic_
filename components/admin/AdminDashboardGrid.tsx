@@ -5,6 +5,9 @@ import DashboardCard, { Dashboard } from "@/components/dashboard/DashboardCard";
 import { createClient } from "@/lib/supabase/client";
 import { DeleteDashboardDialog } from "./dashboard/DeleteDashboardDialog";
 import { SearchX, LayoutDashboard } from "lucide-react";
+import { toast } from "sonner";
+import { publishDashboardAdmin } from "@/app/admin/(main)/dashboard/actions";
+import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
 
 // Shape for mapping Supabase rows
 type SupabaseDashboardRow = {
@@ -15,6 +18,7 @@ type SupabaseDashboardRow = {
   thumbnail_url?: string | null;
   status?: string | null;
   published?: boolean | null;
+  visibility?: string | null;
   description?: string | null;
   views?: number | null;
   user_id?: string;
@@ -83,12 +87,7 @@ export default function AdminDashboardGrid({
         }
 
         const mapped: Dashboard[] = rows.map((row) => {
-            const status: Dashboard["status"] =
-              row.status === "Publicado" || row.status === "Borrador"
-                ? row.status
-                : row.published
-                ? "Publicado"
-                : "Borrador";
+            const status = dashboardPublishedStatusFromRow(row);
 
             const ownerProfile = row.user_id ? ownerById.get(row.user_id) : undefined;
 
@@ -133,6 +132,19 @@ export default function AdminDashboardGrid({
       // Remove from local state so we don't have to reload everything
       setDashboards(prev => prev.filter(d => d.id !== dashboardToDelete?.id));
   };
+
+  const handlePublish = async (d: Dashboard) => {
+    const res = await publishDashboardAdmin(d.id, true);
+    if (!res.ok) {
+      toast.error(res.error ?? "No se pudo publicar el dashboard");
+      return;
+    }
+    toast.success("Dashboard publicado; los clientes lo verán como publicado.");
+    setDashboards((prev) =>
+      prev.map((x) => (x.id === d.id ? { ...x, status: "Publicado" } : x))
+    );
+  };
+
   // Existing code had [] dep array, meaning it loaded ONCE and filtered client-side.
   // I will respect that pattern.
 
@@ -203,6 +215,7 @@ export default function AdminDashboardGrid({
           dashboard={dashboard}
           href={`${basePath}/${dashboard.id}`}
           onDelete={handleDeleteClick}
+          onPublish={handlePublish}
         />
       ))}
       <DeleteDashboardDialog 

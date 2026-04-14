@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
-import { LayoutDashboard } from "lucide-react";
+import { LayoutDashboard, Send } from "lucide-react";
 import EyeIcon from "../icons/EyeIcon";
 import EllipsisHorizontalIcon from "../icons/EllipsisHorizontalIcon";
 import ShareDashboardModal from "./ShareDashboardModal"; // Import the modal
@@ -46,6 +46,8 @@ interface DashboardCardProps {
     dashboard: Dashboard;
     href?: string;
     onDelete?: (dashboard: Dashboard) => void;
+    /** Si se define, en borrador se muestra acción para publicar (p. ej. admin). */
+    onPublish?: (dashboard: Dashboard) => void | Promise<void>;
 }
 
 // Inline Share Icon if not available (copying from EtlCard for consistency)
@@ -68,6 +70,7 @@ export default function DashboardCard({
   dashboard,
   href,
   onDelete,
+  onPublish,
 }: DashboardCardProps) {
   const {
     id,
@@ -81,6 +84,7 @@ export default function DashboardCard({
     clientLabel,
   } = dashboard;
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const activePageId = layout?.activePageId ?? layout?.pages?.[0]?.id;
   const hasLayoutPreview = Array.isArray(layout?.widgets)
     && layout.widgets.some((w) => !activePageId || w.pageId === activePageId);
@@ -167,6 +171,30 @@ export default function DashboardCard({
             
             <div className="flex items-center gap-2">
                 {/* Botón Eliminar - Solo si se pasa onDelete */}
+                {onPublish && status === "Borrador" && (
+                    <button
+                        className="transition-colors hover:opacity-80 disabled:opacity-40"
+                        style={{ color: "var(--platform-accent)" }}
+                        disabled={publishing}
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void (async () => {
+                              setPublishing(true);
+                              try {
+                                await onPublish(dashboard);
+                              } finally {
+                                setPublishing(false);
+                              }
+                            })();
+                        }}
+                        title="Publicar para clientes"
+                        aria-label="Publicar dashboard"
+                    >
+                        <Send className="h-5 w-5" />
+                    </button>
+                )}
+
                 {onDelete && (
                     <button
                         className="transition-colors hover:opacity-80"

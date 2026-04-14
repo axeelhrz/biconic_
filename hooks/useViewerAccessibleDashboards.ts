@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Dashboard } from "@/components/dashboard/DashboardCard";
+import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
 
 export type ViewerCompanySummary = {
   clientId: string;
@@ -24,6 +25,7 @@ type SupabaseDashboardRow = {
   thumbnail_url?: string | null;
   status?: string | null;
   published?: boolean | null;
+  visibility?: string | null;
   description?: string | null;
   views?: number | null;
   user_id?: string | null;
@@ -50,12 +52,7 @@ function clientDisplayName(row: {
 }
 
 function mapRowToDashboard(row: SupabaseDashboardRow): Dashboard {
-  const status: Dashboard["status"] =
-    row.status === "Publicado" || row.status === "Borrador"
-      ? row.status
-      : row.published
-        ? "Publicado"
-        : "Borrador";
+  const status = dashboardPublishedStatusFromRow(row);
 
   return {
     id: String(row.id),

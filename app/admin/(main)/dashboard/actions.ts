@@ -276,6 +276,41 @@ export async function updateDashboardTitle(dashboardId: string, title: string) {
   return { ok: true };
 }
 
+/** Publicar o despublicar dashboard para clientes (usa `visibility` en DB). */
+export async function publishDashboardAdmin(
+  dashboardId: string,
+  published: boolean
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { ok: false, error: "Unauthorized" };
+  }
+
+  const canEdit = await verifyDashboardEditAccess(dashboardId, user.id);
+  if (!canEdit) {
+    return {
+      ok: false,
+      error: "Forbidden: You don't have permission to edit this dashboard",
+    };
+  }
+
+  const { error } = await supabase
+    .from("dashboard")
+    .update({ visibility: published ? "public" : "private" })
+    .eq("id", dashboardId);
+
+  if (error) {
+    console.error("Error updating dashboard visibility:", error);
+    return { ok: false, error: error.message };
+  }
+
+  return { ok: true };
+}
+
 // === Versioning Actions ===
 
 export async function saveDashboardVersion(dashboardId: string, versionName: string | null = null) {

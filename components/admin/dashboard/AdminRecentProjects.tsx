@@ -5,6 +5,7 @@ import AdminDashboardProjectCard, {
   type Dashboard,
 } from "./AdminDashboardProjectCard";
 import { createClient } from "@/lib/supabase/client";
+import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
 
 export default function AdminRecentProjects() {
   const [items, setItems] = useState<Dashboard[]>([]);
@@ -58,7 +59,7 @@ export default function AdminRecentProjects() {
             id: String(row.id),
             title: row.title ?? "Sin título",
             imageUrl: row.image_url ?? "/Image.svg",
-            status: row.published ? "Publicado" : "Borrador",
+            status: dashboardPublishedStatusFromRow(row),
             description: row.description ?? "",
 
             // Data is now nested inside the 'clients' object
