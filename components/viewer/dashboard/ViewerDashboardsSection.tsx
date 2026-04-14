@@ -104,6 +104,7 @@ export default function ViewerDashboardsSection() {
       <DashboardFilterBar
         onSearchChange={setSearchQuery}
         onFilterChange={setActiveFilter}
+        variant="platform"
       />
       {!loading && !error ? (
         <DashboardStatsGrid stats={statsForGrid} />
