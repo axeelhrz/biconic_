@@ -11,13 +11,32 @@ import {
 } from "@/lib/geo/geo-enrichment";
 import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
 import { expandMonthValueWithYearFromFilters } from "@/lib/dashboard/expandMonthFilterWithYear";
+import { buildPgMetricClauses, type MetricClauseMetric } from "@/lib/dashboard/pgAggregateMetricClauses";
+import {
+  checkBalancedParens,
+  expressionToSql,
+  FormulaCycleError,
+  quotedColumn,
+  toSqlLiteral,
+  unwrapAggExpression,
+} from "@/lib/formula-engine";
+import type { DerivedColumnRef } from "@/lib/formula-engine";
 
-// --- Interfaces (Copied from internal route) ---
+// --- Interfaces (alineadas con la ruta interna) ---
+interface MetricCondition {
+  field: string;
+  operator: string;
+  value: unknown;
+}
+
 interface Metric {
   field: string;
   func: string;
   alias: string;
   cast?: "numeric" | "sanitize";
+  condition?: MetricCondition;
+  formula?: string;
+  expression?: string;
 }
 
 interface Filter {
@@ -38,6 +57,12 @@ interface AggregationRequest {
   dimension?: string;
   dimensions?: string[];
   metrics: Metric[];
+  /** Columnas calculadas (mismo shape que aggregate-data interno). */
+  derivedColumns?: DerivedColumnRef[];
+  /** Definiciones de métricas guardadas para resolver por nombre. */
+  savedMetrics?: Array<{ name: string; field?: string; func?: string; alias?: string; expression?: string }>;
+  /** Opcional: fuerza el ETL usado para layout (por defecto el del dashboard del token). */
+  etlId?: string;
   filters?: Filter[];
   orderBy?: OrderBy;
   limit?: number;
@@ -50,17 +75,23 @@ interface AggregationRequest {
   dateSlashOrder?: "DMY" | "MDY";
 }
 
-// --- Constantes ---
-function toSqlLiteral(v: any): string {
-  if (v === null || typeof v === "undefined") return "NULL";
-  if (typeof v === "number" && Number.isFinite(v)) return String(v);
-  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-  const s = String(v).replace(/'/g, "''");
-  return `'${s}'`;
-}
+const ALLOWED_AGG_FUNCTIONS = [
+  "SUM",
+  "AVG",
+  "COUNT",
+  "MIN",
+  "MAX",
+  "COUNT(DISTINCT",
+];
 
 const normalizeStr = (str: string) =>
   str ? str.replace(/\s+/g, "").toUpperCase() : "";
+
+function isInvalidIdentifier(value: unknown): boolean {
+  if (value == null) return true;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "" || normalized === "undefined" || normalized === "null";
+}
 
 /** Obtiene nombres de columnas de la tabla desde information_schema. Devuelve null si falla o no hay SUPABASE_DB_URL. */
 async function fetchTableColumnNames(schemaName: string, tableName: string): Promise<string[] | null> {
@@ -211,36 +242,271 @@ export async function POST(
       validFilters.push(...(body.filters || []));
     }
 
-    // 1. Construcción de Métricas (Usamos metric_X internamente para seguridad SQL)
-    const metricClauses = body.metrics
-      .map((m, i) => {
-        const func = m.func.toUpperCase();
-        const safeField = m.field.replace(/"/g, '""');
+    if (!Array.isArray(body.metrics) || body.metrics.length === 0) {
+      return NextResponse.json({ error: "Se requiere al menos una métrica (metrics)" }, { status: 400 });
+    }
 
-        const fieldExpr = (() => {
-          if (m.cast === "sanitize")
-            return `regexp_replace("${safeField}"::text, '[^0-9\\.-]', '', 'g')::numeric`;
-          if (m.cast === "numeric") return `"${safeField}"::numeric`;
-          return `"${safeField}"`;
-        })();
+    const invalidDimensions = [
+      ...(Array.isArray(body.dimensions) ? body.dimensions : []),
+      body.dimension,
+      body.chartXAxis,
+    ].filter((value) => value !== undefined && isInvalidIdentifier(value));
+    if (invalidDimensions.length > 0) {
+      return NextResponse.json(
+        { error: "Hay dimensiones/campos inválidos en la configuración (valor vacío, undefined o null)." },
+        { status: 400 }
+      );
+    }
 
-        // Internamente usamos metric_0, metric_1 para evitar errores de SQL con caracteres raros
-        const internalAlias = `metric_${i}`;
+    for (let i = 0; i < body.metrics.length; i++) {
+      const metric = body.metrics[i];
+      if (metric.formula) continue;
+      if (isInvalidIdentifier(metric.field) && !String(metric.expression ?? "").trim()) {
+        return NextResponse.json(
+          { error: `Métrica en posición ${i + 1}: field inválido (vacío, undefined o null).` },
+          { status: 400 }
+        );
+      }
+    }
 
-        // Guardamos el internalAlias en el objeto métrica para usarlo en OrderBy
-        (m as any).internalAlias = internalAlias;
+    const allowedAggSet = new Set(ALLOWED_AGG_FUNCTIONS.map((f) => f.toUpperCase()));
+    const allowedAggWhenExpression = new Set([
+      "COUNTIF",
+      "SUMIF",
+      "COUNTIFS",
+      "SUMIFS",
+      "AVERAGEIF",
+      "MAXIFS",
+      "MINIFS",
+      "MEDIAN",
+      "MODE",
+    ]);
+    for (let i = 0; i < body.metrics.length; i++) {
+      const m = body.metrics[i];
+      if (m.formula) continue;
+      const func = (m.func || "").toString().toUpperCase().trim();
+      const expr = (m as Metric & { expression?: string }).expression?.trim() ?? "";
+      const exprIsCountIfSumIf = /^\s*(COUNTIF|SUMIF|COUNTIFS|SUMIFS|AVERAGEIF|MAXIFS|MINIFS)\s*\(/i.test(expr);
+      const exprIsMedianMode = /^\s*(MEDIAN|MODE)\s*\(/i.test(expr);
+      const allowed =
+        allowedAggSet.has(func) ||
+        func.startsWith("COUNT(DISTINCT") ||
+        func === "COUNTA" ||
+        allowedAggWhenExpression.has(func) ||
+        exprIsCountIfSumIf ||
+        exprIsMedianMode;
+      if (!allowed) {
+        return NextResponse.json(
+          {
+            error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use SUM, AVG, COUNT, COUNTA, MIN, MAX, COUNT(DISTINCT), MEDIAN, MODE, o expresiones con COUNTIF/SUMIF/...`,
+          },
+          { status: 400 }
+        );
+      }
+    }
 
-        if (func.startsWith("COUNT(DISTINCT"))
-          return `COUNT(DISTINCT ${fieldExpr}) AS "${internalAlias}"`;
-        return `${func}(${fieldExpr}) AS "${internalAlias}"`;
-      })
-      .join(", ");
+    const buildWhenClause = (cond: MetricCondition): string => {
+      const op = (cond.operator || "=").toUpperCase().trim();
+      const f = quotedColumn(cond.field);
+      if (op === "IN") {
+        const list = (Array.isArray(cond.value) ? cond.value : [cond.value])
+          .map((x: unknown) => toSqlLiteral(x))
+          .join(", ");
+        return `${f} IN (${list})`;
+      }
+      if ((op === "IS" || op === "IS NOT") && cond.value == null) return `${f} ${op} NULL`;
+      return `${f} ${op} ${toSqlLiteral(cond.value)}`;
+    };
+    const buildConditionExpr = (cond: MetricCondition, thenExpr: string): string =>
+      `CASE WHEN ${buildWhenClause(cond)} THEN ${thenExpr} END`;
 
-    // 2. Construcción de Dimensión
+    const derivedByName: Record<string, DerivedColumnRef> = {};
+
+    const addDerivedFromArray = (arr: unknown[]) => {
+      for (const d of arr) {
+        const item = d as Record<string, unknown>;
+        const name = String(item?.name ?? "").trim();
+        const expression = String(item?.expression ?? "").trim();
+        if (!name || !expression) continue;
+        const key = name.toLowerCase();
+        if (!derivedByName[key]) {
+          derivedByName[key] = {
+            name,
+            expression,
+            defaultAggregation: String(item?.defaultAggregation ?? item?.default_aggregation ?? "SUM"),
+          };
+        }
+      }
+    };
+
+    if (Array.isArray(body.derivedColumns)) addDerivedFromArray(body.derivedColumns);
+
+    const etlIdForLookup: string | null = body.etlId ?? dashboard.etl_id ?? null;
+
+    const savedMetricByName: Record<string, { field: string; func: string; alias: string; expression?: string }> = {};
+    if (etlIdForLookup) {
+      try {
+        const { data: etlRow } = await supabase
+          .from("etl")
+          .select("layout")
+          .eq("id", etlIdForLookup)
+          .maybeSingle();
+        if (etlRow) {
+          const layout = etlRow.layout as Record<string, unknown> | undefined;
+          const cfg = (layout?.dataset_config ?? layout?.datasetConfig) as Record<string, unknown> | undefined;
+          const raw = cfg?.derivedColumns ?? cfg?.derived_columns;
+          if (Array.isArray(raw)) addDerivedFromArray(raw);
+          const savedList = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
+          for (const sm of savedList) {
+            const s = sm as {
+              name?: string;
+              metric?: { field?: string; func?: string; alias?: string; expression?: string };
+              aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] };
+            };
+            const name = String(s?.name ?? "").trim().toLowerCase();
+            if (!name) continue;
+            const topMetric = s?.metric;
+            const cfgMetrics = s?.aggregationConfig?.metrics;
+            const firstMetric = Array.isArray(cfgMetrics) && cfgMetrics.length > 0 ? cfgMetrics[0] : topMetric;
+            if (!firstMetric) continue;
+            let field = String(firstMetric?.field ?? "").trim();
+            const expression = (firstMetric as { expression?: string }).expression;
+            const alias = String(firstMetric?.alias ?? name);
+            if (field.toLowerCase() === name && !expression) {
+              const byAlias =
+                Array.isArray(cfgMetrics) && cfgMetrics.length > 0
+                  ? cfgMetrics.find((mm: { field?: string }) => mm?.field && String(mm.field).trim().toLowerCase() !== name)
+                  : null;
+              if (byAlias) {
+                field = String((byAlias as { field?: string }).field ?? "").trim();
+              } else {
+                field = alias;
+              }
+              if (!field || field.toLowerCase() === name) {
+                const agg = s?.aggregationConfig as
+                  | { dimension?: string; dimension2?: string; dimensions?: string[] }
+                  | undefined;
+                const dim =
+                  (agg?.dimension && String(agg.dimension).trim()) ||
+                  (agg?.dimension2 && String(agg.dimension2).trim()) ||
+                  (Array.isArray(agg?.dimensions) && agg.dimensions[0] && String(agg.dimensions[0]).trim()) ||
+                  "";
+                if (dim && dim.toLowerCase() !== name) field = dim;
+              }
+            }
+            savedMetricByName[name] = {
+              field,
+              func: String(firstMetric?.func ?? "SUM").toUpperCase(),
+              alias,
+              ...(expression && String(expression).trim() && { expression: String(expression).trim() }),
+            };
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (Array.isArray(body.savedMetrics) && body.savedMetrics.length > 0) {
+      for (const sm of body.savedMetrics) {
+        const name = typeof sm?.name === "string" ? String(sm.name).trim() : "";
+        if (!name) continue;
+        const key = name.toLowerCase();
+        const field = typeof sm.field === "string" ? String(sm.field).trim() : "";
+        const func = typeof sm.func === "string" ? String(sm.func).toUpperCase() : "SUM";
+        const alias = typeof sm.alias === "string" ? String(sm.alias).trim() : name;
+        const expression = typeof sm.expression === "string" ? String(sm.expression).trim() : undefined;
+        savedMetricByName[key] = {
+          field: field || name,
+          func,
+          alias: alias || name,
+          ...(expression ? { expression } : {}),
+        };
+      }
+    }
+
+    const exprToSql = (e: string): string | null => {
+      try {
+        return expressionToSql(e, derivedByName);
+      } catch (err) {
+        if (err instanceof FormulaCycleError) return null;
+        throw err;
+      }
+    };
+
+    const getDerived = (field: string | undefined): DerivedColumnRef | undefined => {
+      if (!field || !String(field).trim()) return undefined;
+      return derivedByName[String(field).trim().toLowerCase()];
+    };
+
+    const metricsBase = body.metrics.filter((m) => !m.formula);
+    const metricsFormula = body.metrics.filter((m) => m.formula);
+
+    for (let i = 0; i < metricsBase.length; i++) {
+      const m = metricsBase[i];
+      const derived: DerivedColumnRef | undefined = getDerived(m.field);
+      const metricExpr = (m as Metric & { expression?: string }).expression;
+      let expr = metricExpr && metricExpr.trim() ? metricExpr.trim() : (derived?.expression ?? null);
+      if (expr) {
+        const uw = unwrapAggExpression(expr);
+        if (uw) expr = uw.inner;
+      }
+      if (expr != null && String(expr).trim() !== "") {
+        const exprStr = String(expr).trim();
+        const parenError = checkBalancedParens(exprStr);
+        if (parenError) {
+          return NextResponse.json({ error: `Métrica en posición ${i + 1}: ${parenError}` }, { status: 400 });
+        }
+        try {
+          expressionToSql(exprStr, derivedByName);
+        } catch (err) {
+          if (err instanceof FormulaCycleError) {
+            return NextResponse.json({ error: `Métrica en posición ${i + 1}: ${err.message}` }, { status: 400 });
+          }
+          throw err;
+        }
+        const parsedExpr = expressionToSql(exprStr, derivedByName);
+        if (!parsedExpr) {
+          return NextResponse.json(
+            {
+              error: `Métrica en posición ${i + 1}: la expresión no es válida. Revisá columnas del dataset, operadores (* - + / ^ & ) y funciones soportadas.`,
+            },
+            { status: 400 }
+          );
+        }
+      } else if (!m.field || !String(m.field).trim()) {
+        return NextResponse.json(
+          { error: `Métrica en posición ${i + 1}: indicá una expresión o un campo.` },
+          { status: 400 }
+        );
+      }
+    }
+
+    const { metricClauses, ratioAggregateError } = buildPgMetricClauses({
+      bodyMetrics: body.metrics as MetricClauseMetric[],
+      metricsBase: metricsBase as MetricClauseMetric[],
+      derivedByName,
+      savedMetricByName,
+      getDerived,
+      exprToSql,
+      buildWhenClause,
+      buildConditionExpr,
+    });
+
+    if (ratioAggregateError) {
+      return NextResponse.json(
+        {
+          error:
+            "No se puede usar una expresión que sea «agregado / agregado» (ej. sum(...)/count(...)) como una sola métrica. Creá dos métricas y luego una fórmula con metric_0 / NULLIF(metric_1, 0).",
+        },
+        { status: 400 }
+      );
+    }
+
     const dimList =
       Array.isArray(body.dimensions) && body.dimensions.length > 0
-        ? body.dimensions
-        : body.dimension
+        ? body.dimensions.filter((d) => !isInvalidIdentifier(d))
+        : body.dimension && !isInvalidIdentifier(body.dimension)
           ? [body.dimension]
           : [];
     let dimensionSelectClause = "";
@@ -248,17 +514,22 @@ export async function POST(
 
     if (dimList.length > 0) {
       const parts = dimList.map((d) => {
-        const safeDimension = d.replace(/"/g, '""');
-        const coalesceExpression = `COALESCE("${safeDimension}"::text, 'Sin Categoría')`;
-        return { select: `${coalesceExpression} AS "${safeDimension}"`, group: coalesceExpression };
+        const col = quotedColumn(d);
+        const alias = (d || "").trim().replace(/"/g, '""');
+        const coalesceExpression = `COALESCE(${col}::text, 'Sin Categoría')`;
+        return { select: `${coalesceExpression} AS "${alias}"`, group: coalesceExpression };
       });
       dimensionSelectClause = parts.map((p) => p.select).join(", ");
       dimensionGroupByClause = parts.map((p) => p.group).join(", ");
     }
 
-    const selectClause = [dimensionSelectClause, metricClauses]
-      .filter(Boolean)
-      .join(", ");
+    const selectClause = [dimensionSelectClause, metricClauses].filter(Boolean).join(", ");
+    if (!selectClause.trim()) {
+      return NextResponse.json(
+        { error: "La consulta debe incluir al menos una dimensión o una métrica base (no solo fórmulas sobre métricas vacías)." },
+        { status: 400 }
+      );
+    }
     let query = `SELECT ${selectClause} FROM "${schema}"."${table}"`;
 
     // 3. Filtros
@@ -364,27 +635,103 @@ export async function POST(
       query += ` GROUP BY ${dimensionGroupByClause}`;
     }
 
-    // 5. Order By Inteligente
-    if (body.orderBy) {
-      let orderByField = `"${body.orderBy.field}"`;
-      const requestedSortNormalized = normalizeStr(body.orderBy.field);
-
-      // Buscar si el orden solicitado coincide con alguna métrica
-      const matchedMetric = body.metrics.find((m, i) => {
-        const signature = `${m.func}(${m.field})`;
-        // Comparar con el Alias que pidió el usuario O la firma de la función
-        return (
-          requestedSortNormalized === normalizeStr(m.alias || "") ||
-          requestedSortNormalized === normalizeStr(signature)
-        );
-      });
-
-      if (matchedMetric) {
-        // Ordenamos por el alias interno (metric_0) para que SQL no falle
-        orderByField = `"${(matchedMetric as any).internalAlias}"`;
+    // 4b. Fórmulas sobre métricas (metric_n), mismo criterio que la API interna
+    const aliasToMetricRef: { alias: string; ref: string }[] = body.metrics
+      .map((m, idx) => ({ alias: (m.alias || "").trim(), ref: `metric_${idx}` }))
+      .filter((x) => x.alias.length > 0)
+      .sort((a, b) => b.alias.length - a.alias.length);
+    const resolveAliasesInFormula = (formula: string): string => {
+      let s = formula.replace(/\s+/g, " ").trim();
+      for (const { alias, ref } of aliasToMetricRef) {
+        if (alias && s.includes(alias)) s = s.split(alias).join(ref);
       }
+      return s;
+    };
+    const safeFormula = (expr: string) => {
+      if (!expr || typeof expr !== "string") return null;
+      const withAliases = resolveAliasesInFormula(expr);
+      const s = withAliases.replace(/\s+/g, " ").trim();
+      if (!/^[\w\s\-+*/().,&]+$/i.test(s)) return null;
+      return s;
+    };
+    const findMetricRefsInFormula = (expr: string): number[] => {
+      const refs: number[] = [];
+      const re = /metric_(\d+)\b/gi;
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(expr)) != null) {
+        const idx = Number.parseInt(match[1] ?? "", 10);
+        if (Number.isFinite(idx)) refs.push(idx);
+      }
+      return refs;
+    };
+    if (metricsFormula.length > 0) {
+      const maxMetricIndex = body.metrics.length - 1;
+      for (const m of metricsFormula) {
+        const expr = safeFormula(m.formula!);
+        if (!expr) {
+          return NextResponse.json(
+            { error: `Fórmula inválida en la métrica «${m.alias || "sin nombre"}». Revisá la sintaxis.` },
+            { status: 400 }
+          );
+        }
+        const outOfRangeRef = findMetricRefsInFormula(expr).find((idx) => idx < 0 || idx > maxMetricIndex);
+        if (outOfRangeRef != null) {
+          return NextResponse.json(
+            {
+              error: `La fórmula de «${m.alias || "sin nombre"}» referencia metric_${outOfRangeRef}, pero solo existen métricas hasta metric_${maxMetricIndex}.`,
+            },
+            { status: 400 }
+          );
+        }
+      }
+      const formulaSelects = metricsFormula
+        .map((m) => {
+          const i = body.metrics.indexOf(m);
+          const expr = safeFormula(m.formula!);
+          if (!expr) return null;
+          return `(${expr}) AS "metric_${i}"`;
+        })
+        .filter(Boolean);
+      if (formulaSelects.length > 0) {
+        query = `SELECT _sub.*, ${formulaSelects.join(", ")} FROM (${query}) AS _sub`;
+      }
+    }
 
-      query += ` ORDER BY ${orderByField} ${body.orderBy.direction.toUpperCase()}`;
+    // 5. Order By
+    if (body.orderBy?.field) {
+      const dir = (body.orderBy.direction || "DESC").toString().toUpperCase();
+      const safeDir = dir === "ASC" ? "ASC" : "DESC";
+      let orderByField = `"${body.orderBy.field.replace(/"/g, '""')}"`;
+      const requestedSortNormalized = normalizeStr(body.orderBy.field);
+      const dimMatch = dimList.find((d) => normalizeStr(d) === requestedSortNormalized);
+      if (dimMatch) {
+        orderByField = `"${dimMatch.replace(/"/g, '""')}"`;
+      } else {
+        const metricIdxMatch = /^metric_(\d+)$/i.exec(String(body.orderBy.field || "").trim());
+        let orderByInternal: string | undefined;
+        if (metricIdxMatch) {
+          const idx = parseInt(metricIdxMatch[1]!, 10);
+          if (Number.isFinite(idx) && idx >= 0 && idx < body.metrics.length) {
+            const ia = (body.metrics[idx] as { internalAlias?: string }).internalAlias;
+            if (typeof ia === "string" && ia.trim() !== "") orderByInternal = ia;
+          }
+        }
+        if (orderByInternal) {
+          orderByField = `"${orderByInternal.replace(/"/g, '""')}"`;
+        } else {
+          const matchedMetric = body.metrics.find((m) => {
+            const sig = `${m.func}(${m.field})`;
+            return (
+              requestedSortNormalized === normalizeStr(m.alias || "") ||
+              requestedSortNormalized === normalizeStr(sig)
+            );
+          });
+          if (matchedMetric && (matchedMetric as { internalAlias?: string }).internalAlias) {
+            orderByField = `"${String((matchedMetric as { internalAlias?: string }).internalAlias).replace(/"/g, '""')}"`;
+          }
+        }
+      }
+      query += ` ORDER BY ${orderByField} ${safeDir}`;
     }
 
     if (body.limit) {

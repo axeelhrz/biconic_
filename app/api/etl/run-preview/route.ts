@@ -113,13 +113,14 @@ type RunBody = {
     resultColumn?: string;
   };
   arithmetic?: {
-    operations: Array<{
+    operations?: Array<{
       id: string;
       leftOperand: { type: "column" | "constant"; value: string };
       operator: "+" | "-" | "*" | "/" | "%" | "^" | "pct_of" | "pct_off";
       rightOperand: { type: "column" | "constant"; value: string };
       resultColumn: string;
     }>;
+    formulaOperations?: Array<{ expression: string; resultColumn: string }>;
   };
   condition?: {
     resultColumn?: string;
@@ -1233,8 +1234,9 @@ export async function POST(req: NextRequest) {
                    break;
 
                  case "arithmetic":
-                   transformedBatch = applyArithmeticOperations(transformedBatch, step.config);
-                   // Log
+                   if (step.config?.operations?.length || step.config?.formulaOperations?.length) {
+                     transformedBatch = applyArithmeticOperations(transformedBatch, step.config);
+                   }
                    if (isFirstBatch) {
                       const prefixArith = "Arithmetic:";
                       const ops = step.config?.operations || [];
@@ -1243,6 +1245,10 @@ export async function POST(req: NextRequest) {
                           const right = typeof op.rightOperand === 'object' ? op.rightOperand.value : (op.rightOperand || op.rightColumn);
                           const desc = `${prefixArith} ${op.resultColumn} = ${left} ${op.operator} ${right}`;
                           transformationSteps.push(desc);
+                      });
+                      const fos = step.config?.formulaOperations || [];
+                      fos.forEach((fo: { expression?: string; resultColumn?: string }) => {
+                        transformationSteps.push(`${prefixArith} ${fo.resultColumn} = ${fo.expression ?? ""}`);
                       });
                    }
                    break;
@@ -1323,7 +1329,7 @@ export async function POST(req: NextRequest) {
             }
 
             // 3. Arithmetic
-            if (body.arithmetic?.operations?.length) {
+            if (body.arithmetic?.operations?.length || body.arithmetic?.formulaOperations?.length) {
               try {
                  transformedBatch = applyArithmeticOperations(
                     transformedBatch,
@@ -1332,11 +1338,14 @@ export async function POST(req: NextRequest) {
                  // Granular logging for Arithmetic
                  const prefix = "Arithmetic:";
                  if (transformationSteps.filter(s => s.startsWith(prefix)).length === 0) {
-                    body.arithmetic.operations.forEach((op: any) => {
+                    (body.arithmetic.operations || []).forEach((op: any) => {
                         const left = typeof op.leftOperand === 'object' ? op.leftOperand.value : (op.leftOperand || op.leftColumn);
                         const right = typeof op.rightOperand === 'object' ? op.rightOperand.value : (op.rightOperand || op.rightColumn);
                         const desc = `${prefix} ${op.resultColumn} = ${left} ${op.operator} ${right}`;
                         transformationSteps.push(desc);
+                    });
+                    (body.arithmetic.formulaOperations || []).forEach((fo: { expression?: string; resultColumn?: string }) => {
+                      transformationSteps.push(`${prefix} ${fo.resultColumn} = ${fo.expression ?? ""}`);
                     });
                  }
               } catch (e: any) {

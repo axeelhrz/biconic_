@@ -120,13 +120,14 @@ type RunBody = {
     resultColumn?: string;
   };
   arithmetic?: {
-    operations: Array<{
+    operations?: Array<{
       id: string;
       leftOperand: { type: "column" | "constant"; value: string };
       operator: "+" | "-" | "*" | "/" | "%" | "^" | "pct_of" | "pct_off";
       rightOperand: { type: "column" | "constant"; value: string };
       resultColumn: string;
     }>;
+    formulaOperations?: Array<{ expression: string; resultColumn: string }>;
   };
   condition?: {
     resultColumn?: string;
@@ -2074,7 +2075,11 @@ async function executeEtlPipeline(
                switch (step.type) {
                   case "clean": transformedBatch = applyCleanBatch(transformedBatch, step.config); break;
                   case "cast": transformedBatch = applyCastConversions(transformedBatch, step.config); break;
-                  case "arithmetic": transformedBatch = applyArithmeticOperations(transformedBatch, step.config); break;
+                  case "arithmetic":
+                    if (step.config?.operations?.length || step.config?.formulaOperations?.length) {
+                      transformedBatch = applyArithmeticOperations(transformedBatch, step.config);
+                    }
+                    break;
                   case "condition": transformedBatch = applyConditionRules(transformedBatch, step.config); break;
                }
             } catch (err: any) {
@@ -2086,7 +2091,8 @@ async function executeEtlPipeline(
          // Legacy mode
          transformedBatch = applyCleanBatch(rawBatch, body?.clean);
          if (body.cast?.conversions?.length) transformedBatch = applyCastConversions(transformedBatch, body.cast);
-         if (body.arithmetic?.operations?.length) transformedBatch = applyArithmeticOperations(transformedBatch, body.arithmetic);
+         if (body.arithmetic?.operations?.length || body.arithmetic?.formulaOperations?.length)
+           transformedBatch = applyArithmeticOperations(transformedBatch, body.arithmetic);
          if (body.condition?.rules?.length) transformedBatch = applyConditionRules(transformedBatch, body.condition);
       }
       totalTransformMs += Date.now() - transformStartedAt;

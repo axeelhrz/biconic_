@@ -24,6 +24,7 @@ import {
 import { Bar, Line, Pie } from "react-chartjs-2";
 
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { expressionHasAggregation } from "@/lib/formula-engine";
 
 ChartJS.register(
   CategoryScale,
@@ -166,9 +167,12 @@ export type Widget = {
   arithmetic?: {
     operations: Array<{
       id: string;
-      leftOperand: { type: "column" | "constant"; value: string };
-      operator: "+" | "-" | "*" | "/" | "%" | "^" | "pct_of" | "pct_off";
-      rightOperand: { type: "column" | "constant"; value: string };
+      /** "formula" = expresión Excel por fila (formula-engine vía API); omitido = binario. */
+      mode?: "binary" | "formula";
+      expression?: string;
+      leftOperand?: { type: "column" | "constant"; value: string };
+      operator?: "+" | "-" | "*" | "/" | "%" | "^" | "pct_of" | "pct_off";
+      rightOperand?: { type: "column" | "constant"; value: string };
       resultColumn: string;
     }>;
   };
@@ -1866,9 +1870,15 @@ export function ETLEditor({
                               key={op.id}
                               className="text-xs text-gray-600 mt-1"
                             >
-                              {op.resultColumn} = {op.leftOperand.value}{" "}
-                              {op.operator === "pct_of" ? "× % de" : op.operator === "pct_off" ? "descuento %" : op.operator}{" "}
-                              {op.rightOperand.value}
+                              {op.mode === "formula"
+                                ? `${op.resultColumn} = ƒ(${String(op.expression ?? "").slice(0, 40)}${String(op.expression ?? "").length > 40 ? "…" : ""})`
+                                : `${op.resultColumn} = ${op.leftOperand?.value ?? ""} ${
+                                    op.operator === "pct_of"
+                                      ? "× % de"
+                                      : op.operator === "pct_off"
+                                        ? "descuento %"
+                                        : op.operator ?? ""
+                                  } ${op.rightOperand?.value ?? ""}`}
                             </div>
                           ))}
                           {/* Preview button inside arithmetic node */}
@@ -4285,6 +4295,7 @@ export function ETLEditor({
                                       id: `op-${Date.now()}-${Math.random()
                                         .toString(36)
                                         .slice(2, 6)}`,
+                                      mode: "binary" as const,
                                       leftOperand: {
                                         type: "column" as const,
                                         value: columns[0]?.name || "",
@@ -4355,13 +4366,108 @@ export function ETLEditor({
                                       />
                                     </div>
 
+                                    <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        className="rounded border-gray-300"
+                                        checked={op.mode === "formula"}
+                                        onChange={(e) => {
+                                          const formula = e.target.checked;
+                                          setOperations(
+                                            operations.map((o) =>
+                                              o.id === op.id
+                                                ? formula
+                                                  ? {
+                                                      ...o,
+                                                      mode: "formula" as const,
+                                                      expression: o.expression ?? "",
+                                                      leftOperand: undefined,
+                                                      operator: undefined,
+                                                      rightOperand: undefined,
+                                                    }
+                                                  : {
+                                                      ...o,
+                                                      mode: "binary" as const,
+                                                      expression: undefined,
+                                                      leftOperand: o.leftOperand ?? {
+                                                        type: "column" as const,
+                                                        value: columns[0]?.name || "",
+                                                      },
+                                                      operator:
+                                                        (o.operator as
+                                                          | "+"
+                                                          | "-"
+                                                          | "*"
+                                                          | "/"
+                                                          | "%"
+                                                          | "^"
+                                                          | "pct_of"
+                                                          | "pct_off") ?? "+",
+                                                      rightOperand: o.rightOperand ?? {
+                                                        type: "constant" as const,
+                                                        value: "1",
+                                                      },
+                                                    }
+                                                : o
+                                            )
+                                          );
+                                        }}
+                                      />
+                                      Modo fórmula (por fila, sin agregados tipo SUM/COUNTIF)
+                                    </label>
+
+                                    {op.mode === "formula" ? (
+                                      <div className="space-y-2">
+                                        <div>
+                                          <Label>Expresión</Label>
+                                          <textarea
+                                            className="w-full min-h-[88px] rounded-xl border px-2 py-2 text-sm font-mono bg-white"
+                                            value={op.expression ?? ""}
+                                            onChange={(e) => {
+                                              setOperations(
+                                                operations.map((o) =>
+                                                  o.id === op.id
+                                                    ? { ...o, expression: e.target.value }
+                                                    : o
+                                                )
+                                              );
+                                            }}
+                                            placeholder='Ej: IF(precio>0; precio*1.21; 0) o cantidad*precio_unitario'
+                                            spellCheck={false}
+                                          />
+                                        </div>
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          className="rounded-full"
+                                          onClick={() => {
+                                            const ex = (op.expression ?? "").trim();
+                                            if (!ex) {
+                                              toast.error("Escribí una expresión");
+                                              return;
+                                            }
+                                            if (expressionHasAggregation(ex)) {
+                                              toast.error(
+                                                "La expresión parece incluir agregados; en este nodo solo fórmulas por fila."
+                                              );
+                                              return;
+                                            }
+                                            toast.success("Sin agregados detectados.");
+                                          }}
+                                        >
+                                          Validar
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <>
                                     {/* Left operand */}
                                     <div className="grid grid-cols-2 gap-2">
                                       <div>
                                         <Label>Operando izquierdo</Label>
                                         <select
                                           className="w-full rounded-xl border px-2 py-2 text-sm bg-white"
-                                          value={op.leftOperand.type}
+                                          value={op.leftOperand!.type}
                                           onChange={(e) => {
                                             const type = e.target.value as
                                               | "column"
@@ -4395,10 +4501,10 @@ export function ETLEditor({
                                       </div>
                                       <div>
                                         <Label>Valor</Label>
-                                        {op.leftOperand.type === "column" ? (
+                                        {op.leftOperand!.type === "column" ? (
                                           <select
                                             className="w-full rounded-xl border px-2 py-2 text-sm bg-white"
-                                            value={op.leftOperand.value}
+                                            value={op.leftOperand!.value}
                                             onChange={(e) => {
                                               setOperations(
                                                 operations.map((o) =>
@@ -4406,7 +4512,7 @@ export function ETLEditor({
                                                     ? {
                                                         ...o,
                                                         leftOperand: {
-                                                          ...o.leftOperand,
+                                                          ...o.leftOperand!,
                                                           value: e.target.value,
                                                         },
                                                       }
@@ -4426,7 +4532,7 @@ export function ETLEditor({
                                           </select>
                                         ) : (
                                           <Input
-                                            value={op.leftOperand.value}
+                                            value={op.leftOperand!.value}
                                             onChange={(e) => {
                                               setOperations(
                                                 operations.map((o) =>
@@ -4434,7 +4540,7 @@ export function ETLEditor({
                                                     ? {
                                                         ...o,
                                                         leftOperand: {
-                                                          ...o.leftOperand,
+                                                          ...o.leftOperand!,
                                                           value: e.target.value,
                                                         },
                                                       }
@@ -4453,7 +4559,7 @@ export function ETLEditor({
                                       <Label>Operador</Label>
                                       <select
                                         className="w-full rounded-xl border px-2 py-2 text-sm bg-white"
-                                        value={op.operator}
+                                        value={op.operator ?? "+"}
                                         onChange={(e) => {
                                           setOperations(
                                             operations.map((o) =>
@@ -4487,7 +4593,7 @@ export function ETLEditor({
                                         <Label>Operando derecho</Label>
                                         <select
                                           className="w-full rounded-xl border px-2 py-2 text-sm bg-white"
-                                          value={op.rightOperand.type}
+                                          value={op.rightOperand!.type}
                                           onChange={(e) => {
                                             const type = e.target.value as
                                               | "column"
@@ -4521,10 +4627,10 @@ export function ETLEditor({
                                       </div>
                                       <div>
                                         <Label>Valor</Label>
-                                        {op.rightOperand.type === "column" ? (
+                                        {op.rightOperand!.type === "column" ? (
                                           <select
                                             className="w-full rounded-xl border px-2 py-2 text-sm bg-white"
-                                            value={op.rightOperand.value}
+                                            value={op.rightOperand!.value}
                                             onChange={(e) => {
                                               setOperations(
                                                 operations.map((o) =>
@@ -4532,7 +4638,7 @@ export function ETLEditor({
                                                     ? {
                                                         ...o,
                                                         rightOperand: {
-                                                          ...o.rightOperand,
+                                                          ...o.rightOperand!,
                                                           value: e.target.value,
                                                         },
                                                       }
@@ -4552,7 +4658,7 @@ export function ETLEditor({
                                           </select>
                                         ) : (
                                           <Input
-                                            value={op.rightOperand.value}
+                                            value={op.rightOperand!.value}
                                             onChange={(e) => {
                                               setOperations(
                                                 operations.map((o) =>
@@ -4560,7 +4666,7 @@ export function ETLEditor({
                                                     ? {
                                                         ...o,
                                                         rightOperand: {
-                                                          ...o.rightOperand,
+                                                          ...o.rightOperand!,
                                                           value: e.target.value,
                                                         },
                                                       }
@@ -4573,6 +4679,8 @@ export function ETLEditor({
                                         )}
                                       </div>
                                     </div>
+                                      </>
+                                    )}
                                   </div>
                                 ))
                               )}
@@ -6828,9 +6936,17 @@ function collectUpstreamFlow(
   // Given current backend limitation, we will assume linear accumulation of result columns is handled by frontend aliases,
   // but actual calculation needs the operations.
   // To stay safe and "execute all prior flow", we should collect ALL operations.
-  const operations = fullPath
-    .filter(n => n.type === "arithmetic")
-    .flatMap(n => n.arithmetic?.operations || []);
+  const allArithOps = fullPath
+    .filter((n) => n.type === "arithmetic")
+    .flatMap((n) => n.arithmetic?.operations || []);
+  const operations = allArithOps.filter((o) => (o as { mode?: string }).mode !== "formula");
+  const formulaOperations = allArithOps
+    .filter((o) => (o as { mode?: string }).mode === "formula")
+    .map((o) => ({
+      expression: String((o as { expression?: string }).expression ?? "").trim(),
+      resultColumn: String((o as { resultColumn?: string }).resultColumn ?? "").trim(),
+    }))
+    .filter((f) => f.expression && f.resultColumn);
 
   const conversions = fullPath
     .filter(n => n.type === "cast")
@@ -6885,6 +7001,7 @@ function collectUpstreamFlow(
     rightBranch,
     collectedRules: rules,
     collectedOperations: operations,
+    collectedFormulaOperations: formulaOperations,
     collectedConversions: conversions,
     collectedTransforms: cleanTransforms,
     lastCleanDedupe,
@@ -7104,7 +7221,8 @@ function CountPreviewButton({
           connectionNode, 
           collectedRules, 
           collectedConversions,
-          collectedOperations 
+          collectedOperations,
+          collectedFormulaOperations,
         } = collectUpstreamFlow(widget.id, widgets, edges);
 
         const upstreamNode = filterNode ? connectionNode : null;
@@ -7202,6 +7320,9 @@ function CountPreviewButton({
            // Inject collected metadata
            rules: collectedRules,
            operations: collectedOperations,
+           ...(collectedFormulaOperations.length > 0
+             ? { formulaOperations: collectedFormulaOperations }
+             : {}),
            conversions: collectedConversions
         };
         
@@ -7406,7 +7527,8 @@ function ArithmeticPreviewButton({
         connectionNode, 
         collectedRules, 
         collectedConversions,
-        collectedOperations 
+        collectedOperations,
+        collectedFormulaOperations,
       } = collectUpstreamFlow(widget.id, widgets, edges);
 
       if (!filterNode && !joinNode)
@@ -7456,7 +7578,10 @@ function ArithmeticPreviewButton({
              conditions: filterNode?.filter?.conditions || [],
              columns: filterNode?.filter?.columns || undefined,
              rules: collectedRules,
-             operations: widget.arithmetic?.operations,
+             operations: collectedOperations,
+             ...(collectedFormulaOperations.length > 0
+               ? { formulaOperations: collectedFormulaOperations }
+               : {}),
              conversions: collectedConversions,
              join: {
                 primaryConnectionId: j.primaryConnectionId,
@@ -7491,7 +7616,10 @@ function ArithmeticPreviewButton({
               columns: filterNode.filter?.columns?.length ? filterNode.filter.columns : undefined,
               conditions: filterNode.filter?.conditions || [],
               rules: collectedRules,
-              operations: widget.arithmetic?.operations,
+              operations: collectedOperations,
+              ...(collectedFormulaOperations.length > 0
+                ? { formulaOperations: collectedFormulaOperations }
+                : {}),
               conversions: collectedConversions,
               limit: pageSize,
               offset: (pageNum - 1) * pageSize,
@@ -7511,9 +7639,7 @@ function ArithmeticPreviewButton({
         const parts = c.split(".");
         return parts[parts.length - 1];
       });
-      const resultCols = (widget.arithmetic?.operations || []).map(
-        (op) => op.resultColumn
-      );
+      const resultCols = (widget.arithmetic?.operations || []).map((op) => op.resultColumn);
       const conditionCols = collectedRules.map((r: any) => r.resultColumn);
       const aliasKeys = [...new Set([...aliasKeysBase, ...resultCols, ...conditionCols])];
       const pruned = (Array.isArray(data.rows) ? data.rows : []).map((row: any) => {
@@ -7595,7 +7721,7 @@ function ConditionPreviewButton({
         connectionNode, 
         collectedRules, 
         collectedConversions,
-        collectedOperations 
+        collectedOperations,
       } = collectUpstreamFlow(widget.id, widgets, edges);
 
       if (!filterNode && !joinNode)
@@ -7775,9 +7901,17 @@ function CastPreviewButton({
         const upstreamRules = upstreamNodes
             .filter(n => n.type === 'condition')
             .flatMap(n => n.condition?.rules || []);
-        const upstreamOperations = upstreamNodes
-            .filter(n => n.type === 'arithmetic')
-            .flatMap(n => n.arithmetic?.operations || []);
+        const allUpstreamArith = upstreamNodes
+            .filter((n) => n.type === "arithmetic")
+            .flatMap((n) => n.arithmetic?.operations || []);
+        const upstreamOperations = allUpstreamArith.filter((o) => (o as { mode?: string }).mode !== "formula");
+        const upstreamFormulaOperations = allUpstreamArith
+            .filter((o) => (o as { mode?: string }).mode === "formula")
+            .map((o) => ({
+              expression: String((o as { expression?: string }).expression ?? "").trim(),
+              resultColumn: String((o as { resultColumn?: string }).resultColumn ?? "").trim(),
+            }))
+            .filter((f) => f.expression && f.resultColumn);
         const upstreamConversions = upstreamNodes
             .filter(n => n.type === 'cast')
             .flatMap(n => n.cast?.conversions || []);
@@ -7790,6 +7924,9 @@ function CastPreviewButton({
            columns: filterNode?.filter?.columns || undefined,
            rules: upstreamRules,
            operations: upstreamOperations,
+           ...(upstreamFormulaOperations.length > 0
+             ? { formulaOperations: upstreamFormulaOperations }
+             : {}),
            conversions: upstreamConversions
         };
 
@@ -7829,6 +7966,7 @@ function CastPreviewButton({
         // Add columns from upstream logic
         upstreamRules.forEach(r => aliasKeysBase.push(r.resultColumn));
         upstreamOperations.forEach(op => aliasKeysBase.push(op.resultColumn));
+        upstreamFormulaOperations.forEach((f) => aliasKeysBase.push(f.resultColumn));
         
         const keysToKeep = new Set(aliasKeysBase);
         const currentConversions = widget.cast?.conversions || [];
@@ -8319,8 +8457,13 @@ function EndPreviewButton({
         payload.cast = { conversions: flow.collectedConversions };
       }
 
-      if (flow.collectedOperations.length > 0) {
-        payload.arithmetic = { operations: flow.collectedOperations };
+      if (flow.collectedOperations.length > 0 || flow.collectedFormulaOperations.length > 0) {
+        payload.arithmetic = {
+          operations: flow.collectedOperations,
+          ...(flow.collectedFormulaOperations.length > 0
+            ? { formulaOperations: flow.collectedFormulaOperations }
+            : {}),
+        };
       }
       
       if (flow.collectedRules.length > 0) {
@@ -8722,8 +8865,13 @@ function EndRunButton({
         payload.cast = { conversions: flow.collectedConversions };
       }
 
-      if (flow.collectedOperations.length > 0) {
-        payload.arithmetic = { operations: flow.collectedOperations };
+      if (flow.collectedOperations.length > 0 || flow.collectedFormulaOperations.length > 0) {
+        payload.arithmetic = {
+          operations: flow.collectedOperations,
+          ...(flow.collectedFormulaOperations.length > 0
+            ? { formulaOperations: flow.collectedFormulaOperations }
+            : {}),
+        };
       }
       
       if (flow.collectedRules.length > 0) {

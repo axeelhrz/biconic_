@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import { evalRowFormulaExpression } from "@/lib/etl/formulaRowEval";
 
 // ===================================================================
 // TIPOS Y DEFINICIONES (Copiados/Adaptados de run/route.ts)
@@ -247,16 +248,20 @@ export function inferColumnTypes(
 export function applyArithmeticOperations(
   rows: Record<string, any>[],
   config: {
-    operations: Array<{
+    operations?: Array<{
       id: string;
       leftOperand: { type: "column" | "constant"; value: string };
       operator: "+" | "-" | "*" | "/" | "%" | "^" | "pct_of" | "pct_off";
       rightOperand: { type: "column" | "constant"; value: string };
       resultColumn: string;
     }>;
+    /** Fórmulas por fila (mismo shape que arithmetic-query); evaluación acotada en JS. */
+    formulaOperations?: Array<{ expression: string; resultColumn: string }>;
   }
 ): Record<string, any>[] {
-  if (!config?.operations?.length) return rows;
+  const hasBinary = config?.operations?.length;
+  const hasFormula = config?.formulaOperations?.length;
+  if (!hasBinary && !hasFormula) return rows;
 
   if (rows.length > 0) {
     // console.log(`[ARITHMETIC DEBUG] Key check row[0]:`, Object.keys(rows[0]));
@@ -292,7 +297,7 @@ export function applyArithmeticOperations(
       return { val: undefined, key: null };
     };
 
-    for (const op of config.operations) {
+    for (const op of config.operations || []) {
       let rawLeft: any;
       if (op.leftOperand.type === "column") {
         const res = getValAndKey(op.leftOperand.value);
@@ -323,6 +328,17 @@ export function applyArithmeticOperations(
       }
       newRow[op.resultColumn] = result;
     }
+
+    for (const fo of config.formulaOperations || []) {
+      const name = (fo.resultColumn || "").trim();
+      if (!name) continue;
+      try {
+        newRow[name] = evalRowFormulaExpression(fo.expression, newRow as Record<string, unknown>);
+      } catch {
+        newRow[name] = null;
+      }
+    }
+
     return newRow;
   });
 }

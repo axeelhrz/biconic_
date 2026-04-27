@@ -23,6 +23,16 @@ import {
   type GeoComponentOverrides,
   type GeoHints,
 } from "@/lib/geo/geo-enrichment";
+import {
+  checkBalancedParens,
+  expressionToSql,
+  FormulaCycleError,
+  quotedColumn,
+  toSqlLiteral,
+  unwrapAggExpression,
+} from "@/lib/formula-engine";
+import type { MetricClauseMetric } from "@/lib/dashboard/pgAggregateMetricClauses";
+import type { DerivedColumnRef } from "@/lib/formula-engine";
 
 // --- Interfaces ---
 interface MetricCondition {
@@ -56,13 +66,6 @@ interface Filter {
 interface OrderBy {
   field: string;
   direction: "ASC" | "DESC";
-}
-
-/** Columna calculada (nombre + expresión sobre columnas + agregación por defecto). */
-interface DerivedColumnRef {
-  name: string;
-  expression: string;
-  defaultAggregation: string;
 }
 
 interface AggregationRequest {
@@ -162,14 +165,6 @@ async function fetchTableColumnNames(schemaName: string, tableName: string): Pro
   }
 }
 
-function toSqlLiteral(v: any): string {
-  if (v === null || typeof v === "undefined") return "NULL";
-  if (typeof v === "number" && Number.isFinite(v)) return String(v);
-  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-  const s = String(v).replace(/'/g, "''");
-  return `'${s}'`;
-}
-
 /** True si el valor es un año (4 dígitos, 1900–2100). Para arrays, true solo si todos los elementos son año. */
 function isYearLike(value: any): boolean {
   if (value == null) return false;
@@ -189,32 +184,8 @@ function isInvalidIdentifier(value: unknown): boolean {
   return normalized === "" || normalized === "undefined" || normalized === "null";
 }
 
-/** Convierte nombre de columna del front (primary.COL, join_N.COL) al nombre físico en la tabla ETL (primary_col, join_n_col). */
-function displayColumnToPhysical(name: string): string {
-  let n = (name || "").trim();
-  if (n.length >= 2 && n.startsWith('"') && n.endsWith('"'))
-    n = n.slice(1, -1).replace(/""/g, '"');
-  if (/^primary\.[a-zA-Z_][a-zA-Z0-9_]*$/i.test(n))
-    return "primary_" + n.slice(8).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-  const joinMatch = n.match(/^join_(\d+)\.[a-zA-Z_][a-zA-Z0-9_]*$/i);
-  if (joinMatch)
-    return `join_${joinMatch[1]}_` + n.slice(joinMatch[0].indexOf(".") + 1).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-  return n.replace(/"/g, '""').toLowerCase();
-}
-
-/** En Postgres los identificadores sin comillas se guardan en minúsculas; normalizar para que "ID" coincida con "id". */
-function quotedColumn(name: string): string {
-  const physical = displayColumnToPhysical(name);
-  const s = physical.replace(/"/g, '""').toLowerCase();
-  return s ? `"${s}"` : '""';
-}
-
-/** Cast a numérico que devuelve NULL si el valor no es un número válido (evita "invalid input syntax for type numeric"). */
-function safeNumericCast(expr: string): string {
-  const e = expr.trim();
-  const pattern = "'^[[:space:]]*[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?[[:space:]]*$'";
-  return `(CASE WHEN (${e})::text ~ ${pattern} THEN ((${e})::text)::numeric ELSE NULL END)`;
-}
+import { safeNumericCast } from "@/lib/dashboard/safeNumericCast";
+import { buildPgMetricClauses } from "@/lib/dashboard/pgAggregateMetricClauses";
 
 /** Parseo robusto de columnas texto/date/timestamp. Barras: DD/MM o MM/DD según `slashOrder`. */
 function safeDateCast(expr: string, slashOrder: "DMY" | "MDY"): string {
@@ -231,419 +202,6 @@ function safeDateCast(expr: string, slashOrder: "DMY" | "MDY"): string {
       ELSE NULL
     END
   )`;
-}
-
-const SQL_KNOWN_FUNCTIONS = new Set([
-  "SUM", "AVG", "AVERAGE", "COUNT", "MIN", "MAX", "COUNTA", "UNIQUE", "COUNTIF", "SUMIF", "AVERAGEIF", "COUNTIFS", "SUMIFS",
-  "NULLIF", "COALESCE", "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN", "CEIL", "CEILING", "FLOOR", "TRUNC", "GREATEST", "LEAST",
-  "MOD", "POWER", "SQRT", "SIGN", "EXP", "LN", "LOG", "LOG10", "PI",
-  "SIN", "COS", "TAN", "FLOOR", "INT",
-  "CASE", "WHEN", "THEN", "ELSE", "END",
-  "IF", "IFS", "IFERROR", "IFNA", "AND", "OR", "NOT", "TRUE", "FALSE",
-  "UPPER", "LOWER", "TRIM", "LENGTH", "LEN", "LEFT", "RIGHT", "SUBSTRING", "MID", "CONCAT", "CONCATENATE", "REPLACE", "SUBSTITUTE",
-  "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "EOMONTH", "DATEDIF", "DATEVALUE", "TIMEVALUE",
-  "VALUE", "TEXT", "REPT", "FIND", "SEARCH", "PROPER",
-]);
-
-/** Verifica paréntesis balanceados (ignora los que están dentro de comillas). Devuelve mensaje de error o null si está bien. */
-function checkBalancedParens(expr: string): string | null {
-  let depth = 0;
-  let inQuote: string | null = null;
-  for (let i = 0; i < expr.length; i++) {
-    const c = expr[i];
-    if (inQuote) {
-      if (c === inQuote && expr[i - 1] !== "\\") inQuote = null;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      inQuote = c;
-      continue;
-    }
-    if (c === "(") depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth < 0) return "Paréntesis de cierre ) sin apertura.";
-    }
-  }
-  if (depth !== 0) return "Faltan paréntesis de cierre.";
-  return null;
-}
-
-/** Convierte IF(cond, thenVal, elseVal) en CASE WHEN cond THEN thenVal ELSE elseVal END (soporta anidamiento por profundidad de paréntesis). */
-function expandIfToCaseWhen(expr: string): string {
-  const trimmed = expr.trim();
-  const ifStart = trimmed.search(/\bIF\s*\(/i);
-  if (ifStart === -1) return expr;
-  const start = trimmed.indexOf("(", ifStart);
-  if (start === -1) return expr;
-  let depth = 1;
-  let firstComma = -1;
-  let secondComma = -1;
-  let i = start + 1;
-  for (; i < trimmed.length; i++) {
-    const c = trimmed[i];
-    if (c === "(") depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0) break;
-    } else if ((c === "," || c === ";") && depth === 1) {
-      if (firstComma === -1) firstComma = i;
-      else {
-        secondComma = i;
-        break;
-      }
-    }
-  }
-  if (firstComma === -1 || secondComma === -1) return expr;
-  const cond = trimmed.slice(start + 1, firstComma).trim();
-  const thenVal = trimmed.slice(firstComma + 1, secondComma).trim();
-  const elseVal = trimmed.slice(secondComma + 1, i).trim();
-  const caseExpr = `(CASE WHEN ${expandIfToCaseWhen(cond)} THEN ${expandIfToCaseWhen(thenVal)} ELSE ${expandIfToCaseWhen(elseVal)} END)`;
-  return trimmed.slice(0, ifStart) + caseExpr + trimmed.slice(i + 1);
-}
-
-/** Extrae el contenido entre paréntesis balanceados a partir de start (el índice del "("). Devuelve { inner, endIndex }. */
-function extractParenContent(s: string, start: number): { inner: string; endIndex: number } | null {
-  if (s[start] !== "(") return null;
-  let depth = 1;
-  let i = start + 1;
-  for (; i < s.length; i++) {
-    const c = s[i];
-    if (c === "(") depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0) return { inner: s.slice(start + 1, i).trim(), endIndex: i };
-    }
-  }
-  return null;
-}
-
-/** Convierte IFS(cond1, val1, cond2, val2, ..., [default]) en CASE WHEN ... END. */
-function expandIfsToCaseWhen(expr: string): string {
-  const trimmed = expr.trim();
-  const ifsStart = trimmed.search(/\bIFS\s*\(/i);
-  if (ifsStart === -1) return expr;
-  const start = trimmed.indexOf("(", ifsStart);
-  const extracted = extractParenContent(trimmed, start);
-  if (!extracted) return expr;
-  const args = splitArgs(extracted.inner);
-  if (args.length < 2) return expr;
-  const pairs: { cond: string; val: string }[] = [];
-  let i = 0;
-  while (i + 1 < args.length) {
-    pairs.push({ cond: args[i]!, val: args[i + 1]! });
-    i += 2;
-  }
-  const defaultVal = i < args.length ? args[i] : "NULL";
-  const whenParts = pairs.map((p) => `WHEN ${expandIfsToCaseWhen(p.cond)} THEN ${expandIfsToCaseWhen(p.val)}`).join(" ");
-  const caseExpr = `(CASE ${whenParts} ELSE ${expandIfsToCaseWhen(defaultVal)} END)`;
-  return trimmed.slice(0, ifsStart) + caseExpr + trimmed.slice(extracted.endIndex + 1);
-}
-
-/** Convierte AND(a, b, ...) en (a AND b AND ...). */
-function expandAndOr(expr: string, fn: "AND" | "OR"): string {
-  const regex = new RegExp(`\\b${fn}\\s*\\(`, "gi");
-  const match = expr.match(regex);
-  if (!match) return expr;
-  const first = expr.search(regex);
-  const start = expr.indexOf("(", first);
-  const extracted = extractParenContent(expr, start);
-  if (!extracted) return expr;
-  const args = splitArgs(extracted.inner);
-  const op = fn === "AND" ? " AND " : " OR ";
-  const joined = args.map((a) => (fn === "AND" ? expandAndOr(a, "AND") : expandAndOr(a, "OR"))).join(op);
-  const repl = `(${joined})`;
-  return expr.slice(0, first) + repl + expr.slice(extracted.endIndex + 1);
-}
-
-/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO", IF(ESTADO='PAGADO',1,0)) en SQL seguro.
- *  - Literales numéricos y cadenas entre comillas se preservan.
- *  - ; se normaliza a , (estilo Excel).
- *  - AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(.
- *  - IF(cond, then, else) se convierte en CASE WHEN ... THEN ... ELSE ... END.
- *  - Funciones SQL conocidas se preservan.
- *  - Nombres de columnas calculadas (derivedLookup) se expanden a su expresión.
- *  - Demás identificadores se pasan a quotedColumn.
- */
-function expressionToSql(expression: string, derivedLookup?: Record<string, DerivedColumnRef>, _depth = 0): string | null {
-  if (!expression || typeof expression !== "string") return null;
-  let s = expression.replace(/\s+/g, " ").trim();
-  if (!s) return null;
-  // Normalizar comillas tipográficas/Unicode a comillas rectas (evita fallos con IF(primary.X="FB";...))
-  s = s.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"').replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'");
-  // Permitir literales: números, cadenas con ' o ", ^ para potencia, = <> ! para comparaciones (IF, COUNTIF, etc.)
-  const allowed = /^[a-zA-Z0-9_*+\-/().,\s'"%;^=<>!]+$/;
-  if (!allowed.test(s)) return null;
-
-  // 0) Normalizar ; a , (Excel usa ; como separador de argumentos)
-  s = s.replace(/;/g, ",");
-
-  // 1) Proteger cadenas entre comillas (simple o doble) para no tocar su contenido
-  const stringLiterals: string[] = [];
-  s = s.replace(/'([^']*)'|"([^"]*)"/g, (_, single, double) => {
-    const content = single !== undefined ? single : double;
-    const idx = stringLiterals.length;
-    stringLiterals.push(content.replace(/'/g, "''"));
-    return `__STR${idx}__`;
-  });
-
-  // 1b) Alias Excel -> SQL: AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(, CONCATENATE( -> CONCAT(
-  s = s.replace(/\bAVERAGE\s*\(/gi, "AVG(");
-  s = s.replace(/\bLEN\s*\(/gi, "LENGTH(");
-  s = s.replace(/\bMID\s*\(/gi, "SUBSTRING(");
-  s = s.replace(/\bCONCATENATE\s*\(/gi, "CONCAT(");
-
-  // 1c) Potencia: token ^ token -> POWER(token, token)
-  s = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*|\d+\.?\d*|__STR\d+__)\s+\^\s+([a-zA-Z_][a-zA-Z0-9_]*|\d+\.?\d*|__STR\d+__)\b/g, (_, a, b) => `POWER(${a},${b})`);
-
-  // 2) Expandir IF(cond, then, else) a CASE WHEN
-  while (/IF\s*\(/i.test(s) && !/IFS\s*\(/i.test(s)) {
-    const next = expandIfToCaseWhen(s);
-    if (next === s) break;
-    s = next;
-  }
-  while (/\bIFS\s*\(/i.test(s)) {
-    const next = expandIfsToCaseWhen(s);
-    if (next === s) break;
-    s = next;
-  }
-  while (/\bAND\s*\(/i.test(s)) {
-    const next = expandAndOr(s, "AND");
-    if (next === s) break;
-    s = next;
-  }
-  while (/\bOR\s*\(/i.test(s)) {
-    const next = expandAndOr(s, "OR");
-    if (next === s) break;
-    s = next;
-  }
-
-  // 2b) COUNTA(UNIQUE(expr)) -> COUNT(DISTINCT expr) (caso Rumipal)
-  while (/COUNTA\s*\(\s*UNIQUE\s*\(/i.test(s)) {
-    const match = s.match(/COUNTA\s*\(\s*UNIQUE\s*\(/i);
-    if (!match) break;
-    const start = s.indexOf(match[0]!);
-    const openParen = s.indexOf("(", s.indexOf("UNIQUE", start));
-    const extracted = extractParenContent(s, openParen);
-    if (!extracted) break;
-    const inner = extracted.inner;
-    const countDistinctEnd = s.indexOf(")", extracted.endIndex + 1);
-    if (countDistinctEnd === -1) break;
-    const innerSql = expressionToSql(inner, derivedLookup, _depth + 1);
-    if (!innerSql) break;
-    const repl = `COUNT(DISTINCT ${innerSql})`;
-    s = s.slice(0, start) + repl + s.slice(countDistinctEnd + 1);
-  }
-  // 2c) COUNTA(expr) -> COUNT(expr) (contar no vacíos = COUNT en SQL)
-  s = s.replace(/\bCOUNTA\s*\(/gi, "COUNT(");
-
-  // 3) Reemplazar identificadores (columnas/funciones). Primero prefijos join (primary.X, join_N.X) como un solo identificador para no interpretar "primary" como tabla.
-  const out = s.replace(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*|[a-zA-Z_][a-zA-Z0-9_]*)\b/g, (id: string) => {
-    if (/^__STR\d+__$/.test(id)) return id;
-    if (/^\d+\.?\d*$/.test(id)) return id; // literal numérico
-    if (SQL_KNOWN_FUNCTIONS.has(id.toUpperCase())) return id.toUpperCase();
-    if (derivedLookup && _depth < 5 && !/\./.test(id)) {
-      const ref = derivedLookup[id.toLowerCase()];
-      if (ref?.expression) {
-        const inner = expressionToSql(ref.expression, derivedLookup, _depth + 1);
-        if (inner) return `(${inner})`;
-      }
-    }
-    return quotedColumn(id);
-  });
-
-  // 4) Restaurar cadenas como literales SQL (siempre comilla simple)
-  const withStrings = out.replace(/__STR(\d+)__/g, (_, i) => {
-    const content = stringLiterals[Number(i)] ?? "";
-    return `'${content}'`;
-  });
-
-  return withStrings || null;
-}
-
-/** Devuelve el índice de la ")" que cierra la "(" en openParenIndex, respetando paréntesis anidados y comillas. */
-function findMatchingCloseParen(expr: string, openParenIndex: number): number {
-  let depth = 1;
-  let inQuote: string | null = null;
-  for (let i = openParenIndex + 1; i < expr.length; i++) {
-    const c = expr[i];
-    if (inQuote) {
-      if (c === inQuote && expr[i - 1] !== "\\") inQuote = null;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      inQuote = c;
-      continue;
-    }
-    if (c === "(") depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-}
-
-/** Encuentra el índice del operador "/" de división a nivel top (depth 0), respetando paréntesis y comillas. Devuelve -1 si no hay ninguno. */
-function findTopLevelDivision(expr: string): number {
-  let depth = 0;
-  let inQuote: string | null = null;
-  for (let i = 0; i < expr.length; i++) {
-    const c = expr[i];
-    if (inQuote) {
-      if (c === inQuote && expr[i - 1] !== "\\") inQuote = null;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      inQuote = c;
-      continue;
-    }
-    if (c === "(") depth++;
-    else if (c === ")") depth--;
-    else if (c === "/" && depth === 0) return i;
-  }
-  return -1;
-}
-
-/** Si la expresión es un ratio (num/den a nivel top), devuelve { numerator, denominator }. Usado para generar SUM(num)/NULLIF(SUM(den),0) en lugar de SUM(num/den). */
-function parseRatioExpression(expr: string): { numerator: string; denominator: string } | null {
-  const s = expr.replace(/\s+/g, " ").trim();
-  const idx = findTopLevelDivision(s);
-  if (idx <= 0 || idx >= s.length - 1) return null;
-  const numerator = s.slice(0, idx).trim();
-  const denominator = s.slice(idx + 1).trim();
-  if (!numerator || !denominator) return null;
-  return { numerator, denominator };
-}
-
-/** Si la expresión está envuelta en una función de agregación (ej. "SUM(X * Y)", "AVERAGE(X)"), devuelve { func, inner }.
- *  Solo desempaqueta cuando toda la expresión es exactamente una llamada (paréntesis balanceados); p. ej. "SUM(a)/SUM(b)" no se desempaqueta. */
-function unwrapAggExpression(expr: string): { func: string; inner: string } | null {
-  const s = expr.trim();
-  const headMatch = s.match(/^(SUM|AVG|AVERAGE|COUNT|COUNTA|MIN|MAX)\s*\(/i);
-  if (!headMatch) return null;
-  const openParenIndex = headMatch.index! + headMatch[0].length - 1;
-  const closeParenIndex = findMatchingCloseParen(s, openParenIndex);
-  if (closeParenIndex === -1) return null;
-  const afterClose = s.slice(closeParenIndex + 1).trim();
-  if (afterClose.length > 0) return null;
-  const inner = s.slice(openParenIndex + 1, closeParenIndex).trim();
-  let func = headMatch[1]!.toUpperCase();
-  if (func === "AVERAGE") func = "AVG";
-  if (func === "COUNTA") func = "COUNT";
-  return { func, inner };
-}
-
-/** Divide el contenido de argumentos por comas respetando paréntesis y comillas. */
-function splitArgs(content: string): string[] {
-  const args: string[] = [];
-  let depth = 0;
-  let inQuote: string | null = null;
-  let start = 0;
-  for (let i = 0; i < content.length; i++) {
-    const c = content[i];
-    if (inQuote) {
-      if (c === inQuote && content[i - 1] !== "\\") inQuote = null;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      inQuote = c;
-      continue;
-    }
-    if (c === "(") depth++;
-    else if (c === ")") depth--;
-    else if ((c === "," || c === ";") && depth === 0) {
-      args.push(content.slice(start, i).trim());
-      start = i + 1;
-    }
-  }
-  if (start <= content.length) args.push(content.slice(start).trim());
-  return args.filter(Boolean);
-}
-
-/** Parsea criterio tipo ">10", "=Activo", "<>" y devuelve { op, valueStr }. */
-function parseCriterion(crit: string): { op: string; valueStr: string } {
-  const t = crit.trim();
-  const match = t.match(/^(\<\>|\>\=|\<\=|\>|\<|\=)?\s*([\s\S]*)$/);
-  const op = (match?.[1] ?? "=").replace(/\s/g, "");
-  const valueStr = (match?.[2] ?? t).trim();
-  return { op: op || "=", valueStr };
-}
-
-/** Construye la expresión SQL de agregación para COUNTIF/SUMIF/COUNTIFS/SUMIFS. Devuelve null si no aplica. */
-function buildCountIfSumIfAggregate(
-  expression: string,
-  derivedLookup: Record<string, DerivedColumnRef> | undefined
-): string | null {
-  const trimmed = expression.replace(/\s+/g, " ").trim().replace(/;/g, ",");
-  const countIfMatch = trimmed.match(/^\s*COUNTIF\s*\(([\s\S]+)\)\s*$/i);
-  if (countIfMatch) {
-    const args = splitArgs(countIfMatch[1]!);
-    if (args.length < 2) return null;
-    const rangeSql = expressionToSql(args[0]!, derivedLookup);
-    const crit = parseCriterion(args[1]!);
-    const valSql = expressionToSql(args[1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
-    if (!rangeSql) return null;
-    const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
-    return `COUNT(CASE WHEN ${whenClause} THEN 1 END)`;
-  }
-  const sumIfMatch = trimmed.match(/^\s*SUMIF\s*\(([\s\S]+)\)\s*$/i);
-  if (sumIfMatch) {
-    const args = splitArgs(sumIfMatch[1]!);
-    if (args.length < 2) return null;
-    const rangeSql = expressionToSql(args[0]!, derivedLookup);
-    const crit = parseCriterion(args[1]!);
-    const valSql = expressionToSql(args[1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
-    const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
-    const sumRangeSql = args.length >= 3 ? expressionToSql(args[2]!, derivedLookup) : rangeSql;
-    if (!rangeSql || !sumRangeSql) return null;
-    return `SUM(CASE WHEN ${whenClause} THEN ${sumRangeSql} ELSE 0 END)`;
-  }
-  const countIfsMatch = trimmed.match(/^\s*COUNTIFS\s*\(([\s\S]+)\)\s*$/i);
-  if (countIfsMatch) {
-    const args = splitArgs(countIfsMatch[1]!);
-    if (args.length < 2 || args.length % 2 !== 0) return null;
-    const conditions: string[] = [];
-    for (let i = 0; i < args.length; i += 2) {
-      const rangeSql = expressionToSql(args[i]!, derivedLookup);
-      const crit = parseCriterion(args[i + 1]!);
-      const valSql = expressionToSql(args[i + 1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
-      if (!rangeSql) return null;
-      const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
-      conditions.push(whenClause);
-    }
-    return `COUNT(CASE WHEN ${conditions.join(" AND ")} THEN 1 END)`;
-  }
-  const sumIfsMatch = trimmed.match(/^\s*SUMIFS\s*\(([\s\S]+)\)\s*$/i);
-  if (sumIfsMatch) {
-    const args = splitArgs(sumIfsMatch[1]!);
-    if (args.length < 3 || (args.length - 1) % 2 !== 0) return null;
-    const sumRangeSql = expressionToSql(args[0]!, derivedLookup);
-    if (!sumRangeSql) return null;
-    const conditions: string[] = [];
-    for (let i = 1; i < args.length; i += 2) {
-      const rangeSql = expressionToSql(args[i]!, derivedLookup);
-      const crit = parseCriterion(args[i + 1]!);
-      const valSql = expressionToSql(args[i + 1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
-      if (!rangeSql) return null;
-      const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
-      conditions.push(whenClause);
-    }
-    return `SUM(CASE WHEN ${conditions.join(" AND ")} THEN ${sumRangeSql} ELSE 0 END)`;
-  }
-  const averageIfMatch = trimmed.match(/^\s*AVERAGEIF\s*\(([\s\S]+)\)\s*$/i);
-  if (averageIfMatch) {
-    const args = splitArgs(averageIfMatch[1]!);
-    if (args.length < 2) return null;
-    const rangeSql = expressionToSql(args[0]!, derivedLookup);
-    const crit = parseCriterion(args[1]!);
-    const valSql = expressionToSql(args[1]!, derivedLookup) ?? toSqlLiteral(crit.valueStr.replace(/^['"]|['"]$/g, ""));
-    const whenClause = crit.op === "=" ? `${rangeSql} = ${valSql}` : crit.op === "<>" || crit.op === "!=" ? `${rangeSql} <> ${valSql}` : `${rangeSql} ${crit.op} ${valSql}`;
-    const avgRangeSql = args.length >= 3 ? expressionToSql(args[2]!, derivedLookup) : rangeSql;
-    if (!rangeSql || !avgRangeSql) return null;
-    return `AVG(CASE WHEN ${whenClause} THEN ${avgRangeSql} END)`;
-  }
-  return null;
 }
 
 export async function POST(req: NextRequest) {
@@ -701,22 +259,34 @@ export async function POST(req: NextRequest) {
 
     // Validar que cada métrica base use una función de agregación permitida (o expresión con COUNTIF/SUMIF/etc.)
     const allowedAggSet = new Set(ALLOWED_AGG_FUNCTIONS.map((f) => f.toUpperCase()));
-    const allowedAggWhenExpression = new Set(["COUNTIF", "SUMIF", "COUNTIFS", "SUMIFS", "AVERAGEIF"]);
+    const allowedAggWhenExpression = new Set([
+      "COUNTIF",
+      "SUMIF",
+      "COUNTIFS",
+      "SUMIFS",
+      "AVERAGEIF",
+      "MAXIFS",
+      "MINIFS",
+      "MEDIAN",
+      "MODE",
+    ]);
     for (let i = 0; i < body.metrics.length; i++) {
       const m = body.metrics[i];
       if (m.formula) continue;
       const func = (m.func || "").toString().toUpperCase().trim();
       const expr = (m as Metric & { expression?: string }).expression?.trim() ?? "";
-      const exprIsCountIfSumIf = /^\s*(COUNTIF|SUMIF|COUNTIFS|SUMIFS|AVERAGEIF)\s*\(/i.test(expr);
+      const exprIsCountIfSumIf = /^\s*(COUNTIF|SUMIF|COUNTIFS|SUMIFS|AVERAGEIF|MAXIFS|MINIFS)\s*\(/i.test(expr);
+      const exprIsMedianMode = /^\s*(MEDIAN|MODE)\s*\(/i.test(expr);
       const allowed =
         allowedAggSet.has(func) ||
         func.startsWith("COUNT(DISTINCT") ||
         func === "COUNTA" ||
         allowedAggWhenExpression.has(func) ||
-        exprIsCountIfSumIf;
+        exprIsCountIfSumIf ||
+        exprIsMedianMode;
       if (!allowed) {
         return NextResponse.json(
-          { error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use: SUM, AVG, COUNT, COUNTA, MIN, MAX, COUNT(DISTINCT), o expresiones con COUNTIF/SUMIF/COUNTIFS/SUMIFS/AVERAGEIF.` },
+          { error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use: SUM, AVG, COUNT, COUNTA, MIN, MAX, COUNT(DISTINCT), MEDIAN, MODE, o expresiones con COUNTIF/SUMIF/COUNTIFS/SUMIFS/AVERAGEIF/MAXIFS/MINIFS.` },
           { status: 400 }
         );
       }
@@ -952,6 +522,15 @@ export async function POST(req: NextRequest) {
     }
     console.log("[aggregate-data] derivedByName keys:", Object.keys(derivedByName), "etlIdForLookup:", etlIdForLookup);
 
+    const exprToSql = (e: string): string | null => {
+      try {
+        return expressionToSql(e, derivedByName);
+      } catch (err) {
+        if (err instanceof FormulaCycleError) return null;
+        throw err;
+      }
+    };
+
     const getDerived = (field: string | undefined): DerivedColumnRef | undefined => {
       if (!field || !String(field).trim()) return undefined;
       return derivedByName[String(field).trim().toLowerCase()];
@@ -978,9 +557,21 @@ export async function POST(req: NextRequest) {
             { status: 400 }
           );
         }
-        if (!expressionToSql(exprStr, derivedByName)) {
+        let parsedExpr: string | null = null;
+        try {
+          parsedExpr = expressionToSql(exprStr, derivedByName);
+        } catch (err) {
+          if (err instanceof FormulaCycleError) {
+            return NextResponse.json(
+              { error: `Métrica en posición ${i + 1}: ${err.message}` },
+              { status: 400 }
+            );
+          }
+          throw err;
+        }
+        if (!parsedExpr) {
           return NextResponse.json(
-            { error: `Métrica en posición ${i + 1}: la expresión no es válida. Revisá que solo uses columnas del dataset, números, operadores ( * - + / ^ ), comillas para texto, y funciones soportadas (IF, SUM, AVG, ROUND, UPPER, etc.).` },
+            { error: `Métrica en posición ${i + 1}: la expresión no es válida. Revisá que solo uses columnas del dataset, números, operadores ( * - + / ^ & ), comillas para texto, y funciones soportadas (IF, SUM, AVG, ROUND, UPPER, etc.).` },
             { status: 400 }
           );
         }
@@ -995,146 +586,18 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Construcción de Métricas. Columnas calculadas: field -> expression + func. Si field es nombre de métrica guardada, expandir.
-    const metricClauses = metricsBase
-      .map((m) => {
-        const i = body.metrics.indexOf(m);
-        const derived: DerivedColumnRef | undefined = getDerived(m.field);
-        const savedMetric = m.field && !derived ? savedMetricByName[String(m.field).trim().toLowerCase()] : undefined;
+    const { metricClauses, ratioAggregateError } = buildPgMetricClauses({
+      bodyMetrics: body.metrics as MetricClauseMetric[],
+      metricsBase: metricsBase as MetricClauseMetric[],
+      derivedByName,
+      savedMetricByName,
+      getDerived,
+      exprToSql,
+      buildWhenClause,
+      buildConditionExpr,
+    });
 
-        // Resolver expresión: prioridad derived > metric.expression > métrica guardada por nombre (defensivo)
-        let resolvedExpr = "";
-        if (derived) {
-          resolvedExpr = derived.expression;
-        }
-        const metricExpr = (m as Metric & { expression?: string }).expression;
-        if (metricExpr && metricExpr.trim()) {
-          resolvedExpr = metricExpr.trim();
-        }
-        if (!resolvedExpr && savedMetric?.expression) {
-          resolvedExpr = savedMetric.expression;
-        }
-
-        // Si está envuelta en agregación, extraer. Detectar expresión compuesta (ej. SUM(a)/SUM(b)) para no envolver en func() después.
-        let func = (m.func || derived?.defaultAggregation || savedMetric?.func || "SUM").toString().toUpperCase();
-        let isCompoundAggregate = false;
-        if (resolvedExpr) {
-          const unwrapped = unwrapAggExpression(resolvedExpr);
-          isCompoundAggregate = !unwrapped && /\b(SUM|AVG|COUNT|MIN|MAX)\s*\(/i.test(resolvedExpr);
-          if (unwrapped) {
-            resolvedExpr = unwrapped.inner;
-            if (!m.func || m.func === "SUM") func = unwrapped.func;
-          }
-        }
-
-        // Campo efectivo: si no hay expresión y el field es una métrica guardada, usar el field de esa métrica
-        const effectiveField = (!resolvedExpr && savedMetric?.field) ? savedMetric.field : m.field;
-        const derivedForField = getDerived(effectiveField);
-        if (!resolvedExpr && derivedForField?.expression) {
-          resolvedExpr = derivedForField.expression;
-          if (!func || func === "SUM") func = (derivedForField.defaultAggregation || "SUM").toUpperCase();
-          const unwrapped = unwrapAggExpression(resolvedExpr);
-          isCompoundAggregate = !unwrapped && /\b(SUM|AVG|COUNT|MIN|MAX)\s*\(/i.test(resolvedExpr);
-          if (unwrapped) {
-            resolvedExpr = unwrapped.inner;
-            func = unwrapped.func;
-          }
-        }
-        (m as any)._compoundAggregate = isCompoundAggregate;
-
-        const fieldExpr = (() => {
-          if (resolvedExpr) {
-            const countIfSumIfAgg = buildCountIfSumIfAggregate(resolvedExpr, derivedByName);
-            if (countIfSumIfAgg) {
-              (m as any)._forceAggregate = countIfSumIfAgg;
-              return "1";
-            }
-            // Ratio: num/den -> agregar como SUM(num)/NULLIF(SUM(den),0) para que al cambiar dimensión sea correcto
-            const ratioParsed = parseRatioExpression(resolvedExpr);
-            if (ratioParsed) {
-              const numHasAgg = /\b(SUM|AVG|COUNT|MIN|MAX|COUNTA)\s*\(/i.test(ratioParsed.numerator);
-              const denHasAgg = /\b(SUM|AVG|COUNT|MIN|MAX|COUNTA)\s*\(/i.test(ratioParsed.denominator);
-              if (numHasAgg || denHasAgg) {
-                (m as any)._ratioAggregateError = true;
-                return "1";
-              }
-              const numSql = expressionToSql(ratioParsed.numerator, derivedByName);
-              const denSql = expressionToSql(ratioParsed.denominator, derivedByName);
-              if (numSql && denSql) {
-                (m as any)._ratioAggregate = {
-                  numSql: safeNumericCast(`(${numSql})`),
-                  denSql: safeNumericCast(`(${denSql})`),
-                };
-                return "1";
-              }
-            }
-            // UNIQUE(expr) como expresión completa -> COUNT(DISTINCT expr); se maneja en aggExpr más abajo
-            const uniqueMatch = resolvedExpr.trim().match(/^\s*UNIQUE\s*\(([\s\S]+)\)\s*$/i);
-            if (uniqueMatch) {
-              const inner = uniqueMatch[1]!.trim();
-              const innerSql = expressionToSql(inner, derivedByName);
-              if (innerSql) {
-                const countDistinctExpr = `COUNT(DISTINCT (${innerSql}))`;
-                (m as any)._forceCountDistinct = countDistinctExpr;
-                return innerSql;
-              }
-            }
-            const sqlExpr = expressionToSql(resolvedExpr, derivedByName);
-            if (sqlExpr) return safeNumericCast(`(${sqlExpr})`);
-            console.warn("[aggregate-data] expressionToSql returned null for:", resolvedExpr);
-          }
-          if (derived) {
-            console.warn("[aggregate-data] FALLTHROUGH: derived col", m.field, "expr:", derived.expression, "resolvedExpr:", resolvedExpr);
-          }
-          // Si la métrica guardada no pudo resolverse a un campo real (field === nombre), evitar columna inexistente
-          const isSavedNameAsColumn = savedMetric && String(effectiveField || "").trim().toLowerCase() === String(m.field || "").trim().toLowerCase();
-          if (isSavedNameAsColumn && (func === "COUNT" || func.startsWith("COUNT(DISTINCT"))) {
-            return "1";
-          }
-          if (isSavedNameAsColumn) {
-            return "0";
-          }
-          const col = quotedColumn(effectiveField!);
-          if (m.cast === "sanitize")
-            return safeNumericCast(`regexp_replace(${col}::text, '[^0-9\\.-]', '', 'g')`);
-          if (m.cast === "numeric") return safeNumericCast(col);
-          return col;
-        })();
-
-        const internalAlias = `metric_${i}`;
-        (m as any).internalAlias = internalAlias;
-
-        let aggExpr: string;
-        const forceAggregate = (m as any)._forceAggregate as string | undefined;
-        const forceCountDistinct = (m as any)._forceCountDistinct as string | undefined;
-        const compoundAggregate = (m as any)._compoundAggregate as boolean | undefined;
-        const ratioAggregate = (m as any)._ratioAggregate as { numSql: string; denSql: string } | undefined;
-        if (ratioAggregate) {
-          aggExpr = `SUM(${ratioAggregate.numSql}) / NULLIF(SUM(${ratioAggregate.denSql}), 0)`;
-        } else if (forceAggregate) {
-          aggExpr = forceAggregate;
-        } else if (forceCountDistinct) {
-          aggExpr = forceCountDistinct;
-        } else if (compoundAggregate) {
-          aggExpr = fieldExpr;
-        } else if (m.condition) {
-          const whenClause = buildWhenClause(m.condition);
-          if (func === "COUNT" || func.startsWith("COUNT(DISTINCT"))
-            aggExpr = `COUNT(CASE WHEN ${whenClause} THEN 1 END)`;
-          else
-            aggExpr = `${func}(${buildConditionExpr(m.condition, fieldExpr)})`;
-        } else {
-          if (func === "COUNTA") {
-            aggExpr = `COUNT(${fieldExpr})`;
-          } else if (func.startsWith("COUNT(DISTINCT"))
-            aggExpr = `COUNT(DISTINCT ${fieldExpr})`;
-          else
-            aggExpr = `${func}(${fieldExpr})`;
-        }
-        return `${aggExpr} AS "${internalAlias}"`;
-      })
-      .join(", ");
-
-    if (metricsBase.some((m) => (m as any)._ratioAggregateError)) {
+    if (ratioAggregateError) {
       return NextResponse.json(
         { error: "No se puede usar una expresión que sea «agregado / agregado» (ej. sum(...)/count(...)) como una sola métrica. Creá dos métricas (numerador y denominador), guardalas, y luego en Cálculo usá «Reutilizar métricas existentes» con fórmula metric_0 / NULLIF(metric_1, 0)." },
         { status: 400 }
@@ -1440,7 +903,7 @@ export async function POST(req: NextRequest) {
       if (!expr || typeof expr !== "string") return null;
       const withAliases = resolveAliasesInFormula(expr);
       const s = withAliases.replace(/\s+/g, " ").trim();
-      if (!/^[metric_0-9\s\-+*/().,NULLIFROUNDCOALESCE]+$/i.test(s)) return null;
+      if (!/^[\w\s\-+*/().,&]+$/i.test(s)) return null;
       return s;
     };
     const findMetricRefsInFormula = (expr: string): number[] => {

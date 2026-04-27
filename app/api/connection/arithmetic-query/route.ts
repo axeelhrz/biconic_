@@ -3,6 +3,7 @@ import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
+import { createExpansionContext, expressionToSql } from "@/lib/formula-engine";
 
 
 async function getPasswordFromSecret(
@@ -91,6 +92,29 @@ function resolveOperandAlias(name: string): string {
 }
 
 
+type FormulaOperationRow = { expression: string; resultColumn: string };
+
+function buildFormulaOperationSqlParts(
+  formulaOperations: FormulaOperationRow[] | undefined,
+  dialect: "postgres" | "mysql"
+): string[] {
+  const d = dialect === "postgres" ? "postgres" : "mysql";
+  return (formulaOperations || []).map((fo) => {
+    const ctx = createExpansionContext(d);
+    const expr = (fo.expression || "").trim();
+    if (!expr) throw new Error("Expresión de fórmula vacía");
+    const sql = expressionToSql(expr, undefined, ctx);
+    if (!sql) throw new Error(`Expresión inválida para columna «${fo.resultColumn}»`);
+    const rc = (fo.resultColumn || "").trim();
+    if (!rc) throw new Error("Nombre de columna resultado requerido");
+    const alias =
+      dialect === "postgres"
+        ? `"${rc.replace(/"/g, '""')}"`
+        : `\`${rc.replace(/`/g, "``")}\``;
+    return `(${sql}) AS ${alias}`;
+  });
+}
+
 type ArithmeticQueryBody = {
   connectionId?: string | number;
   type?: "mysql" | "postgres" | "postgresql";
@@ -103,7 +127,9 @@ type ArithmeticQueryBody = {
   table: string; // schema.table
   columns?: string[]; // selected columns; default *
   conditions?: FilterCondition[];
-  operations: ArithmeticOperation[]; // arithmetic operations to perform
+  operations?: ArithmeticOperation[]; // operaciones binarias
+  /** Expresiones estilo Excel por fila (traducidas con formula-engine). */
+  formulaOperations?: FormulaOperationRow[];
   conversions?: CastConversion[]; // optional upstream cast conversions
   rules?: ConditionRule[];
   limit?: number;
@@ -437,6 +463,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       columns,
       conditions,
       operations,
+      formulaOperations,
       count,
       conversions, // upstream cast conversions
       rules, // upstream condition rules
@@ -658,6 +685,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 const alias = `"${op.resultColumn.replace(/"/g, '""')}"`;
                 return `${expr} AS ${alias}`;
             });
+            const formulaCols = buildFormulaOperationSqlParts(formulaOperations, "postgres");
             
             // Conditions from Filter Node (applied as WHERE in Outer Query)
             const { clause: whereClause, params: whereParams } = buildWhereClausePg(conditionParts); 
@@ -671,7 +699,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             if (ruleFilters.length) allWhereParts.push(ruleFilters.join(" AND "));
             
             const finalWhere = allWhereParts.length ? `WHERE ${allWhereParts.join(" AND ")}` : "";
-            const finalCols = ["sub.*", ...ruleCols, ...arithmeticCols].join(", ");
+            const finalCols = ["sub.*", ...ruleCols, ...arithmeticCols, ...formulaCols].join(", ");
             
             const sql = `SELECT ${finalCols} FROM (${subQuery}) AS sub ${finalWhere} LIMIT $${whereParams.length + 1} OFFSET $${whereParams.length + 2}`;
             
@@ -793,11 +821,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const alias = `"${op.resultColumn.replace(/"/g, '""')}"`;
         return `${expr} AS ${alias}`;
       });
+      const formulaCols = buildFormulaOperationSqlParts(formulaOperations, "postgres");
 
       const filterParts = (rules || []).map(buildFilterPartPg).filter(Boolean);
       const outerWhere = filterParts.length > 0 ? `WHERE (${filterParts.join(" AND ")})` : "";
 
-      const finalCols = ["sub.*", ...ruleCols, ...arithmeticCols].join(", ");
+      const finalCols = ["sub.*", ...ruleCols, ...arithmeticCols, ...formulaCols].join(", ");
 
       const sql = `SELECT ${finalCols} FROM (${subQuery}) AS sub ${outerWhere} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
 
@@ -865,10 +894,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const alias = `"${op.resultColumn.replace(/"/g, '""')}"`;
         return `${expr} AS ${alias}`;
       });
+      const formulaCols = buildFormulaOperationSqlParts(formulaOperations, "postgres");
 
       const filterParts = (rules || []).map(buildFilterPartPg).filter(Boolean);
       const outerWhere = filterParts.length > 0 ? `WHERE (${filterParts.join(" AND ")})` : "";
-      const finalCols = ["sub.*", ...ruleCols, ...arithmeticCols].join(", ");
+      const finalCols = ["sub.*", ...ruleCols, ...arithmeticCols, ...formulaCols].join(", ");
 
       const sql = `SELECT ${finalCols} FROM (${subQuery}) AS sub ${outerWhere} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
 
@@ -923,10 +953,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const alias = `\`${op.resultColumn.replace(/`/g, "``")}\``;
         return `${expr} AS ${alias}`;
       });
+      const formulaCols = buildFormulaOperationSqlParts(formulaOperations, "mysql");
 
       const filterParts = (rules || []).map(buildFilterPartMy).filter(Boolean);
       const outerWhere = filterParts.length > 0 ? `WHERE (${filterParts.join(" OR ")})` : "";
-      const finalCols = ["sub.*", ...ruleCols, ...arithmeticCols].join(", ");
+      const finalCols = ["sub.*", ...ruleCols, ...arithmeticCols, ...formulaCols].join(", ");
 
       const sql = `SELECT ${finalCols} FROM (${subQuery}) AS sub ${outerWhere} LIMIT ? OFFSET ?`;
 
