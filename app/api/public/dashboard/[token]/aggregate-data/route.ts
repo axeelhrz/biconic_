@@ -509,18 +509,32 @@ export async function POST(
         : body.dimension && !isInvalidIdentifier(body.dimension)
           ? [body.dimension]
           : [];
+    let dimDerivedError: string | null = null;
+    const dimExprSql = (d: string): string => {
+      const derived = getDerived(d);
+      if (!derived?.expression) return quotedColumn(d);
+      const parsed = exprToSql(derived.expression);
+      if (!parsed) {
+        dimDerivedError = `La dimensión calculada «${d}» no pudo expandirse a SQL. Revisá su fórmula.`;
+        return quotedColumn(d);
+      }
+      return `(${parsed})`;
+    };
     let dimensionSelectClause = "";
     let dimensionGroupByClause = "";
 
     if (dimList.length > 0) {
       const parts = dimList.map((d) => {
-        const col = quotedColumn(d);
+        const col = dimExprSql(d);
         const alias = (d || "").trim().replace(/"/g, '""');
         const coalesceExpression = `COALESCE(${col}::text, 'Sin Categoría')`;
         return { select: `${coalesceExpression} AS "${alias}"`, group: coalesceExpression };
       });
       dimensionSelectClause = parts.map((p) => p.select).join(", ");
       dimensionGroupByClause = parts.map((p) => p.group).join(", ");
+    }
+    if (dimDerivedError) {
+      return NextResponse.json({ error: dimDerivedError }, { status: 400 });
     }
 
     const selectClause = [dimensionSelectClause, metricClauses].filter(Boolean).join(", ");

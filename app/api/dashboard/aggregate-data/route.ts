@@ -610,6 +610,17 @@ export async function POST(req: NextRequest) {
       : body.dimension && !isInvalidIdentifier(body.dimension)
         ? [body.dimension]
         : [];
+    let dimDerivedError: string | null = null;
+    const dimExprSql = (d: string): string => {
+      const derived = getDerived(d);
+      if (!derived?.expression) return quotedColumn(d);
+      const parsed = exprToSql(derived.expression);
+      if (!parsed) {
+        dimDerivedError = `La dimensión calculada «${d}» no pudo expandirse a SQL. Revisá su fórmula.`;
+        return quotedColumn(d);
+      }
+      return `(${parsed})`;
+    };
     let dimensionSelectClause = "";
     let dimensionGroupByClause = "";
     let dateGroupByExpr = "";
@@ -646,7 +657,7 @@ export async function POST(req: NextRequest) {
               if (alias === body.dateGroupBy!.field?.trim() || normalizeStr(alias) === normalizeStr(body.dateGroupBy!.field || "")) {
                 return `${dateGroupByDisplayExpr} AS "${alias}"`;
               }
-              const col = quotedColumn(d);
+              const col = dimExprSql(d);
               return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
             })
           : [`${dateGroupByDisplayExpr} AS "${timeField}"`];
@@ -656,20 +667,23 @@ export async function POST(req: NextRequest) {
         groupParts.push(
           ...dimList
             .filter((d) => (d || "").trim() !== (body.dateGroupBy!.field || "").trim() && normalizeStr((d || "").trim()) !== normalizeStr(body.dateGroupBy!.field || ""))
-            .map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
+            .map((d) => `COALESCE(${dimExprSql(d)}::text, 'Sin Categoría')`)
         );
       }
       dimensionGroupByClause = groupParts.join(", ");
     } else if (dimList.length > 0) {
       const parts = dimList.map((d) => {
-        const col = quotedColumn(d);
+        const col = dimExprSql(d);
         const alias = (d || "").trim().replace(/"/g, '""');
         return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
       });
       dimensionSelectClause = parts.join(", ");
       dimensionGroupByClause = dimList
-        .map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
+        .map((d) => `COALESCE(${dimExprSql(d)}::text, 'Sin Categoría')`)
         .join(", ");
+    }
+    if (dimDerivedError) {
+      return NextResponse.json({ error: dimDerivedError }, { status: 400 });
     }
 
     const selectClause = [dimensionSelectClause, metricClauses]
