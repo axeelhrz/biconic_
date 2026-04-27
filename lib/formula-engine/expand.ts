@@ -19,10 +19,7 @@ export function expandIfToCaseWhen(expr: string): string {
       if (depth === 0) break;
     } else if ((c === "," || c === ";") && depth === 1) {
       if (firstComma === -1) firstComma = i;
-      else {
-        secondComma = i;
-        break;
-      }
+      else if (secondComma === -1) secondComma = i;
     }
   }
   if (firstComma === -1 || secondComma === -1) return expr;

@@ -12,6 +12,7 @@ describe("expressionToSql", () => {
     const sql = expressionToSql('IF(monto>0; monto; 0)', undefined);
     expect(sql).toBeTruthy();
     expect(sql!.toUpperCase()).toContain("CASE");
+    expect(sql!.replace(/\s+/g, " ")).toContain("ELSE 0 END");
   });
 
   it("IF anidado (varios niveles)", () => {
