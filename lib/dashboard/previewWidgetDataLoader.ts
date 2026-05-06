@@ -36,6 +36,15 @@ type AggregationConfigLike = {
   chartRankingTop?: number;
   chartRankingMetric?: string;
   chartRankingDirection?: "asc" | "desc";
+  chartRankingPinnedXValues?: string[];
+  dimensionDefaultFilters?: Array<{
+    id: string;
+    field: string;
+    operator: string;
+    defaultValue: unknown;
+    label?: string;
+    inputType?: "select" | "multi" | "text" | "number" | "date";
+  }>;
   chartType?: string;
   chartXAxis?: string;
   analysisDateDisplayFormat?: string;

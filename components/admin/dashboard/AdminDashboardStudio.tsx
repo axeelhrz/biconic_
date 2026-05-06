@@ -62,6 +62,10 @@ import {
 import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
 import { pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
 import {
+  mapDimensionDefaultFiltersToAggregationFilters,
+  type DimensionDefaultFilterEdit,
+} from "@/lib/dashboard/dimensionDefaultFilters";
+import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
   resolveDarkChartTheme,
@@ -156,6 +160,9 @@ type AggregationConfig = {
   chartRankingTop?: number;
   chartRankingMetric?: string;
   chartRankingDirection?: "asc" | "desc";
+  chartRankingPinnedXValues?: string[];
+  /** Defaults editables en vista (no son filtros fijos). */
+  dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
   chartColorScheme?: string;
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";
@@ -731,6 +738,16 @@ export function AdminDashboardStudio({
             mappedGlobalFilters.push({ ...f, field: physicalField, operator: op, value });
           }
         }
+        const mappedDimensionDefaultFilters = mapDimensionDefaultFiltersToAggregationFilters(
+          agg?.dimensionDefaultFilters as DimensionDefaultFilterEdit[] | undefined,
+          {},
+          {
+            datasetDimensions,
+            sourceId,
+            agg: agg ?? null,
+            mapDatasetField,
+          }
+        );
         if (agg?.enabled && agg.metrics.length > 0) {
           const expandedEdits = expandAnalysisMetricsForFetch(
             {
@@ -908,7 +925,7 @@ export function AdminDashboardStudio({
               ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(aggForLoad.geoOverridesByXLabel) }
               : {}),
             metrics: metricsPayload,
-            filters: [...mappedWidgetFilters, ...mappedGlobalFilters],
+            filters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters, ...mappedWidgetFilters],
             orderBy: rankingOrderBy || aggForLoad.orderBy,
             limit: rankingLimit ?? aggForLoad.limit ?? 100,
             cumulative: aggForLoad.cumulative || "none",
@@ -946,7 +963,7 @@ export function AdminDashboardStudio({
             sourceId,
             datasetDimensions: etlData.datasetDimensions,
             savedMetrics: savedMetrics as unknown as Array<{ name?: string; metric?: { field?: string; func?: string; alias?: string; expression?: string }; aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> } }>,
-            globalFilters: mappedGlobalFilters,
+            globalFilters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters],
             aggregateEndpoint: "/api/dashboard/aggregate-data",
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -974,7 +991,7 @@ export function AdminDashboardStudio({
           );
         } else {
           const widgetForBuild = { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color };
-          const rawPayload = { tableName, filters: mappedGlobalFilters, limit: 500 };
+          const rawPayload = { tableName, filters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters], limit: 500 };
           setWidgets((prev) =>
             prev.map((w) =>
               w.id === widgetId
@@ -995,7 +1012,7 @@ export function AdminDashboardStudio({
             tableName,
             sourceId,
             datasetDimensions: etlData.datasetDimensions,
-            globalFilters: mappedGlobalFilters,
+            globalFilters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters],
             aggregateEndpoint: "/api/dashboard/aggregate-data",
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,

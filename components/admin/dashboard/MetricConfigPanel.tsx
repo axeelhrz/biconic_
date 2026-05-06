@@ -30,6 +30,7 @@ import {
   ChartLabelOverridesSection,
   ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS,
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
+import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 
 export type MetricConditionEdit = {
   field: string;
@@ -63,6 +64,7 @@ export type AggregationConfigEdit = {
   dimensions?: string[];
   metrics: AggregationMetricEdit[];
   filters?: AggregationFilterEdit[];
+  dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
   cumulative?: "none" | "running_sum" | "ytd";
@@ -86,6 +88,7 @@ export type AggregationConfigEdit = {
   chartRankingTop?: number;
   chartRankingMetric?: string;
   chartRankingDirection?: "asc" | "desc";
+  chartRankingPinnedXValues?: string[];
   chartColorScheme?: string;
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";
@@ -232,6 +235,14 @@ const AGG_FUNCS: { value: string; label: string }[] = [
   { value: "FORMULA", label: "Fórmula / ratio" },
 ];
 
+const DIMENSION_DEFAULT_INPUT_TYPES: Array<NonNullable<DimensionDefaultFilterEdit["inputType"]>> = [
+  "select",
+  "multi",
+  "text",
+  "number",
+  "date",
+];
+
 const OPERATORS = [
   "=", "!=", ">", ">=", "<", "<=",
   "LIKE", "ILIKE", "IN", "BETWEEN",
@@ -311,6 +322,7 @@ export function MetricConfigPanel({
   const [labelOverrideRawDrafts, setLabelOverrideRawDrafts] = useState<Record<string, string>>({});
   const [tableColKeyDrafts, setTableColKeyDrafts] = useState<Record<string, string>>({});
   const filters = agg.filters || [];
+  const dimensionDefaults = agg.dimensionDefaultFilters ?? [];
   const metrics = agg.metrics || [];
   const yAxisKeysForUi = useMemo(() => {
     const raw = (agg.chartYAxes ?? []).map((k) => String(k ?? "").trim()).filter(Boolean);
@@ -409,6 +421,33 @@ export function MetricConfigPanel({
 
   const removeFilter = (index: number) => {
     updateAgg({ filters: filters.filter((_, i) => i !== index) });
+  };
+
+  const updateDimensionDefault = (index: number, patch: Partial<DimensionDefaultFilterEdit>) => {
+    const next = [...dimensionDefaults];
+    if (!next[index]) return;
+    next[index] = { ...next[index], ...patch };
+    updateAgg({ dimensionDefaultFilters: next });
+  };
+
+  const addDimensionDefaultFilter = () => {
+    updateAgg({
+      dimensionDefaultFilters: [
+        ...dimensionDefaults,
+        {
+          id: `ddf-${Date.now()}`,
+          field: fields[0] || "",
+          operator: "=",
+          defaultValue: "",
+          label: "",
+          inputType: "select",
+        },
+      ],
+    });
+  };
+
+  const removeDimensionDefaultFilter = (index: number) => {
+    updateAgg({ dimensionDefaultFilters: dimensionDefaults.filter((_, i) => i !== index) });
   };
 
   const setLabelOverride = (oldRaw: string, newRaw: string, display: string) => {
@@ -2473,6 +2512,99 @@ export function MetricConfigPanel({
                           ))}
                         </div>
                       </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Valores por defecto en vista</Label>
+                          <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addDimensionDefaultFilter}>
+                            + Añadir
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-[var(--studio-fg-muted)] mb-2">
+                          Preselección al abrir el dashboard (editable por el usuario). Distinto de los filtros fijos.
+                        </p>
+                        <div className="space-y-2">
+                          {dimensionDefaults.map((d, i) => (
+                            <div
+                              key={d.id || `ddf-${i}`}
+                              className="grid grid-cols-12 gap-1 items-start rounded border border-[var(--studio-border)] p-2 bg-[var(--studio-bg)]/30"
+                            >
+                              <div className="col-span-12 sm:col-span-3">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Etiqueta</Label>
+                                <Input
+                                  value={d.label ?? ""}
+                                  onChange={(e) => updateDimensionDefault(i, { label: e.target.value })}
+                                  placeholder="Ej. País"
+                                  className="h-7 text-[11px] mt-0.5"
+                                />
+                              </div>
+                              <div className="col-span-6 sm:col-span-3">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Campo</Label>
+                                <select
+                                  value={d.field}
+                                  onChange={(e) => updateDimensionDefault(i, { field: e.target.value })}
+                                  className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                                >
+                                  {fields.map((name) => (
+                                    <option key={name} value={name}>
+                                      {name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="col-span-6 sm:col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Operador</Label>
+                                <select
+                                  value={d.operator}
+                                  onChange={(e) => updateDimensionDefault(i, { operator: e.target.value })}
+                                  className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                                >
+                                  {OPERATORS.map((op) => (
+                                    <option key={op} value={op}>
+                                      {op}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="col-span-6 sm:col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Entrada</Label>
+                                <select
+                                  value={d.inputType ?? "select"}
+                                  onChange={(e) =>
+                                    updateDimensionDefault(i, {
+                                      inputType: e.target.value as DimensionDefaultFilterEdit["inputType"],
+                                    })
+                                  }
+                                  className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                                >
+                                  {DIMENSION_DEFAULT_INPUT_TYPES.map((t) => (
+                                    <option key={t} value={t}>
+                                      {t}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="col-span-5 sm:col-span-1">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Valor</Label>
+                                <Input
+                                  value={d.defaultValue != null ? String(d.defaultValue) : ""}
+                                  onChange={(e) => updateDimensionDefault(i, { defaultValue: e.target.value || null })}
+                                  placeholder="Default"
+                                  className="h-7 text-[11px] mt-0.5"
+                                />
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="col-span-1 h-7 w-7 text-red-500 mt-5 sm:mt-5"
+                                onClick={() => removeDimensionDefaultFilter(i)}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                       {showLabelOverrides && (
                         <div className="border-t border-[var(--studio-border)] pt-4">
                           <ChartLabelOverridesSection
@@ -2555,6 +2687,82 @@ export function MetricConfigPanel({
                   className="mt-0.5 h-8 text-xs"
                   placeholder="Ej. 10"
                 />
+              </div>
+              <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/80 p-3 space-y-3">
+                <label className="flex items-center gap-2 text-xs font-medium text-[var(--studio-fg)] cursor-pointer">
+                  <Checkbox
+                    checked={!!agg.chartRankingEnabled}
+                    onCheckedChange={(c) =>
+                      updateAgg({
+                        chartRankingEnabled: !!c,
+                        chartRankingTop: agg.chartRankingTop ?? 5,
+                      })
+                    }
+                  />
+                  Ranking (Top N) en el gráfico
+                </label>
+                {agg.chartRankingEnabled ? (
+                  <div className="space-y-3 pl-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Label className="text-[11px] text-[var(--studio-fg-muted)]">Top</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={agg.chartRankingTop ?? 5}
+                        onChange={(e) =>
+                          updateAgg({ chartRankingTop: Math.max(1, parseInt(e.target.value, 10) || 5) })
+                        }
+                        className="h-8 w-16 text-xs"
+                      />
+                      <Label className="text-[11px] text-[var(--studio-fg-muted)]">por métrica</Label>
+                      <select
+                        value={agg.chartRankingMetric ?? ""}
+                        onChange={(e) => updateAgg({ chartRankingMetric: e.target.value || undefined })}
+                        className="h-8 min-w-[10rem] rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                      >
+                        <option value="">Automático (primera métrica)</option>
+                        {yAxisKeysForUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={agg.chartRankingDirection ?? "desc"}
+                        onChange={(e) =>
+                          updateAgg({ chartRankingDirection: e.target.value === "asc" ? "asc" : "desc" })
+                        }
+                        className="h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                      >
+                        <option value="desc">Mayor primero</option>
+                        <option value="asc">Menor primero</option>
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-[11px] text-[var(--studio-fg-muted)]">
+                        Categorías del eje X siempre visibles (además del Top N)
+                      </Label>
+                      <p className="text-[10px] text-[var(--studio-fg-muted)] mb-1">
+                        Valores tal como vienen en los datos (separados por coma). Puede haber más de N barras.
+                      </p>
+                      <Input
+                        value={(agg.chartRankingPinnedXValues ?? []).join(", ")}
+                        onChange={(e) => {
+                          const tokens = e.target.value
+                            .split(/[,;\n]+/)
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          updateAgg({
+                            chartRankingPinnedXValues: tokens.length > 0 ? tokens : undefined,
+                          });
+                        }}
+                        placeholder="Ej. Argentina, Chile"
+                        className="h-8 text-xs mt-0.5"
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
               {showLabelOverrides && (
                 <div className="border-t border-[var(--studio-border)] pt-4">

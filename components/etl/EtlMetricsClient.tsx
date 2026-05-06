@@ -35,6 +35,7 @@ import {
   type DateGranularity,
 } from "@/lib/dashboard/dateFormatting";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
+import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
 import {
   coerceGeoComponentOverrides,
@@ -87,6 +88,31 @@ const DATE_LEVEL_OPTIONS = [
   { value: "semester", label: "Semestre", operator: "SEMESTER" as const },
   { value: "year", label: "Año", operator: "YEAR" as const },
 ];
+
+const DIMENSION_DEFAULT_INPUT_TYPE_OPTIONS: Array<{ value: NonNullable<DimensionDefaultFilterEdit["inputType"]>; label: string }> = [
+  { value: "select", label: "select" },
+  { value: "multi", label: "multi" },
+  { value: "text", label: "text" },
+  { value: "number", label: "number" },
+  { value: "date", label: "date" },
+];
+
+function formatDimensionDefaultValueForInput(v: unknown): string {
+  if (v == null) return "";
+  if (Array.isArray(v)) return v.join(", ");
+  return String(v);
+}
+
+function parseDimensionDefaultValueFromInput(raw: string, inputType: DimensionDefaultFilterEdit["inputType"]): unknown {
+  const t = raw.trim();
+  if (t === "") return "";
+  if (inputType === "multi") return raw.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
+  if (inputType === "number") {
+    const n = Number(String(raw).replace(",", "."));
+    return Number.isFinite(n) ? n : raw;
+  }
+  return raw;
+}
 
 /**
  * Clave de columna en filas de `/api/dashboard/aggregate-data` tras el mapeo `metric_i` → alias.
@@ -453,6 +479,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" },
   ]);
   const [formFilters, setFormFilters] = useState<AggregationFilterEdit[]>([]);
+  const [dimensionDefaultFiltersForm, setDimensionDefaultFiltersForm] = useState<DimensionDefaultFilterEdit[]>([]);
   const [formOrderBy, setFormOrderBy] = useState<{ field: string; direction: "ASC" | "DESC" } | null>(null);
   const [formLimit, setFormLimit] = useState<number | undefined>(100);
   const [, setFormMetric] = useState<AggregationMetricEdit>({
@@ -528,6 +555,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartRankingTop, setChartRankingTop] = useState(5);
   const [chartRankingMetric, setChartRankingMetric] = useState("");
   const [chartRankingDirection, setChartRankingDirection] = useState<"asc" | "desc">("desc");
+  const [chartRankingPinnedXValues, setChartRankingPinnedXValues] = useState<string[]>([]);
   const [chartSortByMetric, setChartSortByMetric] = useState("");
   const [previewDateOrder, setPreviewDateOrder] = useState<"asc" | "desc">("asc");
   const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
@@ -672,9 +700,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartRankingEnabled(false);
     setChartRankingTop(5);
     setChartRankingMetric("");
+    setChartRankingPinnedXValues([]);
     setChartMetricFormats({});
     setChartSeriesColors({});
     setChartPinnedDimensions([]);
+    setDimensionDefaultFiltersForm([]);
     setChartSortDirection("none");
     setChartSortBy("series");
     setChartSortByMetric("");
@@ -712,6 +742,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setAnalysisSelectedMetricIds([]);
     setFormDimensions([]);
     setFormFilters([]);
+    setDimensionDefaultFiltersForm([]);
+    setChartRankingPinnedXValues([]);
     setFormOrderBy(null);
     setFormLimit(100);
     setTimeColumn("");
@@ -1426,6 +1458,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setFormDimensions([]);
     setFormMetrics([{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado", expression: "" } as AggregationMetricEdit]);
     setFormFilters([]);
+    setDimensionDefaultFiltersForm([]);
+    setChartRankingPinnedXValues([]);
     setFormOrderBy(null);
     setFormLimit(100);
     setFormMetric({ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado" });
@@ -1470,6 +1504,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setFormDimensions(dims.length > 0 ? dims : []);
       setFormMetrics((cfg.metrics ?? [saved.metric]).map((m) => ({ ...m, id: m.id || `m-${Date.now()}-${Math.random().toString(36).slice(2)}` })));
       setFormFilters((cfg.filters ?? []).map((f) => ({ ...f, id: f.id || `f-${Date.now()}-${Math.random().toString(36).slice(2)}` })));
+      setDimensionDefaultFiltersForm(
+        Array.isArray(cfg.dimensionDefaultFilters)
+          ? cfg.dimensionDefaultFilters.map((d, i) => ({
+              ...d,
+              id: typeof d.id === "string" && d.id ? d.id : `ddf-${Date.now()}-${i}-${Math.random().toString(36).slice(2)}`,
+            }))
+          : []
+      );
+      setChartRankingPinnedXValues(Array.isArray(cfg.chartRankingPinnedXValues) ? cfg.chartRankingPinnedXValues : []);
       setFormOrderBy(cfg.orderBy ?? null);
       setFormLimit(cfg.limit ?? 100);
       setChartXAxis(cfg.chartXAxis ?? "");
@@ -1619,6 +1662,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setFormDimensions([]);
       setFormMetrics([{ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` }]);
       setFormFilters([]);
+      setDimensionDefaultFiltersForm([]);
+      setChartRankingPinnedXValues([]);
       setFormOrderBy(null);
       setFormLimit(100);
       setChartXAxis("");
@@ -1884,12 +1929,30 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           ...(effectiveExpr ? { expression: effectiveExpr } : {}),
         };
       });
+      const formFiltersPayload = formFilters.map((f) => ({
+        field: f.field,
+        operator: Array.isArray(f.value) ? "IN" : f.operator,
+        value: f.value,
+      }));
+      const ddPreviewFilters = dimensionDefaultFiltersForm
+        .filter(
+          (d) =>
+            d.defaultValue !== "" &&
+            d.defaultValue != null &&
+            !(Array.isArray(d.defaultValue) && d.defaultValue.length === 0)
+        )
+        .map((d) => ({
+          field: d.field,
+          operator: Array.isArray(d.defaultValue) ? "IN" : d.operator,
+          value: d.defaultValue,
+        }));
+      const mergedPreviewFilters = [...formFiltersPayload, ...ddPreviewFilters];
       const body: Record<string, unknown> = {
         tableName,
         etlId,
         dimensions: formDimensions.length > 0 ? formDimensions.filter(Boolean) : undefined,
         metrics: metricsPayload,
-        filters: formFilters.length ? formFilters.map((f) => ({ field: f.field, operator: Array.isArray(f.value) ? "IN" : f.operator, value: f.value })) : undefined,
+        filters: mergedPreviewFilters.length > 0 ? mergedPreviewFilters : undefined,
         orderBy: formOrderBy?.field ? formOrderBy : undefined,
         unlimited: true,
         ...(formLimit != null && formLimit > 0 ? { limit: formLimit } : {}),
@@ -1994,6 +2057,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     geoComponentOverrides,
     geoOverridesByXLabel,
     data?.columnDisplay,
+    dimensionDefaultFiltersForm,
   ]);
 
   const fetchPreviewRef = useRef(fetchPreview);
@@ -2907,6 +2971,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       geoHints,
       metrics: effectiveFormMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` })),
       filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
+      dimensionDefaultFilters: dimensionDefaultFiltersForm.length > 0 ? dimensionDefaultFiltersForm : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
       cumulative: cumulativeToSave,
@@ -2940,6 +3005,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
       chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
+      chartRankingPinnedXValues:
+        chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
@@ -3222,6 +3289,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
       chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
+      chartRankingPinnedXValues:
+        chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
@@ -3376,6 +3445,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
       chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
+      chartRankingPinnedXValues:
+        chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+      dimensionDefaultFilters: dimensionDefaultFiltersForm.length > 0 ? dimensionDefaultFiltersForm : undefined,
       filters: formFilters.length
         ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator }))
         : undefined,
@@ -3440,6 +3512,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartRankingTop,
     chartRankingMetric,
     chartRankingDirection,
+    chartRankingPinnedXValues,
+    dimensionDefaultFiltersForm,
     formFilters,
     formOrderBy,
     formLimit,
@@ -3592,6 +3666,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           ? a.chartRankingDirection
           : "desc"
       );
+      setChartRankingPinnedXValues(Array.isArray(a.chartRankingPinnedXValues) ? (a.chartRankingPinnedXValues as string[]) : []);
       if (Array.isArray(a.filters)) {
         setFormFilters(
           (a.filters as AggregationFilterEdit[]).map((f, i) => ({
@@ -3601,6 +3676,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         );
       } else {
         setFormFilters([]);
+      }
+      if (Array.isArray(a.dimensionDefaultFilters)) {
+        setDimensionDefaultFiltersForm(
+          (a.dimensionDefaultFilters as DimensionDefaultFilterEdit[]).map((d, i) => ({
+            ...d,
+            id: typeof d.id === "string" && d.id ? d.id : `ddf-${Date.now()}-${i}`,
+          }))
+        );
+      } else {
+        setDimensionDefaultFiltersForm([]);
       }
       if (a.orderBy && typeof a.orderBy === "object" && (a.orderBy as { field?: string }).field) {
         setFormOrderBy(a.orderBy as { field: string; direction: "ASC" | "DESC" });
@@ -5518,6 +5603,154 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                   ) : (
                     <p className="text-sm mb-4 rounded-lg border p-3" style={{ color: "var(--platform-fg-muted)", borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>Ningún filtro. Tocá «Agregar filtro» para restringir el análisis por campo, condición y valor.</p>
                   )}
+                  <div className="rounded-xl border p-4 space-y-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Valores por defecto en vista</Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="rounded-lg h-8 text-xs"
+                        style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                        onClick={() =>
+                          setDimensionDefaultFiltersForm((prev) => [
+                            ...prev,
+                            {
+                              id: `ddf-${Date.now()}`,
+                              field: fields[0] ?? allColumnsForRoles[0] ?? "",
+                              operator: "=",
+                              defaultValue: "",
+                              label: "",
+                              inputType: "select",
+                            },
+                          ])
+                        }
+                      >
+                        + Añadir
+                      </Button>
+                    </div>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                      Preselección al abrir el dashboard; el usuario puede cambiarla en la tarjeta. No reemplaza los filtros fijos de arriba. Para «multi», separá valores con coma.
+                    </p>
+                    {dimensionDefaultFiltersForm.length > 0 ? (
+                      <div className="space-y-2">
+                        {dimensionDefaultFiltersForm.map((d, i) => (
+                          <div
+                            key={d.id}
+                            className="flex flex-wrap gap-2 items-start rounded-lg border p-2"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}
+                          >
+                            <div className="flex flex-col gap-1 min-w-[100px] flex-1">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Etiqueta</Label>
+                              <Input
+                                value={d.label ?? ""}
+                                onChange={(e) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) => (ii === i ? { ...row, label: e.target.value } : row))
+                                  )
+                                }
+                                placeholder="Ej. País"
+                                className="h-8 text-xs !bg-[var(--platform-bg)]"
+                                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[120px] flex-1">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Campo</Label>
+                              <Select
+                                value={d.field}
+                                onChange={(val: string) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) => (ii === i ? { ...row, field: val } : row))
+                                  )
+                                }
+                                options={allColumnsForRoles.map((name) => ({
+                                  value: name,
+                                  label: derivedColumnsByName[name] ? `${name} (calculada)` : getSampleDisplayLabel(name),
+                                }))}
+                                placeholder="Campo"
+                                className="min-w-[120px]"
+                                buttonClassName="h-8 text-xs"
+                                disablePortal
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[100px]">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Condición</Label>
+                              <Select
+                                value={d.operator}
+                                onChange={(val: string) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) => (ii === i ? { ...row, operator: val } : row))
+                                  )
+                                }
+                                options={FILTER_OPERATOR_OPTIONS}
+                                placeholder="Op"
+                                className="min-w-[100px]"
+                                buttonClassName="h-8 text-xs"
+                                disablePortal
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[90px]">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Entrada</Label>
+                              <Select
+                                value={d.inputType ?? "select"}
+                                onChange={(val: string) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) =>
+                                      ii === i
+                                        ? {
+                                            ...row,
+                                            inputType: val as NonNullable<DimensionDefaultFilterEdit["inputType"]>,
+                                          }
+                                        : row
+                                    )
+                                  )
+                                }
+                                options={DIMENSION_DEFAULT_INPUT_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                                placeholder="Tipo"
+                                className="min-w-[90px]"
+                                buttonClassName="h-8 text-xs"
+                                disablePortal
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[120px] flex-1">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Valor por defecto</Label>
+                              <Input
+                                value={formatDimensionDefaultValueForInput(d.defaultValue)}
+                                onChange={(e) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) =>
+                                      ii === i
+                                        ? {
+                                            ...row,
+                                            defaultValue: parseDimensionDefaultValueFromInput(
+                                              e.target.value,
+                                              row.inputType ?? "select"
+                                            ),
+                                          }
+                                        : row
+                                    )
+                                  )
+                                }
+                                placeholder={d.inputType === "multi" ? "Uno, otro" : "Valor"}
+                                className="h-8 text-xs !bg-[var(--platform-bg)]"
+                                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-red-500 shrink-0 mt-5"
+                              title="Quitar"
+                              onClick={() => setDimensionDefaultFiltersForm((prev) => prev.filter((_, ii) => ii !== i))}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Ver valores de una columna</Label>
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Cargá los valores posibles de una columna para elegir mejor al definir filtros.</p>
@@ -6438,6 +6671,27 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                               <option value="asc">Ascendente (menor primero)</option>
                             </select>
                           </div>
+                          <div className="w-full space-y-1">
+                            <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                              Categorías del eje X siempre visibles (además del Top N)
+                            </Label>
+                            <p className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>
+                              Valores tal como vienen en los datos (separados por coma). Puede haber más de N barras.
+                            </p>
+                            <Input
+                              value={chartRankingPinnedXValues.join(", ")}
+                              onChange={(e) => {
+                                const tokens = e.target.value
+                                  .split(/[,;\n]+/)
+                                  .map((s) => s.trim())
+                                  .filter(Boolean);
+                                setChartRankingPinnedXValues(tokens);
+                              }}
+                              placeholder="Ej. Argentina, Chile"
+                              className="h-8 text-xs !bg-[var(--platform-bg)]"
+                              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                            />
+                          </div>
                           <p className="text-xs w-full" style={{ color: "var(--platform-fg-muted)" }}>
                             Ej: Top {chartRankingTop} {formDimensions[0] ? formDimensions[0] : "categorías"} que{" "}
                             {chartRankingDirection === "asc" ? "menos" : "más"}{" "}
@@ -6653,7 +6907,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         {previewWidgetForRenderer && formChartType !== "kpi" && formChartType !== "table" && (
                           <div className="h-[320px] w-full">
                             <DashboardWidgetRenderer
-                              key={`pv-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
+                              key={`pv-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartRankingPinnedXValues.join("\x1e")}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
                               widget={previewWidgetForRenderer}
                               isLoading={false}
                               hideHeader

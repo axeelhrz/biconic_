@@ -43,6 +43,7 @@ import {
   type DateGranularity,
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
+import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
@@ -275,6 +276,11 @@ interface DashboardWidgetRendererProps {
   filterValue?: unknown;
   /** Solo para tipo filter: callback al cambiar (viewer) */
   onFilterChange?: (widgetId: string, value: unknown) => void;
+  /** Valores actuales de `dimensionDefaultFilters` (clave = id de la fila). */
+  dimensionDefaultValuesByDdfId?: Record<string, unknown>;
+  /** Opciones distinct por id de fila (solo select/multi). */
+  dimensionDefaultDistinctByDdfId?: Record<string, unknown[]>;
+  onDimensionDefaultFilterChange?: (ddfId: string, value: unknown) => void;
   /** Altura mínima del bloque (px) */
   minHeight?: number;
   /** Clases CSS adicionales para el contenedor */
@@ -292,6 +298,9 @@ export function DashboardWidgetRenderer({
   isLoading = false,
   filterValue,
   onFilterChange,
+  dimensionDefaultValuesByDdfId,
+  dimensionDefaultDistinctByDdfId,
+  onDimensionDefaultFilterChange,
   minHeight = 240,
   className = "",
   darkChartTheme = false,
@@ -1226,6 +1235,149 @@ export function DashboardWidgetRenderer({
           </div>
         )}
         {!isLoading && <ContentAreaIconOverlay widget={widget} />}
+        {(() => {
+          const ddfs = (
+            widget.aggregationConfig as { dimensionDefaultFilters?: DimensionDefaultFilterEdit[] } | undefined
+          )?.dimensionDefaultFilters;
+          if (!Array.isArray(ddfs) || ddfs.length === 0 || !onDimensionDefaultFilterChange) return null;
+          if (chartType === "filter" || chartType === "text" || chartType === "image") return null;
+          const vals = dimensionDefaultValuesByDdfId ?? {};
+          const distinctMap = dimensionDefaultDistinctByDdfId ?? {};
+          return (
+            <div className="mb-2 flex flex-wrap items-end gap-2">
+              {ddfs.map((ddf) => {
+                const id = String(ddf.id ?? "").trim();
+                if (!id) return null;
+                const labelText = (ddf.label && String(ddf.label).trim()) || ddf.field;
+                const cur = vals[id] !== undefined ? vals[id] : ddf.defaultValue;
+                const it = ddf.inputType ?? "select";
+                const opts = (distinctMap[id] as unknown[] | undefined)?.map(String) ?? [];
+                const curStr = Array.isArray(cur) ? "" : String(cur ?? "");
+                const selectOpts =
+                  curStr && !opts.includes(curStr) ? [...opts, curStr] : opts;
+
+                if (it === "multi") {
+                  const selected = (Array.isArray(cur) ? cur : cur != null && cur !== "" ? [cur] : []) as unknown[];
+                  const selectedNorm = selected.map(String);
+                  const toggle = (s: string, checked: boolean) => {
+                    const next = checked ? [...selectedNorm, s] : selectedNorm.filter((x) => x !== s);
+                    onDimensionDefaultFilterChange(id, next);
+                  };
+                  const multiOpts = opts.length > 0 ? opts : selectedNorm;
+                  return (
+                    <div key={id} className="flex min-w-[8rem] flex-col gap-0.5">
+                      <span className="text-[10px] font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                        {labelText}
+                      </span>
+                      <div
+                        className="max-h-28 overflow-y-auto rounded border px-2 py-1 text-xs"
+                        style={{ borderColor: "var(--platform-border)" }}
+                      >
+                        {multiOpts.length === 0 ? (
+                          <span style={{ color: "var(--platform-fg-muted)" }}>Sin opciones</span>
+                        ) : (
+                          multiOpts.map((s) => (
+                            <label key={s} className="flex cursor-pointer items-center gap-1 py-0.5">
+                              <input
+                                type="checkbox"
+                                className="rounded border"
+                                style={{ borderColor: "var(--platform-border)" }}
+                                checked={selectedNorm.includes(s)}
+                                onChange={(e) => toggle(s, e.target.checked)}
+                              />
+                              <span style={{ color: "var(--platform-fg)" }}>{s}</span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (it === "select") {
+                  return (
+                    <div key={id} className="flex min-w-[7rem] flex-col gap-0.5">
+                      <label className="text-[10px] font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                        {labelText}
+                      </label>
+                      <select
+                        className="rounded border px-2 py-1 text-xs"
+                        style={{
+                          borderColor: "var(--platform-border)",
+                          background: "var(--platform-bg)",
+                          color: "var(--platform-fg)",
+                        }}
+                        value={curStr}
+                        onChange={(e) => onDimensionDefaultFilterChange(id, e.target.value)}
+                      >
+                        <option value="">Todos</option>
+                        {selectOpts.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                }
+
+                if (it === "number") {
+                  return (
+                    <div key={id} className="flex min-w-[6rem] flex-col gap-0.5">
+                      <label className="text-[10px] font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                        {labelText}
+                      </label>
+                      <input
+                        type="number"
+                        className="rounded border px-2 py-1 text-xs"
+                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                        value={cur != null && cur !== "" ? Number(cur) : ""}
+                        onChange={(e) =>
+                          onDimensionDefaultFilterChange(
+                            id,
+                            e.target.value === "" ? "" : e.target.valueAsNumber
+                          )
+                        }
+                      />
+                    </div>
+                  );
+                }
+
+                if (it === "date") {
+                  return (
+                    <div key={id} className="flex min-w-[7rem] flex-col gap-0.5">
+                      <label className="text-[10px] font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                        {labelText}
+                      </label>
+                      <input
+                        type="date"
+                        className="rounded border px-2 py-1 text-xs"
+                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                        value={curStr}
+                        onChange={(e) => onDimensionDefaultFilterChange(id, e.target.value)}
+                      />
+                    </div>
+                  );
+                }
+
+                return (
+                  <div key={id} className="flex min-w-[7rem] flex-1 flex-col gap-0.5">
+                    <label className="text-[10px] font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                      {labelText}
+                    </label>
+                    <input
+                      type="text"
+                      className="rounded border px-2 py-1 text-xs"
+                      style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                      value={curStr}
+                      onChange={(e) => onDimensionDefaultFilterChange(id, e.target.value)}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
         {!hasViz && !isLoading && chartType !== "filter" && (
           <div className="flex flex-1 flex-col items-center justify-center py-8 text-center text-sm" style={{ color: "var(--platform-fg-muted, #64748b)" }}>
             Sin datos

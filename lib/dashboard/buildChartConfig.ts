@@ -57,6 +57,8 @@ export type BuildChartConfigWidget = {
     chartRankingTop?: number;
     chartRankingMetric?: string;
     chartRankingDirection?: "asc" | "desc";
+    /** Valores del eje X (clave en datos, no texto renombrado) que siempre se muestran además del Top N. */
+    chartRankingPinnedXValues?: string[];
     chartSortDirection?: string;
     chartSortBy?: string;
     chartSortByMetric?: string;
@@ -287,6 +289,52 @@ function compareRowsByRankingMetric(
   return vb - va;
 }
 
+function resolveRankingMetricKey(
+  agg: BuildChartConfigWidget["aggregationConfig"] | undefined,
+  resultKeys: string[],
+  yKeys: string[]
+): string | null {
+  let rKey = yKeys[0] || resultKeys[0];
+  if (agg?.chartRankingMetric) {
+    if (resultKeys.includes(agg.chartRankingMetric as string)) {
+      rKey = agg.chartRankingMetric as string;
+    } else {
+      const metricMatch = (agg.chartRankingMetric as string).match(/^metric_(\d+)$/);
+      if (metricMatch) {
+        const idx = parseInt(metricMatch[1]!, 10);
+        const resolved = yKeys[idx];
+        if (resolved != null && resultKeys.includes(resolved)) rKey = resolved;
+      }
+    }
+  }
+  return rKey || null;
+}
+
+/** Top N por métrica y filas extra para valores del eje X anclados (orden global ya aplicado sobre `rows`). */
+function sliceRankingWithPinnedX(
+  rows: Record<string, unknown>[],
+  xKey: string,
+  rKey: string,
+  topN: number,
+  direction: string | undefined,
+  pinnedXValues?: string[]
+): Record<string, unknown>[] {
+  const sorted = [...rows].sort((a, b) =>
+    compareRowsByRankingMetric(a as Record<string, unknown>, b as Record<string, unknown>, rKey, direction)
+  );
+  const top = sorted.slice(0, topN);
+  const pinned = (pinnedXValues ?? []).map((s) => String(s ?? "").trim()).filter(Boolean);
+  if (pinned.length === 0) return top;
+  const inTop = new Set(top.map((r) => String(r[xKey] ?? "")));
+  const extras: Record<string, unknown>[] = [];
+  for (const p of pinned) {
+    if (inTop.has(p)) continue;
+    const row = sorted.find((r) => String(r[xKey] ?? "") === p);
+    if (row) extras.push(row);
+  }
+  return [...top, ...extras];
+}
+
 /**
  * Aplica el mismo orden y ranking que buildChartConfig y devuelve las filas procesadas.
  * Usar para widgets tipo "table" para que la tabla muestre el mismo orden y Top N que los gráficos.
@@ -307,29 +355,16 @@ export function getProcessedRowsForChart(
   const isTemporalXAxis = shouldApplyTemporalRankingRule(dataArray, xKey, agg);
   const shouldApplyRanking = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0 && !isTemporalXAxis;
   if (shouldApplyRanking) {
-    let rKey = yKeys[0] || resultKeys[0];
-    if (agg?.chartRankingMetric) {
-      if (resultKeys.includes(agg.chartRankingMetric as string)) {
-        rKey = agg.chartRankingMetric as string;
-      } else {
-        const metricMatch = (agg.chartRankingMetric as string).match(/^metric_(\d+)$/);
-        if (metricMatch) {
-          const idx = parseInt(metricMatch[1]!, 10);
-          const resolved = yKeys[idx];
-          if (resolved != null && resultKeys.includes(resolved)) rKey = resolved;
-        }
-      }
-    }
+    const rKey = resolveRankingMetricKey(agg, resultKeys, yKeys);
     if (rKey) {
-      rows.sort((a, b) =>
-        compareRowsByRankingMetric(
-          a as Record<string, unknown>,
-          b as Record<string, unknown>,
-          rKey,
-          agg?.chartRankingDirection
-        )
+      rows = sliceRankingWithPinnedX(
+        rows,
+        xKey,
+        rKey,
+        agg!.chartRankingTop as number,
+        agg?.chartRankingDirection,
+        agg?.chartRankingPinnedXValues
       );
-      rows = rows.slice(0, agg.chartRankingTop as number);
     }
   } else if (
     !shouldApplyRanking &&
@@ -561,29 +596,16 @@ export function buildChartConfig(
   const isTemporalXAxis = shouldApplyTemporalRankingRule(dataArray, xKey, agg);
   const shouldApplyRanking = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0 && !isTemporalXAxis;
   if (shouldApplyRanking) {
-    let rKey = yKeys[0] || resultKeys[0];
-    if (agg?.chartRankingMetric) {
-      if (resultKeys.includes(agg.chartRankingMetric as string)) {
-        rKey = agg.chartRankingMetric as string;
-      } else {
-        const metricMatch = (agg.chartRankingMetric as string).match(/^metric_(\d+)$/);
-        if (metricMatch) {
-          const idx = parseInt(metricMatch[1]!, 10);
-          const resolved = yKeys[idx];
-          if (resolved != null && resultKeys.includes(resolved)) rKey = resolved;
-        }
-      }
-    }
+    const rKey = resolveRankingMetricKey(agg, resultKeys, yKeys);
     if (rKey) {
-      rows.sort((a, b) =>
-        compareRowsByRankingMetric(
-          a as Record<string, unknown>,
-          b as Record<string, unknown>,
-          rKey,
-          agg?.chartRankingDirection
-        )
+      rows = sliceRankingWithPinnedX(
+        rows,
+        xKey,
+        rKey,
+        agg!.chartRankingTop as number,
+        agg?.chartRankingDirection,
+        agg?.chartRankingPinnedXValues
       );
-      rows = rows.slice(0, agg.chartRankingTop as number);
     }
   } else if (
     !shouldApplyRanking &&

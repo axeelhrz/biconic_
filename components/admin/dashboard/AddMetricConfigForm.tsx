@@ -15,6 +15,9 @@ import {
   ChartLabelOverridesSection,
   ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS,
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
+import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
+
+export type { DimensionDefaultFilterEdit };
 
 export type MetricConditionEdit = {
   field: string;
@@ -47,6 +50,7 @@ export type AggregationConfigEdit = {
   dimensions?: string[];
   metrics: AggregationMetricEdit[];
   filters?: AggregationFilterEdit[];
+  dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
   cumulative?: "none" | "running_sum" | "ytd";
@@ -74,6 +78,7 @@ export type AggregationConfigEdit = {
   chartRankingTop?: number;
   chartRankingMetric?: string;
   chartRankingDirection?: "asc" | "desc";
+  chartRankingPinnedXValues?: string[];
   chartPinnedDimensions?: string[];
   chartColorScheme?: string;
   chartSeriesColors?: Record<string, string>;
@@ -157,6 +162,7 @@ export type SavedMetricAggregationConfig = {
   dimensions?: string[];
   metrics: AggregationMetricEdit[];
   filters?: AggregationFilterEdit[];
+  dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
   cumulative?: "none" | "running_sum" | "ytd";
@@ -191,6 +197,7 @@ export type SavedMetricAggregationConfig = {
   chartRankingTop?: number;
   chartRankingMetric?: string;
   chartRankingDirection?: "asc" | "desc";
+  chartRankingPinnedXValues?: string[];
   chartPinnedDimensions?: string[];
   chartColorScheme?: string;
   chartSeriesColors?: Record<string, string>;
@@ -271,6 +278,13 @@ const AGG_FUNCS = [
 ];
 
 const OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE", "IN", "BETWEEN", "MONTH", "YEAR", "DAY", "QUARTER", "SEMESTER", "IS", "IS NOT"];
+const DIMENSION_DEFAULT_INPUT_TYPES: Array<NonNullable<DimensionDefaultFilterEdit["inputType"]>> = [
+  "select",
+  "multi",
+  "text",
+  "number",
+  "date",
+];
 const LABEL_VISIBILITY_OPTIONS: Array<{ value: "all" | "auto" | "min_max"; label: string }> = [
   { value: "all", label: "Todas" },
   { value: "auto", label: "Algunas (automático)" },
@@ -304,6 +318,7 @@ export function AddMetricConfigForm({
   const agg = form.aggregationConfig;
   const metrics = agg.metrics || [];
   const filters = agg.filters || [];
+  const dimensionDefaults = agg.dimensionDefaultFilters ?? [];
   const sources = etlData?.dataSources;
   const selectedSource = sources?.find((s) => s.id === (form.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id));
   const fields = selectedSource?.fields?.all ?? etlData?.fields?.all ?? [];
@@ -338,6 +353,10 @@ export function AddMetricConfigForm({
       const cfg = saved.aggregationConfig;
       const newMetrics = (cfg.metrics ?? [saved.metric]).map((m, i) => ({ ...m, id: `m-${Date.now()}-${i}` }));
       const newFilters = (cfg.filters ?? []).map((f, i) => ({ ...f, id: f.id || `f-${Date.now()}-${i}` }));
+      const newDimDefaults = (cfg.dimensionDefaultFilters ?? []).map((d, i) => ({
+        ...d,
+        id: d.id || `ddf-${Date.now()}-${i}`,
+      }));
       if (cfg.chartType) {
         updateForm({ type: cfg.chartType });
       }
@@ -347,6 +366,7 @@ export function AddMetricConfigForm({
         dimensions: cfg.dimensions ?? undefined,
         metrics: newMetrics,
         filters: newFilters.length ? newFilters : agg.filters,
+        dimensionDefaultFilters: newDimDefaults.length ? newDimDefaults : agg.dimensionDefaultFilters,
         orderBy: cfg.orderBy ?? agg.orderBy,
         limit: cfg.limit ?? agg.limit,
         cumulative: cfg.cumulative,
@@ -374,6 +394,7 @@ export function AddMetricConfigForm({
         chartRankingTop: cfg.chartRankingTop,
         chartRankingMetric: cfg.chartRankingMetric,
         chartRankingDirection: cfg.chartRankingDirection,
+        chartRankingPinnedXValues: cfg.chartRankingPinnedXValues,
         chartPinnedDimensions: cfg.chartPinnedDimensions,
         chartColorScheme: cfg.chartColorScheme,
         chartSeriesColors: cfg.chartSeriesColors,
@@ -429,6 +450,33 @@ export function AddMetricConfigForm({
 
   const removeFilter = (index: number) => {
     updateAgg({ filters: filters.filter((_, i) => i !== index) });
+  };
+
+  const updateDimensionDefault = (index: number, patch: Partial<DimensionDefaultFilterEdit>) => {
+    const next = [...dimensionDefaults];
+    if (!next[index]) return;
+    next[index] = { ...next[index], ...patch };
+    updateAgg({ dimensionDefaultFilters: next });
+  };
+
+  const addDimensionDefault = () => {
+    updateAgg({
+      dimensionDefaultFilters: [
+        ...dimensionDefaults,
+        {
+          id: `ddf-${Date.now()}`,
+          field: fields[0] || "",
+          operator: "=",
+          defaultValue: "",
+          label: "",
+          inputType: "select",
+        },
+      ],
+    });
+  };
+
+  const removeDimensionDefault = (index: number) => {
+    updateAgg({ dimensionDefaultFilters: dimensionDefaults.filter((_, i) => i !== index) });
   };
 
   const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "stackedColumn", "line", "area", "pie", "doughnut", "combo", "scatter"];
@@ -1329,6 +1377,99 @@ export function AddMetricConfigForm({
                           <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => updateFilter(i, { value: e.target.value || null })} placeholder="Valor" className="h-7 text-[11px]" />
                         </div>
                         <Button type="button" variant="ghost" size="icon" className="col-span-1 h-7 w-7 text-red-500" onClick={() => removeFilter(i)}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="add-metric-label">Valores por defecto en vista</Label>
+                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addDimensionDefault}>
+                      + Añadir
+                    </Button>
+                  </div>
+                  <p className="text-[10px] text-[var(--studio-fg-muted)] mb-2">
+                    Preselección al abrir el dashboard; el usuario puede cambiarla. No reemplaza los filtros fijos de arriba.
+                  </p>
+                  <div className="space-y-2">
+                    {dimensionDefaults.map((d, i) => (
+                      <div
+                        key={d.id || i}
+                        className="grid grid-cols-12 gap-1 items-start rounded border border-[var(--studio-border)] p-2 bg-[var(--studio-bg-elevated)]"
+                      >
+                        <div className="col-span-12 sm:col-span-3">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Etiqueta</Label>
+                          <Input
+                            value={d.label ?? ""}
+                            onChange={(e) => updateDimensionDefault(i, { label: e.target.value })}
+                            placeholder="Ej. País"
+                            className="h-7 text-[11px] mt-0.5"
+                          />
+                        </div>
+                        <div className="col-span-6 sm:col-span-3">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Campo</Label>
+                          <select
+                            value={d.field}
+                            onChange={(e) => updateDimensionDefault(i, { field: e.target.value })}
+                            className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] text-[var(--studio-fg)] mt-0.5"
+                          >
+                            {fields.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="col-span-6 sm:col-span-2">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Operador</Label>
+                          <select
+                            value={d.operator}
+                            onChange={(e) => updateDimensionDefault(i, { operator: e.target.value })}
+                            className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                          >
+                            {OPERATORS.map((op) => (
+                              <option key={op} value={op}>
+                                {op}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="col-span-6 sm:col-span-2">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Entrada</Label>
+                          <select
+                            value={d.inputType ?? "select"}
+                            onChange={(e) =>
+                              updateDimensionDefault(i, {
+                                inputType: e.target.value as DimensionDefaultFilterEdit["inputType"],
+                              })
+                            }
+                            className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                          >
+                            {DIMENSION_DEFAULT_INPUT_TYPES.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="col-span-5 sm:col-span-1">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Valor</Label>
+                          <Input
+                            value={d.defaultValue != null ? String(d.defaultValue) : ""}
+                            onChange={(e) => updateDimensionDefault(i, { defaultValue: e.target.value || null })}
+                            placeholder="Default"
+                            className="h-7 text-[11px] mt-0.5"
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="col-span-1 h-7 w-7 text-red-500 mt-5 sm:mt-5"
+                          onClick={() => removeDimensionDefault(i)}
+                        >
                           <Trash2 className="h-3 w-3" />
                         </Button>
                       </div>
