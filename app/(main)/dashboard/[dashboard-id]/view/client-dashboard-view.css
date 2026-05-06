@@ -237,7 +237,8 @@
   background: var(--client-card);
   border-radius: var(--client-radius, 14px);
   border: var(--client-border-width, 1px) solid var(--client-border);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -465,8 +466,4 @@
 
 [data-theme="client"] .client-view-filters-radio-group input[type="radio"] {
   accent-color: var(--client-accent);
-}
-
-[data-theme="client"] .client-view-widget canvas {
-  max-height: 100%;
 }

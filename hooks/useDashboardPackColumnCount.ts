@@ -8,6 +8,8 @@ import {
   packRowGapPxStudio,
 } from "@/lib/dashboard/gridLayout";
 
+const PACK_LAYOUT_RESIZE_DEBOUNCE_MS = 120;
+
 /** Debe coincidir con breakpoints de `.studio-blocks` en studio.css */
 export function packColumnCountStudio(width: number): number {
   if (width >= 1280) return DASHBOARD_GRID_COLUMN_COUNT;
@@ -40,16 +42,30 @@ export function useDashboardPackLayout(variant: "studio" | "client"): DashboardP
   });
 
   useEffect(() => {
-    const onResize = () => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const applyLayout = () => {
       const w = window.innerWidth;
       setLayout({
         packCols: variant === "studio" ? packColumnCountStudio(w) : packColumnCountClient(w),
         packRowGapPx: variant === "studio" ? packRowGapPxStudio(w) : packRowGapPxClient(w),
       });
     };
-    onResize();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+
+    const scheduleLayout = () => {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        timeoutId = undefined;
+        applyLayout();
+      }, PACK_LAYOUT_RESIZE_DEBOUNCE_MS);
+    };
+
+    applyLayout();
+    window.addEventListener("resize", scheduleLayout);
+    return () => {
+      window.removeEventListener("resize", scheduleLayout);
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    };
   }, [variant]);
 
   return layout;

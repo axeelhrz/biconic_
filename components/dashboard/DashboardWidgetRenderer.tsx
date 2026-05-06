@@ -47,6 +47,7 @@ import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashbo
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
+import { useDevicePixelRatio } from "@/hooks/useDevicePixelRatio";
 import { DashboardTextWidget } from "./DashboardTextWidget";
 
 const DashboardMapWidget = dynamic(
@@ -215,18 +216,21 @@ const AXIS_COLOR_DARK = "rgba(255, 255, 255, 0.85)";
 const GRID_COLOR_DARK = "rgba(255, 255, 255, 0.12)";
 const DATALABEL_COLOR_DARK = "rgba(255, 255, 255, 0.95)";
 
-function getChartOptionsBase(darkTheme: boolean) {
+function getChartOptionsBase(darkTheme: boolean, devicePixelRatio: number) {
   const axisColor = darkTheme ? AXIS_COLOR_DARK : AXIS_COLOR;
   const gridColor = darkTheme ? GRID_COLOR_DARK : GRID_COLOR;
+  const baseTickFont = { size: 11 };
   return {
     responsive: true,
     maintainAspectRatio: false,
-    devicePixelRatio: typeof window !== "undefined" ? Math.min(2.25, window.devicePixelRatio || 1) : 1,
-    layout: { padding: 8 },
+    devicePixelRatio,
+    layout: { padding: getLayoutPadding(undefined) },
     plugins: {
       legend: {
         display: true,
         position: "top" as const,
+        fullSize: false,
+        align: "start" as const,
         labels: { color: axisColor, font: { size: 12 }, padding: 16 },
       },
       tooltip: { enabled: true },
@@ -235,12 +239,12 @@ function getChartOptionsBase(darkTheme: boolean) {
       x: {
         display: true,
         grid: { color: gridColor },
-        ticks: { color: axisColor, maxTicksLimit: 8, font: { size: 11 } },
+        ticks: { color: axisColor, maxTicksLimit: 8, font: baseTickFont, clip: false },
       },
       y: {
         display: true,
         grid: { color: gridColor },
-        ticks: { color: axisColor, font: { size: 11 }, maxTicksLimit: 8 },
+        ticks: { color: axisColor, font: baseTickFont, maxTicksLimit: 8, clip: false },
       },
     },
   };
@@ -294,6 +298,7 @@ export function DashboardWidgetRenderer({
   hideHeader = false,
   showTechnicalPreview = false,
 }: DashboardWidgetRendererProps) {
+  const chartDevicePixelRatio = useDevicePixelRatio();
   const chartPlugins = useMemo(() => [ChartDataLabels], []);
   const effectiveMinHeight = widget.minHeight ?? minHeight;
   const chartType = useMemo(
@@ -539,7 +544,7 @@ export function DashboardWidgetRenderer({
     const cartesianLabelMode: ChartLabelDisplayMode = widget.labelDisplayMode ?? "value";
     const metricStyles = widget.chartMetricStyles as (ChartStyleConfig | undefined)[] | undefined;
     const usePerMetricFormat = Array.isArray(metricStyles) && metricStyles.length > 0;
-    const optionsBase = getChartOptionsBase(darkChartTheme);
+    const optionsBase = getChartOptionsBase(darkChartTheme, chartDevicePixelRatio);
     const labelVisibilityMode = normalizeLabelVisibilityMode(agg?.labelVisibilityMode);
     const showDataLabels =
       typeof agg?.showDataLabels === "boolean"
@@ -798,6 +803,7 @@ export function DashboardWidgetRenderer({
               max: 1,
               ticks: {
                 ...(((built.scales as Record<string, unknown>)?.y as Record<string, unknown> | undefined)?.ticks ?? {}),
+                clip: false,
                 color: axisTickColorResolved,
                 font: axisTickFont,
                 callback: (value: number) => fmt0(value * range0 + min0),
@@ -806,6 +812,7 @@ export function DashboardWidgetRenderer({
             ...(!syncAxes && {
               ticks: {
                 ...(((built.scales as Record<string, unknown>)?.y as Record<string, unknown> | undefined)?.ticks ?? {}),
+                clip: false,
                 color: axisTickColorResolved,
                 font: axisTickFont,
                 callback: (value: number | string) => fmt0(Number(value)),
@@ -839,6 +846,7 @@ export function DashboardWidgetRenderer({
               min: 0,
               max: 1,
               ticks: {
+                clip: false,
                 color: axisTickColorResolved,
                 font: axisTickFont,
                 callback: (value: number) => fmt1(value * range1 + min1),
@@ -846,6 +854,7 @@ export function DashboardWidgetRenderer({
             }),
             ...(!syncAxes && {
               ticks: {
+                clip: false,
                 color: axisTickColorResolved,
                 font: axisTickFont,
                 callback: (value: number | string) => fmt1(Number(value)),
@@ -876,6 +885,7 @@ export function DashboardWidgetRenderer({
               ...(scale0.max != null ? { max: scale0.max } : {}),
               ticks: {
                 ...((((comboScales.y as Record<string, unknown> | undefined)?.ticks as Record<string, unknown>) ?? {})),
+                clip: false,
                 ...(scale0.step != null ? { stepSize: scale0.step } : {}),
               },
             },
@@ -885,6 +895,7 @@ export function DashboardWidgetRenderer({
               ...(scale1.max != null ? { max: scale1.max } : {}),
               ticks: {
                 ...((((comboScales.y1 as Record<string, unknown> | undefined)?.ticks as Record<string, unknown>) ?? {})),
+                clip: false,
                 ...(scale1.step != null ? { stepSize: scale1.step } : {}),
               },
             },
@@ -1025,6 +1036,7 @@ export function DashboardWidgetRenderer({
         ...(stackBySeriesEnabled ? { stacked: true } : {}),
         ticks: {
           ...categoryTicks,
+          clip: false,
           callback: formatCategoryAxisTick,
         },
       };
@@ -1040,6 +1052,7 @@ export function DashboardWidgetRenderer({
                 ...(primaryMetricScale.max != null ? { max: primaryMetricScale.max } : {}),
                 ticks: {
                   ...valueTicks,
+                  clip: false,
                   ...(primaryMetricScale.step != null ? { stepSize: primaryMetricScale.step } : {}),
                   ...(formatValueAxisTickFn != null
                     ? {
@@ -1059,6 +1072,7 @@ export function DashboardWidgetRenderer({
                 ...(primaryMetricScale.max != null ? { max: primaryMetricScale.max } : {}),
                 ticks: {
                   ...valueTicks,
+                  clip: false,
                   ...(primaryMetricScale.step != null ? { stepSize: primaryMetricScale.step } : {}),
                   ...(formatValueAxisTickFn != null
                     ? {
@@ -1089,6 +1103,8 @@ export function DashboardWidgetRenderer({
           ? {
               ...builtLegend,
               display: true,
+              fullSize: false,
+              align: "start",
               position: cartLegendPosition,
               labels: {
                 ...builtLegendLabels,
@@ -1162,13 +1178,14 @@ export function DashboardWidgetRenderer({
     widget.aggregationConfig,
     darkChartTheme,
     pieContainerWidth,
+    chartDevicePixelRatio,
   ]);
 
   const showCardHeader = !hideHeader && !widget.hideWidgetHeader;
 
   return (
     <Card
-      className={`overflow-hidden border transition-all ${className}`}
+      className={`overflow-visible border transition-all ${className}`}
       style={{
         minHeight: effectiveMinHeight,
         ...(isTableWidget
@@ -1186,7 +1203,7 @@ export function DashboardWidgetRenderer({
       }}
     >
       {showCardHeader && (
-        <header className="flex flex-shrink-0 items-center justify-between gap-2 border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
+        <header className="flex min-h-0 flex-shrink-0 items-center justify-between gap-2 overflow-hidden border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
           <h3 className="min-w-0 truncate text-sm font-semibold" style={{ color: "var(--platform-fg, #0f172a)" }}>
             {widget.title}
           </h3>
@@ -1433,7 +1450,7 @@ export function DashboardWidgetRenderer({
                         ...scales,
                         y: {
                           ...yScale,
-                          ticks: { ...yTicks, maxTicksLimit: 12 },
+                          ticks: { ...yTicks, maxTicksLimit: 12, clip: false },
                         },
                       },
                     };

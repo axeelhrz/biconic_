@@ -482,6 +482,7 @@ export function buildChartOptions(
   const tickFamily = style?.chartFontFamily;
   const tickColor = style?.axisTickColor;
   const categoryTickOpts: Record<string, unknown> = {
+    clip: false,
     font: { size: tickFontSize, ...(tickFamily ? { family: tickFamily } : {}) },
     ...(tickColor != null && tickColor !== "" ? { color: tickColor } : {}),
     ...(style?.categoryTickMaxRotation != null
@@ -492,6 +493,7 @@ export function buildChartOptions(
       : {}),
   };
   const valueTickOpts: Record<string, unknown> = {
+    clip: false,
     font: { size: tickFontSize, ...(tickFamily ? { family: tickFamily } : {}) },
     ...(tickColor != null && tickColor !== "" ? { color: tickColor } : {}),
   };
@@ -503,7 +505,11 @@ export function buildChartOptions(
     plugins: {
       legend: {
         display: true,
+        fullSize: false,
+        align: "start" as const,
         labels: {
+          boxWidth: 12,
+          padding: 10,
           font: { size: tickFontSize, ...(tickFamily ? { family: tickFamily } : {}) },
           ...(tickColor != null && tickColor !== "" ? { color: tickColor } : {}),
         },
