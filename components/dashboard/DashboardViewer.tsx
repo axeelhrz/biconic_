@@ -345,6 +345,8 @@ type AggregationConfig = {
   comparePeriod?: string;
   dateDimension?: string;
   chartType?: string;
+  chartCategoryColorMode?: "varied" | "uniform";
+  chartPrimaryColor?: string;
   chartSeriesColors?: Record<string, string>;
   chartXAxis?: string;
   chartYAxes?: string[];

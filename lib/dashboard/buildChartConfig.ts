@@ -48,6 +48,8 @@ export type BuildChartConfigWidget = {
     dateDimension?: string;
     dateGroupByGranularity?: DateGranularity;
     chartType?: string;
+    /** varied = paleta/hash por categoría o serie; uniform = un color base (widget/accent) salvo excepciones en chartSeriesColors. */
+    chartCategoryColorMode?: "varied" | "uniform";
     chartSeriesColors?: Record<string, string>;
     chartLabelOverrides?: Record<string, string>;
     /** Texto en leyenda por clave de métrica (misma clave que chartYAxes / columna en filas). */
@@ -71,6 +73,8 @@ export type BuildChartConfigWidget = {
     chartBarThickness?: number;
     chartLineBorderWidth?: number;
     chartGridLineWidth?: number;
+    /** Color de acento del análisis (ETL) cuando el widget aún no tiene `color` en layout. */
+    chartPrimaryColor?: string;
     [key: string]: unknown;
   };
   source?: { labelField?: string };
@@ -595,6 +599,13 @@ export function buildChartConfig(
     const k = (key ?? "").trim();
     return cfgSeriesColors[key] ?? cfgSeriesColors[k] ?? (key.match(/^metric_\d+$/) ? (cfgSeriesColors[aliasForYKey(key)] as string) : undefined);
   };
+  const categoryUniformMode = String(agg?.chartCategoryColorMode ?? "").trim() === "uniform";
+  const aggPrimary = String(agg?.chartPrimaryColor ?? "").trim();
+  const uniformCategoryColor =
+    String(widget.color ?? "").trim() ||
+    aggPrimary ||
+    String(accentColor ?? "").trim() ||
+    DEFAULT_PALETTE[0]!;
   const getColor = (label: string, idx: number): string => {
     const c =
       resolveColor(label) ??
@@ -602,11 +613,24 @@ export function buildChartConfig(
       (colorKeys[idx] != null ? cfgSeriesColors?.[colorKeys[idx]!] : undefined);
     return c ?? basePalette[idx % basePalette.length]!;
   };
-  const getColorStable = (label: string): string => {
-    const c = resolveColor(label) ?? resolveColor(aliasForYKey(label));
+  const getColorForSeriesSplit = (seriesValue: string, idx: number): string => {
+    const c =
+      resolveColor(seriesValue) ??
+      resolveColor(aliasForYKey(seriesValue)) ??
+      (colorKeys[idx] != null ? cfgSeriesColors?.[colorKeys[idx]!] : undefined);
     if (c) return c;
+    if (categoryUniformMode) return uniformCategoryColor;
+    return basePalette[idx % basePalette.length]!;
+  };
+  const getColorStable = (formattedLabel: string, rawKey?: string): string => {
+    const c =
+      resolveColor(formattedLabel) ??
+      (rawKey != null && String(rawKey).trim() !== "" ? resolveColor(String(rawKey)) : undefined) ??
+      resolveColor(aliasForYKey(formattedLabel));
+    if (c) return c;
+    if (categoryUniformMode) return uniformCategoryColor;
     let hash = 0;
-    for (let i = 0; i < String(label).length; i++) hash = (hash << 5) - hash + String(label).charCodeAt(i);
+    for (let i = 0; i < String(formattedLabel).length; i++) hash = (hash << 5) - hash + String(formattedLabel).charCodeAt(i);
     return basePalette[Math.abs(hash) % basePalette.length]!;
   };
 
@@ -736,8 +760,8 @@ export function buildChartConfig(
     const segmentDatasets = seriesValues.map((sv, idx) => ({
       label: labelOverride(sv),
       data: uniqueX.map((xv) => sumByXSeries.get(`${xv}\u0001${sv}`) ?? 0),
-      backgroundColor: getColor(sv, idx) + "99",
-      borderColor: getColor(sv, idx),
+      backgroundColor: getColorForSeriesSplit(sv, idx) + "99",
+      borderColor: getColorForSeriesSplit(sv, idx),
       borderWidth: 2,
       ...barThicknessOpts,
       ...(stackedBySeriesEnabled ? { stack: "series" } : {}),
@@ -780,7 +804,9 @@ export function buildChartConfig(
     const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
     const firstYKey = yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
     const sliceBw = resolvePieSliceBorderWidth(agg);
-    const bgColors = labels.map((l) => getColorStable(l));
+    const bgColors = rows.map((r, i) =>
+      getColorStable(labels[i]!, String((r as Record<string, unknown>)[xKey] ?? ""))
+    );
     return {
       labels,
       datasets: [
@@ -835,7 +861,9 @@ export function buildChartConfig(
   if (oneMetricManyCategories) {
     const yKey = yKeys[0]!;
     const displayLabel = datasetDisplayLabel(yKey);
-    const barColors = labels.map((l) => getColorStable(l));
+    const barColors = rows.map((r, i) =>
+      getColorStable(labels[i]!, String((r as Record<string, unknown>)[xKey] ?? ""))
+    );
     return {
       labels,
       datasets: [

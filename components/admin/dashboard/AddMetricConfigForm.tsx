@@ -82,6 +82,8 @@ export type AggregationConfigEdit = {
   chartRankingShowRankInLabel?: boolean;
   chartPinnedDimensions?: string[];
   chartColorScheme?: string;
+  chartCategoryColorMode?: "varied" | "uniform";
+  chartPrimaryColor?: string;
   chartSeriesColors?: Record<string, string>;
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";
@@ -202,6 +204,8 @@ export type SavedMetricAggregationConfig = {
   chartRankingShowRankInLabel?: boolean;
   chartPinnedDimensions?: string[];
   chartColorScheme?: string;
+  chartCategoryColorMode?: "varied" | "uniform";
+  chartPrimaryColor?: string;
   chartSeriesColors?: Record<string, string>;
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";
@@ -400,6 +404,8 @@ export function AddMetricConfigForm({
         chartRankingShowRankInLabel: cfg.chartRankingShowRankInLabel,
         chartPinnedDimensions: cfg.chartPinnedDimensions,
         chartColorScheme: cfg.chartColorScheme,
+        chartCategoryColorMode: cfg.chartCategoryColorMode,
+        chartPrimaryColor: cfg.chartPrimaryColor,
         chartSeriesColors: cfg.chartSeriesColors,
         showDataLabels: cfg.showDataLabels,
         labelVisibilityMode: cfg.labelVisibilityMode,

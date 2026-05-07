@@ -538,6 +538,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [showDataLabels, setShowDataLabels] = useState(true);
   const [labelVisibilityMode, setLabelVisibilityMode] = useState<"all" | "auto" | "min_max">("auto");
   const [chartColorScheme, setChartColorScheme] = useState("auto");
+  const [chartCategoryColorMode, setChartCategoryColorMode] = useState<"varied" | "uniform">("varied");
+  const [chartPrimaryColor, setChartPrimaryColor] = useState("#0ea5e9");
   const [chartValueType, setChartValueType] = useState<"number" | "currency" | "percent">("number");
   const [chartValueScale, setChartValueScale] = useState<"none" | "K" | "M" | "BI">("none");
   const [chartCurrencySymbol, setChartCurrencySymbol] = useState("$");
@@ -718,6 +720,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartAxisStep("");
     setChartScalePerMetric({});
     setChartColorScheme("auto");
+    setChartCategoryColorMode("varied");
+    setChartPrimaryColor("#0ea5e9");
     setChartComboSyncAxes(false);
     setChartGridXDisplay(true);
     setChartGridYDisplay(true);
@@ -1580,6 +1584,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       );
       setChartPinnedDimensions(Array.isArray(cfg.chartPinnedDimensions) ? cfg.chartPinnedDimensions : []);
       setChartColorScheme(cfg.chartColorScheme ?? "auto");
+      setChartCategoryColorMode(
+        cfg.chartCategoryColorMode === "uniform" || cfg.chartCategoryColorMode === "varied"
+          ? cfg.chartCategoryColorMode
+          : "varied"
+      );
+      {
+        const rawPc = typeof cfg.chartPrimaryColor === "string" ? cfg.chartPrimaryColor.trim() : "";
+        setChartPrimaryColor(
+          rawPc !== "" ? (rawPc.startsWith("#") ? rawPc : `#${rawPc}`) : "#0ea5e9"
+        );
+      }
       setChartSeriesColors(cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? cfg.chartSeriesColors : {});
       setChartLabelOverrides(cfg.chartLabelOverrides && typeof cfg.chartLabelOverrides === "object" ? cfg.chartLabelOverrides : {});
       setChartDatasetLabelOverrides(
@@ -1690,6 +1705,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartSortByMetric("");
       setChartPinnedDimensions([]);
       setChartColorScheme("auto");
+      setChartCategoryColorMode("varied");
+      setChartPrimaryColor("#0ea5e9");
       setChartSeriesColors({});
       setChartLabelOverrides({});
       setChartDatasetLabelOverrides({});
@@ -2175,6 +2192,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     ) as DateGranularity | undefined;
     return {
       type: formChartType,
+      color: chartPrimaryColor,
       aggregationConfig: {
         enabled: true,
         dimension: chartXAxis || formDimensions[0],
@@ -2188,6 +2206,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartSeriesField,
         dateDimension: timeColumn || undefined,
         dateGroupByGranularity: normalizedGranularity,
+        chartCategoryColorMode,
+        chartPrimaryColor,
         chartSeriesColors,
         chartLabelOverrides,
         chartDatasetLabelOverrides:
@@ -2217,6 +2237,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartSeriesField,
     timeColumn,
     data?.columnDisplay,
+    chartCategoryColorMode,
+    chartPrimaryColor,
     chartSeriesColors,
     chartLabelOverrides,
     chartDatasetLabelOverrides,
@@ -2279,7 +2301,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     const chartCfg = buildChartConfig(
       previewData as Record<string, unknown>[],
       previewPipelineWidget,
-      "#0ea5e9"
+      chartPrimaryColor
     );
     return chartCfg ?? null;
   }, [
@@ -2745,6 +2767,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartSeriesField?: string;
         analysisNameToSave?: string;
         chartDatasetLabelOverrides?: Record<string, string>;
+        chartCategoryColorMode?: "varied" | "uniform";
+        chartPrimaryColor?: string;
       };
       if (Array.isArray(parsed.analysisSelectedMetricIds)) setAnalysisSelectedMetricIds(parsed.analysisSelectedMetricIds);
       if (Array.isArray(parsed.formDimensions)) setFormDimensions(parsed.formDimensions);
@@ -2760,6 +2784,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (typeof parsed.analysisNameToSave === "string") setAnalysisNameToSave(parsed.analysisNameToSave);
       if (parsed.chartDatasetLabelOverrides && typeof parsed.chartDatasetLabelOverrides === "object") {
         setChartDatasetLabelOverrides(parsed.chartDatasetLabelOverrides);
+      }
+      if (parsed.chartCategoryColorMode === "uniform" || parsed.chartCategoryColorMode === "varied") {
+        setChartCategoryColorMode(parsed.chartCategoryColorMode);
+      }
+      if (typeof parsed.chartPrimaryColor === "string" && parsed.chartPrimaryColor.trim() !== "") {
+        const p = parsed.chartPrimaryColor.trim();
+        setChartPrimaryColor(p.startsWith("#") ? p : `#${p}`);
       }
     } catch {
       // ignore invalid draft
@@ -2786,6 +2817,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartSeriesField,
       analysisNameToSave,
       chartDatasetLabelOverrides,
+      chartCategoryColorMode,
+      chartPrimaryColor,
     };
     window.localStorage.setItem(analysisDraftStorageKey, JSON.stringify(draft));
   }, [
@@ -2807,6 +2840,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartSeriesField,
     analysisNameToSave,
     chartDatasetLabelOverrides,
+    chartCategoryColorMode,
+    chartPrimaryColor,
   ]);
 
   const saveDashboardFiltersOnly = useCallback(async () => {
@@ -3026,6 +3061,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
+      chartCategoryColorMode: chartCategoryColorMode === "uniform" ? "uniform" : undefined,
+      chartPrimaryColor: chartPrimaryColor.trim() ? chartPrimaryColor.trim() : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
       chartDatasetLabelOverrides:
@@ -3311,6 +3348,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
+      chartCategoryColorMode: chartCategoryColorMode === "uniform" ? "uniform" : undefined,
+      chartPrimaryColor: chartPrimaryColor.trim() ? chartPrimaryColor.trim() : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
       chartDatasetLabelOverrides:
@@ -3450,6 +3489,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartCurrencySymbol: chartValueType === "currency" ? chartCurrencySymbol : undefined,
       chartThousandSep,
       chartDecimals,
+      chartCategoryColorMode: chartCategoryColorMode === "uniform" ? "uniform" : undefined,
+      chartPrimaryColor: chartPrimaryColor.trim() ? chartPrimaryColor.trim() : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
       chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
       chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
@@ -3518,6 +3559,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartCurrencySymbol,
     chartThousandSep,
     chartDecimals,
+    chartCategoryColorMode,
+    chartPrimaryColor,
     chartSeriesColors,
     chartGridXDisplay,
     chartGridYDisplay,
@@ -3666,6 +3709,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartSeriesColors(
         a.chartSeriesColors && typeof a.chartSeriesColors === "object" ? (a.chartSeriesColors as Record<string, string>) : {}
       );
+      setChartCategoryColorMode(a.chartCategoryColorMode === "uniform" ? "uniform" : "varied");
+      {
+        const rawPc = typeof a.chartPrimaryColor === "string" ? a.chartPrimaryColor.trim() : "";
+        setChartPrimaryColor(rawPc !== "" ? (rawPc.startsWith("#") ? rawPc : `#${rawPc}`) : "#0ea5e9");
+      }
       setChartGridXDisplay(a.chartGridXDisplay !== false);
       setChartGridYDisplay(a.chartGridYDisplay !== false);
       setChartGridColor(typeof a.chartGridColor === "string" ? a.chartGridColor : "");
@@ -6770,6 +6818,52 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         return (
                           <>
                       <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Según el tipo <strong>{CHART_TYPES.find((t) => t.value === formChartType)?.label ?? formChartType}</strong>: {colorLabelsDesc}</p>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {(
+                          [
+                            ["varied", "Varios colores"],
+                            ["uniform", "Un solo color"],
+                          ] as const
+                        ).map(([mode, lbl]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setChartCategoryColorMode(mode)}
+                            className="rounded-lg px-3 py-1.5 text-xs font-medium border transition-all"
+                            style={{
+                              background: chartCategoryColorMode === mode ? "var(--platform-accent)" : "var(--platform-surface-hover)",
+                              color: chartCategoryColorMode === mode ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                              borderColor: chartCategoryColorMode === mode ? "transparent" : "var(--platform-border)",
+                            }}
+                          >
+                            {lbl}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 mb-2">
+                        <span className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>
+                          Color base
+                        </span>
+                        <input
+                          type="color"
+                          value={/^#[0-9A-Fa-f]{6}$/.test(chartPrimaryColor.trim()) ? chartPrimaryColor.trim() : "#0ea5e9"}
+                          onChange={(e) => setChartPrimaryColor(e.target.value)}
+                          className="h-8 w-10 shrink-0 cursor-pointer rounded border-0 p-0"
+                          style={{ background: "transparent" }}
+                          aria-label="Color base del gráfico"
+                        />
+                        <Input
+                          value={chartPrimaryColor}
+                          onChange={(e) => setChartPrimaryColor((e.target.value || "").trim() || "#0ea5e9")}
+                          className="h-8 max-w-[7.5rem] font-mono text-xs !bg-[var(--platform-bg)]"
+                          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                        />
+                      </div>
+                      {chartCategoryColorMode === "uniform" ? (
+                        <p className="text-[10px] mb-3" style={{ color: "var(--platform-fg-muted)" }}>
+                          Todas las categorías o series usan el color base. Con <strong>Personalizado</strong>, solo las que definas abajo con otro hex son excepciones.
+                        </p>
+                      ) : null}
                       {(() => {
                         const defaultPaletteColors = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16"];
                         const presetPalettes: { name: string; colors: string[] }[] = [
@@ -6940,7 +7034,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         {previewWidgetForRenderer && formChartType !== "kpi" && formChartType !== "table" && (
                           <div className="h-[320px] w-full">
                             <DashboardWidgetRenderer
-                              key={`pv-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartRankingPinnedXValues.join("\x1e")}-${chartRankingShowRankInLabel}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
+                              key={`pv-${chartCategoryColorMode}-${chartPrimaryColor}-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartRankingPinnedXValues.join("\x1e")}-${chartRankingShowRankInLabel}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
                               widget={previewWidgetForRenderer}
                               isLoading={false}
                               hideHeader
@@ -6987,6 +7081,52 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     return (
                       <div className="mt-4 rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Colores</Label>
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {(
+                            [
+                              ["varied", "Varios colores"],
+                              ["uniform", "Un solo color"],
+                            ] as const
+                          ).map(([mode, lbl]) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => setChartCategoryColorMode(mode)}
+                              className="rounded-lg px-3 py-1.5 text-xs font-medium border transition-all"
+                              style={{
+                                background: chartCategoryColorMode === mode ? "var(--platform-accent)" : "var(--platform-surface-hover)",
+                                color: chartCategoryColorMode === mode ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                                borderColor: chartCategoryColorMode === mode ? "transparent" : "var(--platform-border)",
+                              }}
+                            >
+                              {lbl}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 mb-2">
+                          <span className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>
+                            Color base
+                          </span>
+                          <input
+                            type="color"
+                            value={/^#[0-9A-Fa-f]{6}$/.test(chartPrimaryColor.trim()) ? chartPrimaryColor.trim() : "#0ea5e9"}
+                            onChange={(e) => setChartPrimaryColor(e.target.value)}
+                            className="h-8 w-10 shrink-0 cursor-pointer rounded border-0 p-0"
+                            style={{ background: "transparent" }}
+                            aria-label="Color base del gráfico"
+                          />
+                          <Input
+                            value={chartPrimaryColor}
+                            onChange={(e) => setChartPrimaryColor((e.target.value || "").trim() || "#0ea5e9")}
+                            className="h-8 max-w-[7.5rem] font-mono text-xs !bg-[var(--platform-bg)]"
+                            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                          />
+                        </div>
+                        {chartCategoryColorMode === "uniform" ? (
+                          <p className="text-[10px] mb-3" style={{ color: "var(--platform-fg-muted)" }}>
+                            Todas las categorías o series usan el color base. Con <strong>Personalizado</strong>, solo las que definas abajo con otro hex son excepciones.
+                          </p>
+                        ) : null}
                         <div className="flex flex-wrap gap-2 mb-3">
                           {presetPalettes.map((p) => (
                             <button key={p.name} type="button" onClick={() => {

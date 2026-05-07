@@ -71,6 +71,8 @@ export type AggregationConfigEdit = {
   comparePeriod?: "previous_year" | "previous_month";
   dateDimension?: string;
   chartType?: string;
+  chartCategoryColorMode?: "varied" | "uniform";
+  chartPrimaryColor?: string;
   chartSeriesColors?: Record<string, string>;
   chartXAxis?: string;
   chartYAxes?: string[];
@@ -330,10 +332,6 @@ export function MetricConfigPanel({
     if (raw.length > 0) return raw;
     return metrics.map((_, i) => `metric_${i}`);
   }, [agg.chartYAxes, metrics]);
-  const seriesColorKeys = useMemo(() => {
-    const fromPreview = previewChartDatasetLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
-    return Array.from(new Set([...yAxisKeysForUi, ...fromPreview]));
-  }, [yAxisKeysForUi, previewChartDatasetLabels]);
   const sources = etlData?.dataSources;
   const selectedSource = sources?.find(
     (s) => s.id === (widget.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id)
@@ -364,6 +362,21 @@ export function MetricConfigPanel({
     }
     return [...uniq].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [previewRows, widget.type, widget.color, chartType, agg, showLabelOverrides]);
+  const includePreviewAxisInColorKeys = useMemo(() => {
+    if (chartType === "pie" || chartType === "doughnut") return true;
+    return (
+      (chartType === "bar" || chartType === "horizontalBar" || chartType === "stackedColumn") &&
+      yAxisKeysForUi.length === 1
+    );
+  }, [chartType, yAxisKeysForUi.length]);
+  const seriesColorKeys = useMemo(() => {
+    const fromPreview = previewChartDatasetLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
+    const fromAxis =
+      includePreviewAxisInColorKeys && previewAxisRawValues.length > 0
+        ? previewAxisRawValues.map((s) => String(s ?? "").trim()).filter(Boolean)
+        : [];
+    return Array.from(new Set([...yAxisKeysForUi, ...fromPreview, ...fromAxis]));
+  }, [yAxisKeysForUi, previewChartDatasetLabels, includePreviewAxisInColorKeys, previewAxisRawValues]);
   const fillChartLabelOverridesFromPreview = useCallback(() => {
     const next = { ...(agg.chartLabelOverrides ?? {}) };
     for (const raw of previewAxisRawValues) {
@@ -1632,6 +1645,48 @@ export function MetricConfigPanel({
             </div>
           </div>
         )}
+        {isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) &&
+          (chartType === "pie" ||
+            chartType === "doughnut" ||
+            ((chartType === "bar" || chartType === "horizontalBar" || chartType === "stackedColumn") &&
+              yAxisKeysForUi.length === 1) ||
+            String(agg.chartSeriesField ?? "").trim() !== "") && (
+            <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Colores por categoría o serie</Label>
+              <p className="text-[11px] text-[var(--studio-fg-muted)]">
+                «Un solo color» usa el color principal para todas las porciones, barras por categoría o series por dimensión. Podés definir{' '}
+                <strong className="text-[var(--studio-fg-muted)]">excepciones</strong> más abajo en «Color por serie» dejando un hex solo en las claves que quieras distintas.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    ["varied", "Varios colores"],
+                    ["uniform", "Un solo color"],
+                  ] as const
+                ).map(([mode, lbl]) => {
+                  const active = mode === "uniform" ? agg.chartCategoryColorMode === "uniform" : agg.chartCategoryColorMode !== "uniform";
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() =>
+                        updateAgg({
+                          chartCategoryColorMode: mode === "uniform" ? "uniform" : undefined,
+                        })
+                      }
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        active
+                          ? "border-transparent bg-[var(--studio-accent)] text-[var(--studio-bg)]"
+                          : "border-[var(--studio-border)] bg-[var(--studio-surface-hover)] text-[var(--studio-fg-muted)]"
+                      }`}
+                    >
+                      {lbl}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         {yAxisKeysForUi.length > 0 && isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) && (
           <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Nombres en leyenda (por métrica)</Label>
@@ -1663,7 +1718,10 @@ export function MetricConfigPanel({
           <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Color por serie</Label>
             <p className="text-[11px] text-[var(--studio-fg-muted)]">
-              Clave de métrica o etiqueta de serie del preview. Vacío en hex quita el color personalizado para esa clave.
+              Claves de métrica, valores del eje o serie del preview. Vacío en hex quita el color personalizado.
+              {agg.chartCategoryColorMode === "uniform"
+                ? " Con «Un solo color» activo, solo las claves con hex definido se apartan del color principal."
+                : null}
             </p>
             {seriesColorKeys.map((sKey) => {
               const hex = agg.chartSeriesColors?.[sKey] || widget.color || "#0ea5e9";

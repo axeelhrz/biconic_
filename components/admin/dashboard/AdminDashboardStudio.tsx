@@ -96,6 +96,8 @@ export type SavedAnalysis = {
   chartCurrencySymbol?: string;
   chartThousandSep?: boolean;
   chartDecimals?: number;
+  chartCategoryColorMode?: "varied" | "uniform";
+  chartPrimaryColor?: string;
   chartSeriesColors?: Record<string, string>;
   chartSortDirection?: string;
   chartSortBy?: string;
@@ -142,6 +144,8 @@ type AggregationConfig = {
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
   dateDimension?: string;
+  chartCategoryColorMode?: "varied" | "uniform";
+  chartPrimaryColor?: string;
   chartSeriesColors?: Record<string, string>;
   chartType?: string;
   chartXAxis?: string;
