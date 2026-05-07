@@ -310,6 +310,12 @@ function resolveRankingMetricKey(
   return rKey || null;
 }
 
+export type RankingSliceResult = {
+  rows: Record<string, unknown>[];
+  /** Posición 1-indexada en el ranking completo (antes de slice + anclados) por valor crudo del eje X. */
+  rankByXValue: Map<string, number>;
+};
+
 /** Top N por métrica y filas extra para valores del eje X anclados (orden global ya aplicado sobre `rows`). */
 function sliceRankingWithPinnedX(
   rows: Record<string, unknown>[],
@@ -318,13 +324,18 @@ function sliceRankingWithPinnedX(
   topN: number,
   direction: string | undefined,
   pinnedXValues?: string[]
-): Record<string, unknown>[] {
+): RankingSliceResult {
   const sorted = [...rows].sort((a, b) =>
     compareRowsByRankingMetric(a as Record<string, unknown>, b as Record<string, unknown>, rKey, direction)
   );
+  const rankByXValue = new Map<string, number>();
+  sorted.forEach((r, i) => {
+    const k = String(r[xKey] ?? "");
+    if (!rankByXValue.has(k)) rankByXValue.set(k, i + 1);
+  });
   const top = sorted.slice(0, topN);
   const pinned = (pinnedXValues ?? []).map((s) => String(s ?? "").trim()).filter(Boolean);
-  if (pinned.length === 0) return top;
+  if (pinned.length === 0) return { rows: top, rankByXValue };
   const inTop = new Set(top.map((r) => String(r[xKey] ?? "")));
   const extras: Record<string, unknown>[] = [];
   for (const p of pinned) {
@@ -332,7 +343,7 @@ function sliceRankingWithPinnedX(
     const row = sorted.find((r) => String(r[xKey] ?? "") === p);
     if (row) extras.push(row);
   }
-  return [...top, ...extras];
+  return { rows: [...top, ...extras], rankByXValue };
 }
 
 /**
@@ -357,7 +368,7 @@ export function getProcessedRowsForChart(
   if (shouldApplyRanking) {
     const rKey = resolveRankingMetricKey(agg, resultKeys, yKeys);
     if (rKey) {
-      rows = sliceRankingWithPinnedX(
+      const sliced = sliceRankingWithPinnedX(
         rows,
         xKey,
         rKey,
@@ -365,6 +376,7 @@ export function getProcessedRowsForChart(
         agg?.chartRankingDirection,
         agg?.chartRankingPinnedXValues
       );
+      rows = sliced.rows;
     }
   } else if (
     !shouldApplyRanking &&
@@ -540,14 +552,24 @@ export function buildChartConfig(
     (normalizedDateDim !== "" && normalizedDateDim === normalizedXKey) ||
     dataArray.some((r) => parseDateLike((r as Record<string, unknown>)[xKey], dateParseOpts) != null);
   const dateDisplayFmt = agg?.analysisDateDisplayFormat as AnalysisDateDisplayFormat | undefined;
+  /** Mapa rango de ranking por valor del eje X (1-indexado). Se completa al aplicar Top N + anclados. */
+  let rankByXValue: Map<string, number> | null = null;
   const formatXLabel = (value: unknown): string => {
     const raw = String(value ?? "");
     const overridden = labelOverride(raw);
-    if (overridden !== raw) return overridden;
-    if (!shouldTreatXAsDate) return overridden;
-    const granularity = configuredGranularity ?? "day";
-    const formatted = formatAnalysisDateForChart(value, granularity, dateDisplayFmt, overridden, dateParseOpts);
-    return formatted ?? overridden;
+    let formatted: string;
+    if (overridden !== raw) formatted = overridden;
+    else if (!shouldTreatXAsDate) formatted = overridden;
+    else {
+      const granularity = configuredGranularity ?? "day";
+      const dateFmt = formatAnalysisDateForChart(value, granularity, dateDisplayFmt, overridden, dateParseOpts);
+      formatted = dateFmt ?? overridden;
+    }
+    if (rankByXValue) {
+      const rank = rankByXValue.get(raw);
+      if (rank != null) return `#${rank} \u00b7 ${formatted}`;
+    }
+    return formatted;
   };
 
   const basePalette = widget.color ? [widget.color, ...DEFAULT_PALETTE] : accentColor ? [accentColor, ...DEFAULT_PALETTE] : DEFAULT_PALETTE;
@@ -598,7 +620,7 @@ export function buildChartConfig(
   if (shouldApplyRanking) {
     const rKey = resolveRankingMetricKey(agg, resultKeys, yKeys);
     if (rKey) {
-      rows = sliceRankingWithPinnedX(
+      const sliced = sliceRankingWithPinnedX(
         rows,
         xKey,
         rKey,
@@ -606,6 +628,8 @@ export function buildChartConfig(
         agg?.chartRankingDirection,
         agg?.chartRankingPinnedXValues
       );
+      rows = sliced.rows;
+      rankByXValue = sliced.rankByXValue;
     }
   } else if (
     !shouldApplyRanking &&
