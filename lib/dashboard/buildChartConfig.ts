@@ -59,6 +59,8 @@ export type BuildChartConfigWidget = {
     chartRankingDirection?: "asc" | "desc";
     /** Valores del eje X (clave en datos, no texto renombrado) que siempre se muestran además del Top N. */
     chartRankingPinnedXValues?: string[];
+    /** Prefija las etiquetas del eje X con la posición del ranking (#N) cuando hay ranking activo. */
+    chartRankingShowRankInLabel?: boolean;
     chartSortDirection?: string;
     chartSortBy?: string;
     chartSortByMetric?: string;
@@ -629,7 +631,9 @@ export function buildChartConfig(
         agg?.chartRankingPinnedXValues
       );
       rows = sliced.rows;
-      rankByXValue = sliced.rankByXValue;
+      if (agg?.chartRankingShowRankInLabel !== false) {
+        rankByXValue = sliced.rankByXValue;
+      }
     }
   } else if (
     !shouldApplyRanking &&

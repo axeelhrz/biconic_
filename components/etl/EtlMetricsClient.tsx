@@ -556,6 +556,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartRankingMetric, setChartRankingMetric] = useState("");
   const [chartRankingDirection, setChartRankingDirection] = useState<"asc" | "desc">("desc");
   const [chartRankingPinnedXValues, setChartRankingPinnedXValues] = useState<string[]>([]);
+  const [chartRankingShowRankInLabel, setChartRankingShowRankInLabel] = useState(true);
   const [chartSortByMetric, setChartSortByMetric] = useState("");
   const [previewDateOrder, setPreviewDateOrder] = useState<"asc" | "desc">("asc");
   const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
@@ -701,6 +702,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartRankingTop(5);
     setChartRankingMetric("");
     setChartRankingPinnedXValues([]);
+    setChartRankingShowRankInLabel(true);
     setChartMetricFormats({});
     setChartSeriesColors({});
     setChartPinnedDimensions([]);
@@ -744,6 +746,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setFormFilters([]);
     setDimensionDefaultFiltersForm([]);
     setChartRankingPinnedXValues([]);
+    setChartRankingShowRankInLabel(true);
     setFormOrderBy(null);
     setFormLimit(100);
     setTimeColumn("");
@@ -1460,6 +1463,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setFormFilters([]);
     setDimensionDefaultFiltersForm([]);
     setChartRankingPinnedXValues([]);
+    setChartRankingShowRankInLabel(true);
     setFormOrderBy(null);
     setFormLimit(100);
     setFormMetric({ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado" });
@@ -1513,6 +1517,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           : []
       );
       setChartRankingPinnedXValues(Array.isArray(cfg.chartRankingPinnedXValues) ? cfg.chartRankingPinnedXValues : []);
+      setChartRankingShowRankInLabel(cfg.chartRankingShowRankInLabel !== false);
       setFormOrderBy(cfg.orderBy ?? null);
       setFormLimit(cfg.limit ?? 100);
       setChartXAxis(cfg.chartXAxis ?? "");
@@ -1664,6 +1669,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setFormFilters([]);
       setDimensionDefaultFiltersForm([]);
       setChartRankingPinnedXValues([]);
+      setChartRankingShowRankInLabel(true);
       setFormOrderBy(null);
       setFormLimit(100);
       setChartXAxis("");
@@ -2192,6 +2198,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartRankingDirection,
         chartRankingPinnedXValues:
           chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+        chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
         chartSortDirection,
         chartSortBy,
         chartSortByMetric,
@@ -2218,6 +2225,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartRankingMetric,
     chartRankingDirection,
     chartRankingPinnedXValues,
+    chartRankingShowRankInLabel,
     chartSortDirection,
     chartSortBy,
     chartSortByMetric,
@@ -2358,6 +2366,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartRankingDirection,
         chartRankingPinnedXValues:
           chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+        chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
         chartSortDirection,
         chartSortBy,
         chartSortByMetric,
@@ -2410,6 +2419,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartRankingMetric,
     chartRankingDirection,
     chartRankingPinnedXValues,
+    chartRankingShowRankInLabel,
     chartSortDirection,
     chartSortBy,
     chartSortByMetric,
@@ -3013,6 +3023,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
       chartRankingPinnedXValues:
         chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+      chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
@@ -3297,6 +3308,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
       chartRankingPinnedXValues:
         chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+      chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
@@ -3453,6 +3465,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
       chartRankingPinnedXValues:
         chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+      chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
       dimensionDefaultFilters: dimensionDefaultFiltersForm.length > 0 ? dimensionDefaultFiltersForm : undefined,
       filters: formFilters.length
         ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator }))
@@ -3519,6 +3532,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartRankingMetric,
     chartRankingDirection,
     chartRankingPinnedXValues,
+    chartRankingShowRankInLabel,
     dimensionDefaultFiltersForm,
     formFilters,
     formOrderBy,
@@ -3673,6 +3687,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           : "desc"
       );
       setChartRankingPinnedXValues(Array.isArray(a.chartRankingPinnedXValues) ? (a.chartRankingPinnedXValues as string[]) : []);
+      setChartRankingShowRankInLabel(a.chartRankingShowRankInLabel !== false);
       if (Array.isArray(a.filters)) {
         setFormFilters(
           (a.filters as AggregationFilterEdit[]).map((f, i) => ({
@@ -6698,6 +6713,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                               style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                             />
                           </div>
+                          <label
+                            className="flex items-center gap-2 text-xs cursor-pointer w-full"
+                            style={{ color: "var(--platform-fg)" }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={chartRankingShowRankInLabel}
+                              onChange={(e) => setChartRankingShowRankInLabel(e.target.checked)}
+                              className="rounded"
+                            />
+                            Mostrar posición del ranking junto a cada categoría (#1, #2, #N)
+                          </label>
                           <p className="text-xs w-full" style={{ color: "var(--platform-fg-muted)" }}>
                             Ej: Top {chartRankingTop} {formDimensions[0] ? formDimensions[0] : "categorías"} que{" "}
                             {chartRankingDirection === "asc" ? "menos" : "más"}{" "}
@@ -6913,7 +6940,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         {previewWidgetForRenderer && formChartType !== "kpi" && formChartType !== "table" && (
                           <div className="h-[320px] w-full">
                             <DashboardWidgetRenderer
-                              key={`pv-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartRankingPinnedXValues.join("\x1e")}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
+                              key={`pv-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartRankingPinnedXValues.join("\x1e")}-${chartRankingShowRankInLabel}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
                               widget={previewWidgetForRenderer}
                               isLoading={false}
                               hideHeader

@@ -89,6 +89,7 @@ export type AggregationConfigEdit = {
   chartRankingMetric?: string;
   chartRankingDirection?: "asc" | "desc";
   chartRankingPinnedXValues?: string[];
+  chartRankingShowRankInLabel?: boolean;
   chartColorScheme?: string;
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";
@@ -2761,6 +2762,17 @@ export function MetricConfigPanel({
                         className="h-8 text-xs mt-0.5"
                       />
                     </div>
+                    <label className="flex items-center gap-2 text-[11px] cursor-pointer text-[var(--studio-fg)]">
+                      <input
+                        type="checkbox"
+                        checked={agg.chartRankingShowRankInLabel !== false}
+                        onChange={(e) =>
+                          updateAgg({ chartRankingShowRankInLabel: e.target.checked ? undefined : false })
+                        }
+                        className="rounded"
+                      />
+                      Mostrar posición del ranking junto a cada categoría (#1, #2, #N)
+                    </label>
                   </div>
                 ) : null}
               </div>
