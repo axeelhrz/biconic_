@@ -1288,13 +1288,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       else if (c === ")") { depth--; if (depth < 0) return "Paréntesis de cierre ) sin apertura."; }
     }
     if (depth !== 0) return "Faltan paréntesis de cierre.";
+    const expressionWithoutStrings = expr.replace(/'([^'\\]|\\.)*'|"([^"\\]|\\.)*"/g, " ");
     const allowedChars = /^[a-zA-Z0-9_*+\-/().,\s'"%;^=<>!]+$/;
-    if (!allowedChars.test(expr)) return "La fórmula contiene caracteres no permitidos. Usá columnas, números, operadores ( * - + / ^ ) y comparaciones (=, <, >, <>, !=).";
+    if (!allowedChars.test(expressionWithoutStrings)) return "La fórmula contiene caracteres no permitidos. Usá columnas, números, operadores ( * - + / ^ ) y comparaciones (=, <, >, <>, !=).";
     const columnsSet = new Set([...fields, ...derivedColumns.map((d) => d.name)].map((x) => x.toLowerCase()));
     const savedMetricNamesSet = new Set((data?.savedMetrics ?? []).map((s: { name?: string }) => (s.name ?? "").toLowerCase()));
-    const protectedStr = expr.replace(/'([^']*)'|"([^"]*)"/g, " __STR__ ");
-    const prefixedCols = protectedStr.match(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
-    const restStr = protectedStr.replace(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g, " ");
+    const prefixedCols = expressionWithoutStrings.match(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
+    const restStr = expressionWithoutStrings.replace(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g, " ");
     const simpleWords = restStr.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
     const words = [...prefixedCols, ...simpleWords];
     for (const w of words) {
