@@ -45,6 +45,8 @@ import {
 } from "@/lib/dashboard/dateFormatting";
 import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import { createChartPercentDenominatorResolver } from "@/lib/dashboard/chartPercentEngine";
+import type { ChartPercentWidgetLike } from "@/lib/dashboard/chartPercentEngine";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
@@ -87,6 +89,7 @@ export type WidgetChartType =
 
 export type ChartConfig = {
   labels: string[];
+  xRawCategoryKeys?: string[];
   datasets: Array<{
     label: string;
     data: number[];
@@ -131,6 +134,10 @@ export interface DashboardWidgetRendererWidget {
   labelDisplayMode?: ChartLabelDisplayMode;
   /** Base del % (total general, por categoría o por serie). */
   chartPercentBasis?: ChartPercentBasis;
+  chartPercentGroupField?: string;
+  chartPercentDenominatorMetric?: string;
+  chartPercentDenominatorScope?: "analysis" | "visible";
+  chartPercentDenominatorGrandTotal?: boolean;
   chartStyle?: ChartStyleConfig;
   /** Un estilo por dataset cuando el gráfico tiene varias métricas (formato por métrica). */
   chartMetricStyles?: (ChartStyleConfig | undefined)[];
@@ -492,6 +499,40 @@ export function DashboardWidgetRenderer({
     };
   }, [isCombo, comboSyncAxes, chartConfig]);
 
+  const chartAccentForPercent = useMemo(
+    () =>
+      String(
+        (widget as { color?: string }).color ??
+          (widget.aggregationConfig as { chartPrimaryColor?: string } | undefined)?.chartPrimaryColor ??
+          ""
+      ).trim(),
+    [widget.color, (widget.aggregationConfig as { chartPrimaryColor?: string } | undefined)?.chartPrimaryColor]
+  );
+
+  const percentDenomResolver = useMemo(
+    () =>
+      createChartPercentDenominatorResolver({
+        basisRaw: widget.chartPercentBasis,
+        fullRows: widget.rows as Record<string, unknown>[] | undefined,
+        widget: widget as unknown as ChartPercentWidgetLike,
+        chartConfig: chartConfig ?? null,
+        accentColor: chartAccentForPercent,
+      }),
+    [
+      widget.chartPercentBasis,
+      widget.rows,
+      widget.chartPercentGroupField,
+      widget.chartPercentDenominatorMetric,
+      widget.chartPercentDenominatorScope,
+      widget.chartPercentDenominatorGrandTotal,
+      widget.aggregationConfig,
+      widget.type,
+      widget.source,
+      chartConfig,
+      chartAccentForPercent,
+    ]
+  );
+
   const chartOptions = useMemo(() => {
     const agg = widget.aggregationConfig as {
       chartGridXDisplay?: boolean;
@@ -636,7 +677,16 @@ export function DashboardWidgetRenderer({
             : "58%"
           : undefined;
       const forceExteriorLabels = !pieIntegrated && !pieLegendVisible;
-      const pieTooltipFormatter = getValueFormatter(style, pieLabelMode, percentBasis);
+      const pieBaseFormatter = getValueFormatter(style, pieLabelMode, percentBasis);
+      const pieTooltipFormatter = (parsed: number, ctx: FormatChartPointContext) => {
+        const di = typeof ctx.dataIndex === "number" ? ctx.dataIndex : -1;
+        const dsi = typeof ctx.datasetIndex === "number" && ctx.datasetIndex >= 0 ? ctx.datasetIndex : 0;
+        const denom = percentDenomResolver(di, dsi);
+        return pieBaseFormatter(parsed, {
+          ...ctx,
+          ...(typeof denom === "number" && Number.isFinite(denom) ? { percentDenominator: denom } : {}),
+        });
+      };
       const tooltipPlugin = {
         ...(optionsBasePlugins.tooltip as Record<string, unknown> | undefined),
         callbacks: {
@@ -934,10 +984,17 @@ export function DashboardWidgetRenderer({
         const datasetStyle =
           metricStyles?.[dsIdxForStyle] != null ? metricStyles[dsIdxForStyle]! : style;
         const styleForFormat = datasetStyle ?? style;
+        const denom =
+          typeof di === "number"
+            ? percentDenomResolver(di, typeof dsi === "number" ? dsi : 0)
+            : undefined;
         const pointCtx: FormatChartPointContext | undefined =
           cartesianLabelMode === "percent" || cartesianLabelMode === "both"
             ? typeof di === "number"
-              ? makePercentCtx(di, dsi)
+              ? {
+                  ...makePercentCtx(di, dsi),
+                  ...(typeof denom === "number" && Number.isFinite(denom) ? { percentDenominator: denom } : {}),
+                }
               : undefined
             : ctx;
         return formatChartPointDisplay(
@@ -1184,6 +1241,7 @@ export function DashboardWidgetRenderer({
     widget.chartMetricStyles,
     widget.labelDisplayMode,
     widget.chartPercentBasis,
+    percentDenomResolver,
     widget.aggregationConfig,
     darkChartTheme,
     pieContainerWidth,

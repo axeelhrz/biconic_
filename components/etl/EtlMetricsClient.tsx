@@ -2416,7 +2416,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       }),
       chartMetricStyles: metricFormats,
       labelDisplayMode: "percent" as const,
-      chartPercentBasis: "grand_total" as const,
+      chartPercentBasis: "chart_visible_total" as const,
       minHeight: 320,
     };
   }, [

@@ -9,7 +9,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import AdminFieldSelector from "./AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
-import type { ChartLabelDisplayMode, ChartPercentBasis } from "@/lib/dashboard/chartOptions";
+import {
+  normalizeChartPercentBasis,
+  type ChartLabelDisplayMode,
+  type ChartPercentBasis,
+} from "@/lib/dashboard/chartOptions";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import {
   ChartLabelOverridesSection,
@@ -148,6 +152,10 @@ export type AddMetricFormConfig = {
   color?: string;
   labelDisplayMode?: ChartLabelDisplayMode;
   chartPercentBasis?: ChartPercentBasis;
+  chartPercentGroupField?: string;
+  chartPercentDenominatorMetric?: string;
+  chartPercentDenominatorScope?: "analysis" | "visible";
+  chartPercentDenominatorGrandTotal?: boolean;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
   kpiCaption?: string;
@@ -557,6 +565,19 @@ export function AddMetricConfigForm({
     return [...uniq].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [previewRows, form.type, form.color, agg, showLabelOverrides]);
 
+  const yAxisKeysForAddMetricUi = useMemo(() => {
+    const raw = (agg.chartYAxes ?? []).map((k) => String(k ?? "").trim()).filter(Boolean);
+    if (raw.length > 0) return raw;
+    return metrics.map((_, i) => `metric_${i}`);
+  }, [agg.chartYAxes, metrics]);
+
+  const percentFieldColumnOptionsAdd = useMemo(() => {
+    if (!previewRows?.length) return [] as string[];
+    return Object.keys((previewRows[0] as Record<string, unknown>) ?? {}).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+  }, [previewRows]);
+
   const fillChartLabelOverridesFromPreview = useCallback(() => {
     const next = { ...(agg.chartLabelOverrides ?? {}) };
     for (const raw of previewAxisRawValues) {
@@ -703,17 +724,95 @@ export function AddMetricConfigForm({
               </select>
             </div>
             {(form.labelDisplayMode === "percent" || form.labelDisplayMode === "both" || !form.labelDisplayMode) && (
-              <div>
+              <div className="space-y-2">
                 <Label className="add-metric-label">Base del porcentaje</Label>
                 <select
-                  value={form.chartPercentBasis ?? "grand_total"}
+                  value={normalizeChartPercentBasis(form.chartPercentBasis)}
                   onChange={(e) => updateForm({ chartPercentBasis: e.target.value as ChartPercentBasis })}
                   className="add-metric-select mt-1"
                 >
-                  <option value="grand_total">Total general (toda la torta)</option>
-                  <option value="per_category">Por categoría</option>
+                  <option value="chart_visible_total">Total visible en el gráfico</option>
+                  <option value="analysis_total">Total general del análisis (sin Top N)</option>
+                  <option value="per_category_axis">Por categoría del eje</option>
                   <option value="per_series">Por serie</option>
+                  <option value="per_dimension_group">Por dimensión / grupo</option>
+                  <option value="per_denominator_metric">Sobre otra métrica / columna</option>
                 </select>
+                {normalizeChartPercentBasis(form.chartPercentBasis) === "per_dimension_group" && (
+                  <div>
+                    <Label className="add-metric-label">Dimensión de agrupación</Label>
+                    <select
+                      value={form.chartPercentGroupField ?? ""}
+                      onChange={(e) =>
+                        updateForm({ chartPercentGroupField: e.target.value ? e.target.value : undefined })
+                      }
+                      className="add-metric-select mt-1"
+                    >
+                      <option value="">Elegir columna…</option>
+                      {percentFieldColumnOptionsAdd.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {normalizeChartPercentBasis(form.chartPercentBasis) === "per_denominator_metric" && (
+                  <div className="space-y-2">
+                    <div>
+                      <Label className="add-metric-label">Columna denominador</Label>
+                      <select
+                        value={form.chartPercentDenominatorMetric ?? ""}
+                        onChange={(e) =>
+                          updateForm({
+                            chartPercentDenominatorMetric: e.target.value ? e.target.value : undefined,
+                          })
+                        }
+                        className="add-metric-select mt-1"
+                      >
+                        <option value="">Elegir…</option>
+                        {yAxisKeysForAddMetricUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                        {percentFieldColumnOptionsAdd
+                          .filter((k) => !yAxisKeysForAddMetricUi.includes(k))
+                          .map((k) => (
+                            <option key={`c-${k}`} value={k}>
+                              {k}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="add-metric-label">Ámbito denominador</Label>
+                      <select
+                        value={form.chartPercentDenominatorScope ?? "analysis"}
+                        onChange={(e) =>
+                          updateForm({
+                            chartPercentDenominatorScope: e.target.value as "analysis" | "visible",
+                          })
+                        }
+                        className="add-metric-select mt-1"
+                      >
+                        <option value="analysis">Todo el análisis</option>
+                        <option value="visible">Solo visible</option>
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                      <input
+                        type="checkbox"
+                        checked={form.chartPercentDenominatorGrandTotal === true}
+                        onChange={(e) =>
+                          updateForm({ chartPercentDenominatorGrandTotal: e.target.checked ? true : undefined })
+                        }
+                        className="rounded"
+                      />
+                      Un solo total en el ámbito
+                    </label>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -737,17 +836,95 @@ export function AddMetricConfigForm({
               </select>
             </div>
             {(form.labelDisplayMode === "percent" || form.labelDisplayMode === "both") && (
-              <div>
+              <div className="space-y-2">
                 <Label className="add-metric-label">Base del porcentaje</Label>
                 <select
-                  value={form.chartPercentBasis ?? "grand_total"}
+                  value={normalizeChartPercentBasis(form.chartPercentBasis)}
                   onChange={(e) => updateForm({ chartPercentBasis: e.target.value as ChartPercentBasis })}
                   className="add-metric-select mt-1"
                 >
-                  <option value="grand_total">Total general</option>
-                  <option value="per_category">Por categoría (eje categoría)</option>
-                  <option value="per_series">Por serie (leyenda)</option>
+                  <option value="chart_visible_total">Total visible en el gráfico</option>
+                  <option value="analysis_total">Total general del análisis</option>
+                  <option value="per_category_axis">Por categoría del eje</option>
+                  <option value="per_series">Por serie</option>
+                  <option value="per_dimension_group">Por dimensión / grupo</option>
+                  <option value="per_denominator_metric">Sobre otra métrica / columna</option>
                 </select>
+                {normalizeChartPercentBasis(form.chartPercentBasis) === "per_dimension_group" && (
+                  <div>
+                    <Label className="add-metric-label">Dimensión de agrupación</Label>
+                    <select
+                      value={form.chartPercentGroupField ?? ""}
+                      onChange={(e) =>
+                        updateForm({ chartPercentGroupField: e.target.value ? e.target.value : undefined })
+                      }
+                      className="add-metric-select mt-1"
+                    >
+                      <option value="">Elegir columna…</option>
+                      {percentFieldColumnOptionsAdd.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {normalizeChartPercentBasis(form.chartPercentBasis) === "per_denominator_metric" && (
+                  <div className="space-y-2">
+                    <div>
+                      <Label className="add-metric-label">Columna denominador</Label>
+                      <select
+                        value={form.chartPercentDenominatorMetric ?? ""}
+                        onChange={(e) =>
+                          updateForm({
+                            chartPercentDenominatorMetric: e.target.value ? e.target.value : undefined,
+                          })
+                        }
+                        className="add-metric-select mt-1"
+                      >
+                        <option value="">Elegir…</option>
+                        {yAxisKeysForAddMetricUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                        {percentFieldColumnOptionsAdd
+                          .filter((k) => !yAxisKeysForAddMetricUi.includes(k))
+                          .map((k) => (
+                            <option key={`c2-${k}`} value={k}>
+                              {k}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="add-metric-label">Ámbito denominador</Label>
+                      <select
+                        value={form.chartPercentDenominatorScope ?? "analysis"}
+                        onChange={(e) =>
+                          updateForm({
+                            chartPercentDenominatorScope: e.target.value as "analysis" | "visible",
+                          })
+                        }
+                        className="add-metric-select mt-1"
+                      >
+                        <option value="analysis">Todo el análisis</option>
+                        <option value="visible">Solo visible</option>
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                      <input
+                        type="checkbox"
+                        checked={form.chartPercentDenominatorGrandTotal === true}
+                        onChange={(e) =>
+                          updateForm({ chartPercentDenominatorGrandTotal: e.target.checked ? true : undefined })
+                        }
+                        className="rounded"
+                      />
+                      Un solo total en el ámbito
+                    </label>
+                  </div>
+                )}
               </div>
             )}
           </div>

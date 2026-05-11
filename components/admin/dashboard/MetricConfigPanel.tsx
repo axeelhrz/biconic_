@@ -24,7 +24,11 @@ import {
 } from "@/lib/dashboard/gridLayout";
 import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
 import { CONTENT_ICON_POSITION_OPTIONS, type ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
-import type { ChartLabelDisplayMode, ChartPercentBasis } from "@/lib/dashboard/chartOptions";
+import {
+  normalizeChartPercentBasis,
+  type ChartLabelDisplayMode,
+  type ChartPercentBasis,
+} from "@/lib/dashboard/chartOptions";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import {
   ChartLabelOverridesSection,
@@ -175,6 +179,10 @@ export type MetricConfigWidget = {
   aggregationConfig?: AggregationConfigEdit;
   labelDisplayMode?: ChartLabelDisplayMode;
   chartPercentBasis?: ChartPercentBasis;
+  chartPercentGroupField?: string;
+  chartPercentDenominatorMetric?: string;
+  chartPercentDenominatorScope?: "analysis" | "visible";
+  chartPercentDenominatorGrandTotal?: boolean;
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
@@ -362,6 +370,12 @@ export function MetricConfigPanel({
     }
     return [...uniq].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [previewRows, widget.type, widget.color, chartType, agg, showLabelOverrides]);
+  const percentFieldColumnOptions = useMemo(() => {
+    if (!previewRows?.length) return [] as string[];
+    return Object.keys((previewRows[0] as Record<string, unknown>) ?? {}).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+  }, [previewRows]);
   const includePreviewAxisInColorKeys = useMemo(() => {
     if (chartType === "pie" || chartType === "doughnut") return true;
     return (
@@ -1434,17 +1448,98 @@ export function MetricConfigPanel({
               <div>
                 <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Base del porcentaje</Label>
                 <select
-                  value={widget.chartPercentBasis ?? "grand_total"}
+                  value={normalizeChartPercentBasis(widget.chartPercentBasis)}
                   onChange={(e) => onUpdate({ chartPercentBasis: e.target.value as ChartPercentBasis })}
                   className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
                 >
-                  <option value="grand_total">Total general (toda la torta)</option>
-                  <option value="per_category">Por categoría</option>
-                  <option value="per_series">Por serie</option>
+                  <option value="chart_visible_total">Total visible en el gráfico</option>
+                  <option value="analysis_total">Total general del análisis (sin Top N)</option>
+                  <option value="per_category_axis">Por categoría del eje (misma columna X)</option>
+                  <option value="per_series">Por serie (cada leyenda suma 100%)</option>
+                  <option value="per_dimension_group">Por dimensión / grupo (elegir abajo)</option>
+                  <option value="per_denominator_metric">Sobre otra métrica / columna</option>
                 </select>
                 <p className="mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">
-                  En circular/dona con una sola métrica, «Total general» y «Por categoría» suelen coincidir.
+                  En circular/dona con una sola métrica, «Total visible» y «Por eje X» suelen coincidir.
                 </p>
+                {normalizeChartPercentBasis(widget.chartPercentBasis) === "per_dimension_group" && (
+                  <div className="mt-2">
+                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Dimensión de agrupación</Label>
+                    <select
+                      value={widget.chartPercentGroupField ?? ""}
+                      onChange={(e) =>
+                        onUpdate({ chartPercentGroupField: e.target.value ? e.target.value : undefined })
+                      }
+                      className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                    >
+                      <option value="">Elegir columna…</option>
+                      {percentFieldColumnOptions.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {normalizeChartPercentBasis(widget.chartPercentBasis) === "per_denominator_metric" && (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columna denominador</Label>
+                      <select
+                        value={widget.chartPercentDenominatorMetric ?? ""}
+                        onChange={(e) =>
+                          onUpdate({
+                            chartPercentDenominatorMetric: e.target.value ? e.target.value : undefined,
+                          })
+                        }
+                        className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                      >
+                        <option value="">Elegir métrica o columna…</option>
+                        {yAxisKeysForUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                        {percentFieldColumnOptions
+                          .filter((k) => !yAxisKeysForUi.includes(k))
+                          .map((k) => (
+                            <option key={`col-${k}`} value={k}>
+                              {k}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Ámbito del denominador</Label>
+                      <select
+                        value={widget.chartPercentDenominatorScope ?? "analysis"}
+                        onChange={(e) =>
+                          onUpdate({
+                            chartPercentDenominatorScope: e.target.value as "analysis" | "visible",
+                          })
+                        }
+                        className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                      >
+                        <option value="analysis">Todo el análisis (sin Top N)</option>
+                        <option value="visible">Solo lo visible en el gráfico</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="pie-pct-denom-grand"
+                        checked={widget.chartPercentDenominatorGrandTotal === true}
+                        onChange={(e) =>
+                          onUpdate({ chartPercentDenominatorGrandTotal: e.target.checked ? true : undefined })
+                        }
+                        className="rounded"
+                      />
+                      <Label htmlFor="pie-pct-denom-grand" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                        Un solo total (suma la columna en todo el ámbito; si no, por categoría del eje X)
+                      </Label>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             {agg.pieLegendMode !== "integrated" && (
@@ -1518,17 +1613,98 @@ export function MetricConfigPanel({
               <div>
                 <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Base del porcentaje</Label>
                 <select
-                  value={widget.chartPercentBasis ?? "grand_total"}
+                  value={normalizeChartPercentBasis(widget.chartPercentBasis)}
                   onChange={(e) => onUpdate({ chartPercentBasis: e.target.value as ChartPercentBasis })}
                   className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
                 >
-                  <option value="grand_total">Total general (todo el gráfico)</option>
-                  <option value="per_category">Por categoría (misma columna del eje categoría)</option>
-                  <option value="per_series">Por serie (cada leyenda respecto a su total)</option>
+                  <option value="chart_visible_total">Total visible en el gráfico (p. ej. Top 10 = 100%)</option>
+                  <option value="analysis_total">Total general del análisis (respuesta completa, sin Top N)</option>
+                  <option value="per_category_axis">Por categoría del eje (suma en cada columna del eje X)</option>
+                  <option value="per_series">Por serie (cada métrica/serie suma 100%)</option>
+                  <option value="per_dimension_group">Por dimensión / grupo (elegir columna abajo)</option>
+                  <option value="per_denominator_metric">Sobre otra métrica / columna</option>
                 </select>
                 <p className="mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">
-                  En combo con métricas muy distintas, «Total general» puede ser poco interpretable; probá «Por serie».
+                  Con Top N, «Total visible» y «Total del análisis» marcan la diferencia. En combo con métricas muy distintas, probá «Por serie».
                 </p>
+                {normalizeChartPercentBasis(widget.chartPercentBasis) === "per_dimension_group" && (
+                  <div className="mt-2">
+                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Dimensión de agrupación</Label>
+                    <select
+                      value={widget.chartPercentGroupField ?? ""}
+                      onChange={(e) =>
+                        onUpdate({ chartPercentGroupField: e.target.value ? e.target.value : undefined })
+                      }
+                      className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                    >
+                      <option value="">Elegir columna…</option>
+                      {percentFieldColumnOptions.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {normalizeChartPercentBasis(widget.chartPercentBasis) === "per_denominator_metric" && (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columna denominador</Label>
+                      <select
+                        value={widget.chartPercentDenominatorMetric ?? ""}
+                        onChange={(e) =>
+                          onUpdate({
+                            chartPercentDenominatorMetric: e.target.value ? e.target.value : undefined,
+                          })
+                        }
+                        className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                      >
+                        <option value="">Elegir métrica o columna…</option>
+                        {yAxisKeysForUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                        {percentFieldColumnOptions
+                          .filter((k) => !yAxisKeysForUi.includes(k))
+                          .map((k) => (
+                            <option key={`col-${k}`} value={k}>
+                              {k}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Ámbito del denominador</Label>
+                      <select
+                        value={widget.chartPercentDenominatorScope ?? "analysis"}
+                        onChange={(e) =>
+                          onUpdate({
+                            chartPercentDenominatorScope: e.target.value as "analysis" | "visible",
+                          })
+                        }
+                        className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                      >
+                        <option value="analysis">Todo el análisis (sin Top N)</option>
+                        <option value="visible">Solo lo visible en el gráfico</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="cart-pct-denom-grand"
+                        checked={widget.chartPercentDenominatorGrandTotal === true}
+                        onChange={(e) =>
+                          onUpdate({ chartPercentDenominatorGrandTotal: e.target.checked ? true : undefined })
+                        }
+                        className="rounded"
+                      />
+                      <Label htmlFor="cart-pct-denom-grand" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                        Un solo total (suma la columna en todo el ámbito; si no, por categoría del eje X)
+                      </Label>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

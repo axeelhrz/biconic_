@@ -19,6 +19,8 @@ function aggregationDateParseOpts(agg?: { dateSlashOrder?: string }): ParseDateL
 
 export type ChartConfig = {
   labels: string[];
+  /** Valores crudos del eje categoría (misma longitud que `labels`), para % sobre análisis / Top N. */
+  xRawCategoryKeys?: string[];
   datasets: Array<{
     label: string;
     data: number[];
@@ -136,7 +138,7 @@ function matchResultKey(candidate: string, resultKeys: string[]): string | null 
 /**
  * Convierte una entrada de chartYAxes (alias, metric_N, etc.) a la clave presente en las filas.
  */
-function resolveChartYAxisEntryToResultKey(
+export function resolveChartYAxisEntryToResultKey(
   trimmed: string,
   metrics: AggMetricLike[] | undefined,
   resultKeys: string[]
@@ -352,15 +354,25 @@ function sliceRankingWithPinnedX(
   return { rows: [...top, ...extras], rankByXValue };
 }
 
+export type GetProcessedRowsForChartOptions = {
+  /**
+   * Si es false, ordena por la métrica de ranking pero no aplica Top N (para totales de análisis).
+   * Por defecto true (misma vista que el gráfico).
+   */
+  applyRankingSlice?: boolean;
+};
+
 /**
  * Aplica el mismo orden y ranking que buildChartConfig y devuelve las filas procesadas.
  * Usar para widgets tipo "table" para que la tabla muestre el mismo orden y Top N que los gráficos.
  */
 export function getProcessedRowsForChart(
   dataArray: Record<string, unknown>[],
-  widget: BuildChartConfigWidget
+  widget: BuildChartConfigWidget,
+  options?: GetProcessedRowsForChartOptions
 ): Record<string, unknown>[] {
   if (!Array.isArray(dataArray) || dataArray.length === 0) return [];
+  const applyRankingSlice = options?.applyRankingSlice !== false;
   const agg = widget.aggregationConfig;
   const dateParseOpts = aggregationDateParseOpts(agg);
   const axis = resolveWidgetAxisKeys(dataArray, widget);
@@ -374,15 +386,26 @@ export function getProcessedRowsForChart(
   if (shouldApplyRanking) {
     const rKey = resolveRankingMetricKey(agg, resultKeys, yKeys);
     if (rKey) {
-      const sliced = sliceRankingWithPinnedX(
-        rows,
-        xKey,
-        rKey,
-        agg!.chartRankingTop as number,
-        agg?.chartRankingDirection,
-        agg?.chartRankingPinnedXValues
-      );
-      rows = sliced.rows;
+      if (!applyRankingSlice) {
+        rows.sort((a, b) =>
+          compareRowsByRankingMetric(
+            a as Record<string, unknown>,
+            b as Record<string, unknown>,
+            rKey,
+            agg?.chartRankingDirection
+          )
+        );
+      } else {
+        const sliced = sliceRankingWithPinnedX(
+          rows,
+          xKey,
+          rKey,
+          agg!.chartRankingTop as number,
+          agg?.chartRankingDirection,
+          agg?.chartRankingPinnedXValues
+        );
+        rows = sliced.rows;
+      }
     }
   } else if (
     !shouldApplyRanking &&
@@ -496,10 +519,16 @@ function resolveChartLineBorderWidth(agg: BuildChartConfigWidget["aggregationCon
  * Incluye ordenación (chartSortDirection, chartSortBy, chartAxisOrder) y ranking (chartRankingEnabled)
  * para que editor y viewer muestren exactamente los mismos datos en el mismo orden.
  */
+export type BuildChartConfigOptions = {
+  /** Si true, no aplica Top N; útil para totales de porcentaje sobre todo el análisis. */
+  skipRanking?: boolean;
+};
+
 export function buildChartConfig(
   dataArray: Record<string, unknown>[],
   widget: BuildChartConfigWidget,
-  accentColor: string = ""
+  accentColor: string = "",
+  buildOptions?: BuildChartConfigOptions
 ): ChartConfig | undefined {
   if (!Array.isArray(dataArray) || dataArray.length === 0) return undefined;
   const agg = widget.aggregationConfig;
@@ -531,7 +560,7 @@ export function buildChartConfig(
     const kpiLegend =
       typeof dsKpi?.[yKey] === "string" && dsKpi[yKey]!.trim() !== "" ? dsKpi[yKey]!.trim() : kpiDefaultLabel;
     const sum = dataArray.reduce((acc, row) => acc + Number((row as Record<string, unknown>)[yKey] ?? 0), 0);
-    return { labels: ["Total"], datasets: [{ label: kpiLegend, data: [sum] }] };
+    return { labels: ["Total"], xRawCategoryKeys: [""], datasets: [{ label: kpiLegend, data: [sum] }] };
   }
 
   const axis = resolveWidgetAxisKeys(dataArray, widget);
@@ -646,17 +675,28 @@ export function buildChartConfig(
   if (shouldApplyRanking) {
     const rKey = resolveRankingMetricKey(agg, resultKeys, yKeys);
     if (rKey) {
-      const sliced = sliceRankingWithPinnedX(
-        rows,
-        xKey,
-        rKey,
-        agg!.chartRankingTop as number,
-        agg?.chartRankingDirection,
-        agg?.chartRankingPinnedXValues
-      );
-      rows = sliced.rows;
-      if (agg?.chartRankingShowRankInLabel !== false) {
-        rankByXValue = sliced.rankByXValue;
+      if (buildOptions?.skipRanking) {
+        rows.sort((a, b) =>
+          compareRowsByRankingMetric(
+            a as Record<string, unknown>,
+            b as Record<string, unknown>,
+            rKey,
+            agg?.chartRankingDirection
+          )
+        );
+      } else {
+        const sliced = sliceRankingWithPinnedX(
+          rows,
+          xKey,
+          rKey,
+          agg!.chartRankingTop as number,
+          agg?.chartRankingDirection,
+          agg?.chartRankingPinnedXValues
+        );
+        rows = sliced.rows;
+        if (agg?.chartRankingShowRankInLabel !== false) {
+          rankByXValue = sliced.rankByXValue;
+        }
       }
     }
   } else if (
@@ -779,6 +819,7 @@ export function buildChartConfig(
       const secondaryLabel = datasetDisplayLabel(secondaryMetricKey);
       return {
         labels: uniqueX.map((value) => formatXLabel(value)),
+        xRawCategoryKeys: uniqueX.map((xv) => String(xv ?? "")),
         datasets: [
           ...segmentDatasets,
           {
@@ -796,12 +837,14 @@ export function buildChartConfig(
     }
     return {
       labels: uniqueX.map((value) => formatXLabel(value)),
+      xRawCategoryKeys: uniqueX.map((xv) => String(xv ?? "")),
       datasets: segmentDatasets,
     };
   }
 
   if (isPieOrDoughnut) {
     const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
+    const xRawCategoryKeys = rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? ""));
     const firstYKey = yKeys[0] || resultKeys.find((k) => k !== xKey) || resultKeys[0];
     const sliceBw = resolvePieSliceBorderWidth(agg);
     const bgColors = rows.map((r, i) =>
@@ -809,6 +852,7 @@ export function buildChartConfig(
     );
     return {
       labels,
+      xRawCategoryKeys,
       datasets: [
         {
           label: datasetDisplayLabel(firstYKey!),
@@ -823,12 +867,14 @@ export function buildChartConfig(
 
   if (resolvedType === "combo" && yKeys.length >= 2) {
     const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
+    const xRawCategoryKeys = rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? ""));
     const y0 = yKeys[0]!;
     const y1 = yKeys[1]!;
     const label0 = datasetDisplayLabel(y0);
     const label1 = datasetDisplayLabel(y1);
     return {
       labels,
+      xRawCategoryKeys,
       datasets: [
         {
           label: label0,
@@ -855,6 +901,7 @@ export function buildChartConfig(
   }
 
   const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
+  const xRawCategoryKeys = rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? ""));
   const isBarOrHorizontalBar =
     resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "stackedColumn";
   const oneMetricManyCategories = isBarOrHorizontalBar && yKeys.length === 1 && labels.length > 0;
@@ -866,6 +913,7 @@ export function buildChartConfig(
     );
     return {
       labels,
+      xRawCategoryKeys,
       datasets: [
         {
           label: displayLabel,
@@ -880,6 +928,7 @@ export function buildChartConfig(
   }
   return {
     labels,
+    xRawCategoryKeys,
     datasets: yKeys.map((yKey, idx) => {
       const displayLabel = datasetDisplayLabel(yKey);
       const isLineLike = resolvedType === "line" || resolvedType === "area";

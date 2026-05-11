@@ -248,6 +248,10 @@ type StudioWidget = {
   excludeGlobalFilters?: boolean;
   labelDisplayMode?: ChartLabelDisplayMode;
   chartPercentBasis?: ChartPercentBasis;
+  chartPercentGroupField?: string;
+  chartPercentDenominatorMetric?: string;
+  chartPercentDenominatorScope?: "analysis" | "visible";
+  chartPercentDenominatorGrandTotal?: boolean;
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
@@ -1563,21 +1567,30 @@ export function AdminDashboardStudio({
           if (w.id !== selectedId) return w;
           const { imageConfig: patchImg, ...restPatch } = patch;
           const next: StudioWidget = { ...w, ...restPatch };
+          const percentLayoutPatch =
+            "chartPercentBasis" in patch ||
+            "chartPercentGroupField" in patch ||
+            "chartPercentDenominatorMetric" in patch ||
+            "chartPercentDenominatorScope" in patch ||
+            "chartPercentDenominatorGrandTotal" in patch;
           if (patch.aggregationConfig != null) {
             next.aggregationConfig = {
               ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
               ...patch.aggregationConfig,
             } as AggregationConfig;
+          }
+          if (patch.aggregationConfig != null || percentLayoutPatch) {
             const rows = w.rows;
+            const aggForBuild = (next.aggregationConfig ?? w.aggregationConfig) as BuildChartConfigWidget["aggregationConfig"];
             if (
               !nonChartStudioTypes.has(w.type) &&
               Array.isArray(rows) &&
               rows.length > 0 &&
-              next.aggregationConfig
+              aggForBuild
             ) {
               const widgetForBuild: BuildChartConfigWidget = {
                 type: w.type,
-                aggregationConfig: next.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
+                aggregationConfig: aggForBuild,
                 source: w.source,
                 color: (w as { color?: string }).color,
               };
@@ -2269,6 +2282,13 @@ export function AdminDashboardStudio({
                         ),
                         labelDisplayMode: (w as { labelDisplayMode?: ChartLabelDisplayMode }).labelDisplayMode,
                         chartPercentBasis: (w as { chartPercentBasis?: ChartPercentBasis }).chartPercentBasis,
+                        chartPercentGroupField: (w as { chartPercentGroupField?: string }).chartPercentGroupField,
+                        chartPercentDenominatorMetric: (w as { chartPercentDenominatorMetric?: string })
+                          .chartPercentDenominatorMetric,
+                        chartPercentDenominatorScope: (w as { chartPercentDenominatorScope?: "analysis" | "visible" })
+                          .chartPercentDenominatorScope,
+                        chartPercentDenominatorGrandTotal: (w as { chartPercentDenominatorGrandTotal?: boolean })
+                          .chartPercentDenominatorGrandTotal,
                         chartMetricStyles: (() => {
                           const current = (w as { chartMetricStyles?: (ChartStyleConfig | undefined)[] }).chartMetricStyles;
                           return Array.isArray(current) && current.length > 0 ? current : buildChartMetricStyles(w.aggregationConfig);
@@ -2348,6 +2368,10 @@ export function AdminDashboardStudio({
                   }) as AggregationConfigEdit,
                   labelDisplayMode: selectedWidgetForPanel.labelDisplayMode,
                   chartPercentBasis: selectedWidgetForPanel.chartPercentBasis,
+                  chartPercentGroupField: selectedWidgetForPanel.chartPercentGroupField,
+                  chartPercentDenominatorMetric: selectedWidgetForPanel.chartPercentDenominatorMetric,
+                  chartPercentDenominatorScope: selectedWidgetForPanel.chartPercentDenominatorScope,
+                  chartPercentDenominatorGrandTotal: selectedWidgetForPanel.chartPercentDenominatorGrandTotal,
                   color: selectedWidgetForPanel.color as string | undefined,
                   kpiSecondaryLabel: selectedWidgetForPanel.kpiSecondaryLabel,
                   kpiSecondaryValue: selectedWidgetForPanel.kpiSecondaryValue,
