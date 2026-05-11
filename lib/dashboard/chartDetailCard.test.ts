@@ -82,6 +82,31 @@ describe("buildDetailCardLineStrings", () => {
     expect(lines[1]).toMatch(/Participación:/);
     expect(lines[1]).toMatch(/%$/);
   });
+
+  it("applies valueScale M to currency row", () => {
+    const d = normalizeChartDetailCard({
+      lines: [
+        {
+          id: "1",
+          kind: "row",
+          label: "Ventas",
+          field: "sum_ventas",
+          valueFormat: "currency",
+          valueScale: "M",
+          decimals: 2,
+          currencySymbol: "$",
+        },
+      ],
+    })!;
+    const s = buildDetailCardLineStrings({
+      detail: d,
+      row: { sum_ventas: 42_500_000 },
+      allRows: [{ sum_ventas: 42_500_000 }],
+      widget,
+    })[0]!;
+    expect(s).toMatch(/Ventas:/);
+    expect(s).toMatch(/M/);
+  });
 });
 
 describe("resolveDetailCardRow", () => {

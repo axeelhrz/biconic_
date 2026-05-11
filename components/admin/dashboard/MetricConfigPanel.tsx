@@ -2467,6 +2467,7 @@ export function MetricConfigPanel({
                           label: "Etiqueta",
                           field: col,
                           valueFormat: "none",
+                          valueScale: "none",
                           decimals: 2,
                         },
                       ];
@@ -2601,11 +2602,13 @@ export function MetricConfigPanel({
                               <Label className="text-[10px] text-[var(--studio-fg-muted)]">Formato</Label>
                               <select
                                 value={line.valueFormat ?? "none"}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  const vf = e.target.value as "none" | "currency" | "percent";
                                   patchLine({
-                                    valueFormat: e.target.value as "none" | "currency" | "percent",
-                                  })
-                                }
+                                    valueFormat: vf,
+                                    ...(vf === "percent" ? { valueScale: undefined } : {}),
+                                  });
+                                }}
                                 className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
                               >
                                 <option value="none">Número</option>
@@ -2624,6 +2627,29 @@ export function MetricConfigPanel({
                                 className="mt-0.5 h-7 text-[11px]"
                               />
                             </div>
+                            {kind === "row" && line.valueFormat !== "percent" ? (
+                              <div className="col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Escala (K / M / B)</Label>
+                                <select
+                                  value={line.valueScale ?? "none"}
+                                  onChange={(e) =>
+                                    patchLine({
+                                      valueScale: e.target.value as "none" | "K" | "M" | "Bi" | "B",
+                                    })
+                                  }
+                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                                >
+                                  <option value="none">Ninguna</option>
+                                  <option value="K">Miles (K)</option>
+                                  <option value="M">Millones (M)</option>
+                                  <option value="Bi">Miles de millones (Bi)</option>
+                                  <option value="B">Billones (B)</option>
+                                </select>
+                                <p className="mt-0.5 text-[10px] text-[var(--studio-fg-muted)]">
+                                  Abrevia el número (p. ej. moneda con M) como en el formato por métrica del gráfico.
+                                </p>
+                              </div>
+                            ) : null}
                             <label className="col-span-2 flex cursor-pointer items-center gap-2">
                               <Checkbox
                                 checked={line.integerOnly === true}
