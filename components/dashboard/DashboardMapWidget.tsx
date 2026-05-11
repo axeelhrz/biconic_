@@ -15,6 +15,12 @@ import {
 import { findArProvinceGadmIdForLatLon } from "@/lib/geo/pointInProvinceGeoJson";
 import type { MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
 import { resolveChoroplethVisual, resolveMapVisualStyle, resolveMarkerVisual } from "@/lib/dashboard/mapVisualScale";
+import {
+  buildDetailCardLineStringsFromRowMap,
+  buildMapDetailPopupHtml,
+  isChartDetailCardActive,
+} from "@/lib/dashboard/chartDetailCard";
+import type { BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 
 export type MapAggregationConfig = MapVisualConfigInput & {
   chartXAxis?: string;
@@ -22,6 +28,9 @@ export type MapAggregationConfig = MapVisualConfigInput & {
   dimension?: string;
   dimensions?: string[];
   mapDefaultCountry?: string;
+  chartDetailCard?: unknown;
+  metrics?: Array<{ alias?: string; func?: string; field?: string }>;
+  enabled?: boolean;
 };
 
 type DashboardMapWidgetProps = {
@@ -106,6 +115,50 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function MapMarkerDetailBody({
+  marker,
+  sumRows,
+  aggregationConfig,
+  valueKey,
+}: {
+  marker: { label: string; source: string; value: number | null; detailRow: Record<string, unknown> };
+  sumRows: Record<string, unknown>[];
+  aggregationConfig?: MapAggregationConfig;
+  valueKey: string;
+}) {
+  const widget: BuildChartConfigWidget = {
+    type: "map",
+    aggregationConfig: aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
+  };
+  const place = marker.label || `(${marker.detailRow.__geo_label ?? "—"})`;
+  const parsed = buildDetailCardLineStringsFromRowMap({
+    detailRaw: aggregationConfig?.chartDetailCard,
+    row: { ...marker.detailRow, __category: place },
+    sumRows,
+    widget,
+  });
+  if (parsed?.lines.length) {
+    return (
+      <div className="space-y-1 text-xs">
+        <strong>{parsed.title ?? place}</strong>
+        {parsed.description ? <p className="text-[11px] opacity-90">{parsed.description}</p> : null}
+        {parsed.lines.map((line, i) => (
+          <div key={i}>{line}</div>
+        ))}
+      </div>
+    );
+  }
+  const value = marker.value != null ? String(marker.value) : "";
+  const popupContent = [place, value].filter(Boolean).join(" — ");
+  return (
+    <div className="space-y-1 text-xs">
+      <div>{popupContent}</div>
+      {valueKey ? <div>Valor: {value}</div> : null}
+      <div>Fuente: {marker.source || "native"}</div>
+    </div>
+  );
+}
+
 export function DashboardMapWidget({
   rows,
   aggregationConfig,
@@ -138,13 +191,21 @@ export function DashboardMapWidget({
     };
   }, [argentinaMode]);
 
-  const { markers, valueKey, unresolvedCount, provinceSums, provinceMatchRows } = useMemo(() => {
+  const { markers, valueKey, unresolvedCount, provinceSums, provinceMetricBags, provinceMatchRows } = useMemo(() => {
     if (!Array.isArray(rows) || rows.length === 0) {
       return {
-        markers: [] as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>,
+        markers: [] as Array<{
+          lat: number;
+          lon: number;
+          value: number | null;
+          label: string;
+          source: string;
+          detailRow: Record<string, unknown>;
+        }>,
         valueKey: "",
         unresolvedCount: 0,
         provinceSums: new Map<ArProvinceGadmId, number>(),
+        provinceMetricBags: new Map<ArProvinceGadmId, Record<string, number>>(),
         provinceMatchRows: 0,
       };
     }
@@ -182,15 +243,41 @@ export function DashboardMapWidget({
         ? yAxes[0]
         : (keys.find((k) => typeof first[k] === "number" && k !== latColRes && k !== lonColRes) ?? "");
 
+    const valueKeysForAgg =
+      Array.isArray(yAxes) && yAxes.length > 0
+        ? yAxes.map(String).filter((k) => k && keys.includes(k))
+        : valueKeyRes
+          ? [valueKeyRes]
+          : [];
+
     const provinceSumsRes = new Map<ArProvinceGadmId, number>();
+    const provinceMetricBagsRes = new Map<ArProvinceGadmId, Record<string, number>>();
     let provinceMatchRowsRes = 0;
 
     const useProvincePolygons =
       argentinaMode && arGeo && !arGeoError && Array.isArray(arGeo.features) && arGeo.features.length > 0;
 
-    const addToProvince = (pid: ArProvinceGadmId, valueCandidate: number) => {
+    const rowHasMapMetric = (r: Record<string, unknown>) =>
+      valueKeysForAgg.some((k) => Number.isFinite(Number(r[k]))) ||
+      (!!valueKeyRes && Number.isFinite(Number(r[valueKeyRes])));
+
+    const addProvinceMetrics = (pid: ArProvinceGadmId, r: Record<string, unknown>) => {
       provinceMatchRowsRes += 1;
-      provinceSumsRes.set(pid, (provinceSumsRes.get(pid) ?? 0) + valueCandidate);
+      let bag = provinceMetricBagsRes.get(pid);
+      if (!bag) {
+        bag = {};
+        provinceMetricBagsRes.set(pid, bag);
+      }
+      for (const k of valueKeysForAgg) {
+        const n = Number(r[k]);
+        if (Number.isFinite(n)) bag[k] = (bag[k] ?? 0) + n;
+      }
+      if (valueKeyRes) {
+        const n = Number(r[valueKeyRes]);
+        if (Number.isFinite(n)) {
+          provinceSumsRes.set(pid, (provinceSumsRes.get(pid) ?? 0) + n);
+        }
+      }
     };
 
     for (const row of rows.slice(0, 500)) {
@@ -198,9 +285,8 @@ export function DashboardMapWidget({
       const rawLabel = labelKeyRes ? r[labelKeyRes] : "";
       const fromDim = rawLabel != null ? String(rawLabel) : "";
       const fromGeo = r.__geo_label != null ? String(r.__geo_label) : "";
-      const valueCandidate = valueKeyRes ? Number(r[valueKeyRes]) : NaN;
-      if (!Number.isFinite(valueCandidate)) continue;
 
+      let pid: ArProvinceGadmId | null = null;
       let attributed = false;
       if (latColRes && lonColRes) {
         const lat = Number(r[latColRes]);
@@ -208,34 +294,47 @@ export function DashboardMapWidget({
         if (useProvincePolygons && Number.isFinite(lat) && Number.isFinite(lon) && isPointInArgentinaBBox(lat, lon)) {
           const pidPt = findArProvinceGadmIdForLatLon(arGeo, lat, lon);
           if (pidPt) {
-            addToProvince(pidPt, valueCandidate);
+            pid = pidPt;
             attributed = true;
           }
         }
       }
-
       if (!attributed) {
-        const pid = resolveArProvinceGadmId(fromDim) ?? resolveArProvinceGadmId(fromGeo);
-        if (pid) {
-          addToProvince(pid, valueCandidate);
-          attributed = true;
-        }
+        pid = resolveArProvinceGadmId(fromDim) ?? resolveArProvinceGadmId(fromGeo);
       }
+      if (!pid) continue;
+      if (!rowHasMapMetric(r)) continue;
+      addProvinceMetrics(pid, r);
     }
 
     if (!latColRes || !lonColRes) {
       const unresolved = rows.length;
       return {
-        markers: [] as Array<{ lat: number; lon: number; value: number | null; label: string; source: string }>,
+        markers: [] as Array<{
+          lat: number;
+          lon: number;
+          value: number | null;
+          label: string;
+          source: string;
+          detailRow: Record<string, unknown>;
+        }>,
         valueKey: valueKeyRes ?? "",
         unresolvedCount: unresolved,
         provinceSums: provinceSumsRes,
+        provinceMetricBags: provinceMetricBagsRes,
         provinceMatchRows: provinceMatchRowsRes,
       };
     }
 
     /** En Argentina con GeoJSON cargado, no se usan puntos: el valor va al polígono de la provincia. */
-    const markersRes: Array<{ lat: number; lon: number; value: number | null; label: string; source: string }> = [];
+    const markersRes: Array<{
+      lat: number;
+      lon: number;
+      value: number | null;
+      label: string;
+      source: string;
+      detailRow: Record<string, unknown>;
+    }> = [];
     if (!useProvincePolygons) {
       for (const row of rows.slice(0, 500)) {
         const r = row as Record<string, unknown>;
@@ -252,6 +351,7 @@ export function DashboardMapWidget({
           value: Number.isFinite(valueCandidate) ? valueCandidate : null,
           label,
           source: sourceValue,
+          detailRow: { ...r },
         });
       }
     }
@@ -271,6 +371,7 @@ export function DashboardMapWidget({
       valueKey: valueKeyRes ?? "",
       unresolvedCount: unresolvedCountRes,
       provinceSums: provinceSumsRes,
+      provinceMetricBags: provinceMetricBagsRes,
       provinceMatchRows: provinceMatchRowsRes,
     };
   }, [rows, aggregationConfig, arGeo, arGeoError, argentinaMode]);
@@ -285,6 +386,19 @@ export function DashboardMapWidget({
   const chMax = choroplethNumeric.length > 0 ? Math.max(...choroplethNumeric) : null;
 
   const points = markers.map((m) => [m.lat, m.lon] as [number, number]);
+
+  const mapWidgetForDetail = useMemo(
+    (): BuildChartConfigWidget => ({
+      type: "map",
+      aggregationConfig: aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
+    }),
+    [aggregationConfig]
+  );
+
+  const provinceSumRows = useMemo(
+    () => [...provinceMetricBags.values()].map((b) => ({ ...b })),
+    [provinceMetricBags]
+  );
 
   if (argentinaMode && !arGeoError && !arGeo) {
     return (
@@ -349,6 +463,22 @@ export function DashboardMapWidget({
               const name = props?.name ?? id ?? "Provincia";
               const v = id ? provinceSums.get(id) : undefined;
               const valueStr = v != null && Number.isFinite(v) ? String(v) : "Sin dato";
+              const bag = id ? provinceMetricBags.get(id) : undefined;
+              const detailRow = bag && Object.keys(bag).length > 0 ? { ...bag } : null;
+              const custom =
+                isChartDetailCardActive(aggregationConfig?.chartDetailCard) && detailRow
+                  ? buildMapDetailPopupHtml({
+                      placeTitle: name,
+                      row: detailRow,
+                      sumRows: provinceSumRows,
+                      widget: mapWidgetForDetail,
+                      detailRaw: aggregationConfig?.chartDetailCard,
+                    })
+                  : null;
+              if (custom) {
+                layer.bindPopup(custom);
+                return;
+              }
               const safeName = escapeHtml(name);
               const safeKey = escapeHtml(valueKey);
               const safeVal = escapeHtml(valueStr);
@@ -419,9 +549,6 @@ export function DashboardMapWidget({
         <TileLayer attribution={attribution} url={tileUrl} />
         <FitBounds points={points} />
         {markers.map((marker, i) => {
-          const value = marker.value != null ? String(marker.value) : "";
-          const popupLabel = marker.label || `(${marker.lat.toFixed(4)}, ${marker.lon.toFixed(4)})`;
-          const popupContent = [popupLabel, value].filter(Boolean).join(" — ");
           const mv = resolveMarkerVisual(marker.value, minValue, maxValue, mapVisual);
           return (
             <CircleMarker
@@ -437,11 +564,12 @@ export function DashboardMapWidget({
               }}
             >
               <Popup>
-                <div className="space-y-1 text-xs">
-                  <div>{popupContent}</div>
-                  {valueKey ? <div>Valor: {value}</div> : null}
-                  <div>Fuente: {marker.source || "native"}</div>
-                </div>
+                <MapMarkerDetailBody
+                  marker={marker}
+                  sumRows={rows.slice(0, 500) as Record<string, unknown>[]}
+                  aggregationConfig={aggregationConfig}
+                  valueKey={valueKey}
+                />
               </Popup>
             </CircleMarker>
           );

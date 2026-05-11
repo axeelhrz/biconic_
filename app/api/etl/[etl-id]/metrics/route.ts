@@ -284,6 +284,7 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
     pieIntegratedNameOrder: cfg.pieIntegratedNameOrder,
     pieSliceBorderWidth: cfg.pieSliceBorderWidth,
     chartMetricFormats: cfg.chartMetricFormats,
+    chartDetailCard: cfg.chartDetailCard,
     chartComboSyncAxes: cfg.chartComboSyncAxes,
     chartGridXDisplay: cfg.chartGridXDisplay,
     chartGridYDisplay: cfg.chartGridYDisplay,

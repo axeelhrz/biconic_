@@ -75,6 +75,7 @@ import {
   type MetricConfigWidget,
   type AggregationConfigEdit,
 } from "./MetricConfigPanel";
+import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
 
 type SavedMetric = SavedMetricForm;
 
@@ -227,6 +228,7 @@ type AggregationConfig = {
   mapDefaultCountry?: string;
   geoComponentOverrides?: { country?: string; province?: string; city?: string };
   geoOverridesByXLabel?: Record<string, { country?: string; province?: string; city?: string }>;
+  chartDetailCard?: ChartDetailCardConfig;
 };
 type StudioWidget = {
   id: string;

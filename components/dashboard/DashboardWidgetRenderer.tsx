@@ -47,6 +47,7 @@ import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaul
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { createChartPercentDenominatorResolver } from "@/lib/dashboard/chartPercentEngine";
 import type { ChartPercentWidgetLike } from "@/lib/dashboard/chartPercentEngine";
+import { buildChartTooltipDetailParts, isChartDetailCardActive } from "@/lib/dashboard/chartDetailCard";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
@@ -687,26 +688,85 @@ export function DashboardWidgetRenderer({
           ...(typeof denom === "number" && Number.isFinite(denom) ? { percentDenominator: denom } : {}),
         });
       };
+      const pieDetailRaw = (agg as { chartDetailCard?: unknown } | undefined)?.chartDetailCard;
+      const pieDetailActive =
+        isChartDetailCardActive(pieDetailRaw) &&
+        chartConfig &&
+        Array.isArray(widget.rows) &&
+        widget.rows.length > 0;
+      const pieBaseTooltipCb =
+        ((optionsBasePlugins.tooltip as { callbacks?: Record<string, unknown> } | undefined)?.callbacks ??
+          {}) as Record<string, unknown>;
+      const pieCallbacks: Record<string, unknown> = {
+        ...pieBaseTooltipCb,
+        label: (ctx: {
+          label?: string;
+          parsed: number;
+          chart?: unknown;
+          dataIndex?: number;
+          datasetIndex?: number;
+        }) => {
+          const fullLabel = String(ctx.label ?? "");
+          const valueStr = pieTooltipFormatter(ctx.parsed, {
+            chart: ctx.chart as { data?: { datasets?: Array<{ data?: unknown[] }> } },
+            dataIndex: ctx.dataIndex,
+            datasetIndex: ctx.datasetIndex,
+          });
+          return fullLabel ? `${fullLabel}: ${valueStr}` : valueStr;
+        },
+      };
+      if (pieDetailActive) {
+        const prevPieAfterBody = pieCallbacks.afterBody as ((items: unknown[]) => string | string[] | void) | undefined;
+        const prevPieTitle = pieCallbacks.title as ((items: unknown[]) => string | void) | undefined;
+        pieCallbacks.afterBody = (items: unknown[]) => {
+          const arr = Array.isArray(items) ? items : [];
+          const first = arr[0] as { dataIndex?: number; datasetIndex?: number; label?: unknown } | undefined;
+          const di = typeof first?.dataIndex === "number" ? first.dataIndex : 0;
+          const dsi = typeof first?.datasetIndex === "number" ? first.datasetIndex : 0;
+          const categoryLabel = formatTemporalLabel(first?.label ?? chartConfig?.labels?.[di] ?? "");
+          const seriesLabel = String(chartConfig?.datasets?.[dsi]?.label ?? "");
+          const parts = buildChartTooltipDetailParts({
+            detailRaw: pieDetailRaw,
+            rows: widget.rows as Record<string, unknown>[],
+            widget: widget as unknown as BuildChartConfigWidget,
+            chartConfig,
+            dataIndex: di,
+            datasetIndex: dsi,
+            chartType,
+            categoryLabel,
+            seriesLabel,
+          });
+          const extra = parts?.afterBody?.length ? parts.afterBody : [];
+          const prev = prevPieAfterBody ? prevPieAfterBody(items) : undefined;
+          const prevArr = Array.isArray(prev) ? prev : prev != null && prev !== "" ? [String(prev)] : [];
+          return [...prevArr, ...extra];
+        };
+        pieCallbacks.title = (items: unknown[]) => {
+          const arr = Array.isArray(items) ? items : [];
+          const first = arr[0] as { dataIndex?: number; datasetIndex?: number; label?: unknown } | undefined;
+          const di = typeof first?.dataIndex === "number" ? first.dataIndex : 0;
+          const dsi = typeof first?.datasetIndex === "number" ? first.datasetIndex : 0;
+          const categoryLabel = formatTemporalLabel(first?.label ?? chartConfig?.labels?.[di] ?? "");
+          const seriesLabel = String(chartConfig?.datasets?.[dsi]?.label ?? "");
+          const parts = buildChartTooltipDetailParts({
+            detailRaw: pieDetailRaw,
+            rows: widget.rows as Record<string, unknown>[],
+            widget: widget as unknown as BuildChartConfigWidget,
+            chartConfig,
+            dataIndex: di,
+            datasetIndex: dsi,
+            chartType,
+            categoryLabel,
+            seriesLabel,
+          });
+          if (parts?.title) return parts.title;
+          if (prevPieTitle) return String(prevPieTitle(items) ?? "");
+          return categoryLabel;
+        };
+      }
       const tooltipPlugin = {
         ...(optionsBasePlugins.tooltip as Record<string, unknown> | undefined),
-        callbacks: {
-          ...((optionsBasePlugins.tooltip as { callbacks?: Record<string, unknown> } | undefined)?.callbacks ?? {}),
-          label: (ctx: {
-            label?: string;
-            parsed: number;
-            chart?: unknown;
-            dataIndex?: number;
-            datasetIndex?: number;
-          }) => {
-            const fullLabel = String(ctx.label ?? "");
-            const valueStr = pieTooltipFormatter(ctx.parsed, {
-              chart: ctx.chart as { data?: { datasets?: Array<{ data?: unknown[] }> } },
-              dataIndex: ctx.dataIndex,
-              datasetIndex: ctx.datasetIndex,
-            });
-            return fullLabel ? `${fullLabel}: ${valueStr}` : valueStr;
-          },
-        },
+        callbacks: pieCallbacks,
       };
       const nameOrder = agg?.pieIntegratedNameOrder === "below" ? "below" : "above";
       const pieIntegratedFormatter =
@@ -1045,7 +1105,7 @@ export function DashboardWidgetRenderer({
             }
           : undefined;
 
-      const tooltipCallbacks =
+      const tooltipCallbacksBase =
         tooltipTitleCallback || tooltipLabelCallback
           ? {
               ...baseOptionsTooltipCallbacks,
@@ -1053,6 +1113,67 @@ export function DashboardWidgetRenderer({
               ...(tooltipLabelCallback ? { label: tooltipLabelCallback } : {}),
             }
           : undefined;
+      const detailCardRaw = (agg as { chartDetailCard?: unknown } | undefined)?.chartDetailCard;
+      const detailCardTooltipActive =
+        isChartDetailCardActive(detailCardRaw) &&
+        chartConfig &&
+        Array.isArray(widget.rows) &&
+        widget.rows.length > 0;
+      const tooltipCallbacks = (() => {
+        if (!detailCardTooltipActive) return tooltipCallbacksBase;
+        const baseCb: Record<string, unknown> = {
+          ...baseOptionsTooltipCallbacks,
+          ...(tooltipCallbacksBase ?? {}),
+        };
+        const prevAfterBody = baseCb.afterBody as ((items: unknown[]) => string | string[] | void) | undefined;
+        const prevTitle = baseCb.title as ((items: unknown[]) => string | void) | undefined;
+        baseCb.afterBody = (items: unknown[]) => {
+          const arr = Array.isArray(items) ? items : [];
+          const first = arr[0] as { dataIndex?: number; datasetIndex?: number; label?: unknown } | undefined;
+          const di = typeof first?.dataIndex === "number" ? first.dataIndex : 0;
+          const dsi = typeof first?.datasetIndex === "number" ? first.datasetIndex : 0;
+          const categoryLabel = formatTemporalLabel(first?.label ?? "");
+          const seriesLabel = String(chartConfig?.datasets?.[dsi]?.label ?? "");
+          const parts = buildChartTooltipDetailParts({
+            detailRaw: detailCardRaw,
+            rows: widget.rows as Record<string, unknown>[],
+            widget: widget as unknown as BuildChartConfigWidget,
+            chartConfig,
+            dataIndex: di,
+            datasetIndex: dsi,
+            chartType,
+            categoryLabel,
+            seriesLabel,
+          });
+          const extra = parts?.afterBody?.length ? parts.afterBody : [];
+          const prev = prevAfterBody ? prevAfterBody(items) : undefined;
+          const prevArr = Array.isArray(prev) ? prev : prev != null && prev !== "" ? [String(prev)] : [];
+          return [...prevArr, ...extra];
+        };
+        baseCb.title = (items: unknown[]) => {
+          const arr = Array.isArray(items) ? items : [];
+          const first = arr[0] as { dataIndex?: number; datasetIndex?: number; label?: unknown } | undefined;
+          const di = typeof first?.dataIndex === "number" ? first.dataIndex : 0;
+          const dsi = typeof first?.datasetIndex === "number" ? first.datasetIndex : 0;
+          const categoryLabel = formatTemporalLabel(first?.label ?? "");
+          const seriesLabel = String(chartConfig?.datasets?.[dsi]?.label ?? "");
+          const parts = buildChartTooltipDetailParts({
+            detailRaw: detailCardRaw,
+            rows: widget.rows as Record<string, unknown>[],
+            widget: widget as unknown as BuildChartConfigWidget,
+            chartConfig,
+            dataIndex: di,
+            datasetIndex: dsi,
+            chartType,
+            categoryLabel,
+            seriesLabel,
+          });
+          if (parts?.title) return parts.title;
+          if (prevTitle) return String(prevTitle(items) ?? "");
+          return categoryLabel;
+        };
+        return baseCb;
+      })();
       const builtScales = (built.scales as Record<string, unknown> | undefined) ?? {};
       const categoryScaleKey = type === "horizontalBar" ? "y" : "x";
       const valueScaleKey = type === "horizontalBar" ? "x" : "y";
@@ -1201,10 +1322,10 @@ export function DashboardWidgetRenderer({
               ? { color: DATALABEL_COLOR_DARK }
               : {}),
         },
-        ...(tooltipCallbacks && {
+        ...((tooltipCallbacks ?? tooltipCallbacksBase) && {
           tooltip: {
             ...(optionsBase.plugins as { tooltip?: Record<string, unknown> }).tooltip,
-            callbacks: tooltipCallbacks,
+            callbacks: (tooltipCallbacks ?? tooltipCallbacksBase) as Record<string, unknown>,
           },
         }),
       };

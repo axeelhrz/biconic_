@@ -25,6 +25,7 @@ import {
   resolveDarkChartTheme,
 } from "@/lib/dashboard/widgetRenderParity";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
 import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2 } from "lucide-react";
 import {
   exportDashboardExcel,
@@ -399,6 +400,7 @@ type AggregationConfig = {
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
   chartRankingPinnedXValues?: string[];
+  chartDetailCard?: ChartDetailCardConfig;
 };
 
 export type Widget = DashboardWidgetRendererWidget & {

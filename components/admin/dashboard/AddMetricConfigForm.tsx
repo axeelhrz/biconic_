@@ -20,6 +20,7 @@ import {
   ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS,
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
 import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
+import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
 
 export type { DimensionDefaultFilterEdit };
 
@@ -143,6 +144,8 @@ export type AggregationConfigEdit = {
   geoComponentOverrides?: GeoComponentOverrides;
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   tableColumnLabelOverrides?: Record<string, string>;
+  /** Tooltip / tarjeta de detalle (gráfico y mapa). */
+  chartDetailCard?: ChartDetailCardConfig;
 };
 
 export type AddMetricFormConfig = {
@@ -246,6 +249,7 @@ export type SavedMetricAggregationConfig = {
   };
   geoComponentOverrides?: GeoComponentOverrides;
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
+  chartDetailCard?: ChartDetailCardConfig;
   dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string };
   interCrossFilter?: boolean;
   interCrossFilterFields?: string[];
@@ -420,6 +424,7 @@ export function AddMetricConfigForm({
         chartLabelOverrides: cfg.chartLabelOverrides,
         chartDatasetLabelOverrides: (cfg as { chartDatasetLabelOverrides?: Record<string, string> }).chartDatasetLabelOverrides,
         chartMetricFormats: cfg.chartMetricFormats,
+        chartDetailCard: (cfg as { chartDetailCard?: ChartDetailCardConfig }).chartDetailCard,
         chartComboSyncAxes: (cfg as { chartComboSyncAxes?: boolean }).chartComboSyncAxes,
         chartStackBySeries: (cfg as { chartStackBySeries?: boolean }).chartStackBySeries,
         chartAxisXVisible: (cfg as { chartAxisXVisible?: boolean }).chartAxisXVisible,
