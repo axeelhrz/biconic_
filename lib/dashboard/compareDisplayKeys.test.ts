@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CompareSpec } from "@/lib/dashboard/compareSpec";
-import { getCompareColumnKeys, readComparePresentation, normalizeComparePlacements, placementEnabled } from "@/lib/dashboard/compareDisplayKeys";
+import { getCompareColumnKeys, readComparePresentation, normalizeComparePlacements, placementEnabled, compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
 
 describe("getCompareColumnKeys", () => {
   const row = {
@@ -42,6 +42,47 @@ describe("getCompareColumnKeys", () => {
     expect(v.reference).toBe(80);
     expect(v.delta).toBe(20);
     expect(v.deltaPct).toBe(25);
+  });
+});
+
+describe("compareNeedsTimeGroupedRows", () => {
+  it("temporal y cumulative requieren serie", () => {
+    expect(
+      compareNeedsTimeGroupedRows({
+        kind: "temporal",
+        mode: "calendar_prev_month",
+        timeColumn: "fecha",
+        granularity: "month",
+      })
+    ).toBe(true);
+    expect(
+      compareNeedsTimeGroupedRows({
+        kind: "cumulative",
+        mode: "ytd_running",
+        timeColumn: "fecha",
+        granularity: "month",
+      })
+    ).toBe(true);
+  });
+  it("none y fixed no", () => {
+    expect(compareNeedsTimeGroupedRows({ kind: "none" })).toBe(false);
+    expect(compareNeedsTimeGroupedRows({ kind: "fixed", value: 1 })).toBe(false);
+  });
+  it("average solo con partición", () => {
+    expect(
+      compareNeedsTimeGroupedRows({
+        kind: "average",
+        scope: "global",
+        partitionDimensions: [],
+      })
+    ).toBe(false);
+    expect(
+      compareNeedsTimeGroupedRows({
+        kind: "average",
+        scope: "partition",
+        partitionDimensions: ["cat"],
+      })
+    ).toBe(true);
   });
 });
 

@@ -13,6 +13,8 @@ import {
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
 import { appendCompareLineDatasetsIfConfigured } from "@/lib/dashboard/compareChartMerge";
+import { legacyCompareInputFromWidgetAgg, compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
+import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 
 function aggregationDateParseOpts(agg?: { dateSlashOrder?: string }): ParseDateLikeOptions {
   return { slashDateOrder: agg?.dateSlashOrder === "MDY" ? "MDY" : "DMY" };
@@ -561,7 +563,14 @@ export function buildChartConfig(
     const kpiLegend =
       typeof dsKpi?.[yKey] === "string" && dsKpi[yKey]!.trim() !== "" ? dsKpi[yKey]!.trim() : kpiDefaultLabel;
     const sum = dataArray.reduce((acc, row) => acc + Number((row as Record<string, unknown>)[yKey] ?? 0), 0);
-    return { labels: ["Total"], xRawCategoryKeys: [""], datasets: [{ label: kpiLegend, data: [sum] }] };
+    const compareSpec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg));
+    const useLastBucket =
+      Boolean((agg as { dashboardCompareUi?: { enabled?: boolean } }).dashboardCompareUi?.enabled) &&
+      compareNeedsTimeGroupedRows(compareSpec) &&
+      dataArray.length > 1;
+    const lastRow = dataArray[dataArray.length - 1] as Record<string, unknown>;
+    const kpiNumber = useLastBucket ? Number(lastRow[yKey] ?? 0) : sum;
+    return { labels: ["Total"], xRawCategoryKeys: [""], datasets: [{ label: kpiLegend, data: [kpiNumber] }] };
   }
 
   const axis = resolveWidgetAxisKeys(dataArray, widget);

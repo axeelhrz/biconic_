@@ -8,7 +8,7 @@ import type { CompareSpec, CompareTemporalMode } from "@/lib/dashboard/compareSp
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { dimensionsListFromAgg, pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
 import type { DashboardComparePlacement, DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
-import { normalizeComparePlacements } from "@/lib/dashboard/compareDisplayKeys";
+import { normalizeComparePlacements, compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
 
 const PLACEMENT_OPTIONS: { value: DashboardComparePlacement; label: string }[] = [
   { value: "kpi_below", label: "KPI (bajo el valor)" },
@@ -68,6 +68,8 @@ type DashboardCompareSpecSectionProps = {
   updateAgg: (patch: Partial<DashboardCompareAggSlice>) => void;
   savedMetrics: SavedMetricWithOptionalAgg[];
   previewRows?: Record<string, unknown>[];
+  /** p. ej. "kpi" — avisos de UX específicos del tipo de widget. */
+  widgetType?: string;
 };
 
 export function DashboardCompareSpecSection({
@@ -75,6 +77,7 @@ export function DashboardCompareSpecSection({
   updateAgg,
   savedMetrics,
   previewRows,
+  widgetType,
 }: DashboardCompareSpecSectionProps) {
   const compare = effectiveCompare(agg);
   const ui = defaultCompareUi(agg.dashboardCompareUi);
@@ -100,6 +103,8 @@ export function DashboardCompareSpecSection({
   }, [agg.metrics, dims, previewRows]);
 
   const placements = normalizeComparePlacements(ui.placement);
+  const showKpiTemporalSeriesHint =
+    widgetType === "kpi" && compareNeedsTimeGroupedRows(compare) && !agg.dateGroupByGranularity;
   const togglePlacement = (p: DashboardComparePlacement, checked: boolean) => {
     const set = new Set(normalizeComparePlacements(ui.placement));
     if (checked) set.add(p);
@@ -148,6 +153,13 @@ export function DashboardCompareSpecSection({
       <div className="flex items-center justify-between gap-2">
         <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Comparación (análisis / transformaciones)</Label>
       </div>
+
+      {showKpiTemporalSeriesHint && (
+        <p className="text-[10px] text-amber-700 dark:text-amber-500/90 leading-snug">
+          En KPI, la comparación temporal necesita agrupar por fecha (elegí mes/día/etc. arriba). Sin granularidad el
+          agregado puede ser un solo total y no se calculará «vs periodo anterior».
+        </p>
+      )}
 
       {savedWithCompare.length > 0 && (
         <div>

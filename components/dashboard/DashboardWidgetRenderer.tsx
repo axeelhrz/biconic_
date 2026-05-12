@@ -49,6 +49,7 @@ import {
   placementEnabled,
   getCompareColumnKeys,
   legacyCompareInputFromWidgetAgg,
+  compareNeedsTimeGroupedRows,
   pickDashboardKpiCompareRow,
   readComparePresentation,
   formatDashboardCompareText,
@@ -361,13 +362,41 @@ export function DashboardWidgetRenderer({
   const kpiValue = useMemo(() => {
     if (chartType !== "kpi" || !Array.isArray(widget.rows) || widget.rows.length === 0) return null;
     const style = widget.chartStyle as ChartStyleConfig | undefined;
+    const rows = widget.rows as Record<string, unknown>[];
+    const aggCfg = widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"];
+    const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(aggCfg));
+    const useLastBucket =
+      Boolean((aggCfg as { dashboardCompareUi?: { enabled?: boolean } } | undefined)?.dashboardCompareUi?.enabled) &&
+      compareNeedsTimeGroupedRows(spec) &&
+      rows.length > 1;
+
+    if (useLastBucket) {
+      const lastRow = rows[rows.length - 1] ?? {};
+      const resultKeys = Object.keys(lastRow);
+      const metricAliases =
+        aggCfg?.enabled && aggCfg.metrics?.length
+          ? aggCfg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
+          : [];
+      const metricsKpi = (aggCfg?.metrics ?? []) as { alias?: string; func?: string; field?: string }[];
+      const rawKpiY =
+        Array.isArray(aggCfg?.chartYAxes) && aggCfg.chartYAxes[0] != null ? String(aggCfg.chartYAxes[0]).trim() : "";
+      const resolvedKpiY = rawKpiY ? resolveChartYAxisEntryToResultKey(rawKpiY, metricsKpi, resultKeys) : null;
+      const yKey =
+        resolvedKpiY ??
+        metricAliases.find((k) => resultKeys.includes(k)) ??
+        resultKeys.find((k) => typeof lastRow[k] === "number") ??
+        resultKeys[0];
+      if (yKey && Number.isFinite(Number(lastRow[yKey]))) {
+        return formatKpiValue(Number(lastRow[yKey]), style);
+      }
+    }
 
     const fromConfig = chartConfig?.datasets?.[0]?.data?.[0];
     if (fromConfig != null && Number.isFinite(Number(fromConfig))) {
       return formatKpiValue(Number(fromConfig), style);
     }
 
-    const firstRow = (widget.rows as Record<string, unknown>[])[0] ?? {};
+    const firstRow = rows[0] ?? {};
 
     const explicitY = (widget.aggregationConfig as { chartYAxes?: string[] } | undefined)?.chartYAxes?.[0];
     if (explicitY && Number.isFinite(Number(firstRow[explicitY]))) {
@@ -403,12 +432,27 @@ export function DashboardWidgetRenderer({
     if (spec.kind === "none") return null;
     const rows = widget.rows as Record<string, unknown>[];
     const dataRow = pickDashboardKpiCompareRow(rows, spec) ?? rows[0]!;
-    const explicitY = (widget.aggregationConfig as { chartYAxes?: string[] } | undefined)?.chartYAxes?.[0];
-    let metricKey: string | null = null;
-    if (explicitY && dataRow[explicitY] != null) metricKey = explicitY;
+    const resultKeys = Object.keys(dataRow);
+    const metricsKpi =
+      (widget.aggregationConfig as { metrics?: { alias?: string; func?: string; field?: string }[] } | undefined)
+        ?.metrics ?? [];
+    const rawKpiY =
+      Array.isArray((widget.aggregationConfig as { chartYAxes?: string[] } | undefined)?.chartYAxes) &&
+      (widget.aggregationConfig as { chartYAxes?: string[] }).chartYAxes![0] != null
+        ? String((widget.aggregationConfig as { chartYAxes: string[] }).chartYAxes[0]).trim()
+        : "";
+    const resolvedY = rawKpiY ? resolveChartYAxisEntryToResultKey(rawKpiY, metricsKpi, resultKeys) : null;
+    let metricKey: string | null = resolvedY;
     if (!metricKey) {
-      const metrics = (widget.aggregationConfig as { metrics?: { alias?: string }[] } | undefined)?.metrics;
-      const metricAlias = metrics?.[Math.max(0, (metrics?.length ?? 1) - 1)]?.alias;
+      const metricAliases =
+        (widget.aggregationConfig as { enabled?: boolean; metrics?: { alias?: string; func?: string; field?: string }[] } | undefined)?.enabled &&
+        metricsKpi.length
+          ? metricsKpi.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
+          : [];
+      metricKey = metricAliases.find((k) => resultKeys.includes(k) && dataRow[k] != null) ?? null;
+    }
+    if (!metricKey) {
+      const metricAlias = metricsKpi[Math.max(0, metricsKpi.length - 1)]?.alias;
       if (metricAlias && dataRow[metricAlias] != null) metricKey = String(metricAlias);
     }
     if (!metricKey) {

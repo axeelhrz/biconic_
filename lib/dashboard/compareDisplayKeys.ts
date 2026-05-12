@@ -62,6 +62,26 @@ export type ComparePresentationValues = {
   deltaPct: number | null;
 };
 
+/** Si la comparación necesita varias filas (p. ej. serie temporal) para calcular deltas en el API. */
+export function compareNeedsTimeGroupedRows(spec: CompareSpec): boolean {
+  switch (spec.kind) {
+    case "none":
+      return false;
+    case "fixed":
+    case "column":
+      return false;
+    case "temporal":
+    case "cumulative":
+      return true;
+    case "average":
+      return spec.scope === "partition";
+    case "total_share":
+      return false;
+    default:
+      return false;
+  }
+}
+
 /**
  * Resuelve sufijos de columnas según CompareSpec (alineado con compareMetricRows.ts).
  */

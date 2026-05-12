@@ -2820,6 +2820,7 @@ export function MetricConfigPanel({
                         updateAgg={updateAgg}
                         savedMetrics={savedMetrics}
                         previewRows={previewRows}
+                        widgetType={widget.type}
                       />
                       <div>
                         <div className="flex items-center justify-between mb-2">
