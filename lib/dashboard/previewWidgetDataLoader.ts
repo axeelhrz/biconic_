@@ -226,6 +226,12 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
           }),
       cumulative: agg?.cumulative ?? "none",
       comparePeriod: agg?.comparePeriod,
+      ...(agg && "compare" in agg && agg.compare && typeof agg.compare === "object"
+        ? { compare: agg.compare as Record<string, unknown> }
+        : {}),
+      compareFixedValue: typeof agg?.compareFixedValue === "number" ? agg.compareFixedValue : undefined,
+      transformCompare: (agg as { transformCompare?: string }).transformCompare,
+      transformCompareFixedValue: (agg as { transformCompareFixedValue?: string }).transformCompareFixedValue,
       dateDimension: mapField(agg?.dateDimension, sourceId, datasetDimensions),
       ...(dateGroupByGranularity && primaryDim
         ? {

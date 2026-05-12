@@ -12,6 +12,7 @@ import {
   type DateGranularity,
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
+import { appendCompareLineDatasetsIfConfigured } from "@/lib/dashboard/compareChartMerge";
 
 function aggregationDateParseOpts(agg?: { dateSlashOrder?: string }): ParseDateLikeOptions {
   return { slashDateOrder: agg?.dateSlashOrder === "MDY" ? "MDY" : "DMY" };
@@ -929,20 +930,27 @@ export function buildChartConfig(
   return {
     labels,
     xRawCategoryKeys,
-    datasets: yKeys.map((yKey, idx) => {
-      const displayLabel = datasetDisplayLabel(yKey);
-      const isLineLike = resolvedType === "line" || resolvedType === "area";
-      const isBarLike =
-        resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "stackedColumn";
-      return {
-        label: displayLabel,
-        data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
-        backgroundColor: (resolvedType === "area" ? getColor(yKey, idx) + "40" : getColor(yKey, idx) + "99"),
-        borderColor: getColor(yKey, idx),
-        borderWidth: isLineLike ? lineStrokeW : 1,
-        ...(isBarLike ? barThicknessOpts : {}),
-        ...(resolvedType === "area" ? { fill: true } : {}),
-      };
-    }),
+    datasets: appendCompareLineDatasetsIfConfigured(
+      resolvedType,
+      rows,
+      widget,
+      yKeys,
+      yKeys.map((yKey, idx) => {
+        const displayLabel = datasetDisplayLabel(yKey);
+        const isLineLike = resolvedType === "line" || resolvedType === "area";
+        const isBarLike =
+          resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "stackedColumn";
+        return {
+          label: displayLabel,
+          data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
+          backgroundColor: (resolvedType === "area" ? getColor(yKey, idx) + "40" : getColor(yKey, idx) + "99"),
+          borderColor: getColor(yKey, idx),
+          borderWidth: isLineLike ? lineStrokeW : 1,
+          ...(isBarLike ? barThicknessOpts : {}),
+          ...(resolvedType === "area" ? { fill: true } : {}),
+        };
+      }),
+      lineStrokeW
+    ),
   };
 }

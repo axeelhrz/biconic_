@@ -23,6 +23,8 @@ import {
   type GeoComponentOverrides,
   type GeoHints,
 } from "@/lib/geo/geo-enrichment";
+import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
+import { applyCompareSpecToRows } from "@/lib/dashboard/compareMetricRows";
 
 // --- Interfaces ---
 interface MetricCondition {
@@ -82,8 +84,13 @@ interface AggregationRequest {
   unlimited?: boolean;
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
+  /** Comparación avanzada (prioridad sobre comparePeriod / transformCompare legacy). */
+  compare?: Record<string, unknown>;
   /** Comparación contra un valor fijo: agrega columnas alias_vs_fijo y alias_var_pct_fijo. */
   compareFixedValue?: number;
+  /** Legacy wizard ETL (mom | yoy | fixed). */
+  transformCompare?: string;
+  transformCompareFixedValue?: string;
   dateDimension?: string;
   /** Agrupación temporal: aplica DATE_TRUNC(granularity, campo) como primera dimensión (semester vía expresión). */
   dateGroupBy?: { field: string; granularity: "day" | "week" | "month" | "quarter" | "semester" | "year" };
@@ -1787,85 +1794,6 @@ export async function POST(req: NextRequest) {
 
     let results = data || [];
 
-    // 6b. Comparación temporal: segundo query período anterior y merge
-    if (body.comparePeriod && dimList.length > 0 && body.dateDimension) {
-      const dateColExpr = safeDateCast(quotedColumn(body.dateDimension), dateSlashOrder);
-      const now = new Date();
-      let prevStart: string;
-      let prevEnd: string;
-      if (body.comparePeriod === "previous_year") {
-        const y = now.getFullYear() - 1;
-        prevStart = `${y}-01-01`;
-        prevEnd = `${y}-12-31`;
-      } else {
-        const m = now.getMonth();
-        const y = m === 0 ? now.getFullYear() - 1 : now.getFullYear();
-        const pm = m === 0 ? 12 : m;
-        prevStart = `${y}-${String(pm).padStart(2, "0")}-01`;
-        const lastDay = new Date(y, pm, 0).getDate();
-        prevEnd = `${y}-${String(pm).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-      }
-      const dateFilter = `${dateColExpr} BETWEEN '${prevStart}' AND '${prevEnd}'`;
-      const prevWhere = whereClausesStr ? `${dateFilter} AND (${whereClausesStr})` : dateFilter;
-      const simplePrevQuery = `SELECT ${dimensionSelectClause}, ${metricClauses} FROM "${schema}"."${table}" WHERE ${prevWhere} GROUP BY ${dimensionGroupByClause}`;
-      try {
-        const { data: prevData } = await (supabase as any).rpc("execute_sql", {
-          sql_query: simplePrevQuery,
-        });
-        const prevRows = (prevData || []) as Record<string, any>[];
-        const prevByDim = new Map<string, Record<string, any>>();
-        const dimKey = (r: any) => dimList.map((d) => String(r[d] ?? "")).join("\t");
-        prevRows.forEach((r) => prevByDim.set(dimKey(r), r));
-        results = results.map((row: any) => {
-          const key = dimKey(row);
-          const prev = prevByDim.get(key);
-          const out = { ...row };
-          metricsBase.forEach((m) => {
-            const alias = (m as any).internalAlias;
-            const v = row[alias] != null ? Number(row[alias]) : null;
-            const vPrev = prev?.[alias] != null ? Number(prev[alias]) : null;
-            out[`${alias}_prev`] = vPrev;
-            out[`${alias}_delta`] = (v != null && vPrev != null) ? v - vPrev : null;
-            if (v != null && vPrev != null && vPrev !== 0)
-              out[`${alias}_delta_pct`] = ((v - vPrev) / vPrev) * 100;
-            else if (v != null && vPrev != null)
-              out[`${alias}_delta_pct`] = vPrev === 0 ? (v === 0 ? 0 : 100) : null;
-            else
-              out[`${alias}_delta_pct`] = null;
-          });
-          return out;
-        });
-        const accumulator: Record<string, number> = {};
-        results.forEach((row: any) => {
-          metricsBase.forEach((m) => {
-            const alias = (m as any).internalAlias;
-            const v = row[alias] != null ? Number(row[alias]) : 0;
-            accumulator[alias] = (accumulator[alias] || 0) + v;
-            row[`${alias}_acumulado`] = accumulator[alias];
-          });
-        });
-      } catch (_) {
-        // si falla comparación, devolver solo resultados actuales
-      }
-    }
-
-    // 6c. Comparación contra valor fijo: agrega columnas _vs_fijo y _var_pct_fijo
-    const fixedVal = body.compareFixedValue != null && typeof body.compareFixedValue === "number" && Number.isFinite(body.compareFixedValue) ? body.compareFixedValue : null;
-    if (fixedVal !== null) {
-      results = results.map((row: any) => {
-        const out = { ...row };
-        body.metrics.forEach((m, i) => {
-          const alias = (m as any).internalAlias;
-          const v = row[alias] != null ? Number(row[alias]) : null;
-          if (v != null && Number.isFinite(v)) {
-            out[`${alias}_vs_fijo`] = v - fixedVal;
-            out[`${alias}_var_pct_fijo`] = fixedVal !== 0 ? ((v - fixedVal) / fixedVal) * 100 : (v === 0 ? 0 : null);
-          }
-        });
-        return out;
-      });
-    }
-
     // 7. Mapeo final: metric_X -> alias del usuario
     const mappedResults = results.map((row: any) => {
       const newRow = { ...row };
@@ -1880,24 +1808,6 @@ export async function POST(req: NextRequest) {
         if (cumulative && Object.prototype.hasOwnProperty.call(newRow, `${internalKey}_cumulative`)) {
           newRow[`${externalKey}_acumulado`] = newRow[`${internalKey}_cumulative`];
           delete newRow[`${internalKey}_cumulative`];
-        }
-        if (body.comparePeriod) {
-          for (const suffix of ["_prev", "_delta", "_delta_pct", "_acumulado"]) {
-            if (Object.prototype.hasOwnProperty.call(newRow, `${internalKey}${suffix}`)) {
-              newRow[`${externalKey}${suffix}`] = newRow[`${internalKey}${suffix}`];
-              delete newRow[`${internalKey}${suffix}`];
-            }
-          }
-        }
-        if (fixedVal !== null) {
-          if (Object.prototype.hasOwnProperty.call(newRow, `${internalKey}_vs_fijo`)) {
-            newRow[`${externalKey}_vs_fijo`] = newRow[`${internalKey}_vs_fijo`];
-            delete newRow[`${internalKey}_vs_fijo`];
-          }
-          if (Object.prototype.hasOwnProperty.call(newRow, `${internalKey}_var_pct_fijo`)) {
-            newRow[`${externalKey}_var_pct_fijo`] = newRow[`${internalKey}_var_pct_fijo`];
-            delete newRow[`${internalKey}_var_pct_fijo`];
-          }
         }
       });
 
@@ -1920,6 +1830,45 @@ export async function POST(req: NextRequest) {
 
       return newRow;
     });
+
+    const compareSpec = normalizeAggregationCompare({
+      compare: body.compare,
+      comparePeriod: body.comparePeriod,
+      compareFixedValue: body.compareFixedValue,
+      transformCompare: body.transformCompare,
+      transformCompareFixedValue: body.transformCompareFixedValue,
+      dateGroupBy: body.dateGroupBy,
+      dateDimension: body.dateDimension,
+    });
+
+    const metricExternalKeys = body.metrics.map((m, i) => {
+      const key = (m.alias && String(m.alias).trim()) || `${m.func}(${m.field})`;
+      return key || `metric_${i}`;
+    });
+
+    const dimensionColumnsOrdered: string[] = [];
+    const dgf = body.dateGroupBy?.field?.trim();
+    if (dgf) dimensionColumnsOrdered.push(dgf);
+    for (const d of dimList) {
+      const t = (d || "").trim();
+      if (!t) continue;
+      if (!dimensionColumnsOrdered.some((x) => normalizeStr(x) === normalizeStr(t))) {
+        dimensionColumnsOrdered.push(t);
+      }
+    }
+
+    const comparedResults =
+      compareSpec.kind === "none"
+        ? mappedResults
+        : applyCompareSpecToRows(
+            mappedResults as Record<string, unknown>[],
+            metricExternalKeys,
+            compareSpec,
+            {
+              parseDateOpts: body.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
+              dimensionColumns: dimensionColumnsOrdered,
+            }
+          );
 
     const requestedSortNormalized = normalizeStr(body.orderBy?.field || "");
     const dateFieldNormalized = normalizeStr(body.dateGroupBy?.field || "");
@@ -1945,7 +1894,7 @@ export async function POST(req: NextRequest) {
     // Defensa final: evita orden lexicográfico incorrecto en etiquetas de periodo por configuraciones heredadas.
     const sortedResults =
       body.dateGroupBy?.field && requestedTemporalSort && temporalKey
-        ? [...mappedResults].sort((a, b) => {
+        ? [...comparedResults].sort((a, b) => {
             const va = (a as Record<string, unknown>)[temporalKey];
             const vb = (b as Record<string, unknown>)[temporalKey];
             const ta = parseDateLike(va, dateParseOpts)?.getTime() ?? NaN;
@@ -1953,7 +1902,7 @@ export async function POST(req: NextRequest) {
             if (!Number.isNaN(ta) && !Number.isNaN(tb)) return (ta - tb) * directionMultiplier;
             return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true }) * directionMultiplier;
           })
-        : mappedResults;
+        : comparedResults;
 
     const shouldEnrichGeo =
       requestedChartType === "map" ||

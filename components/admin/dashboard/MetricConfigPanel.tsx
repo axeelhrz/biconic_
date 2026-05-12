@@ -23,6 +23,7 @@ import {
   DASHBOARD_GRID_COLUMN_COUNT,
 } from "@/lib/dashboard/gridLayout";
 import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
+import type { CompareSpec } from "@/lib/dashboard/compareSpec";
 import { CONTENT_ICON_POSITION_OPTIONS, type ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
 import {
   normalizeChartPercentBasis,
@@ -36,6 +37,8 @@ import {
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
 import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 import type { ChartDetailCardConfig, ChartDetailCardLine } from "@/lib/dashboard/chartDetailCard";
+import type { DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
+import { DashboardCompareSpecSection } from "@/components/admin/dashboard/DashboardCompareSpecSection";
 
 export type MetricConditionEdit = {
   field: string;
@@ -74,6 +77,15 @@ export type AggregationConfigEdit = {
   limit?: number;
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
+  compare?: CompareSpec;
+  compareFixedValue?: number;
+  transformCompare?: string;
+  transformCompareFixedValue?: string;
+  transformShowDelta?: boolean;
+  transformShowDeltaPct?: boolean;
+  transformShowAccum?: boolean;
+  /** Visualización de comparación en dashboards (KPI, tabla, gráfico, tooltip). */
+  dashboardCompareUi?: DashboardCompareUi;
   dateDimension?: string;
   chartType?: string;
   chartCategoryColorMode?: "varied" | "uniform";
@@ -213,7 +225,12 @@ export type MetricConfigWidget = {
   hideWidgetHeader?: boolean;
 };
 
-export type SavedMetricPanel = { id: string; name: string; metric: AggregationMetricEdit };
+export type SavedMetricPanel = {
+  id: string;
+  name: string;
+  metric: AggregationMetricEdit;
+  aggregationConfig?: Partial<AggregationConfigEdit> & Record<string, unknown>;
+};
 
 const CHART_TYPES: { value: string; label: string }[] = [
   { value: "bar", label: "Barras verticales" },
@@ -2782,9 +2799,14 @@ export function MetricConfigPanel({
                           <option value="ytd">YTD (año hasta la fecha)</option>
                         </select>
                       </div>
-                      {(agg.cumulative === "ytd" || agg.comparePeriod) && (
+                      {(agg.cumulative === "ytd" ||
+                        agg.comparePeriod ||
+                        (agg.compare &&
+                          typeof agg.compare === "object" &&
+                          "kind" in agg.compare &&
+                          (agg.compare as CompareSpec).kind !== "none")) && (
                         <AdminFieldSelector
-                          label="Columna de fecha (para YTD / comparación)"
+                          label="Columna de fecha (para YTD / comparación temporal)"
                           value={agg.dateDimension || ""}
                           onChange={(v) => updateAgg({ dateDimension: v || undefined })}
                           etlData={etlData}
@@ -2793,18 +2815,12 @@ export function MetricConfigPanel({
                           placeholder="Campo fecha..."
                         />
                       )}
-                      <div>
-                        <Label className="text-[11px] text-[var(--studio-fg-muted)]">Comparar con período anterior</Label>
-                        <select
-                          value={agg.comparePeriod ?? ""}
-                          onChange={(e) => updateAgg({ comparePeriod: (e.target.value || undefined) as "previous_year" | "previous_month" | undefined })}
-                          className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-                        >
-                          <option value="">Ninguno</option>
-                          <option value="previous_month">Mes anterior</option>
-                          <option value="previous_year">Año anterior</option>
-                        </select>
-                      </div>
+                      <DashboardCompareSpecSection
+                        agg={agg}
+                        updateAgg={updateAgg}
+                        savedMetrics={savedMetrics}
+                        previewRows={previewRows}
+                      />
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Métricas</Label>

@@ -144,6 +144,10 @@ type AggregationConfig = {
   limit?: number;
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
+  compare?: Record<string, unknown>;
+  compareFixedValue?: number;
+  transformCompare?: string;
+  transformCompareFixedValue?: string;
   dateDimension?: string;
   chartCategoryColorMode?: "varied" | "uniform";
   chartPrimaryColor?: string;
@@ -940,6 +944,13 @@ export function AdminDashboardStudio({
             limit: rankingLimit ?? aggForLoad.limit ?? 100,
             cumulative: aggForLoad.cumulative || "none",
             comparePeriod: aggForLoad.comparePeriod || undefined,
+            ...(aggForLoad.compare && typeof aggForLoad.compare === "object"
+              ? { compare: aggForLoad.compare as Record<string, unknown> }
+              : {}),
+            compareFixedValue:
+              typeof aggForLoad.compareFixedValue === "number" ? aggForLoad.compareFixedValue : undefined,
+            transformCompare: aggForLoad.transformCompare,
+            transformCompareFixedValue: aggForLoad.transformCompareFixedValue,
             dateDimension: aggForLoad.dateDimension || undefined,
             ...(dateGroupByGranularity &&
               dateGroupBySourceField && {

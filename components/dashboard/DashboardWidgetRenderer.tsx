@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, TrendingDown, TrendingUp, Minus } from "lucide-react";
 import { Bar, Line, Pie, Doughnut, Scatter } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -44,7 +44,19 @@ import {
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
 import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
-import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import { resolveWidgetAxisKeys, resolveChartYAxisEntryToResultKey, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import {
+  placementEnabled,
+  getCompareColumnKeys,
+  legacyCompareInputFromWidgetAgg,
+  pickDashboardKpiCompareRow,
+  readComparePresentation,
+  formatDashboardCompareText,
+  buildCompareTooltipLineFromAgg,
+  compareTrendTone,
+  type DashboardCompareUi,
+} from "@/lib/dashboard/compareDisplayKeys";
+import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { createChartPercentDenominatorResolver } from "@/lib/dashboard/chartPercentEngine";
 import type { ChartPercentWidgetLike } from "@/lib/dashboard/chartPercentEngine";
 import { buildChartTooltipDetailParts, isChartDetailCardActive } from "@/lib/dashboard/chartDetailCard";
@@ -277,6 +289,17 @@ function formatKpiValue(value: unknown, style?: ChartStyleConfig | null): string
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+function fallbackCompareColumnLabel(key: string): string {
+  if (/_delta_pct|_var_pct_fijo|_delta_pct_col|_delta_pct_prom|delta_pct_ytd/.test(key)) return "Var. %";
+  if (/_delta$|_vs_col$|_vs_prom$|_vs_fijo$|_vs_ytd_ly$/.test(key)) return "Δ";
+  if (/_prev$/.test(key)) return "Referencia";
+  if (/_pct_mes_en_ytd$/.test(key)) return "% mes / YTD";
+  if (/_pct_total$/.test(key)) return "% del total";
+  if (/_total_ref$/.test(key)) return "Total ref.";
+  if (/_ytd_run$|_ytd$/.test(key)) return "YTD";
+  return key;
+}
+
 interface DashboardWidgetRendererProps {
   widget: DashboardWidgetRendererWidget;
   isLoading?: boolean;
@@ -371,6 +394,45 @@ export function DashboardWidgetRenderer({
     return null;
   }, [chartType, chartConfig, widget.rows, widget.chartStyle, widget.aggregationConfig]);
 
+  const kpiCompareDisplay = useMemo(() => {
+    if (chartType !== "kpi" || !Array.isArray(widget.rows) || widget.rows.length === 0) return null;
+    const agg = widget.aggregationConfig as Record<string, unknown> | undefined;
+    const ui = agg?.dashboardCompareUi as DashboardCompareUi | undefined;
+    if (!ui?.enabled || !placementEnabled(ui, "kpi_below")) return null;
+    const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg as never));
+    if (spec.kind === "none") return null;
+    const rows = widget.rows as Record<string, unknown>[];
+    const dataRow = pickDashboardKpiCompareRow(rows, spec) ?? rows[0]!;
+    const explicitY = (widget.aggregationConfig as { chartYAxes?: string[] } | undefined)?.chartYAxes?.[0];
+    let metricKey: string | null = null;
+    if (explicitY && dataRow[explicitY] != null) metricKey = explicitY;
+    if (!metricKey) {
+      const metrics = (widget.aggregationConfig as { metrics?: { alias?: string }[] } | undefined)?.metrics;
+      const metricAlias = metrics?.[Math.max(0, (metrics?.length ?? 1) - 1)]?.alias;
+      if (metricAlias && dataRow[metricAlias] != null) metricKey = String(metricAlias);
+    }
+    if (!metricKey) {
+      for (const key of ["value", "metric_0"]) {
+        if (dataRow[key] != null) {
+          metricKey = key;
+          break;
+        }
+      }
+    }
+    if (!metricKey) return null;
+    const vals = readComparePresentation(spec, metricKey, dataRow);
+    const text = formatDashboardCompareText(ui, vals, widget.chartStyle as ChartStyleConfig | undefined);
+    if (!text.trim()) return null;
+    const tone = compareTrendTone(vals);
+    const ind = ui.indicator ?? "both";
+    return {
+      text,
+      tone,
+      showIcon: ind === "icon" || ind === "both",
+      showColor: ind === "color" || ind === "both",
+    };
+  }, [chartType, widget.rows, widget.aggregationConfig, widget.chartStyle]);
+
   const aggConfig = widget.aggregationConfig as {
     chartComboSyncAxes?: boolean;
     chartYAxes?: string[];
@@ -415,8 +477,40 @@ export function DashboardWidgetRenderer({
     const selected = [...dimensionsOrdered, ...metricsOrdered];
     return selected.length > 0 ? selected : firstRowKeys;
   }, [tableRows, chartType, widget.type, widget.aggregationConfig, widget.source]);
+  const compareTableExtraKeys = useMemo(() => {
+    if (chartType !== "table" || !Array.isArray(tableRows) || tableRows.length === 0) return [] as string[];
+    const agg = widget.aggregationConfig as Record<string, unknown> | undefined;
+    const ui = agg?.dashboardCompareUi as DashboardCompareUi | undefined;
+    if (!ui?.enabled || !placementEnabled(ui, "table_extra_columns")) return [];
+    const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg as never));
+    if (spec.kind === "none") return [];
+    const axis = resolveWidgetAxisKeys(tableRows as Record<string, unknown>[], {
+      type: widget.type,
+      aggregationConfig: widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
+      source: widget.source as BuildChartConfigWidget["source"],
+    });
+    const y0 = axis?.yKeys[0];
+    if (!y0) return [];
+    const keys = getCompareColumnKeys(spec, y0, tableRows[0] as Record<string, unknown>);
+    return keys.tableExtraKeys;
+  }, [chartType, tableRows, widget.type, widget.aggregationConfig, widget.source]);
+  const effectiveTableColumnOrder = useMemo(() => {
+    const extra = compareTableExtraKeys.filter((k) => !tableColumnOrder.includes(k));
+    return [...tableColumnOrder, ...extra];
+  }, [tableColumnOrder, compareTableExtraKeys]);
   const tableHeaderLabels = (widget.aggregationConfig as { tableColumnLabelOverrides?: Record<string, string> } | undefined)
     ?.tableColumnLabelOverrides;
+  const effectiveTableHeaderLabels = useMemo(() => {
+    const base = tableHeaderLabels ?? {};
+    const ui = (widget.aggregationConfig as { dashboardCompareUi?: { label?: string } } | undefined)?.dashboardCompareUi;
+    const suffix = ui?.label?.trim() ? ` (${ui.label.trim()})` : "";
+    const next: Record<string, string> = { ...base };
+    for (const k of compareTableExtraKeys) {
+      if (next[k]) continue;
+      next[k] = `${fallbackCompareColumnLabel(k)}${suffix}`;
+    }
+    return next;
+  }, [tableHeaderLabels, compareTableExtraKeys, widget.aggregationConfig]);
   const tableMetricFormatters = useMemo(() => {
     const map = new Map<string, (value: number) => string>();
     const yKeys = Array.isArray(aggConfig?.chartYAxes) ? aggConfig.chartYAxes : [];
@@ -615,6 +709,23 @@ export function DashboardWidgetRenderer({
     const globalMax = agg?.chartScaleMode === "custom" ? parseNumeric(agg.chartScaleMax) : agg?.chartScaleMode === "dataset" ? datasetMax : undefined;
     const globalStep = parseNumeric(agg?.chartAxisStep);
     const yAxisKeys = Array.isArray(agg?.chartYAxes) ? agg.chartYAxes : [];
+    const tooltipCompareAxis =
+      Array.isArray(widget.rows) && widget.rows.length > 0
+        ? resolveWidgetAxisKeys(widget.rows as Record<string, unknown>[], {
+            type: widget.type,
+            aggregationConfig: widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
+            source: widget.source as BuildChartConfigWidget["source"],
+          })
+        : null;
+    const compareTooltipExtraActive =
+      Array.isArray(widget.rows) &&
+      widget.rows.length > 0 &&
+      (() => {
+        const a = widget.aggregationConfig as { dashboardCompareUi?: DashboardCompareUi } | undefined;
+        const ui = a?.dashboardCompareUi;
+        if (!ui?.enabled) return false;
+        return placementEnabled(ui, "tooltip") || placementEnabled(ui, "detail_card");
+      })();
     const resolveMetricScale = (datasetIndex: number) => {
       const yKey = yAxisKeys[datasetIndex] ?? "";
       const per = yKey && agg?.chartScalePerMetric ? agg.chartScalePerMetric[yKey] : undefined;
@@ -1120,7 +1231,7 @@ export function DashboardWidgetRenderer({
         Array.isArray(widget.rows) &&
         widget.rows.length > 0;
       const tooltipCallbacks = (() => {
-        if (!detailCardTooltipActive) return tooltipCallbacksBase;
+        if (!detailCardTooltipActive && !compareTooltipExtraActive) return tooltipCallbacksBase;
         const baseCb: Record<string, unknown> = {
           ...baseOptionsTooltipCallbacks,
           ...(tooltipCallbacksBase ?? {}),
@@ -1134,21 +1245,54 @@ export function DashboardWidgetRenderer({
           const dsi = typeof first?.datasetIndex === "number" ? first.datasetIndex : 0;
           const categoryLabel = formatTemporalLabel(first?.label ?? "");
           const seriesLabel = String(chartConfig?.datasets?.[dsi]?.label ?? "");
-          const parts = buildChartTooltipDetailParts({
-            detailRaw: detailCardRaw,
-            rows: widget.rows as Record<string, unknown>[],
-            widget: widget as unknown as BuildChartConfigWidget,
-            chartConfig,
-            dataIndex: di,
-            datasetIndex: dsi,
-            chartType,
-            categoryLabel,
-            seriesLabel,
-          });
+          const parts =
+            detailCardTooltipActive
+              ? buildChartTooltipDetailParts({
+                  detailRaw: detailCardRaw,
+                  rows: widget.rows as Record<string, unknown>[],
+                  widget: widget as unknown as BuildChartConfigWidget,
+                  chartConfig,
+                  dataIndex: di,
+                  datasetIndex: dsi,
+                  chartType,
+                  categoryLabel,
+                  seriesLabel,
+                })
+              : null;
           const extra = parts?.afterBody?.length ? parts.afterBody : [];
           const prev = prevAfterBody ? prevAfterBody(items) : undefined;
           const prevArr = Array.isArray(prev) ? prev : prev != null && prev !== "" ? [String(prev)] : [];
-          return [...prevArr, ...extra];
+          let compareLines: string[] = [];
+          if (compareTooltipExtraActive && tooltipCompareAxis?.yKeys?.length) {
+            const rowsArr = widget.rows as Record<string, unknown>[];
+            const row = rowsArr[di];
+            const metricsForY = (widget.aggregationConfig as { metrics?: { alias?: string; func?: string; field?: string }[] })
+              ?.metrics;
+            const resultKeys = rowsArr[0] ? Object.keys(rowsArr[0]) : [];
+            const rawY =
+              isComboTwo && chartType === "combo"
+                ? yAxisKeys[dsi] ?? tooltipCompareAxis.yKeys[dsi]
+                : yAxisKeys[0] ?? tooltipCompareAxis.yKeys[0];
+            const resolvedY =
+              rawY && metricsForY
+                ? resolveChartYAxisEntryToResultKey(String(rawY), metricsForY, resultKeys) ?? String(rawY)
+                : rawY != null
+                  ? String(rawY)
+                  : "";
+            const styleForRow = (usePerMetricFormat && metricStyles?.[dsi] ? metricStyles[dsi] : style) as
+              | ChartStyleConfig
+              | undefined;
+            if (resolvedY && row) {
+              const line = buildCompareTooltipLineFromAgg(
+                widget.aggregationConfig as never,
+                row,
+                resolvedY,
+                styleForRow
+              );
+              if (line) compareLines = [line];
+            }
+          }
+          return [...prevArr, ...extra, ...compareLines];
         };
         baseCb.title = (items: unknown[]) => {
           const arr = Array.isArray(items) ? items : [];
@@ -1157,18 +1301,20 @@ export function DashboardWidgetRenderer({
           const dsi = typeof first?.datasetIndex === "number" ? first.datasetIndex : 0;
           const categoryLabel = formatTemporalLabel(first?.label ?? "");
           const seriesLabel = String(chartConfig?.datasets?.[dsi]?.label ?? "");
-          const parts = buildChartTooltipDetailParts({
-            detailRaw: detailCardRaw,
-            rows: widget.rows as Record<string, unknown>[],
-            widget: widget as unknown as BuildChartConfigWidget,
-            chartConfig,
-            dataIndex: di,
-            datasetIndex: dsi,
-            chartType,
-            categoryLabel,
-            seriesLabel,
-          });
-          if (parts?.title) return parts.title;
+          if (detailCardTooltipActive) {
+            const titleParts = buildChartTooltipDetailParts({
+              detailRaw: detailCardRaw,
+              rows: widget.rows as Record<string, unknown>[],
+              widget: widget as unknown as BuildChartConfigWidget,
+              chartConfig,
+              dataIndex: di,
+              datasetIndex: dsi,
+              chartType,
+              categoryLabel,
+              seriesLabel,
+            });
+            if (titleParts?.title) return titleParts.title;
+          }
           if (prevTitle) return String(prevTitle(items) ?? "");
           return categoryLabel;
         };
@@ -1603,6 +1749,29 @@ export function DashboardWidgetRenderer({
                   }
                   return null;
                 })()}
+                {kpiCompareDisplay && (
+                  <div
+                    className="mt-0.5 flex items-center justify-center gap-1 text-center text-sm"
+                    style={{
+                      color:
+                        kpiCompareDisplay.showColor && kpiCompareDisplay.tone === "up"
+                          ? "rgb(22 163 74)"
+                          : kpiCompareDisplay.showColor && kpiCompareDisplay.tone === "down"
+                            ? "rgb(220 38 38)"
+                            : "var(--platform-fg-muted, #64748b)",
+                    }}
+                  >
+                    {kpiCompareDisplay.showIcon &&
+                      (kpiCompareDisplay.tone === "up" ? (
+                        <TrendingUp className="h-4 w-4 shrink-0" aria-hidden />
+                      ) : kpiCompareDisplay.tone === "down" ? (
+                        <TrendingDown className="h-4 w-4 shrink-0" aria-hidden />
+                      ) : (
+                        <Minus className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+                      ))}
+                    <span className="tabular-nums">{kpiCompareDisplay.text}</span>
+                  </div>
+                )}
               </div>
             )}
             {chartType === "table" && Array.isArray(tableRows) && tableRows.length > 0 && (
@@ -1614,7 +1783,7 @@ export function DashboardWidgetRenderer({
                   <table className="w-full min-w-max">
                     <thead>
                       <tr className="border-b text-left" style={{ borderColor: "var(--platform-border)" }}>
-                        {tableColumnOrder.map((k) => (
+                        {effectiveTableColumnOrder.map((k) => (
                           <th
                             key={k}
                             className="sticky top-0 z-[1] py-1.5 pr-2 font-medium"
@@ -1624,7 +1793,7 @@ export function DashboardWidgetRenderer({
                               boxShadow: "inset 0 -1px 0 var(--platform-border, #e2e8f0)",
                             }}
                           >
-                            {String(tableHeaderLabels?.[k] ?? "").trim() || k}
+                            {String(effectiveTableHeaderLabels?.[k] ?? "").trim() || k}
                           </th>
                         ))}
                       </tr>
@@ -1632,7 +1801,7 @@ export function DashboardWidgetRenderer({
                     <tbody>
                       {tableRows.map((row, i) => (
                         <tr key={i} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
-                          {tableColumnOrder.map((columnKey) => (
+                          {effectiveTableColumnOrder.map((columnKey) => (
                             <td key={columnKey} className="py-1.5 pr-2" style={{ color: "var(--platform-fg)" }}>
                               {formatTableCellValue(columnKey, row[columnKey])}
                             </td>
