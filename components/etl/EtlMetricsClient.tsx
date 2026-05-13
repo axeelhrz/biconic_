@@ -244,16 +244,16 @@ const EXCEL_FORMULAS_REFERENCIA: { categoria: string; funciones: { nombre: strin
   {
     categoria: "Lógica",
     funciones: [
-      { nombre: "IF", sintaxis: "IF(condición; valor_si_verdadero; valor_si_falso)", descripcion: "Condicional" },
+      { nombre: "IF", sintaxis: "IF(condición; valor_si_verdadero; valor_si_falso)", descripcion: "Condicional. Compará con = (ej. col='texto'). Varias condiciones: IF(AND(col1='a'; col2='b'); x; y)." },
       { nombre: "IFERROR", sintaxis: "IFERROR(valor; valor_si_error)", descripcion: "Devuelve valor si hay error" },
       { nombre: "IFNA", sintaxis: "IFNA(valor; valor_si_NA)", descripcion: "Devuelve valor si es #N/A" },
-      { nombre: "AND", sintaxis: "AND(cond1; cond2; ...)", descripcion: "Y lógico" },
+      { nombre: "AND", sintaxis: "AND(cond1; cond2; ...)", descripcion: "Y lógico. Ej.: AND(fy='FY24'; pais_medio='Argentina'). No uses ; entre comparando y valor: usá = dentro de cada condición." },
       { nombre: "OR", sintaxis: "OR(cond1; cond2; ...)", descripcion: "O lógico" },
       { nombre: "NOT", sintaxis: "NOT(condición)", descripcion: "Negación" },
       { nombre: "TRUE", sintaxis: "TRUE()", descripcion: "Verdadero" },
       { nombre: "FALSE", sintaxis: "FALSE()", descripcion: "Falso" },
       { nombre: "XOR", sintaxis: "XOR(cond1; cond2; ...)", descripcion: "O exclusivo" },
-      { nombre: "IFS", sintaxis: "IFS(cond1; valor1; cond2; valor2; ...)", descripcion: "Múltiples condiciones" },
+      { nombre: "IFS", sintaxis: "IFS(cond1; valor1; cond2; valor2; ...; default)", descripcion: "Pares condición-valor en una sola función; condición compuesta = AND(...). Decimales con punto (0.065), no coma." },
       { nombre: "SWITCH", sintaxis: "SWITCH(expr; val1; res1; ...; default)", descripcion: "Selección por valor" },
     ],
   },
@@ -345,6 +345,64 @@ const EXCEL_FORMULAS_REFERENCIA: { categoria: string; funciones: { nombre: strin
     ],
   },
 ];
+
+/** Coeficientes ejemplo FY24/FY25 × país (medio) para copiar en medidas con expresión. */
+const FY_PAIS_COEFICIENT_ROWS: readonly { fy: string; pais: string; coef: number }[] = [
+  { fy: "FY24", pais: "Argentina", coef: 0.065 },
+  { fy: "FY24", pais: "Brasil", coef: 0.069 },
+  { fy: "FY24", pais: "Chile", coef: 0.1 },
+  { fy: "FY24", pais: "México", coef: 0.16 },
+  { fy: "FY24", pais: "Perú", coef: 0.125 },
+  { fy: "FY24", pais: "Colombia", coef: 0.155 },
+  { fy: "FY24", pais: "Costa Rica", coef: 0.125 },
+  { fy: "FY24", pais: "Ecuador", coef: 0.145 },
+  { fy: "FY24", pais: "Panamá", coef: 0.145 },
+  { fy: "FY24", pais: "Puerto Rico", coef: 0.15 },
+  { fy: "FY24", pais: "Rep, Dominicana", coef: 0.155 },
+  { fy: "FY24", pais: "Uruguay", coef: 0.15 },
+  { fy: "FY25", pais: "Argentina", coef: 0.07 },
+  { fy: "FY25", pais: "Brasil", coef: 0.065 },
+  { fy: "FY25", pais: "Chile", coef: 0.075 },
+  { fy: "FY25", pais: "México", coef: 0.165 },
+  { fy: "FY25", pais: "Perú", coef: 0.09 },
+  { fy: "FY25", pais: "Colombia", coef: 0.141 },
+  { fy: "FY25", pais: "Costa Rica", coef: 0.151 },
+  { fy: "FY25", pais: "Ecuador", coef: 0.136 },
+  { fy: "FY25", pais: "Panamá", coef: 0.165 },
+  { fy: "FY25", pais: "Puerto Rico", coef: 0.165 },
+  { fy: "FY25", pais: "Rep, Dominicana", coef: 0.164 },
+  { fy: "FY25", pais: "Uruguay", coef: 0.16 },
+];
+
+function escapeSingleQuotedForFormula(s: string): string {
+  return s.replace(/'/g, "''");
+}
+
+function buildFyPaisCoefficientIFS(
+  rows: readonly { fy: string; pais: string; coef: number }[],
+  paisColumn = "pais_medio"
+): string {
+  const pairs = rows.map(
+    (r) =>
+      `AND(fy='${escapeSingleQuotedForFormula(r.fy)}';${paisColumn}='${escapeSingleQuotedForFormula(r.pais)}');${r.coef}`
+  );
+  return `IFS(${pairs.join(";")};0)`;
+}
+
+function buildFyPaisCoefficientIfNested(
+  rows: readonly { fy: string; pais: string; coef: number }[],
+  paisColumn = "pais_medio"
+): string {
+  let acc = "0";
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!;
+    acc = `IF(AND(fy='${escapeSingleQuotedForFormula(r.fy)}';${paisColumn}='${escapeSingleQuotedForFormula(r.pais)}');${r.coef};${acc})`;
+  }
+  return acc;
+}
+
+const FY_PAIS_COEFICIENTE_IFS_FORMULA = buildFyPaisCoefficientIFS(FY_PAIS_COEFICIENT_ROWS);
+const FY_PAIS_COEFICIENTE_IF_FORMULA = buildFyPaisCoefficientIfNested(FY_PAIS_COEFICIENT_ROWS);
 
 type ColumnRole = "key" | "time" | "dimension" | "measure" | "geo";
 type GeoType = "country" | "province" | "city" | "address" | "lat_lon";
@@ -7920,6 +7978,91 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto pr-2 -mr-2 space-y-6">
+            <div
+              className="rounded-xl border p-4 space-y-4"
+              style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+            >
+              <div>
+                <h4 className="text-sm font-semibold mb-1" style={{ color: "var(--platform-accent)" }}>
+                  Ejemplo: coeficiente por FY y país (IFS / IF)
+                </h4>
+                <p className="text-xs leading-relaxed" style={{ color: "var(--platform-fg-muted)" }}>
+                  Compará con <span className="font-mono">=</span> (no con <span className="font-mono">;</span>). Varias columnas en{" "}
+                  <span className="font-mono">AND(fy=&apos;FY24&apos;; pais_medio=&apos;Argentina&apos;)</span>. Una sola{" "}
+                  <span className="font-mono">IFS</span> con pares condición;valor y valor final. Decimales con{" "}
+                  <span className="font-mono">.</span> (ej. <span className="font-mono">0.065</span>). Ajustá el nombre{" "}
+                  <span className="font-mono">pais_medio</span> si tu columna tiene otro alias.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold" style={{ color: "var(--platform-fg)" }}>
+                    IFS (recomendado)
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs rounded-lg"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(FY_PAIS_COEFICIENTE_IFS_FORMULA);
+                        toast.success("Fórmula IFS copiada al portapapeles");
+                      } catch {
+                        toast.error("No se pudo copiar");
+                      }
+                    }}
+                  >
+                    Copiar IFS
+                  </Button>
+                </div>
+                <pre
+                  className="text-xs font-mono p-3 rounded-lg border max-h-44 overflow-auto whitespace-pre-wrap break-all"
+                  style={{
+                    borderColor: "var(--platform-border)",
+                    background: "var(--platform-bg-elevated)",
+                    color: "var(--platform-fg-muted)",
+                  }}
+                >
+                  {FY_PAIS_COEFICIENTE_IFS_FORMULA}
+                </pre>
+              </div>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold" style={{ color: "var(--platform-fg)" }}>
+                    IF anidado (equivalente)
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs rounded-lg"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(FY_PAIS_COEFICIENTE_IF_FORMULA);
+                        toast.success("Fórmula IF copiada al portapapeles");
+                      } catch {
+                        toast.error("No se pudo copiar");
+                      }
+                    }}
+                  >
+                    Copiar IF
+                  </Button>
+                </div>
+                <pre
+                  className="text-xs font-mono p-3 rounded-lg border max-h-44 overflow-auto whitespace-pre-wrap break-all"
+                  style={{
+                    borderColor: "var(--platform-border)",
+                    background: "var(--platform-bg-elevated)",
+                    color: "var(--platform-fg-muted)",
+                  }}
+                >
+                  {FY_PAIS_COEFICIENTE_IF_FORMULA}
+                </pre>
+              </div>
+            </div>
             {EXCEL_FORMULAS_REFERENCIA.map((grupo) => (
               <div key={grupo.categoria}>
                 <h4 className="text-sm font-semibold mb-2 sticky top-0 py-1 z-10" style={{ color: "var(--platform-accent)", background: "var(--platform-bg-elevated)" }}>{grupo.categoria}</h4>
