@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expressionToSql } from "@/app/api/dashboard/aggregate-data/route";
+import { expressionToSql } from "@/lib/dashboard/metricExpressionToSql";
 
 describe("expressionToSql", () => {
   it("acepta IFS con literales con tilde dentro de comillas (no falla el whitelist ASCII)", () => {
