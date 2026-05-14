@@ -364,7 +364,8 @@ function expandAndOr(expr: string, fn: "AND" | "OR"): string {
 }
 
 /** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO", IF(ESTADO='PAGADO',1,0)) en SQL seguro.
- *  - Literales numéricos y cadenas entre comillas se preservan.
+ *  - Literales numéricos y cadenas entre comillas se preservan (incl. Unicode en comillas, p. ej. 'México').
+ *  - El whitelist de caracteres se aplica al esqueleto tras sustituir literales por placeholders (evita rechazar tildes en texto).
  *  - ; se normaliza a , (estilo Excel).
  *  - AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(.
  *  - IF(cond, then, else) se convierte en CASE WHEN ... THEN ... ELSE ... END.
@@ -372,20 +373,13 @@ function expandAndOr(expr: string, fn: "AND" | "OR"): string {
  *  - Nombres de columnas calculadas (derivedLookup) se expanden a su expresión.
  *  - Demás identificadores se pasan a quotedColumn.
  */
-function expressionToSql(expression: string, derivedLookup?: Record<string, DerivedColumnRef>, _depth = 0): string | null {
+export function expressionToSql(expression: string, derivedLookup?: Record<string, DerivedColumnRef>, _depth = 0): string | null {
   if (!expression || typeof expression !== "string") return null;
   let s = expression.replace(/\s+/g, " ").trim();
   if (!s) return null;
   // Normalizar comillas tipográficas/Unicode a comillas rectas (evita fallos con IF(primary.X="FB";...))
   s = s.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"').replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'");
-  // Permitir literales: números, cadenas con ' o ", ^ para potencia, = <> ! para comparaciones (IF, COUNTIF, etc.)
-  const allowed = /^[a-zA-Z0-9_*+\-/().,\s'"%;^=<>!]+$/;
-  if (!allowed.test(s)) return null;
-
-  // 0) Normalizar ; a , (Excel usa ; como separador de argumentos)
-  s = s.replace(/;/g, ",");
-
-  // 1) Proteger cadenas entre comillas (simple o doble) para no tocar su contenido
+  // Proteger cadenas entre comillas antes del whitelist: [a-zA-Z] es solo ASCII; literales como 'México' deben enmascararse primero.
   const stringLiterals: string[] = [];
   s = s.replace(/'([^']*)'|"([^"]*)"/g, (_, single, double) => {
     const content = single !== undefined ? single : double;
@@ -393,6 +387,12 @@ function expressionToSql(expression: string, derivedLookup?: Record<string, Deri
     stringLiterals.push(content.replace(/'/g, "''"));
     return `__STR${idx}__`;
   });
+  // Permitir literales: números, placeholders __STRn__, ^ = <> ! para comparaciones; comillas solo en esqueleto residual.
+  const allowed = /^[a-zA-Z0-9_*+\-/().,\s'"%;^=<>!]+$/;
+  if (!allowed.test(s)) return null;
+
+  // 0) Normalizar ; a , (Excel usa ; como separador de argumentos)
+  s = s.replace(/;/g, ",");
 
   // 1b) Alias Excel -> SQL: AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(, CONCATENATE( -> CONCAT(
   s = s.replace(/\bAVERAGE\s*\(/gi, "AVG(");
