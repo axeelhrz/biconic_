@@ -126,6 +126,18 @@ export function ifsYieldsOnlyTextLiterals(expression: string): boolean {
   return true;
 }
 
+/**
+ * SUM/AVG sobre una expresión que es solo `IFS(...)` con ramas entre comillas (tipo texto en SQL)
+ * no es válido en Postgres. Para etiquetas por grupo se usa `MAX` (si el grupo tiene un solo valor
+ * de etiqueta, MAX y MIN coinciden con ese valor).
+ */
+export function coerceAggFuncForTextOnlyIFS(func: string, expression: string): string {
+  const f = (func || "SUM").toString().toUpperCase().trim();
+  if (!expression.trim()) return f;
+  if ((f === "SUM" || f === "AVG") && ifsYieldsOnlyTextLiterals(expression)) return "MAX";
+  return f;
+}
+
 /** Convierte IF(cond, thenVal, elseVal) en CASE WHEN cond THEN thenVal ELSE elseVal END (soporta anidamiento por profundidad de paréntesis). */
 function expandIfToCaseWhen(expr: string): string {
   const trimmed = expr.trim();
@@ -145,10 +157,7 @@ function expandIfToCaseWhen(expr: string): string {
       if (depth === 0) break;
     } else if ((c === "," || c === ";") && depth === 1) {
       if (firstComma === -1) firstComma = i;
-      else {
-        secondComma = i;
-        break;
-      }
+      else if (secondComma === -1) secondComma = i;
     }
   }
   if (firstComma === -1 || secondComma === -1) return expr;
