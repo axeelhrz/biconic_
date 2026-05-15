@@ -37,6 +37,7 @@ import {
   coerceAggFuncForTextOnlyIFS,
   type DerivedColumnRef,
 } from "@/lib/dashboard/metricExpressionToSql";
+import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
 
 // --- Interfaces ---
 interface MetricCondition {
@@ -172,14 +173,6 @@ async function fetchTableColumnNames(schemaName: string, tableName: string): Pro
     }
     return null;
   }
-}
-
-function toSqlLiteral(v: any): string {
-  if (v === null || typeof v === "undefined") return "NULL";
-  if (typeof v === "number" && Number.isFinite(v)) return String(v);
-  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-  const s = String(v).replace(/'/g, "''");
-  return `'${s}'`;
 }
 
 /** True si el valor es un año (4 dígitos, 1900–2100). Para arrays, true solo si todos los elementos son año. */
@@ -530,6 +523,7 @@ export async function POST(req: NextRequest) {
         const list = (Array.isArray(cond.value) ? cond.value : [cond.value])
           .map((x: any) => toSqlLiteral(x))
           .join(", ");
+        if (!list.trim()) return "TRUE";
         return `${f} IN (${list})`;
       }
       if ((op === "IS" || op === "IS NOT") && cond.value == null) return `${f} ${op} NULL`;
@@ -1064,6 +1058,7 @@ export async function POST(req: NextRequest) {
             const list = (Array.isArray(f.value) ? f.value : [])
               .map((x) => toSqlLiteral(x))
               .join(", ");
+            if (!list) return "TRUE";
             return `${fieldExpression} IN (${list})`;
           }
           if (op === "BETWEEN") {

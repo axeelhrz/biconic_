@@ -11,6 +11,7 @@ import {
 } from "@/lib/geo/geo-enrichment";
 import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
 import { expandMonthValueWithYearFromFilters } from "@/lib/dashboard/expandMonthFilterWithYear";
+import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
 
 // --- Interfaces (Copied from internal route) ---
 interface Metric {
@@ -51,14 +52,6 @@ interface AggregationRequest {
 }
 
 // --- Constantes ---
-function toSqlLiteral(v: any): string {
-  if (v === null || typeof v === "undefined") return "NULL";
-  if (typeof v === "number" && Number.isFinite(v)) return String(v);
-  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-  const s = String(v).replace(/'/g, "''");
-  return `'${s}'`;
-}
-
 const normalizeStr = (str: string) =>
   str ? str.replace(/\s+/g, "").toUpperCase() : "";
 
@@ -337,6 +330,7 @@ export async function POST(
             const list = (Array.isArray(f.value) ? f.value : [])
               .map((x) => toSqlLiteral(x))
               .join(", ");
+            if (!list) return "TRUE";
             return `${fieldExpression} IN (${list})`;
           }
           if (op === "BETWEEN") {

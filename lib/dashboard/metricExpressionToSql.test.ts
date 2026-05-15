@@ -16,7 +16,7 @@ describe("expressionToSql", () => {
     const expr = "IF(codigoarticulo=999999;0;preciocompra)";
     const sql = expressionToSql(expr);
     expect(sql).not.toBeNull();
-    expect(sql).toBe('(CASE WHEN "codigoarticulo"=999999 THEN 0 ELSE "preciocompra" END)');
+    expect(sql).toBe('(CASE WHEN "codigoarticulo"=\'999999\' THEN 0 ELSE "preciocompra" END)');
     const coerced = coerceArithmeticOperandsToNumeric(sql!);
     expect(countSqlKeywords(coerced, "CASE")).toBe(countSqlKeywords(coerced, "END"));
     expect(coerced).toMatch(/ELSE[\s\S]+END\s*$/);
@@ -51,6 +51,10 @@ describe("expressionToSql", () => {
 
   it("rechaza caracteres no permitidos fuera de literales enmascarados", () => {
     expect(expressionToSql("cola`backtick`")).toBeNull();
+  });
+
+  it("comparación columna = número: literal entre comillas para columnas text en PG", () => {
+    expect(expressionToSql("codigoarticulo=999999")).toBe(`"codigoarticulo"='999999'`);
   });
 });
 

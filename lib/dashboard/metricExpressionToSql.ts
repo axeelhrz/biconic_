@@ -211,6 +211,17 @@ function expandAndOr(expr: string, fn: "AND" | "OR"): string {
   return expr.slice(0, first) + repl + expr.slice(extracted.endIndex + 1);
 }
 
+/**
+ * Evita «operator does not exist: text = integer» cuando la columna ETL es `text` y el usuario
+ * escribe `codigoarticulo=999999` (literal sin comillas). Reescribe `"col" = 999` → `"col" = '999'`.
+ */
+function normalizeNumericComparisonLiterals(sql: string): string {
+  return sql.replace(
+    /("[^"]+")\s*(<=|>=|<>|!=|=|<|>)\s*(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\b/g,
+    (_m, col: string, op: string, num: string) => `${col}${op}'${num}'`
+  );
+}
+
 /** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO", IF(ESTADO='PAGADO',1,0)) en SQL seguro.
  *  - Literales numéricos y cadenas entre comillas se preservan (incl. Unicode en comillas, p. ej. 'México').
  *  - El whitelist de caracteres se aplica al esqueleto tras sustituir literales por placeholders (evita rechazar tildes en texto).
@@ -317,5 +328,5 @@ export function expressionToSql(
     return `'${content}'`;
   });
 
-  return withStrings || null;
+  return normalizeNumericComparisonLiterals(withStrings) || null;
 }
