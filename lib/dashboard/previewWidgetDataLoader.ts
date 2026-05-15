@@ -6,9 +6,10 @@ import {
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget, type ChartConfig } from "@/lib/dashboard/buildChartConfig";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 import { resolveWidgetAggregationForDisplay } from "@/lib/dashboard/widgetRenderParity";
-import { pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
 import { legacyCompareInputFromWidgetAgg, compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
-import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
+import { normalizeAggregationCompare, type ComparePeriodSource } from "@/lib/dashboard/compareSpec";
+import { resolveEffectiveDateGroupByForFetch, type AggForCompareDateGroupBy } from "@/lib/dashboard/aggregateCompareRequest";
+import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 
 type AggregationMetric = {
   id?: string;
@@ -67,6 +68,8 @@ type AggregationConfigLike = {
   compareFixedValue?: number;
   transformCompare?: string;
   transformCompareFixedValue?: string;
+  /** Origen del período para comparaciones temporales (si no va dentro de `compare`). */
+  comparePeriodSource?: ComparePeriodSource;
   dashboardCompareUi?: { enabled?: boolean };
 };
 
@@ -187,53 +190,23 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       ...m,
       field: mapField(m.field, sourceId, datasetDimensions),
     }));
-    const primaryDim = pickDateGroupBySourceField(agg) ?? dimensions[0] ?? agg?.dimension;
-    const dateGroupByGranularity = agg?.dateGroupByGranularity;
     const compareSpec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg));
+    const mapPhysical = (field: string | undefined) => mapField(field, sourceId, datasetDimensions);
+
+    const dg = resolveEffectiveDateGroupByForFetch({
+      effectiveChartType: type,
+      agg: agg as AggForCompareDateGroupBy,
+      compareSpec,
+      mapPhysicalField: mapPhysical,
+    });
+
     /**
      * Paridad con EtlMetricsClient.fetchPreview: Top N solo en buildChartConfig/getProcessedRowsForChart.
      * Evita ORDER BY + LIMIT en SQL (incorrecto con metric_N, FORMULA en capa externa, etc.).
      */
     const rankingActive = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0;
-    /** Misma condición que el bloque `dateGroupBy` del payload: evita LIMIT+N filas con ORDER BY periodo ASC (corta meses recientes si hay 2ª dimensión, ej. columnas apiladas por rubro). */
-    const hasDateGroupBy = !!(dateGroupByGranularity && primaryDim);
 
-    let inferredDateGroupField: string | undefined;
-    let inferredDateGroupGranularity: AggregationConfigLike["dateGroupByGranularity"] | undefined;
-    const kpiNeedsSeries = type === "kpi" && compareNeedsTimeGroupedRows(compareSpec);
-    if (kpiNeedsSeries && !hasDateGroupBy) {
-      if (compareSpec.kind === "temporal" || compareSpec.kind === "cumulative") {
-        const tc = compareSpec.timeColumn?.trim();
-        if (tc) {
-          inferredDateGroupField = mapField(tc, sourceId, datasetDimensions) ?? tc;
-          inferredDateGroupGranularity =
-            (compareSpec.granularity as AggregationConfigLike["dateGroupByGranularity"]) ??
-            dateGroupByGranularity ??
-            "month";
-        }
-      }
-      if (!inferredDateGroupField && (agg?.dateDimension ?? "").trim()) {
-        inferredDateGroupField =
-          mapField(agg.dateDimension, sourceId, datasetDimensions) ?? String(agg?.dateDimension).trim();
-        inferredDateGroupGranularity = dateGroupByGranularity ?? "month";
-      }
-    }
-
-    const dateGroupByField =
-      hasDateGroupBy && primaryDim
-        ? (mapField(primaryDim, sourceId, datasetDimensions) ?? String(primaryDim))
-        : inferredDateGroupField;
-    const dateGroupByGran =
-      hasDateGroupBy && primaryDim ? dateGroupByGranularity : inferredDateGroupGranularity;
-    const hasDateGroupByEffective = !!(dateGroupByField && dateGroupByGran);
-
-    const defaultTemporalOrderBy =
-      kpiNeedsSeries && hasDateGroupByEffective && !agg?.orderBy?.field && dateGroupByField
-        ? ({ field: dateGroupByField, direction: "ASC" as const } satisfies {
-            field: string;
-            direction: "ASC" | "DESC";
-          })
-        : undefined;
+    const defaultTemporalOrderBy = dg.defaultTemporalOrderBy;
 
     const mappedChartX = agg?.chartXAxis ? mapField(agg.chartXAxis, sourceId, datasetDimensions) : undefined;
     const mapAggFilterField = <T extends { field?: string }>(f: T): T => {
@@ -244,6 +217,21 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     };
     const aggFiltersMapped = (agg?.filters ?? []).map((f) => mapAggFilterField(f));
     const globalFiltersMapped = (globalFilters ?? []).map((f) => mapAggFilterField(f));
+
+    const compareFieldForExpand =
+      dg.dateGroupByField ??
+      (compareSpec.kind === "temporal" ? mapPhysical(compareSpec.timeColumn) : undefined) ??
+      (compareSpec.kind === "cumulative" ? mapPhysical(compareSpec.timeColumn) : undefined);
+
+    let mergedFilters = [...globalFiltersMapped, ...aggFiltersMapped];
+    if (compareNeedsTimeGroupedRows(compareSpec) && compareFieldForExpand) {
+      mergedFilters = expandAggregationFiltersForTemporalCompare(mergedFilters, {
+        compareField: compareFieldForExpand,
+        compareSpec,
+        aggComparePeriodSource: (agg as { comparePeriodSource?: ComparePeriodSource }).comparePeriodSource,
+      });
+    }
+
     const dateRangeRaw = agg?.dateRangeFilter as { field?: string; last?: number; unit?: string; from?: string; to?: string } | undefined;
     const dateRangeMapped =
       dateRangeRaw && typeof dateRangeRaw.field === "string"
@@ -260,8 +248,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       dimension: mapField(agg?.dimension, sourceId, datasetDimensions),
       dimensions: dimensions.map((d) => mapField(d, sourceId, datasetDimensions)),
       metrics: metricsPayload,
-      filters: [...globalFiltersMapped, ...aggFiltersMapped],
-      ...(rankingActive || hasDateGroupByEffective
+      filters: mergedFilters,
+      ...(rankingActive || dg.hasDateGroupByEffective
         ? {
             unlimited: true as const,
             ...(agg?.orderBy?.field
@@ -283,11 +271,11 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       transformCompare: (agg as { transformCompare?: string }).transformCompare,
       transformCompareFixedValue: (agg as { transformCompareFixedValue?: string }).transformCompareFixedValue,
       dateDimension: mapField(agg?.dateDimension, sourceId, datasetDimensions),
-      ...(hasDateGroupByEffective && dateGroupByField && dateGroupByGran
+      ...(dg.hasDateGroupByEffective && dg.dateGroupByField && dg.dateGroupByGranularity
         ? {
             dateGroupBy: {
-              field: dateGroupByField,
-              granularity: dateGroupByGran,
+              field: dg.dateGroupByField,
+              granularity: dg.dateGroupByGranularity,
             },
           }
         : {}),

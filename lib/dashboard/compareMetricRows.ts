@@ -70,7 +70,7 @@ export function shiftBucketLabelOneYear(
 
 /** Inicio UTC del bucket (para desplazamientos de calendario). */
 function bucketStartUtc(value: unknown, gran: DateGranularity, parseOpts?: ParseDateLikeOptions): Date | null {
-  const t = bucketSortTime(value, gran, parseOpts);
+  const t = compareBucketSortTime(value, gran, parseOpts);
   if (Number.isNaN(t)) return null;
   return new Date(t);
 }
@@ -117,7 +117,8 @@ export function shiftCalendarBucketLabel(
   return formatDateByGranularity(d2, gran === "day" || gran === "week" ? gran : "month", undefined, parseOpts);
 }
 
-function bucketSortTime(value: unknown, gran: DateGranularity, parseOpts?: ParseDateLikeOptions): number {
+/** Orden cronológico de etiquetas de bucket (exportado para KPI / selección de fila). */
+export function compareBucketSortTime(value: unknown, gran: DateGranularity, parseOpts?: ParseDateLikeOptions): number {
   if (value == null) return NaN;
   const s = typeof value === "string" ? value.trim() : String(value);
   if (gran === "quarter") {
@@ -176,8 +177,8 @@ function attachTemporalLag(
     for (const groupRows of groups.values()) {
       const sorted = [...groupRows].sort(
         (a, b) =>
-          bucketSortTime(getRowValue(a, timeResolved), granularity, parseOpts) -
-          bucketSortTime(getRowValue(b, timeResolved), granularity, parseOpts)
+          compareBucketSortTime(getRowValue(a, timeResolved), granularity, parseOpts) -
+          compareBucketSortTime(getRowValue(b, timeResolved), granularity, parseOpts)
       );
       for (let i = 0; i < sorted.length; i++) {
         const base = sorted[i]!;
@@ -433,8 +434,8 @@ function attachCumulativeCompare(
   for (const groupRows of groups.values()) {
     const sorted = [...groupRows].sort(
       (a, b) =>
-        bucketSortTime(getRowValue(a, timeResolved), granularity, parseOpts) -
-        bucketSortTime(getRowValue(b, timeResolved), granularity, parseOpts)
+        compareBucketSortTime(getRowValue(a, timeResolved), granularity, parseOpts) -
+        compareBucketSortTime(getRowValue(b, timeResolved), granularity, parseOpts)
     );
     const runByAlias: Record<string, number> = {};
     for (const row of sorted) {

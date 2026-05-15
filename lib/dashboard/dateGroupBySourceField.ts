@@ -43,3 +43,16 @@ export function pickDateGroupBySourceField(agg: AggLikeForDateGroupByField | nul
   if (chartX && dims.includes(chartX)) return chartX;
   return primary;
 }
+
+/**
+ * Eje físico para mapear filtros globales de fecha (MONTH/YEAR/…) cuando no hay dimensiones visibles
+ * (p. ej. KPI): `pickDateGroupBySourceField` no usa `dateDimension` si no está en `dimensions`.
+ */
+export function pickSemanticDateAxisForGlobalFilters(agg: AggLikeForDateGroupByField | null | undefined): string | undefined {
+  if (!agg) return undefined;
+  if (!String(agg.dateGroupByGranularity ?? "").trim()) return undefined;
+  const dims = dimensionsListFromAgg(agg);
+  const dateDim = String(agg.dateDimension ?? "").trim();
+  if (dims.length === 0 && dateDim) return dateDim;
+  return pickDateGroupBySourceField(agg);
+}

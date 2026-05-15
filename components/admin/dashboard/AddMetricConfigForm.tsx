@@ -21,7 +21,7 @@ import {
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
 import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
-import type { CompareSpec } from "@/lib/dashboard/compareSpec";
+import type { CompareSpec, ComparePeriodSource } from "@/lib/dashboard/compareSpec";
 import type { DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
 
 export type { DimensionDefaultFilterEdit };
@@ -185,6 +185,7 @@ export type SavedMetricAggregationConfig = {
   comparePeriod?: "previous_year" | "previous_month";
   compare?: CompareSpec;
   dateDimension?: string;
+  comparePeriodSource?: ComparePeriodSource;
   compareFixedValue?: number;
   transformCompare?: "none" | "mom" | "yoy" | "fixed";
   transformCompareFixedValue?: string;

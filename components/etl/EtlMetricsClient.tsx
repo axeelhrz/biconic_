@@ -34,8 +34,16 @@ import {
   resolveMonthYearFromAmbiguousSlash,
   type DateGranularity,
 } from "@/lib/dashboard/dateFormatting";
-import type { CompareSpec, CompareTemporalMode } from "@/lib/dashboard/compareSpec";
+import type {
+  CompareSpec,
+  CompareTemporalMode,
+  ComparePeriodSource,
+  LegacyCompareInput,
+} from "@/lib/dashboard/compareSpec";
 import { normalizeAggregationCompare, deriveLegacyTransformCompare } from "@/lib/dashboard/compareSpec";
+import { compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
+import { resolveEffectiveDateGroupByForFetch } from "@/lib/dashboard/aggregateCompareRequest";
+import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
 import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
@@ -1690,10 +1698,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             : undefined,
         dateDimension: typeof dateColOpen === "string" ? dateColOpen : undefined,
       });
-      setAnalysisCompare(compareResolved);
+      const cpsTop = (cfg as { comparePeriodSource?: ComparePeriodSource }).comparePeriodSource;
+      let mergedCompare: CompareSpec = compareResolved;
+      if (
+        (mergedCompare.kind === "temporal" || mergedCompare.kind === "cumulative") &&
+        cpsTop &&
+        !mergedCompare.periodSource &&
+        (cpsTop === "dashboard" || cpsTop === "widget" || cpsTop === "fixed" || cpsTop === "data_max")
+      ) {
+        mergedCompare = { ...mergedCompare, periodSource: cpsTop };
+      }
+      setAnalysisCompare(mergedCompare);
       const fixedStr =
-        compareResolved.kind === "fixed"
-          ? String(compareResolved.value)
+        mergedCompare.kind === "fixed"
+          ? String(mergedCompare.value)
           : typeof cfg.transformCompareFixedValue === "string" && cfg.transformCompareFixedValue.trim()
             ? cfg.transformCompareFixedValue
             : typeof (cfg as { compareFixedValue?: unknown }).compareFixedValue === "number"
@@ -2050,21 +2068,75 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           value: d.defaultValue,
         }));
       const mergedPreviewFilters = [...formFiltersPayload, ...ddPreviewFilters];
+      const includePeriodInResult = formDimensions.some((d) => d && String(d).trim() === timeColumn);
+      const useAnalysisConfig = wizard === "C" || wizard === "D";
+
+      const compareLegacyInput: LegacyCompareInput = useAnalysisConfig
+        ? {
+            compare: analysisCompare.kind !== "none" ? analysisCompare : undefined,
+            dateGroupBy:
+              includePeriodInResult && timeColumn && analysisGranularity
+                ? { field: timeColumn, granularity: analysisGranularity }
+                : undefined,
+            dateDimension: timeColumn || undefined,
+          }
+        : {};
+      const compareSpecResolved = useAnalysisConfig
+        ? normalizeAggregationCompare(compareLegacyInput)
+        : ({ kind: "none" } as CompareSpec);
+
+      const dg = useAnalysisConfig
+        ? resolveEffectiveDateGroupByForFetch({
+            effectiveChartType: formChartType,
+            agg: {
+              dimensions: formDimensions.filter(Boolean),
+              dimension: formDimensions.find(Boolean),
+              chartXAxis: chartXAxis ? String(chartXAxis).trim() : undefined,
+              dateDimension: timeColumn || undefined,
+              dateGroupByGranularity: analysisGranularity || undefined,
+              orderBy: formOrderBy?.field ? formOrderBy : undefined,
+            },
+            compareSpec: compareSpecResolved,
+            mapPhysicalField: (f) => (f == null || f === "" ? undefined : f),
+            inferInternalSeriesWithoutVisibleTimeDimension: true,
+          })
+        : null;
+
+      let filtersForRequest = mergedPreviewFilters;
+      if (useAnalysisConfig && compareNeedsTimeGroupedRows(compareSpecResolved) && dg) {
+        const cf =
+          dg.dateGroupByField ??
+          (compareSpecResolved.kind === "temporal" ? compareSpecResolved.timeColumn : undefined) ??
+          (compareSpecResolved.kind === "cumulative" ? compareSpecResolved.timeColumn : undefined);
+        if (cf) {
+          filtersForRequest = expandAggregationFiltersForTemporalCompare(mergedPreviewFilters, {
+            compareField: cf,
+            compareSpec: compareSpecResolved,
+          }) as typeof mergedPreviewFilters;
+        }
+      }
+
       const body: Record<string, unknown> = {
         tableName,
         etlId,
         dimensions: formDimensions.length > 0 ? formDimensions.filter(Boolean) : undefined,
         metrics: metricsPayload,
-        filters: mergedPreviewFilters.length > 0 ? mergedPreviewFilters : undefined,
-        orderBy: formOrderBy?.field ? formOrderBy : undefined,
+        filters: filtersForRequest.length > 0 ? filtersForRequest : undefined,
+        orderBy: formOrderBy?.field
+          ? formOrderBy
+          : useAnalysisConfig && dg?.defaultTemporalOrderBy
+            ? dg.defaultTemporalOrderBy
+            : undefined,
         unlimited: true,
         ...(formLimit != null && formLimit > 0 ? { limit: formLimit } : {}),
       };
       if (derivedToSend.length > 0) {
-        body.derivedColumns = derivedToSend.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" }));
+        body.derivedColumns = derivedToSend.map((d) => ({
+          name: d.name,
+          expression: d.expression,
+          defaultAggregation: d.defaultAggregation || "SUM",
+        }));
       }
-      const includePeriodInResult = formDimensions.some((d) => d && String(d).trim() === timeColumn);
-      const useAnalysisConfig = wizard === "C" || wizard === "D";
       if (useAnalysisConfig && timeColumn) {
         if (analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo) {
           body.dateRangeFilter = { field: timeColumn, from: analysisDateFrom, to: analysisDateTo };
@@ -2075,10 +2147,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             body.dateRangeFilter = { field: timeColumn, last: rangeNum, unit };
           }
         }
-        // Si no se elige rango (valor "0" o vacío), no se envía dateRangeFilter: se traen todos los datos.
-        if (analysisGranularity && includePeriodInResult) {
-          body.dateGroupBy = { field: timeColumn, granularity: analysisGranularity };
-        }
+      }
+      if (useAnalysisConfig && dg?.hasDateGroupByEffective && dg.dateGroupByField && dg.dateGroupByGranularity) {
+        body.dateGroupBy = {
+          field: dg.dateGroupByField,
+          granularity: dg.dateGroupByGranularity,
+        };
       }
       if (useAnalysisConfig && analysisCompare.kind !== "none") {
         body.compare = analysisCompare as unknown as Record<string, unknown>;
@@ -3135,6 +3209,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       limit: formLimit ?? 100,
       cumulative: cumulativeToSave,
       compare: analysisCompare.kind === "none" ? undefined : analysisCompare,
+      comparePeriodSource:
+        analysisCompare.kind === "temporal" || analysisCompare.kind === "cumulative"
+          ? analysisCompare.periodSource
+          : undefined,
       comparePeriod: comparePeriodToSave,
       compareFixedValue: Number.isFinite(compareFixedValueToSave) ? compareFixedValueToSave : undefined,
       transformCompare: legacyTc,
@@ -3417,6 +3495,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       limit: formLimit ?? 100,
       cumulative: cumulativeToSave,
       compare: analysisCompare.kind === "none" ? undefined : analysisCompare,
+      comparePeriodSource:
+        analysisCompare.kind === "temporal" || analysisCompare.kind === "cumulative"
+          ? analysisCompare.periodSource
+          : undefined,
       comparePeriod: comparePeriodToSave,
       compareFixedValue: Number.isFinite(compareFixedValueToSave) ? compareFixedValueToSave : undefined,
       transformCompare: legacyTcB,
@@ -5975,15 +6057,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                             return;
                           }
                           if (v === "temporal") {
-                            if (!timeColumn?.trim() || !analysisGranularity) {
-                              toast.error("Definí columna de tiempo y granularidad en el paso anterior.");
+                            const defaultTc = (timeColumn || dateFields[0] || "").trim();
+                            const gran = (analysisGranularity || "month") as DateGranularity;
+                            if (!defaultTc) {
+                              toast.error("No hay columna de fecha: definí el eje temporal en el paso anterior o agregá una columna fecha al dataset.");
                               return;
                             }
                             setAnalysisCompare({
                               kind: "temporal",
                               mode: "prev_bucket",
-                              timeColumn: timeColumn.trim(),
-                              granularity: analysisGranularity as DateGranularity,
+                              timeColumn: defaultTc,
+                              granularity: gran,
+                              periodSource: "dashboard",
                             });
                             return;
                           }
@@ -6010,15 +6095,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                             return;
                           }
                           if (v === "cumulative") {
-                            if (!timeColumn?.trim() || !analysisGranularity) {
-                              toast.error("Definí columna de tiempo y granularidad para acumulados.");
+                            const defaultTc = (timeColumn || dateFields[0] || "").trim();
+                            const gran = (analysisGranularity || "month") as DateGranularity;
+                            if (!defaultTc) {
+                              toast.error("No hay columna de fecha para acumulados.");
                               return;
                             }
                             setAnalysisCompare({
                               kind: "cumulative",
                               mode: "month_vs_ytd",
-                              timeColumn: timeColumn.trim(),
-                              granularity: analysisGranularity as DateGranularity,
+                              timeColumn: defaultTc,
+                              granularity: gran,
+                              periodSource: "dashboard",
                             });
                           }
                         }}
@@ -6043,12 +6131,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                           value={analysisCompare.mode}
                           onChange={(e) => {
                             const mode = e.target.value as CompareTemporalMode;
-                            if (!timeColumn?.trim() || !analysisGranularity) return;
+                            if (analysisCompare.kind !== "temporal") return;
                             setAnalysisCompare({
-                              kind: "temporal",
+                              ...analysisCompare,
                               mode,
-                              timeColumn: timeColumn.trim(),
-                              granularity: analysisGranularity as DateGranularity,
                             });
                           }}
                         >
@@ -6058,6 +6144,62 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                           <option value="calendar_prev_week">Semana calendario anterior</option>
                           <option value="calendar_prev_month">Mes calendario anterior</option>
                           <option value="calendar_prev_year">Año calendario anterior</option>
+                        </select>
+                        <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg-muted)" }}>
+                          Campo de fecha para la comparación (puede ser solo cálculo, sin mostrarse en el gráfico)
+                        </Label>
+                        <select
+                          className="w-full h-9 rounded-lg border px-3 text-sm"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          value={analysisCompare.timeColumn}
+                          onChange={(e) => {
+                            const col = e.target.value;
+                            if (analysisCompare.kind !== "temporal") return;
+                            setAnalysisCompare({ ...analysisCompare, timeColumn: col });
+                          }}
+                        >
+                          {(dateFields.length ? dateFields : timeColumn ? [timeColumn] : []).map((f) => (
+                            <option key={f} value={f}>
+                              {getSampleDisplayLabel(f)}
+                            </option>
+                          ))}
+                        </select>
+                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                          Granularidad del bucket
+                        </Label>
+                        <select
+                          className="w-full h-9 rounded-lg border px-3 text-sm"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          value={analysisCompare.granularity}
+                          onChange={(e) => {
+                            const g = e.target.value as DateGranularity;
+                            if (analysisCompare.kind !== "temporal") return;
+                            setAnalysisCompare({ ...analysisCompare, granularity: g });
+                          }}
+                        >
+                          {(["day", "week", "month", "quarter", "semester", "year"] as const).map((g) => (
+                            <option key={g} value={g}>
+                              {g}
+                            </option>
+                          ))}
+                        </select>
+                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                          Fuente del período
+                        </Label>
+                        <select
+                          className="w-full h-9 rounded-lg border px-3 text-sm"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          value={analysisCompare.periodSource ?? "dashboard"}
+                          onChange={(e) => {
+                            const periodSource = e.target.value as ComparePeriodSource;
+                            if (analysisCompare.kind !== "temporal") return;
+                            setAnalysisCompare({ ...analysisCompare, periodSource });
+                          }}
+                        >
+                          <option value="dashboard">Heredar (tablero + filtros del análisis)</option>
+                          <option value="widget">Priorizar rango de fechas del análisis</option>
+                          <option value="fixed">Fijo (sin expansión automática de filtros)</option>
+                          <option value="data_max">Último dato disponible</option>
                         </select>
                         <div className="space-y-2">
                           <p className="text-xs font-medium" style={{ color: "var(--platform-fg)" }}>Columnas a visualizar:</p>
@@ -6180,18 +6322,72 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                           value={analysisCompare.mode}
                           onChange={(e) => {
                             const mode = e.target.value as "month_vs_ytd" | "vs_prior_year_ytd" | "ytd_running";
-                            if (!timeColumn?.trim() || !analysisGranularity) return;
+                            if (analysisCompare.kind !== "cumulative") return;
                             setAnalysisCompare({
-                              kind: "cumulative",
+                              ...analysisCompare,
                               mode,
-                              timeColumn: timeColumn.trim(),
-                              granularity: analysisGranularity as DateGranularity,
                             });
                           }}
                         >
                           <option value="month_vs_ytd">Mes vs YTD (% del acumulado anual)</option>
                           <option value="vs_prior_year_ytd">YTD vs mismo mes año anterior</option>
                           <option value="ytd_running">Suma acumulada YTD (por año)</option>
+                        </select>
+                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                          Campo de fecha (acumulados)
+                        </Label>
+                        <select
+                          className="w-full h-9 rounded-lg border px-3 text-sm"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          value={analysisCompare.timeColumn}
+                          onChange={(e) => {
+                            const col = e.target.value;
+                            if (analysisCompare.kind !== "cumulative") return;
+                            setAnalysisCompare({ ...analysisCompare, timeColumn: col });
+                          }}
+                        >
+                          {(dateFields.length ? dateFields : timeColumn ? [timeColumn] : []).map((f) => (
+                            <option key={f} value={f}>
+                              {getSampleDisplayLabel(f)}
+                            </option>
+                          ))}
+                        </select>
+                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                          Granularidad
+                        </Label>
+                        <select
+                          className="w-full h-9 rounded-lg border px-3 text-sm"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          value={analysisCompare.granularity}
+                          onChange={(e) => {
+                            const g = e.target.value as DateGranularity;
+                            if (analysisCompare.kind !== "cumulative") return;
+                            setAnalysisCompare({ ...analysisCompare, granularity: g });
+                          }}
+                        >
+                          {(["day", "week", "month", "quarter", "semester", "year"] as const).map((g) => (
+                            <option key={g} value={g}>
+                              {g}
+                            </option>
+                          ))}
+                        </select>
+                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
+                          Fuente del período
+                        </Label>
+                        <select
+                          className="w-full h-9 rounded-lg border px-3 text-sm"
+                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          value={analysisCompare.periodSource ?? "dashboard"}
+                          onChange={(e) => {
+                            const periodSource = e.target.value as ComparePeriodSource;
+                            if (analysisCompare.kind !== "cumulative") return;
+                            setAnalysisCompare({ ...analysisCompare, periodSource });
+                          }}
+                        >
+                          <option value="dashboard">Heredar (tablero + filtros del análisis)</option>
+                          <option value="widget">Priorizar rango de fechas del análisis</option>
+                          <option value="fixed">Fijo (sin expansión automática de filtros)</option>
+                          <option value="data_max">Último dato disponible</option>
                         </select>
                       </div>
                     )}

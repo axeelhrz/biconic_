@@ -1,8 +1,9 @@
 import type { CompareSpec, LegacyCompareInput } from "@/lib/dashboard/compareSpec";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
-import { getRowValue, resolveRowColumnKey } from "@/lib/dashboard/compareMetricRows";
+import { getRowValue, resolveRowColumnKey, compareBucketSortTime } from "@/lib/dashboard/compareMetricRows";
 import { formatValue, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
+import type { ParseDateLikeOptions } from "@/lib/dashboard/dateFormatting";
 
 function toNum(v: unknown): number | null {
   if (v == null || v === "") return null;
@@ -235,14 +236,26 @@ export function readComparePresentation(
   return { current, reference, delta, deltaPct };
 }
 
-/** Fila recomendada para KPI con serie temporal (último bucket). */
+/** Fila recomendada para KPI con serie temporal: bucket de mayor fecha (alineado al período actual tras expansión de filtros). */
 export function pickDashboardKpiCompareRow(
   rows: Record<string, unknown>[],
-  spec: CompareSpec
+  spec: CompareSpec,
+  parseOpts?: ParseDateLikeOptions
 ): Record<string, unknown> | null {
   if (!rows.length) return null;
   if (spec.kind === "temporal" || spec.kind === "cumulative") {
-    return rows[rows.length - 1] as Record<string, unknown>;
+    const col = spec.timeColumn?.trim();
+    if (!col) return rows[rows.length - 1] ?? null;
+    let bestIdx = 0;
+    let bestT = compareBucketSortTime(getRowValue(rows[0]!, col), spec.granularity, parseOpts);
+    for (let i = 1; i < rows.length; i++) {
+      const t = compareBucketSortTime(getRowValue(rows[i]!, col), spec.granularity, parseOpts);
+      if (!Number.isNaN(t) && (Number.isNaN(bestT) || t > bestT)) {
+        bestT = t;
+        bestIdx = i;
+      }
+    }
+    return rows[bestIdx] ?? null;
   }
   return rows[0] as Record<string, unknown>;
 }

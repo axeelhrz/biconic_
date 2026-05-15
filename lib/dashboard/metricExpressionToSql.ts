@@ -80,6 +80,52 @@ function extractParenContent(s: string, start: number): { inner: string; endInde
   return null;
 }
 
+/** Si el fragmento ya es CASE … sin paréntesis envolventes, lo envuelve para que escáneres/SQL no confundan WHEN/END anidados. */
+function wrapBareCaseFragment(expanded: string): string {
+  const t = expanded.trim();
+  if (!/\bCASE\s/i.test(t)) return expanded;
+  if (t[0] === "(") {
+    const ex = extractParenContent(t, 0);
+    if (ex && ex.endIndex === t.length - 1) return expanded;
+  }
+  return `(${t})`;
+}
+
+/** Literal de texto estilo hoja de cálculo: comillas simples o dobles sin escapado interno. */
+function isSpreadsheetQuotedString(arg: string): boolean {
+  const t = arg.trim();
+  if (/^'[^']*'$/.test(t)) return true;
+  if (/^"[^"]*"$/.test(t)) return true;
+  return false;
+}
+
+/**
+ * True si la expresión (tras trim y `;` → `,`) es solo una llamada `IFS(...)` y cada valor de rama
+ * (cada segundo argumento del par + el default opcional) es un literal entre comillas.
+ * Ese `CASE` en SQL es de tipo texto: SUM/AVG en Postgres fallan (`function sum(text) does not exist`).
+ */
+export function ifsYieldsOnlyTextLiterals(expression: string): boolean {
+  let s = (expression || "").replace(/\s+/g, " ").trim().replace(/;/g, ",");
+  if (!s) return false;
+  const ifsStart = s.search(/\bIFS\s*\(/i);
+  if (ifsStart === -1 || ifsStart !== 0) return false;
+  const open = s.indexOf("(", ifsStart);
+  if (open === -1) return false;
+  const extracted = extractParenContent(s, open);
+  if (!extracted) return false;
+  const tail = s.slice(extracted.endIndex + 1).trim();
+  if (tail.length > 0) return false;
+  const args = splitArgs(extracted.inner);
+  if (args.length < 2) return false;
+  let i = 0;
+  while (i + 1 < args.length) {
+    if (!isSpreadsheetQuotedString(args[i + 1]!)) return false;
+    i += 2;
+  }
+  if (i < args.length && !isSpreadsheetQuotedString(args[i]!)) return false;
+  return true;
+}
+
 /** Convierte IF(cond, thenVal, elseVal) en CASE WHEN cond THEN thenVal ELSE elseVal END (soporta anidamiento por profundidad de paréntesis). */
 function expandIfToCaseWhen(expr: string): string {
   const trimmed = expr.trim();
@@ -109,7 +155,7 @@ function expandIfToCaseWhen(expr: string): string {
   const cond = trimmed.slice(start + 1, firstComma).trim();
   const thenVal = trimmed.slice(firstComma + 1, secondComma).trim();
   const elseVal = trimmed.slice(secondComma + 1, i).trim();
-  const caseExpr = `(CASE WHEN ${expandIfToCaseWhen(cond)} THEN ${expandIfToCaseWhen(thenVal)} ELSE ${expandIfToCaseWhen(elseVal)} END)`;
+  const caseExpr = `(CASE WHEN ${wrapBareCaseFragment(expandIfToCaseWhen(cond))} THEN ${wrapBareCaseFragment(expandIfToCaseWhen(thenVal))} ELSE ${wrapBareCaseFragment(expandIfToCaseWhen(elseVal))} END)`;
   return trimmed.slice(0, ifStart) + caseExpr + trimmed.slice(i + 1);
 }
 
@@ -130,8 +176,13 @@ function expandIfsToCaseWhen(expr: string): string {
     i += 2;
   }
   const defaultVal = i < args.length ? args[i] : "NULL";
-  const whenParts = pairs.map((p) => `WHEN ${expandIfsToCaseWhen(p.cond)} THEN ${expandIfsToCaseWhen(p.val)}`).join(" ");
-  const caseExpr = `(CASE ${whenParts} ELSE ${expandIfsToCaseWhen(defaultVal)} END)`;
+  const whenParts = pairs
+    .map(
+      (p) =>
+        `WHEN ${wrapBareCaseFragment(expandIfsToCaseWhen(p.cond))} THEN ${wrapBareCaseFragment(expandIfsToCaseWhen(p.val))}`
+    )
+    .join(" ");
+  const caseExpr = `(CASE ${whenParts} ELSE ${wrapBareCaseFragment(expandIfsToCaseWhen(defaultVal))} END)`;
   return trimmed.slice(0, ifsStart) + caseExpr + trimmed.slice(extracted.endIndex + 1);
 }
 

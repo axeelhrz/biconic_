@@ -365,13 +365,17 @@ export function DashboardWidgetRenderer({
     const rows = widget.rows as Record<string, unknown>[];
     const aggCfg = widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"];
     const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(aggCfg));
+    const parseOpts =
+      (aggCfg as { dateSlashOrder?: string } | undefined)?.dateSlashOrder === "MDY"
+        ? ({ slashDateOrder: "MDY" } as const)
+        : ({ slashDateOrder: "DMY" } as const);
     const useLastBucket =
       Boolean((aggCfg as { dashboardCompareUi?: { enabled?: boolean } } | undefined)?.dashboardCompareUi?.enabled) &&
       compareNeedsTimeGroupedRows(spec) &&
       rows.length > 1;
 
     if (useLastBucket) {
-      const lastRow = rows[rows.length - 1] ?? {};
+      const lastRow = pickDashboardKpiCompareRow(rows, spec, parseOpts) ?? rows[rows.length - 1] ?? {};
       const resultKeys = Object.keys(lastRow);
       const metricAliases =
         aggCfg?.enabled && aggCfg.metrics?.length
@@ -431,7 +435,11 @@ export function DashboardWidgetRenderer({
     const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg as never));
     if (spec.kind === "none") return null;
     const rows = widget.rows as Record<string, unknown>[];
-    const dataRow = pickDashboardKpiCompareRow(rows, spec) ?? rows[0]!;
+    const parseOpts =
+      (agg as { dateSlashOrder?: string } | undefined)?.dateSlashOrder === "MDY"
+        ? ({ slashDateOrder: "MDY" } as const)
+        : ({ slashDateOrder: "DMY" } as const);
+    const dataRow = pickDashboardKpiCompareRow(rows, spec, parseOpts) ?? rows[0]!;
     const resultKeys = Object.keys(dataRow);
     const metricsKpi =
       (widget.aggregationConfig as { metrics?: { alias?: string; func?: string; field?: string }[] } | undefined)

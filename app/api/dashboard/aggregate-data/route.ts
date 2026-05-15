@@ -26,9 +26,14 @@ import {
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { applyCompareSpecToRows } from "@/lib/dashboard/compareMetricRows";
 import {
+  findThenBranchBoundary,
+  findElseBranchClosingEnd,
+} from "@/lib/dashboard/caseSqlBranchScan";
+import {
   expressionToSql,
   splitArgs,
   quotedColumn,
+  ifsYieldsOnlyTextLiterals,
   type DerivedColumnRef,
 } from "@/lib/dashboard/metricExpressionToSql";
 
@@ -456,12 +461,8 @@ function tryCoerceCaseWhenSql(s: string): string | null {
       if (thenIdx === -1) return null;
       const cond = t.slice(afterWhen, thenIdx).trim();
       const afterThen = skipWsSql(t, thenIdx + 4);
-      const nw = findSqlKeywordAtDepthZero(t, afterThen, "WHEN");
-      const ne = findSqlKeywordAtDepthZero(t, afterThen, "ELSE");
-      const nend = findSqlKeywordAtDepthZero(t, afterThen, "END");
-      const candidates = [nw, ne, nend].filter((x) => x >= 0);
-      if (candidates.length === 0) return null;
-      const boundary = Math.min(...candidates);
+      const boundary = findThenBranchBoundary(t, afterThen);
+      if (boundary === -1) return null;
       const thenVal = t.slice(afterThen, boundary).trim();
       parts.push(`WHEN ${cond} THEN ${coerceNumericSqlExpr(thenVal)}`);
       i = boundary;
@@ -469,7 +470,7 @@ function tryCoerceCaseWhenSql(s: string): string | null {
     }
     if (matchSqlKeywordAt(t, i, "ELSE")) {
       const afterElse = skipWsSql(t, i + 4);
-      const endIdx = findSqlKeywordAtDepthZero(t, afterElse, "END");
+      const endIdx = findElseBranchClosingEnd(t, afterElse);
       if (endIdx === -1) return null;
       const elseVal = t.slice(afterElse, endIdx).trim();
       parts.push(`ELSE ${coerceNumericSqlExpr(elseVal)}`);
@@ -1007,6 +1008,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Construcción de Métricas. Columnas calculadas: field -> expression + func. Si field es nombre de métrica guardada, expandir.
+    let textAggIFSError: string | null = null;
     const metricClauses = metricsBase
       .map((m) => {
         const i = body.metrics.indexOf(m);
@@ -1052,6 +1054,15 @@ export async function POST(req: NextRequest) {
           }
         }
         (m as any)._compoundAggregate = isCompoundAggregate;
+
+        if (
+          resolvedExpr.trim() &&
+          (func === "SUM" || func === "AVG") &&
+          ifsYieldsOnlyTextLiterals(resolvedExpr) &&
+          !textAggIFSError
+        ) {
+          textAggIFSError = `Métrica en posición ${i + 1}: IFS devuelve solo etiquetas de texto. PostgreSQL no permite SUM ni AVG sobre texto. Usá MAX o MIN para una etiqueta por grupo, definí la categoría como columna calculada y usala como dimensión, o hacé que IFS devuelva números.`;
+        }
 
         const fieldExpr = (() => {
           if (resolvedExpr) {
@@ -1145,6 +1156,10 @@ export async function POST(req: NextRequest) {
         return `${aggExpr} AS "${internalAlias}"`;
       })
       .join(", ");
+
+    if (textAggIFSError) {
+      return NextResponse.json({ error: textAggIFSError }, { status: 400 });
+    }
 
     if (metricsBase.some((m) => (m as any)._ratioAggregateError)) {
       return NextResponse.json(
@@ -1522,6 +1537,10 @@ export async function POST(req: NextRequest) {
       const msg = error.message || String(error);
       console.error("[aggregate-data] execute_sql error:", msg, "Query:", query.slice(0, 500), "derivedByName:", JSON.stringify(derivedByName));
       let userMsg = "Error al ejecutar la agregación: " + msg;
+      if (/function\s+(sum|avg)\s*\(\s*text\s*\)\s+does\s+not\s+exist/i.test(msg)) {
+        userMsg +=
+          " Si la métrica usa IFS con comillas (etiquetas de texto), no uses SUM ni AVG: usá MAX o MIN, o definí la categoría como columna calculada y usala como dimensión.";
+      }
       if (/column\s+["']?(\w+)["']?\s+does not exist/i.test(msg)) {
         const colMatch = msg.match(/column\s+["']?(\w+)["']?\s+does not exist/i);
         const colName = colMatch ? colMatch[1] : "";

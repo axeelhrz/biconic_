@@ -1,5 +1,13 @@
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
 
+/** Origen del período para comparaciones temporales (persistido en `compare` o `comparePeriodSource`). */
+export type ComparePeriodSource = "dashboard" | "widget" | "fixed" | "data_max";
+
+function parsePeriodSource(raw: unknown): ComparePeriodSource | undefined {
+  if (raw === "dashboard" || raw === "widget" || raw === "fixed" || raw === "data_max") return raw;
+  return undefined;
+}
+
 /** Modo temporal explícito (calendario vs serie). */
 export type CompareTemporalMode =
   | "prev_bucket"
@@ -21,6 +29,8 @@ export type CompareSpec =
       /** Columna de tiempo presente en cada fila (mismo nombre que en el resultado). */
       timeColumn: string;
       granularity: DateGranularity;
+      /** Por defecto `dashboard`: hereda filtros del tablero + widget. */
+      periodSource?: ComparePeriodSource;
     }
   | { kind: "column"; refColumn: string }
   | { kind: "fixed"; value: number }
@@ -40,6 +50,7 @@ export type CompareSpec =
       mode: CompareCumulativeMode;
       timeColumn: string;
       granularity: DateGranularity;
+      periodSource?: ComparePeriodSource;
     };
 
 const VALID_GRAN: DateGranularity[] = ["day", "week", "month", "quarter", "semester", "year"];
@@ -80,6 +91,10 @@ function parseCompareSpecObject(raw: unknown): CompareSpec | null {
       mode,
       timeColumn,
       granularity: asGranularity(typeof o.granularity === "string" ? o.granularity : undefined),
+      ...(() => {
+        const ps = parsePeriodSource(o.periodSource);
+        return ps ? { periodSource: ps } : {};
+      })(),
     };
   }
   if (kind === "average") {
@@ -108,6 +123,10 @@ function parseCompareSpecObject(raw: unknown): CompareSpec | null {
       mode,
       timeColumn,
       granularity: asGranularity(typeof o.granularity === "string" ? o.granularity : undefined),
+      ...(() => {
+        const ps = parsePeriodSource(o.periodSource);
+        return ps ? { periodSource: ps } : {};
+      })(),
     };
   }
   return null;
@@ -176,7 +195,24 @@ export function normalizeAggregationCompare(input: LegacyCompareInput): CompareS
   return { kind: "none" };
 }
 
-/** Compatibilidad con widgets que solo leen `transformCompare`. */
+/** Fuente de período efectiva para expansión de filtros (dashboard por defecto). */
+export function getComparePeriodSource(
+  spec: CompareSpec,
+  aggComparePeriodSource?: ComparePeriodSource | string | null
+): ComparePeriodSource {
+  if (aggComparePeriodSource === "dashboard" || aggComparePeriodSource === "widget" || aggComparePeriodSource === "fixed" || aggComparePeriodSource === "data_max") {
+    return aggComparePeriodSource;
+  }
+  if (spec.kind === "temporal" && spec.periodSource) return spec.periodSource;
+  if (spec.kind === "cumulative" && spec.periodSource) return spec.periodSource;
+  return "dashboard";
+}
+
+/**
+ * Objetivo / meta: no hay tipo dedicado `target` aún. Opciones:
+ * - Valor fijo por widget: `compare: { kind: "fixed", value: N }`.
+ * - Meta en datos: agregar columna calculada o física en el ETL y usar `compare: { kind: "column", refColumn: "meta_ventas" }`.
+ */
 export function deriveLegacyTransformCompare(spec: CompareSpec): "none" | "mom" | "yoy" | "fixed" {
   if (spec.kind === "fixed") return "fixed";
   if (spec.kind === "temporal" && spec.mode === "same_period_prior_year") return "yoy";
