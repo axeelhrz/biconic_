@@ -1,4 +1,4 @@
-import type { AggregationMetricEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
+import type { AggregationMetricEdit } from "@/lib/dashboard/metricConfigTypes";
 
 export type SavedMetricForExpand = {
   id?: string;

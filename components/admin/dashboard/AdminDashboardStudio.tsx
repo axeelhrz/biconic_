@@ -44,6 +44,8 @@ import {
 } from "@/lib/dashboard/buildChartConfig";
 import type { ChartLabelDisplayMode, ChartPercentBasis, ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import { shouldRefetchWidgetOnComparePatch } from "@/lib/dashboard/compareAggRefetch";
+import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import {
   compactGeoComponentOverridesForRequest,
   compactGeoOverridesByXLabelForRequest,
@@ -429,6 +431,7 @@ export function AdminDashboardStudio({
   const autoLoadWidgetsDoneRef = useRef(false);
   /** Tras merge de savedMetrics desde ETL, recargar widgets de análisis (expand depende de tarjetas por id). */
   const analysisReloadLastSavedMetricsLenRef = useRef(-1);
+  const compareRefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const layoutHydratedForAnalysisRef = useRef(false);
   const resizeStateRef = useRef<{
     widgetId: string;
@@ -1184,6 +1187,10 @@ export function AdminDashboardStudio({
       const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
       const sources = etlData?.dataSources;
       const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
+      const compareUi = ensureDashboardCompareUi(cfg as Parameters<typeof ensureDashboardCompareUi>[0], {
+        widgetType: chartType,
+        chartType,
+      });
       const aggregationConfig: AggregationConfig = {
         ...(cfg as AggregationConfig),
         enabled: true,
@@ -1192,6 +1199,7 @@ export function AdminDashboardStudio({
         dimensions: dims.length > 0 ? dims : undefined,
         metrics,
         chartType,
+        ...(compareUi ? { dashboardCompareUi: compareUi } : {}),
       };
       return {
         id: `w-${saved.id}-${Date.now()}`,
@@ -1258,6 +1266,10 @@ export function AdminDashboardStudio({
       const currentPageWidgets = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
       const sources = etlData?.dataSources;
       const primaryId = etlData?.primarySourceId ?? sources?.[0]?.id ?? null;
+      const compareUi = ensureDashboardCompareUi(mergedCfg as Parameters<typeof ensureDashboardCompareUi>[0], {
+        widgetType: chartType,
+        chartType,
+      });
       const aggregationConfig: AggregationConfig = {
         ...(mergedCfg as AggregationConfig),
         enabled: true,
@@ -1266,6 +1278,7 @@ export function AdminDashboardStudio({
         dimensions: dims.length > 0 ? dims : undefined,
         metrics: sanitizedMetrics,
         chartType,
+        ...(compareUi ? { dashboardCompareUi: compareUi } : {}),
       };
       return {
         id: `w-${analysis.id}-${Date.now()}`,
@@ -1571,9 +1584,16 @@ export function AdminDashboardStudio({
 
   const themeResolved = useMemo(() => mergeTheme(dashboardTheme), [dashboardTheme]);
 
+  useEffect(() => {
+    return () => {
+      if (compareRefetchTimerRef.current) clearTimeout(compareRefetchTimerRef.current);
+    };
+  }, []);
+
   const handleMetricPanelUpdate = useCallback(
     (patch: Partial<MetricConfigWidget>) => {
       if (!selectedId) return;
+      const aggPatch = patch.aggregationConfig as Record<string, unknown> | undefined;
       const nonChartStudioTypes = new Set(["table", "filter", "text", "image", "map"]);
       setWidgets((prev) =>
         prev.map((w) => {
@@ -1624,8 +1644,16 @@ export function AdminDashboardStudio({
         })
       );
       setIsDirty(true);
+
+      if (aggPatch && shouldRefetchWidgetOnComparePatch(aggPatch)) {
+        const widgetId = selectedId;
+        if (compareRefetchTimerRef.current) clearTimeout(compareRefetchTimerRef.current);
+        compareRefetchTimerRef.current = setTimeout(() => {
+          void loadMetricData(widgetId);
+        }, 500);
+      }
     },
-    [selectedId]
+    [selectedId, loadMetricData]
   );
 
   const selectedWidgetForPanel = useMemo(() => {

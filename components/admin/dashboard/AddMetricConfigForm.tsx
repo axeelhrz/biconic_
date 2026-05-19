@@ -21,261 +21,25 @@ import {
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
 import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
-import type { CompareSpec, ComparePeriodSource } from "@/lib/dashboard/compareSpec";
-import type { DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
+export type {
+  DimensionDefaultFilterEdit,
+  MetricConditionEdit,
+  AggregationMetricEdit,
+  AggregationFilterEdit,
+  AggregationConfigEdit,
+  AddMetricFormConfig,
+  SavedMetricAggregationConfig,
+  SavedMetricForm,
+} from "@/lib/dashboard/metricConfigTypes";
 
-export type { DimensionDefaultFilterEdit };
-
-export type MetricConditionEdit = {
-  field: string;
-  operator: string;
-  value: unknown;
-};
-
-export type AggregationMetricEdit = {
-  id: string;
-  field: string;
-  func: string;
-  alias: string;
-  condition?: MetricConditionEdit;
-  formula?: string;
-  /** Expresión sobre columnas (ej. CANTIDAD * PRECIO_UNITARIO). Se agrega con func (SUM, AVG…). */
-  expression?: string;
-};
-
-export type AggregationFilterEdit = {
-  id: string;
-  field: string;
-  operator: string;
-  value: unknown;
-};
-
-export type AggregationConfigEdit = {
-  enabled: boolean;
-  dimension?: string;
-  dimension2?: string;
-  dimensions?: string[];
-  metrics: AggregationMetricEdit[];
-  filters?: AggregationFilterEdit[];
-  dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
-  orderBy?: { field: string; direction: "ASC" | "DESC" };
-  limit?: number;
-  cumulative?: "none" | "running_sum" | "ytd";
-  comparePeriod?: "previous_year" | "previous_month";
-  dateDimension?: string;
-  chartType?: string;
-  chartXAxis?: string;
-  chartYAxes?: string[];
-  chartSeriesField?: string;
-  chartNumberFormat?: string;
-  chartValueType?: string;
-  chartValueScale?: string;
-  chartCurrencySymbol?: string;
-  chartThousandSep?: boolean;
-  chartDecimals?: number;
-  chartSortDirection?: string;
-  chartSortBy?: string;
-  chartSortByMetric?: string;
-  chartAxisOrder?: string;
-  chartScaleMode?: string;
-  chartScaleMin?: string | number;
-  chartScaleMax?: string | number;
-  chartAxisStep?: string | number;
-  chartRankingEnabled?: boolean;
-  chartRankingTop?: number;
-  chartRankingMetric?: string;
-  chartRankingDirection?: "asc" | "desc";
-  chartRankingPinnedXValues?: string[];
-  chartRankingShowRankInLabel?: boolean;
-  chartPinnedDimensions?: string[];
-  chartColorScheme?: string;
-  chartCategoryColorMode?: "varied" | "uniform";
-  chartPrimaryColor?: string;
-  chartSeriesColors?: Record<string, string>;
-  showDataLabels?: boolean;
-  labelVisibilityMode?: "all" | "auto" | "min_max";
-  /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
-  chartLabelOverrides?: Record<string, string>;
-  /** Texto en leyenda por clave de métrica (chartYAxes). */
-  chartDatasetLabelOverrides?: Record<string, string>;
-  /** Formato por métrica (clave = chartYAxes key). Si existe, se usa en lugar del formato global para esa serie. */
-  chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
-  /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
-  chartComboSyncAxes?: boolean;
-  chartGridXDisplay?: boolean;
-  chartGridYDisplay?: boolean;
-  chartGridColor?: string;
-  chartAxisXVisible?: boolean;
-  chartAxisYVisible?: boolean;
-  chartDataLabelFontSize?: number;
-  chartDataLabelColor?: string;
-  chartAxisFontSize?: number;
-  chartLayoutPadding?: number;
-  chartBarThickness?: number;
-  chartLineBorderWidth?: number;
-  chartGridLineWidth?: number;
-  chartAxisTickColor?: string;
-  chartCategoryTickMaxRotation?: number;
-  chartCategoryTickMinRotation?: number;
-  chartCategoryMaxTicks?: number;
-  chartFontFamily?: string;
-  labelVisibilityMaxCount?: number;
-  chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
-  chartLegendVisible?: boolean;
-  pieLegendVisible?: boolean;
-  pieLegendResponsive?: boolean;
-  pieLegendMode?: "side" | "integrated";
-  pieIntegratedNameOrder?: "above" | "below";
-  pieSliceBorderWidth?: number;
-  /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
-  chartStackBySeries?: boolean;
-  /** Si la dimensión es una columna fecha, agrupar por este nivel. */
-  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
-  analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
-  /** Texto con `/` ambiguo: DMY = día/mes (AR/EU); MDY = mes/día (US). */
-  dateSlashOrder?: "DMY" | "MDY";
-  mapDefaultCountry?: string;
-  geoHints?: {
-    countryField?: string;
-    provinceField?: string;
-    cityField?: string;
-    addressField?: string;
-    latField?: string;
-    lonField?: string;
-  };
-  geoComponentOverrides?: GeoComponentOverrides;
-  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
-  tableColumnLabelOverrides?: Record<string, string>;
-  /** Tooltip / tarjeta de detalle (gráfico y mapa). */
-  chartDetailCard?: ChartDetailCardConfig;
-};
-
-export type AddMetricFormConfig = {
-  title: string;
-  type: string;
-  gridSpan?: number;
-  color?: string;
-  labelDisplayMode?: ChartLabelDisplayMode;
-  chartPercentBasis?: ChartPercentBasis;
-  chartPercentGroupField?: string;
-  chartPercentDenominatorMetric?: string;
-  chartPercentDenominatorScope?: "analysis" | "visible";
-  chartPercentDenominatorGrandTotal?: boolean;
-  kpiSecondaryLabel?: string;
-  kpiSecondaryValue?: string;
-  kpiCaption?: string;
-  aggregationConfig: AggregationConfigEdit;
-  excludeGlobalFilters?: boolean;
-  /** ID de la fuente de datos cuando el dashboard tiene múltiples ETLs */
-  dataSourceId?: string | null;
-};
-
-/** Configuración de agregación guardada en una métrica reutilizable */
-export type SavedMetricAggregationConfig = {
-  dimension?: string;
-  dimension2?: string;
-  /** Múltiples dimensiones (GROUP BY); si está presente tiene prioridad sobre dimension/dimension2 */
-  dimensions?: string[];
-  metrics: AggregationMetricEdit[];
-  filters?: AggregationFilterEdit[];
-  dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
-  orderBy?: { field: string; direction: "ASC" | "DESC" };
-  limit?: number;
-  cumulative?: "none" | "running_sum" | "ytd";
-  comparePeriod?: "previous_year" | "previous_month";
-  compare?: CompareSpec;
-  dateDimension?: string;
-  comparePeriodSource?: ComparePeriodSource;
-  compareFixedValue?: number;
-  transformCompare?: "none" | "mom" | "yoy" | "fixed";
-  transformCompareFixedValue?: string;
-  transformShowDelta?: boolean;
-  transformShowDeltaPct?: boolean;
-  transformShowAccum?: boolean;
-  // Opciones de gráfico (persistidas al guardar métrica)
-  chartType?: string;
-  chartXAxis?: string;
-  chartYAxes?: string[];
-  chartSeriesField?: string;
-  chartNumberFormat?: string;
-  chartValueType?: string;
-  chartValueScale?: string;
-  chartCurrencySymbol?: string;
-  chartThousandSep?: boolean;
-  chartDecimals?: number;
-  chartSortDirection?: string;
-  chartSortBy?: string;
-  chartSortByMetric?: string;
-  chartAxisOrder?: string;
-  chartScaleMode?: string;
-  chartScaleMin?: string | number;
-  chartScaleMax?: string | number;
-  chartAxisStep?: string | number;
-  chartRankingEnabled?: boolean;
-  chartRankingTop?: number;
-  chartRankingMetric?: string;
-  chartRankingDirection?: "asc" | "desc";
-  chartRankingPinnedXValues?: string[];
-  chartRankingShowRankInLabel?: boolean;
-  chartPinnedDimensions?: string[];
-  chartColorScheme?: string;
-  chartCategoryColorMode?: "varied" | "uniform";
-  chartPrimaryColor?: string;
-  chartSeriesColors?: Record<string, string>;
-  showDataLabels?: boolean;
-  labelVisibilityMode?: "all" | "auto" | "min_max";
-  chartLabelOverrides?: Record<string, string>;
-  chartDatasetLabelOverrides?: Record<string, string>;
-  chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
-  chartComboSyncAxes?: boolean;
-  chartGridXDisplay?: boolean;
-  chartGridYDisplay?: boolean;
-  chartGridColor?: string;
-  chartAxisXVisible?: boolean;
-  chartAxisYVisible?: boolean;
-  chartStackBySeries?: boolean;
-  chartBarThickness?: number;
-  chartLineBorderWidth?: number;
-  chartGridLineWidth?: number;
-  chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
-  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
-  analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
-  /** Texto con `/` ambiguo: DMY = día/mes (AR/EU); MDY = mes/día (US). */
-  dateSlashOrder?: "DMY" | "MDY";
-  mapDefaultCountry?: string;
-  geoHints?: {
-    countryField?: string;
-    provinceField?: string;
-    cityField?: string;
-    addressField?: string;
-    latField?: string;
-    lonField?: string;
-  };
-  geoComponentOverrides?: GeoComponentOverrides;
-  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
-  chartDetailCard?: ChartDetailCardConfig;
-  dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string };
-  dashboardCompareUi?: DashboardCompareUi;
-  interCrossFilter?: boolean;
-  interCrossFilterFields?: string[];
-  interDrilldown?: boolean;
-  interDrilldownHierarchy?: string[];
-  interDrillThrough?: boolean;
-  interDrillThroughTarget?: string;
-  interTooltipFields?: string[];
-  interHighlight?: boolean;
-};
-
-/** Métrica guardada para reutilizar (mismo formato que en AdminDashboardStudio) */
-export type SavedMetricForm = {
-  id: string;
-  name: string;
-  metric: AggregationMetricEdit;
-  /** Tipo de gráfico recomendado */
-  chartType?: string;
-  /** Configuración completa de agregación (persistida al guardar) */
-  aggregationConfig?: SavedMetricAggregationConfig;
-};
+import type {
+  AggregationConfigEdit,
+  AggregationMetricEdit,
+  AggregationFilterEdit,
+  AddMetricFormConfig,
+  SavedMetricForm,
+  SavedMetricAggregationConfig,
+} from "@/lib/dashboard/metricConfigTypes";
 
 const CHART_TYPES: { value: string; label: string }[] = [
   { value: "bar", label: "Barras verticales" },
@@ -327,6 +91,7 @@ type AddMetricConfigFormProps = {
   previewRows?: Record<string, unknown>[];
 };
 
+/** @deprecated Usar `MetricConfigPanel` en Admin Dashboard Studio. Se mantiene por compatibilidad de imports. */
 export function AddMetricConfigForm({
   initialValues,
   etlData,
@@ -1402,15 +1167,9 @@ export function AddMetricConfigForm({
                     <option value="ytd">YTD (año hasta la fecha)</option>
                   </select>
                 </div>
-                <div>
-                  <Label className="add-metric-label text-[11px]">Comparar con período anterior</Label>
-                  <select value={agg.comparePeriod ?? ""} onChange={(e) => updateAgg({ comparePeriod: (e.target.value || undefined) as "previous_year" | "previous_month" | undefined })} className="add-metric-select mt-0.5 h-8 text-xs w-full">
-                    <option value="">Ninguno</option>
-                    <option value="previous_month">Mes anterior</option>
-                    <option value="previous_year">Año anterior</option>
-                  </select>
-                </div>
-                {(agg.cumulative === "ytd" || agg.comparePeriod) && (
+                {(agg.cumulative === "ytd" ||
+                  agg.comparePeriod ||
+                  (agg.compare && typeof agg.compare === "object" && "kind" in agg.compare && agg.compare.kind !== "none")) && (
                   <AdminFieldSelector label="Columna de fecha (YTD / comparación)" value={agg.dateDimension || ""} onChange={(v) => updateAgg({ dateDimension: v || undefined })} etlData={etlData} dataSourceId={form.dataSourceId} fieldType="all" placeholder="Campo fecha..." />
                 )}
                 <div>

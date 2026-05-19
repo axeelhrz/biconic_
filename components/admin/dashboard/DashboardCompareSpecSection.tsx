@@ -4,11 +4,13 @@ import { useMemo } from "react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import type { CompareSpec, CompareTemporalMode } from "@/lib/dashboard/compareSpec";
+import type { CompareSpec } from "@/lib/dashboard/compareSpec";
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { dimensionsListFromAgg, pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
 import type { DashboardComparePlacement, DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
-import { normalizeComparePlacements, compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
+import { normalizeComparePlacements, compareNeedsTimeGroupedRows, readComparePresentation } from "@/lib/dashboard/compareDisplayKeys";
+import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import { CompareSpecFields } from "@/components/admin/dashboard/CompareSpecFields";
 
 const PLACEMENT_OPTIONS: { value: DashboardComparePlacement; label: string }[] = [
   { value: "kpi_below", label: "KPI (bajo el valor)" },
@@ -44,6 +46,14 @@ export type SavedMetricWithOptionalAgg = {
   aggregationConfig?: Record<string, unknown>;
 };
 
+function effectiveCompare(agg: DashboardCompareAggSlice): CompareSpec {
+  const c = agg.compare;
+  if (c && typeof c === "object" && "kind" in c && (c as CompareSpec).kind !== "none") {
+    return c as CompareSpec;
+  }
+  return { kind: "none" };
+}
+
 function defaultCompareUi(prev?: DashboardCompareUi): DashboardCompareUi {
   return {
     enabled: prev?.enabled ?? false,
@@ -55,22 +65,28 @@ function defaultCompareUi(prev?: DashboardCompareUi): DashboardCompareUi {
   };
 }
 
-function effectiveCompare(agg: DashboardCompareAggSlice): CompareSpec {
-  const c = agg.compare;
-  if (c && typeof c === "object" && "kind" in c && (c as CompareSpec).kind !== "none") {
-    return c as CompareSpec;
-  }
-  return { kind: "none" };
-}
-
 type DashboardCompareSpecSectionProps = {
   agg: DashboardCompareAggSlice;
   updateAgg: (patch: Partial<DashboardCompareAggSlice>) => void;
   savedMetrics: SavedMetricWithOptionalAgg[];
   previewRows?: Record<string, unknown>[];
-  /** p. ej. "kpi" — avisos de UX específicos del tipo de widget. */
   widgetType?: string;
 };
+
+function previewCompareSample(
+  previewRows: Record<string, unknown>[] | undefined,
+  compare: CompareSpec,
+  metricAlias: string
+): string | null {
+  if (!previewRows?.length || compare.kind === "none" || !metricAlias) return null;
+  const row = previewRows[previewRows.length - 1] as Record<string, unknown>;
+  const vals = readComparePresentation(compare, metricAlias, row);
+  if (vals.delta == null && vals.deltaPct == null) return null;
+  const parts: string[] = [];
+  if (vals.delta != null) parts.push(`Δ ${vals.delta}`);
+  if (vals.deltaPct != null) parts.push(`${vals.deltaPct}%`);
+  return parts.length ? parts.join(" · ") : null;
+}
 
 export function DashboardCompareSpecSection({
   agg,
@@ -84,6 +100,7 @@ export function DashboardCompareSpecSection({
   const dims = dimensionsListFromAgg(agg);
   const timeColumnDefault = pickDateGroupBySourceField(agg) || agg.dateDimension?.trim() || dims[0] || "";
   const granularity = (agg.dateGroupByGranularity ?? "month") as DateGranularity;
+  const primaryMetricAlias = (agg.metrics ?? []).map((m) => String(m.alias || "").trim()).filter(Boolean)[0] ?? "";
 
   const savedWithCompare = useMemo(
     () =>
@@ -105,6 +122,9 @@ export function DashboardCompareSpecSection({
   const placements = normalizeComparePlacements(ui.placement);
   const showKpiTemporalSeriesHint =
     widgetType === "kpi" && compareNeedsTimeGroupedRows(compare) && !agg.dateGroupByGranularity;
+
+  const comparePreviewLine = previewCompareSample(previewRows, compare, primaryMetricAlias);
+
   const togglePlacement = (p: DashboardComparePlacement, checked: boolean) => {
     const set = new Set(normalizeComparePlacements(ui.placement));
     if (checked) set.add(p);
@@ -121,7 +141,11 @@ export function DashboardCompareSpecSection({
   const setCompare = (next: CompareSpec) => {
     const patch: Partial<DashboardCompareAggSlice> = { compare: next.kind === "none" ? undefined : next };
     if (next.kind !== "none") {
-      patch.dashboardCompareUi = { ...ui, enabled: ui.enabled || true };
+      const ensured = ensureDashboardCompareUi(
+        { ...agg, compare: next },
+        { widgetType, chartType: widgetType }
+      );
+      patch.dashboardCompareUi = ensured ?? { ...ui, enabled: true };
     }
     updateAgg(patch);
   };
@@ -130,6 +154,7 @@ export function DashboardCompareSpecSection({
     const saved = savedMetrics.find((s) => s.id === id);
     if (!saved?.aggregationConfig) return;
     const cfg = saved.aggregationConfig as DashboardCompareAggSlice;
+    const ensuredUi = ensureDashboardCompareUi(cfg, { widgetType, chartType: widgetType });
     updateAgg({
       compare: cfg.compare,
       comparePeriod: cfg.comparePeriod,
@@ -141,25 +166,19 @@ export function DashboardCompareSpecSection({
       transformShowAccum: cfg.transformShowAccum,
       dateDimension: cfg.dateDimension ?? agg.dateDimension,
       dateGroupByGranularity: cfg.dateGroupByGranularity ?? agg.dateGroupByGranularity,
-      dashboardCompareUi: defaultCompareUi({
-        ...(cfg.dashboardCompareUi as DashboardCompareUi | undefined),
-        enabled: true,
-      }),
+      dashboardCompareUi: ensuredUi ?? defaultCompareUi({ enabled: true }),
     });
   };
 
   return (
     <div className="space-y-4 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)]/40 p-3">
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Comparación (análisis / transformaciones)</Label>
+        <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Comparación</Label>
       </div>
 
-      {showKpiTemporalSeriesHint && (
-        <p className="text-[10px] text-amber-700 dark:text-amber-500/90 leading-snug">
-          En KPI, la comparación temporal necesita agrupar por fecha (elegí mes/día/etc. arriba). Sin granularidad el
-          agregado puede ser un solo total y no se calculará «vs periodo anterior».
-        </p>
-      )}
+      <p className="text-[10px] text-[var(--studio-fg-muted)] leading-snug">
+        Los cambios de comparación recargan los datos automáticamente.
+      </p>
 
       {savedWithCompare.length > 0 && (
         <div>
@@ -181,222 +200,27 @@ export function DashboardCompareSpecSection({
               </option>
             ))}
           </select>
-          <p className="mt-1 text-[10px] text-[var(--studio-fg-muted)]">
-            Copia la definición de comparación al widget (queda persistida en el dashboard).
-          </p>
         </div>
       )}
 
-      <div>
-        <Label className="text-[11px] text-[var(--studio-fg-muted)]">Tipo de comparación</Label>
-        <select
-          className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-          value={compare.kind}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v === "none") {
-              setCompare({ kind: "none" });
-              return;
-            }
-            if (v === "temporal") {
-              if (!timeColumnDefault) return;
-              setCompare({
-                kind: "temporal",
-                mode: "prev_bucket",
-                timeColumn: timeColumnDefault,
-                granularity,
-              });
-              return;
-            }
-            if (v === "column") {
-              const first = compareColumnCandidates[0] ?? "";
-              if (!first) return;
-              setCompare({ kind: "column", refColumn: first });
-              return;
-            }
-            if (v === "fixed") {
-              const n = Number.parseFloat(String(agg.transformCompareFixedValue ?? ""));
-              setCompare(Number.isFinite(n) ? { kind: "fixed", value: n } : { kind: "none" });
-              return;
-            }
-            if (v === "average") {
-              setCompare({ kind: "average", scope: "global", partitionDimensions: [] });
-              return;
-            }
-            if (v === "total_share") {
-              setCompare({ kind: "total_share", partitionDimensions: [] });
-              return;
-            }
-            if (v === "cumulative") {
-              if (!timeColumnDefault) return;
-              setCompare({
-                kind: "cumulative",
-                mode: "month_vs_ytd",
-                timeColumn: timeColumnDefault,
-                granularity,
-              });
-            }
-          }}
-        >
-          <option value="none">Ninguna</option>
-          <option value="temporal">Temporal</option>
-          <option value="column">Otra columna del resultado</option>
-          <option value="fixed">Valor fijo</option>
-          <option value="average">Promedio</option>
-          <option value="total_share">Participación sobre total</option>
-          <option value="cumulative">Acumulados (YTD)</option>
-        </select>
-      </div>
+      <CompareSpecFields
+        variant="studio"
+        compare={compare}
+        setCompare={setCompare}
+        timeColumnDefault={timeColumnDefault}
+        timeColumnOptions={timeColumnDefault ? [timeColumnDefault, ...dims.filter((d) => d !== timeColumnDefault)] : dims}
+        granularity={granularity}
+        dims={dims}
+        compareColumnCandidates={compareColumnCandidates}
+        fixedValue={String(agg.transformCompareFixedValue ?? "")}
+        onFixedValueChange={(v) => updateAgg({ transformCompareFixedValue: v })}
+        showKpiTemporalSeriesHint={showKpiTemporalSeriesHint}
+      />
 
-      {compare.kind === "temporal" && (
-        <div className="space-y-2">
-          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Modo temporal</Label>
-          <select
-            className="w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-            value={compare.mode}
-            onChange={(e) => {
-              const mode = e.target.value as CompareTemporalMode;
-              if (!timeColumnDefault) return;
-              setCompare({
-                kind: "temporal",
-                mode,
-                timeColumn: timeColumnDefault,
-                granularity: compare.granularity,
-              });
-            }}
-          >
-            <option value="prev_bucket">Período anterior en la serie</option>
-            <option value="same_period_prior_year">Mismo período, año anterior</option>
-            <option value="calendar_prev_day">Día calendario anterior</option>
-            <option value="calendar_prev_week">Semana calendario anterior</option>
-            <option value="calendar_prev_month">Mes calendario anterior</option>
-            <option value="calendar_prev_year">Año calendario anterior</option>
-          </select>
-        </div>
-      )}
-
-      {compare.kind === "column" && (
-        <div>
-          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Columna de referencia</Label>
-          <select
-            className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-            value={compare.refColumn}
-            onChange={(e) => setCompare({ kind: "column", refColumn: e.target.value })}
-          >
-            {compareColumnCandidates.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {compare.kind === "fixed" && (
-        <div>
-          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Valor fijo</Label>
-          <Input
-            type="text"
-            className="mt-0.5 h-8 text-xs border-[var(--studio-border)]"
-            value={String(agg.transformCompareFixedValue ?? "")}
-            onChange={(e) => {
-              updateAgg({ transformCompareFixedValue: e.target.value });
-              const n = Number.parseFloat(e.target.value);
-              if (Number.isFinite(n)) setCompare({ kind: "fixed", value: n });
-            }}
-          />
-        </div>
-      )}
-
-      {compare.kind === "average" && (
-        <div className="space-y-2">
-          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Ámbito</Label>
-          <select
-            className="w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-            value={compare.scope}
-            onChange={(e) => {
-              const scope = e.target.value === "partition" ? "partition" : "global";
-              setCompare({
-                kind: "average",
-                scope,
-                partitionDimensions: scope === "partition" ? dims.slice(0, 1) : [],
-              });
-            }}
-          >
-            <option value="global">Promedio general</option>
-            <option value="partition">Por dimensión</option>
-          </select>
-          {compare.scope === "partition" && (
-            <div className="flex flex-wrap gap-2">
-              {dims.map((d) => {
-                const on = compare.partitionDimensions.includes(d);
-                return (
-                  <label key={d} className="flex items-center gap-1 text-[11px] text-[var(--studio-fg)]">
-                    <Checkbox
-                      checked={on}
-                      onCheckedChange={() => {
-                        const next = on
-                          ? compare.partitionDimensions.filter((x) => x !== d)
-                          : [...compare.partitionDimensions, d];
-                        setCompare({ kind: "average", scope: "partition", partitionDimensions: next });
-                      }}
-                    />
-                    {d}
-                  </label>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {compare.kind === "total_share" && (
-        <div className="space-y-2">
-          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Total por grupo (vacío = global)</Label>
-          <div className="flex flex-wrap gap-2">
-            {dims.map((d) => {
-              const on = compare.partitionDimensions.includes(d);
-              return (
-                <label key={d} className="flex items-center gap-1 text-[11px] text-[var(--studio-fg)]">
-                  <Checkbox
-                    checked={on}
-                    onCheckedChange={() => {
-                      const next = on
-                        ? compare.partitionDimensions.filter((x) => x !== d)
-                        : [...compare.partitionDimensions, d];
-                      setCompare({ kind: "total_share", partitionDimensions: next });
-                    }}
-                  />
-                  {d}
-                </label>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {compare.kind === "cumulative" && (
-        <div>
-          <Label className="text-[11px] text-[var(--studio-fg-muted)]">Modo acumulado</Label>
-          <select
-            className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-            value={compare.mode}
-            onChange={(e) => {
-              const mode = e.target.value as "month_vs_ytd" | "vs_prior_year_ytd" | "ytd_running";
-              if (!timeColumnDefault) return;
-              setCompare({
-                kind: "cumulative",
-                mode,
-                timeColumn: timeColumnDefault,
-                granularity: compare.granularity,
-              });
-            }}
-          >
-            <option value="month_vs_ytd">Mes vs YTD</option>
-            <option value="vs_prior_year_ytd">YTD vs año anterior</option>
-            <option value="ytd_running">YTD acumulado</option>
-          </select>
-        </div>
+      {comparePreviewLine && compare.kind !== "none" && (
+        <p className="text-[10px] text-[var(--studio-accent)]">
+          Vista previa (última fila, {primaryMetricAlias}): {comparePreviewLine}
+        </p>
       )}
 
       {compare.kind !== "none" && (
@@ -481,23 +305,6 @@ export function DashboardCompareSpecSection({
           </div>
         </div>
       )}
-
-      <div>
-        <Label className="text-[11px] text-[var(--studio-fg-muted)]">Compatibilidad (legacy)</Label>
-        <select
-          className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-          value={agg.comparePeriod ?? ""}
-          onChange={(e) =>
-            updateAgg({
-              comparePeriod: (e.target.value || undefined) as "previous_year" | "previous_month" | undefined,
-            })
-          }
-        >
-          <option value="">comparePeriod: ninguno</option>
-          <option value="previous_month">Mes anterior (legacy)</option>
-          <option value="previous_year">Año anterior (legacy)</option>
-        </select>
-      </div>
     </div>
   );
 }

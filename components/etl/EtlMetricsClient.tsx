@@ -42,6 +42,8 @@ import type {
 } from "@/lib/dashboard/compareSpec";
 import { normalizeAggregationCompare, deriveLegacyTransformCompare } from "@/lib/dashboard/compareSpec";
 import { compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
+import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import { CompareSpecFields } from "@/components/admin/dashboard/CompareSpecFields";
 import { resolveEffectiveDateGroupByForFetch } from "@/lib/dashboard/aggregateCompareRequest";
 import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
@@ -3313,6 +3315,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
         : {}),
       ...(formChartType === "map" ? { ...mapVisualFields } : {}),
+      dashboardCompareUi: ensureDashboardCompareUi(
+        {
+          compare: analysisCompare.kind === "none" ? undefined : analysisCompare,
+          comparePeriod: comparePeriodToSave,
+          transformShowDelta,
+          transformShowDeltaPct,
+        },
+        { widgetType: formChartType || "bar", chartType: formChartType || undefined }
+      ),
     };
     let expr = (firstMetric as { expression?: string }).expression;
     const alias = (firstMetric.alias || "").trim();
@@ -3599,6 +3610,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
         : {}),
       ...(formChartType === "map" ? { ...mapVisualFields } : {}),
+      dashboardCompareUi: ensureDashboardCompareUi(
+        {
+          compare: analysisCompare.kind === "none" ? undefined : analysisCompare,
+          comparePeriod: comparePeriodToSave,
+          transformShowDelta,
+          transformShowDeltaPct,
+        },
+        { widgetType: formChartType || "bar", chartType: formChartType || undefined }
+      ),
     };
     const item: SavedMetricForm = {
       id: `sm-${Date.now()}`,
@@ -3723,9 +3743,35 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
         : {}),
       ...(formChartType === "map" ? { ...mapVisualFields } : {}),
+      ...(analysisCompare.kind !== "none"
+        ? {
+            compare: analysisCompare,
+            comparePeriod:
+              deriveLegacyTransformCompare(analysisCompare) === "mom"
+                ? ("previous_month" as const)
+                : deriveLegacyTransformCompare(analysisCompare) === "yoy"
+                  ? ("previous_year" as const)
+                  : undefined,
+            transformShowDelta,
+            transformShowDeltaPct,
+            transformShowAccum,
+            dashboardCompareUi: ensureDashboardCompareUi(
+              {
+                compare: analysisCompare,
+                transformShowDelta,
+                transformShowDeltaPct,
+              },
+              { widgetType: formChartType || "bar", chartType: formChartType || undefined }
+            ),
+          }
+        : {}),
     };
   }, [
     analysisDateFormat,
+    analysisCompare,
+    transformShowDelta,
+    transformShowDeltaPct,
+    transformShowAccum,
     mapDefaultCountry,
     mapVisualFields,
     geoComponentOverrides,
@@ -6043,390 +6089,65 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     </ul>
                   </div>
                   <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg)" }}>Comparaciones disponibles</p>
-                  <div className="space-y-4 mb-4">
-                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Tipo de comparación</Label>
-                      <select
-                        className="w-full h-9 rounded-lg border px-3 text-sm"
-                        style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                        value={analysisCompare.kind}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (v === "none") {
-                            setAnalysisCompare({ kind: "none" });
-                            return;
-                          }
-                          if (v === "temporal") {
-                            const defaultTc = (timeColumn || dateFields[0] || "").trim();
-                            const gran = (analysisGranularity || "month") as DateGranularity;
-                            if (!defaultTc) {
-                              toast.error("No hay columna de fecha: definí el eje temporal en el paso anterior o agregá una columna fecha al dataset.");
-                              return;
-                            }
-                            setAnalysisCompare({
-                              kind: "temporal",
-                              mode: "prev_bucket",
-                              timeColumn: defaultTc,
-                              granularity: gran,
-                              periodSource: "dashboard",
-                            });
-                            return;
-                          }
-                          if (v === "column") {
-                            const first = compareColumnCandidates[0] ?? "";
-                            if (!first) {
-                              toast.error("No hay columnas candidatas (agregá métricas o dimensiones).");
-                              return;
-                            }
-                            setAnalysisCompare({ kind: "column", refColumn: first });
-                            return;
-                          }
-                          if (v === "fixed") {
-                            const n = Number.parseFloat(transformCompareFixedValue);
-                            setAnalysisCompare(Number.isFinite(n) ? { kind: "fixed", value: n } : { kind: "none" });
-                            return;
-                          }
-                          if (v === "average") {
-                            setAnalysisCompare({ kind: "average", scope: "global", partitionDimensions: [] });
-                            return;
-                          }
-                          if (v === "total_share") {
-                            setAnalysisCompare({ kind: "total_share", partitionDimensions: [] });
-                            return;
-                          }
-                          if (v === "cumulative") {
-                            const defaultTc = (timeColumn || dateFields[0] || "").trim();
-                            const gran = (analysisGranularity || "month") as DateGranularity;
-                            if (!defaultTc) {
-                              toast.error("No hay columna de fecha para acumulados.");
-                              return;
-                            }
-                            setAnalysisCompare({
-                              kind: "cumulative",
-                              mode: "month_vs_ytd",
-                              timeColumn: defaultTc,
-                              granularity: gran,
-                              periodSource: "dashboard",
-                            });
-                          }
-                        }}
-                      >
-                        <option value="none">Ninguna</option>
-                        <option value="temporal">Temporal (serie o calendario)</option>
-                        <option value="column">Otra columna del resultado</option>
-                        <option value="fixed">Valor fijo</option>
-                        <option value="average">Promedio</option>
-                        <option value="total_share">Participación sobre total</option>
-                        <option value="cumulative">Acumulados (YTD)</option>
-                      </select>
-                      <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Se agregan columnas extra; la métrica base no se modifica.</p>
+                  <CompareSpecFields
+                    variant="etl"
+                    compare={analysisCompare}
+                    setCompare={setAnalysisCompare}
+                    timeColumnDefault={(timeColumn || dateFields[0] || "").trim()}
+                    timeColumnOptions={dateFields.length > 0 ? dateFields : timeColumn ? [timeColumn] : []}
+                    formatTimeColumnLabel={getSampleDisplayLabel}
+                    granularity={(analysisGranularity || "month") as DateGranularity}
+                    onGranularityChange={(g) => setAnalysisGranularity(g)}
+                    dims={formDimensions.filter(Boolean)}
+                    compareColumnCandidates={compareColumnCandidates}
+                    fixedValue={transformCompareFixedValue}
+                    onFixedValueChange={setTransformCompareFixedValue}
+                    onMissingTimeColumn={() =>
+                      toast.error(
+                        "No hay columna de fecha: definí el eje temporal en el paso anterior o agregá una columna fecha al dataset."
+                      )
+                    }
+                    onMissingColumnCandidate={() =>
+                      toast.error("No hay columnas candidatas (agregá métricas o dimensiones).")
+                    }
+                  />
+                  {analysisCompare.kind !== "none" && (
+                    <div
+                      className="rounded-lg border p-3 space-y-2"
+                      style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
+                    >
+                      <p className="text-xs font-medium" style={{ color: "var(--platform-fg)" }}>
+                        Columnas a visualizar en la tabla de preview:
+                      </p>
+                      <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        <input
+                          type="checkbox"
+                          checked={transformShowDelta}
+                          onChange={(e) => setTransformShowDelta(e.target.checked)}
+                          className="rounded"
+                        />
+                        Delta
+                      </label>
+                      <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        <input
+                          type="checkbox"
+                          checked={transformShowDeltaPct}
+                          onChange={(e) => setTransformShowDeltaPct(e.target.checked)}
+                          className="rounded"
+                        />
+                        Delta %
+                      </label>
+                      <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        <input
+                          type="checkbox"
+                          checked={transformShowAccum}
+                          onChange={(e) => setTransformShowAccum(e.target.checked)}
+                          className="rounded"
+                        />
+                        Acumulado (suma en ventana SQL)
+                      </label>
                     </div>
-
-                    {analysisCompare.kind === "temporal" && (
-                      <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg-muted)" }}>Modo temporal</Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.mode}
-                          onChange={(e) => {
-                            const mode = e.target.value as CompareTemporalMode;
-                            if (analysisCompare.kind !== "temporal") return;
-                            setAnalysisCompare({
-                              ...analysisCompare,
-                              mode,
-                            });
-                          }}
-                        >
-                          <option value="prev_bucket">Período anterior en la serie (LAG)</option>
-                          <option value="same_period_prior_year">Mismo período, año anterior</option>
-                          <option value="calendar_prev_day">Día calendario anterior</option>
-                          <option value="calendar_prev_week">Semana calendario anterior</option>
-                          <option value="calendar_prev_month">Mes calendario anterior</option>
-                          <option value="calendar_prev_year">Año calendario anterior</option>
-                        </select>
-                        <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg-muted)" }}>
-                          Campo de fecha para la comparación (puede ser solo cálculo, sin mostrarse en el gráfico)
-                        </Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.timeColumn}
-                          onChange={(e) => {
-                            const col = e.target.value;
-                            if (analysisCompare.kind !== "temporal") return;
-                            setAnalysisCompare({ ...analysisCompare, timeColumn: col });
-                          }}
-                        >
-                          {(dateFields.length ? dateFields : timeColumn ? [timeColumn] : []).map((f) => (
-                            <option key={f} value={f}>
-                              {getSampleDisplayLabel(f)}
-                            </option>
-                          ))}
-                        </select>
-                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                          Granularidad del bucket
-                        </Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.granularity}
-                          onChange={(e) => {
-                            const g = e.target.value as DateGranularity;
-                            if (analysisCompare.kind !== "temporal") return;
-                            setAnalysisCompare({ ...analysisCompare, granularity: g });
-                          }}
-                        >
-                          {(["day", "week", "month", "quarter", "semester", "year"] as const).map((g) => (
-                            <option key={g} value={g}>
-                              {g}
-                            </option>
-                          ))}
-                        </select>
-                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                          Fuente del período
-                        </Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.periodSource ?? "dashboard"}
-                          onChange={(e) => {
-                            const periodSource = e.target.value as ComparePeriodSource;
-                            if (analysisCompare.kind !== "temporal") return;
-                            setAnalysisCompare({ ...analysisCompare, periodSource });
-                          }}
-                        >
-                          <option value="dashboard">Heredar (tablero + filtros del análisis)</option>
-                          <option value="widget">Priorizar rango de fechas del análisis</option>
-                          <option value="fixed">Fijo (sin expansión automática de filtros)</option>
-                          <option value="data_max">Último dato disponible</option>
-                        </select>
-                        <div className="space-y-2">
-                          <p className="text-xs font-medium" style={{ color: "var(--platform-fg)" }}>Columnas a visualizar:</p>
-                          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
-                            <input type="checkbox" checked={transformShowDelta} onChange={(e) => setTransformShowDelta(e.target.checked)} className="rounded" />
-                            Delta
-                          </label>
-                          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
-                            <input type="checkbox" checked={transformShowDeltaPct} onChange={(e) => setTransformShowDeltaPct(e.target.checked)} className="rounded" />
-                            Delta %
-                          </label>
-                          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
-                            <input type="checkbox" checked={transformShowAccum} onChange={(e) => setTransformShowAccum(e.target.checked)} className="rounded" />
-                            Acumulado (suma en ventana SQL)
-                          </label>
-                        </div>
-                      </div>
-                    )}
-
-                    {analysisCompare.kind === "column" && (
-                      <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Columna de referencia</Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.refColumn}
-                          onChange={(e) => setAnalysisCompare({ kind: "column", refColumn: e.target.value })}
-                        >
-                          {compareColumnCandidates.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Compará cada métrica numérica contra esta columna (diferencia y %).</p>
-                      </div>
-                    )}
-
-                    {analysisCompare.kind === "average" && (
-                      <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg-muted)" }}>Ámbito del promedio</Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.scope}
-                          onChange={(e) => {
-                            const scope = e.target.value === "partition" ? "partition" : "global";
-                            setAnalysisCompare({
-                              kind: "average",
-                              scope,
-                              partitionDimensions:
-                                scope === "partition"
-                                  ? formDimensions.filter(Boolean).slice(0, 1)
-                                  : [],
-                            });
-                          }}
-                        >
-                          <option value="global">Promedio general</option>
-                          <option value="partition">Promedio por dimensión (elegí abajo)</option>
-                        </select>
-                        {analysisCompare.scope === "partition" && (
-                          <div className="flex flex-wrap gap-2 pt-1">
-                            {formDimensions.filter(Boolean).map((d) => {
-                              const on = analysisCompare.partitionDimensions.some((x) => x === d);
-                              return (
-                                <label key={d} className="flex items-center gap-1 text-xs" style={{ color: "var(--platform-fg)" }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={on}
-                                    onChange={() => {
-                                      const next = on
-                                        ? analysisCompare.partitionDimensions.filter((x) => x !== d)
-                                        : [...analysisCompare.partitionDimensions, d];
-                                      setAnalysisCompare({ kind: "average", scope: "partition", partitionDimensions: next });
-                                    }}
-                                    className="rounded"
-                                  />
-                                  {d}
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {analysisCompare.kind === "total_share" && (
-                      <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg-muted)" }}>Total por grupo (vacío = total global)</Label>
-                        <div className="flex flex-wrap gap-2">
-                          {formDimensions.filter(Boolean).map((d) => {
-                            const on = analysisCompare.partitionDimensions.includes(d);
-                            return (
-                              <label key={d} className="flex items-center gap-1 text-xs" style={{ color: "var(--platform-fg)" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={on}
-                                  onChange={() => {
-                                    const next = on
-                                      ? analysisCompare.partitionDimensions.filter((x) => x !== d)
-                                      : [...analysisCompare.partitionDimensions, d];
-                                    setAnalysisCompare({ kind: "total_share", partitionDimensions: next });
-                                  }}
-                                  className="rounded"
-                                />
-                                {d}
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {analysisCompare.kind === "cumulative" && (
-                      <div className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg-muted)" }}>Modo acumulado</Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.mode}
-                          onChange={(e) => {
-                            const mode = e.target.value as "month_vs_ytd" | "vs_prior_year_ytd" | "ytd_running";
-                            if (analysisCompare.kind !== "cumulative") return;
-                            setAnalysisCompare({
-                              ...analysisCompare,
-                              mode,
-                            });
-                          }}
-                        >
-                          <option value="month_vs_ytd">Mes vs YTD (% del acumulado anual)</option>
-                          <option value="vs_prior_year_ytd">YTD vs mismo mes año anterior</option>
-                          <option value="ytd_running">Suma acumulada YTD (por año)</option>
-                        </select>
-                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                          Campo de fecha (acumulados)
-                        </Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.timeColumn}
-                          onChange={(e) => {
-                            const col = e.target.value;
-                            if (analysisCompare.kind !== "cumulative") return;
-                            setAnalysisCompare({ ...analysisCompare, timeColumn: col });
-                          }}
-                        >
-                          {(dateFields.length ? dateFields : timeColumn ? [timeColumn] : []).map((f) => (
-                            <option key={f} value={f}>
-                              {getSampleDisplayLabel(f)}
-                            </option>
-                          ))}
-                        </select>
-                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                          Granularidad
-                        </Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.granularity}
-                          onChange={(e) => {
-                            const g = e.target.value as DateGranularity;
-                            if (analysisCompare.kind !== "cumulative") return;
-                            setAnalysisCompare({ ...analysisCompare, granularity: g });
-                          }}
-                        >
-                          {(["day", "week", "month", "quarter", "semester", "year"] as const).map((g) => (
-                            <option key={g} value={g}>
-                              {g}
-                            </option>
-                          ))}
-                        </select>
-                        <Label className="text-sm font-medium block pt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                          Fuente del período
-                        </Label>
-                        <select
-                          className="w-full h-9 rounded-lg border px-3 text-sm"
-                          style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
-                          value={analysisCompare.periodSource ?? "dashboard"}
-                          onChange={(e) => {
-                            const periodSource = e.target.value as ComparePeriodSource;
-                            if (analysisCompare.kind !== "cumulative") return;
-                            setAnalysisCompare({ ...analysisCompare, periodSource });
-                          }}
-                        >
-                          <option value="dashboard">Heredar (tablero + filtros del análisis)</option>
-                          <option value="widget">Priorizar rango de fechas del análisis</option>
-                          <option value="fixed">Fijo (sin expansión automática de filtros)</option>
-                          <option value="data_max">Último dato disponible</option>
-                        </select>
-                      </div>
-                    )}
-
-                    {analysisCompare.kind === "fixed" && (
-                      <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                        <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Valor fijo</Label>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Input
-                            type="number"
-                            step="any"
-                            placeholder="Ej. 1000"
-                            value={transformCompareFixedValue}
-                            onChange={(e) => {
-                              const s = e.target.value;
-                              setTransformCompareFixedValue(s);
-                              const n = Number.parseFloat(s);
-                              setAnalysisCompare(Number.isFinite(n) ? { kind: "fixed", value: n } : { kind: "none" });
-                            }}
-                            className="h-9 rounded-lg text-sm max-w-[140px] !bg-[var(--platform-bg)]"
-                            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="text-xs h-8"
-                            style={{ color: "var(--platform-fg-muted)" }}
-                            onClick={() => {
-                              setTransformCompareFixedValue("");
-                              setAnalysisCompare({ kind: "none" });
-                            }}
-                          >
-                            Quitar
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  )}
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Preview</Button>

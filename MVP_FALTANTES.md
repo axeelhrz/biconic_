@@ -64,25 +64,17 @@ La API de agregación (`/api/dashboard/aggregate-data` y la versión pública) c
 | **Fórmulas derivadas** | Las fórmulas que referencian `metric_0`, `metric_1`, etc. están limitadas por un regex estricto. Revisar con casos reales (decimales, espacios, paréntesis) que todas las fórmulas válidas pasen y que el resultado numérico sea el esperado. |
 | **Condiciones en métricas** | Las métricas con `condition` (solo filas que cumplan algo) usan `CASE WHEN ... THEN ... END`. Verificar con datos reales que los totales y subtotales coincidan con lo esperado (por ejemplo, “ventas donde estado = Aprobado”). |
 | **Orden y alias en ORDER BY** | El ordenamiento puede ser por dimensión o por alias de métrica. Si el front envía un alias con caracteres raros o que no coinciden exactamente con lo generado, el ORDER BY puede fallar o no aplicarse. Unificar criterio de nombres (por ejemplo siempre alias interno `metric_i` en el ORDER BY del backend). |
-| **Comparación temporal** | `comparePeriod` (año anterior / mes anterior) hace un segundo query y mezcla resultados. Si las dimensiones no coinciden (por ejemplo, categorías distintas entre períodos), algunas filas pueden quedar sin valor de comparación. Documentar o ajustar el comportamiento cuando falte período anterior. |
+| **Comparación temporal** | Un solo agregado SQL + enriquecimiento en memoria (`applyCompareSpecToRows` en `/api/dashboard/aggregate-data`). Modelo canónico: `compare` (`CompareSpec`) y visualización `dashboardCompareUi`. Legacy `comparePeriod` se normaliza a `CompareSpec`. Si las dimensiones no coinciden entre períodos, algunas filas pueden quedar sin valor de comparación — documentar ese comportamiento. |
 | **Tipos de datos** | Algunos campos vienen como string desde Excel/CSV. El uso de `cast: "numeric"` o `"sanitize"` en la API debe aplicarse de forma consistente en filtros y métricas; revisar casos donde el valor tenga comas, puntos o símbolos de moneda. |
 
-### 2.2 Parámetros avanzados no enviados desde la vista
+### 2.2 Comparaciones y vista (estado actual)
 
-La API ya soporta:
+La API soporta `dimensions`, `cumulative`, `compare` / `comparePeriod` (legacy), `dateDimension`, `dateGroupBy`, etc.
 
-- `dimensions` (varias dimensiones, GROUP BY múltiple)
-- `cumulative` (`running_sum`, `ytd`)
-- `comparePeriod` y `dateDimension`
-
-En el **Viewer** (y en el Editor al previsualizar), el body que se envía a `aggregate-data` solo incluye `dimension` (una), `metrics`, `filters`, `orderBy`, `limit`. **No se envían**:
-
-- `dimensions` (array)
-- `cumulative`
-- `comparePeriod`
-- `dateDimension`
-
-El formulario de métricas en admin (`AddMetricConfigForm`) sí tiene `dimension2`, `cumulative`, `comparePeriod`, `dateDimension`. **Falta**: al guardar el widget, persistir estos campos en `aggregationConfig` y, en el Viewer (y en el Editor al cargar datos del widget), enviarlos en el POST a `aggregate-data` para que los cálculos avanzados se reflejen en la vista.
+- **Viewer y Admin Studio** cargan widgets con `loadPreviewWidgetData`, que envía `compare`, `comparePeriod`, `cumulative`, `dateDimension` y filtros expandidos para comparación temporal.
+- **Configurar métrica** usa `MetricConfigPanel` + `DashboardCompareSpecSection` (`CompareSpec` completo, `periodSource`, `dashboardCompareUi`). Los cambios de comparación recargan datos automáticamente (debounce en studio).
+- **ETL** persiste `compare` y `dashboardCompareUi` al guardar métricas/análisis; el dashboard muestra comparación sin reconfigurar el widget (fallback `ensureDashboardCompareUi` si falta UI explícita).
+- **Formulario legacy** `AddMetricConfigForm` está deprecado; tipos en `lib/dashboard/metricConfigTypes.ts`.
 
 ---
 

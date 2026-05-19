@@ -1,11 +1,9 @@
 import type { ChartConfig, BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
-import {
-  getCompareColumnKeys,
-  placementEnabled,
-  type DashboardCompareUi,
-} from "@/lib/dashboard/compareDisplayKeys";
+import { getCompareColumnKeys } from "@/lib/dashboard/compareDisplayKeys";
+import { getEffectiveDashboardCompareUi, effectivePlacementEnabled } from "@/lib/dashboard/ensureDashboardCompareUi";
+import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 
 function compareSpecFromAgg(agg: BuildChartConfigWidget["aggregationConfig"] | undefined) {
   return normalizeAggregationCompare({
@@ -38,8 +36,12 @@ export function appendCompareLineDatasetsIfConfigured(
   lineStrokeW: number
 ): ChartConfig["datasets"] {
   const agg = widget.aggregationConfig;
-  const ui = agg?.dashboardCompareUi as DashboardCompareUi | undefined;
-  if (!ui?.enabled || !placementEnabled(ui, "line_reference_series")) return datasets;
+  const chartType = effectiveWidgetChartType(widget);
+  const aggCompare = agg as import("@/lib/dashboard/ensureDashboardCompareUi").AggForDashboardCompareUi;
+  const ui = getEffectiveDashboardCompareUi(aggCompare, { widgetType: widget.type, chartType });
+  if (!effectivePlacementEnabled(aggCompare, "line_reference_series", { widgetType: widget.type, chartType })) {
+    return datasets;
+  }
   const spec = compareSpecFromAgg(agg);
   if (spec.kind === "none") return datasets;
   if (resolvedType !== "line" && resolvedType !== "area") return datasets;
@@ -49,7 +51,7 @@ export function appendCompareLineDatasetsIfConfigured(
   const keys = getCompareColumnKeys(spec, y0, sample);
   const refKey = keys.referenceSeriesKey;
   if (!refKey || !rows.some((r) => Object.prototype.hasOwnProperty.call(r as object, refKey))) return datasets;
-  const label = (ui.label?.trim() || "Referencia").slice(0, 120);
+  const label = (ui?.label?.trim() || "Referencia").slice(0, 120);
   const data = rows.map((r) => Number((r as Record<string, unknown>)[refKey] ?? NaN));
   return [
     ...datasets,

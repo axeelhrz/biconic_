@@ -55,8 +55,11 @@ import {
   formatDashboardCompareText,
   buildCompareTooltipLineFromAgg,
   compareTrendTone,
-  type DashboardCompareUi,
 } from "@/lib/dashboard/compareDisplayKeys";
+import {
+  getEffectiveDashboardCompareUi,
+  effectivePlacementEnabled,
+} from "@/lib/dashboard/ensureDashboardCompareUi";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { createChartPercentDenominatorResolver } from "@/lib/dashboard/chartPercentEngine";
 import type { ChartPercentWidgetLike } from "@/lib/dashboard/chartPercentEngine";
@@ -369,8 +372,13 @@ export function DashboardWidgetRenderer({
       (aggCfg as { dateSlashOrder?: string } | undefined)?.dateSlashOrder === "MDY"
         ? ({ slashDateOrder: "MDY" } as const)
         : ({ slashDateOrder: "DMY" } as const);
+    const compareUiOpts = { widgetType: widget.type, chartType: effectiveWidgetChartType(widget) };
+    const compareUi = getEffectiveDashboardCompareUi(
+      aggCfg as import("@/lib/dashboard/ensureDashboardCompareUi").AggForDashboardCompareUi,
+      compareUiOpts
+    );
     const useLastBucket =
-      Boolean((aggCfg as { dashboardCompareUi?: { enabled?: boolean } } | undefined)?.dashboardCompareUi?.enabled) &&
+      Boolean(compareUi?.enabled) &&
       compareNeedsTimeGroupedRows(spec) &&
       rows.length > 1;
 
@@ -430,7 +438,8 @@ export function DashboardWidgetRenderer({
   const kpiCompareDisplay = useMemo(() => {
     if (chartType !== "kpi" || !Array.isArray(widget.rows) || widget.rows.length === 0) return null;
     const agg = widget.aggregationConfig as Record<string, unknown> | undefined;
-    const ui = agg?.dashboardCompareUi as DashboardCompareUi | undefined;
+    const compareUiOpts = { widgetType: widget.type, chartType: effectiveWidgetChartType(widget) };
+    const ui = getEffectiveDashboardCompareUi(agg ?? {}, compareUiOpts);
     if (!ui?.enabled || !placementEnabled(ui, "kpi_below")) return null;
     const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg as never));
     if (spec.kind === "none") return null;
@@ -532,8 +541,8 @@ export function DashboardWidgetRenderer({
   const compareTableExtraKeys = useMemo(() => {
     if (chartType !== "table" || !Array.isArray(tableRows) || tableRows.length === 0) return [] as string[];
     const agg = widget.aggregationConfig as Record<string, unknown> | undefined;
-    const ui = agg?.dashboardCompareUi as DashboardCompareUi | undefined;
-    if (!ui?.enabled || !placementEnabled(ui, "table_extra_columns")) return [];
+    const compareUiOpts = { widgetType: widget.type, chartType: effectiveWidgetChartType(widget) };
+    if (!effectivePlacementEnabled(agg ?? {}, "table_extra_columns", compareUiOpts)) return [];
     const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg as never));
     if (spec.kind === "none") return [];
     const axis = resolveWidgetAxisKeys(tableRows as Record<string, unknown>[], {
@@ -554,7 +563,10 @@ export function DashboardWidgetRenderer({
     ?.tableColumnLabelOverrides;
   const effectiveTableHeaderLabels = useMemo(() => {
     const base = tableHeaderLabels ?? {};
-    const ui = (widget.aggregationConfig as { dashboardCompareUi?: { label?: string } } | undefined)?.dashboardCompareUi;
+    const ui = getEffectiveDashboardCompareUi(
+      (widget.aggregationConfig ?? {}) as Record<string, unknown>,
+      { widgetType: widget.type, chartType: effectiveWidgetChartType(widget) }
+    );
     const suffix = ui?.label?.trim() ? ` (${ui.label.trim()})` : "";
     const next: Record<string, string> = { ...base };
     for (const k of compareTableExtraKeys) {
@@ -773,10 +785,12 @@ export function DashboardWidgetRenderer({
       Array.isArray(widget.rows) &&
       widget.rows.length > 0 &&
       (() => {
-        const a = widget.aggregationConfig as { dashboardCompareUi?: DashboardCompareUi } | undefined;
-        const ui = a?.dashboardCompareUi;
-        if (!ui?.enabled) return false;
-        return placementEnabled(ui, "tooltip") || placementEnabled(ui, "detail_card");
+        const a = widget.aggregationConfig as Record<string, unknown> | undefined;
+        const compareUiOpts = { widgetType: widget.type, chartType: effectiveWidgetChartType(widget) };
+        return (
+          effectivePlacementEnabled(a ?? {}, "tooltip", compareUiOpts) ||
+          effectivePlacementEnabled(a ?? {}, "detail_card", compareUiOpts)
+        );
       })();
     const resolveMetricScale = (datasetIndex: number) => {
       const yKey = yAxisKeys[datasetIndex] ?? "";

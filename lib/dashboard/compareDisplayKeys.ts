@@ -1,5 +1,6 @@
 import type { CompareSpec, LegacyCompareInput } from "@/lib/dashboard/compareSpec";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
+import { getEffectiveDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import { getRowValue, resolveRowColumnKey, compareBucketSortTime } from "@/lib/dashboard/compareMetricRows";
 import { formatValue, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
@@ -350,7 +351,7 @@ export function buildCompareTooltipLineFromAgg(
   if (!agg) return null;
   const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg));
   if (spec.kind === "none") return null;
-  const ui = agg.dashboardCompareUi;
+  const ui = getEffectiveDashboardCompareUi(agg);
   if (!ui?.enabled || !placementEnabled(ui, "tooltip")) return null;
   const vals = readComparePresentation(spec, primaryMetricAlias, row);
   const text = formatDashboardCompareText(ui, vals, valueStyle);
