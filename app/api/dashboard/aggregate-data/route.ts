@@ -35,6 +35,7 @@ import {
   splitArgs,
   quotedColumn,
   coerceAggFuncForTextOnlyIFS,
+  resolveFieldToSql,
   type DerivedColumnRef,
 } from "@/lib/dashboard/metricExpressionToSql";
 import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
@@ -874,6 +875,36 @@ export async function POST(req: NextRequest) {
       : body.dimension && !isInvalidIdentifier(body.dimension)
         ? [body.dimension]
         : [];
+
+    for (const d of dimList) {
+      const derived = getDerived(d);
+      if (!derived) continue;
+      const exprStr = derived.expression.trim();
+      const parenError = checkBalancedParens(exprStr);
+      if (parenError) {
+        return NextResponse.json(
+          { error: `Dimensión «${d}»: ${parenError}` },
+          { status: 400 }
+        );
+      }
+      if (!expressionToSql(exprStr, derivedByName)) {
+        return NextResponse.json(
+          {
+            error: `Dimensión «${d}»: la expresión de la columna calculada no es válida. Revisá que solo uses columnas del dataset, números, operadores ( * - + / ^ ), comillas para texto, y funciones soportadas (IF, IFS, SUM, AVG, ROUND, UPPER, etc.).`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    const resolveDimensionCoalesce = (dim: string): string => {
+      const sql = resolveFieldToSql(dim, derivedByName);
+      if (!sql) {
+        return `COALESCE(${quotedColumn(dim)}::text, 'Sin Categoría')`;
+      }
+      return `COALESCE((${sql})::text, 'Sin Categoría')`;
+    };
+
     let dimensionSelectClause = "";
     let dimensionGroupByClause = "";
     let dateGroupByExpr = "";
@@ -910,8 +941,7 @@ export async function POST(req: NextRequest) {
               if (alias === body.dateGroupBy!.field?.trim() || normalizeStr(alias) === normalizeStr(body.dateGroupBy!.field || "")) {
                 return `${dateGroupByDisplayExpr} AS "${alias}"`;
               }
-              const col = quotedColumn(d);
-              return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
+              return `${resolveDimensionCoalesce(d)} AS "${alias}"`;
             })
           : [`${dateGroupByDisplayExpr} AS "${timeField}"`];
       dimensionSelectClause = dateParts.join(", ");
@@ -920,20 +950,17 @@ export async function POST(req: NextRequest) {
         groupParts.push(
           ...dimList
             .filter((d) => (d || "").trim() !== (body.dateGroupBy!.field || "").trim() && normalizeStr((d || "").trim()) !== normalizeStr(body.dateGroupBy!.field || ""))
-            .map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
+            .map((d) => resolveDimensionCoalesce(d))
         );
       }
       dimensionGroupByClause = groupParts.join(", ");
     } else if (dimList.length > 0) {
       const parts = dimList.map((d) => {
-        const col = quotedColumn(d);
         const alias = (d || "").trim().replace(/"/g, '""');
-        return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
+        return `${resolveDimensionCoalesce(d)} AS "${alias}"`;
       });
       dimensionSelectClause = parts.join(", ");
-      dimensionGroupByClause = dimList
-        .map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
-        .join(", ");
+      dimensionGroupByClause = dimList.map((d) => resolveDimensionCoalesce(d)).join(", ");
     }
 
     const selectClause = [dimensionSelectClause, metricClauses]

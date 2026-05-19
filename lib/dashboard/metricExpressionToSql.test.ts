@@ -4,6 +4,8 @@ import {
   coerceAggFuncForTextOnlyIFS,
   expressionToSql,
   ifsYieldsOnlyTextLiterals,
+  resolveFieldToSql,
+  type DerivedColumnRef,
 } from "@/lib/dashboard/metricExpressionToSql";
 
 function countSqlKeywords(sql: string, kw: string): number {
@@ -69,6 +71,36 @@ describe("ifsYieldsOnlyTextLiterals", () => {
 
   it("no aplica si hay texto fuera de la llamada IFS", () => {
     expect(ifsYieldsOnlyTextLiterals('IFS(a;"x")+1')).toBe(false);
+  });
+});
+
+describe("resolveFieldToSql", () => {
+  const segmentoLookup: Record<string, DerivedColumnRef> = {
+    columna_segmentocliente: {
+      name: "columna_segmentocliente",
+      expression:
+        'IFS(actividad="Grandes Supermercados";"Grandes Supermercados";actividad="Distribuidor";"Distribuidor";"Preventa")',
+      defaultAggregation: "MAX",
+    },
+  };
+
+  it("expande columna calculada con IFS a CASE WHEN", () => {
+    const sql = resolveFieldToSql("columna_segmentocliente", segmentoLookup);
+    expect(sql).not.toBeNull();
+    expect(sql).toContain("CASE");
+    expect(sql).toContain('"actividad"');
+    expect(sql).not.toContain("columna_segmentocliente");
+  });
+
+  it("devuelve quotedColumn para columna física sin lookup", () => {
+    expect(resolveFieldToSql("actividad")).toBe('"actividad"');
+  });
+
+  it("COALESCE sobre expresión derivada produce etiqueta de dimensión", () => {
+    const sql = resolveFieldToSql("columna_segmentocliente", segmentoLookup);
+    const dimExpr = `COALESCE((${sql})::text, 'Sin Categoría')`;
+    expect(dimExpr).toContain("CASE");
+    expect(dimExpr).toContain("'Sin Categoría'");
   });
 });
 

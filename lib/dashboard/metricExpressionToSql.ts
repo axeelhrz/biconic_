@@ -330,3 +330,17 @@ export function expressionToSql(
 
   return normalizeNumericComparisonLiterals(withStrings) || null;
 }
+
+/** Resuelve un nombre de campo a SQL: expande columnas calculadas o devuelve quotedColumn para físicas. */
+export function resolveFieldToSql(
+  field: string,
+  derivedLookup?: Record<string, DerivedColumnRef>
+): string | null {
+  const trimmed = (field || "").trim();
+  if (!trimmed) return null;
+  const derived = derivedLookup?.[trimmed.toLowerCase()];
+  if (derived?.expression) {
+    return expressionToSql(derived.expression, derivedLookup);
+  }
+  return quotedColumn(trimmed);
+}
