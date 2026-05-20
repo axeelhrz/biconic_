@@ -8,8 +8,15 @@ import type { CompareSpec } from "@/lib/dashboard/compareSpec";
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { dimensionsListFromAgg, pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
 import type { DashboardComparePlacement, DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
-import { normalizeComparePlacements, compareNeedsTimeGroupedRows, readComparePresentation } from "@/lib/dashboard/compareDisplayKeys";
+import {
+  normalizeComparePlacements,
+  compareNeedsTimeGroupedRows,
+  readComparePresentation,
+  resolveDashboardKpiMainValue,
+  pickDashboardKpiCompareRow,
+} from "@/lib/dashboard/compareDisplayKeys";
 import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import { formatValue } from "@/lib/dashboard/chartOptions";
 import { CompareSpecFields } from "@/components/admin/dashboard/CompareSpecFields";
 
 const PLACEMENT_OPTIONS: { value: DashboardComparePlacement; label: string }[] = [
@@ -19,6 +26,15 @@ const PLACEMENT_OPTIONS: { value: DashboardComparePlacement; label: string }[] =
   { value: "tooltip", label: "Tooltip del gráfico" },
   { value: "detail_card", label: "Tarjeta de detalle" },
 ];
+
+const COMPARE_KIND_LABELS: Record<Exclude<CompareSpec["kind"], "none">, string> = {
+  temporal: "Temporal",
+  column: "Vs columna",
+  fixed: "Vs valor fijo",
+  average: "Vs promedio",
+  total_share: "% del total",
+  cumulative: "Acumulado / YTD",
+};
 
 export type DashboardCompareAggSlice = {
   enabled: boolean;
@@ -65,6 +81,26 @@ function defaultCompareUi(prev?: DashboardCompareUi): DashboardCompareUi {
   };
 }
 
+function compareKindBadgeLabel(compare: CompareSpec): string | null {
+  if (compare.kind === "none") return null;
+  const base = COMPARE_KIND_LABELS[compare.kind];
+  if (compare.kind === "temporal" && compare.mode) {
+    const modeLabels: Record<string, string> = {
+      prev_bucket: "período anterior",
+      same_period_prior_year: "mismo período año anterior",
+      calendar_prev_day: "día anterior",
+      calendar_prev_week: "semana anterior",
+      calendar_prev_month: "mes anterior",
+      calendar_prev_year: "año anterior",
+    };
+    return `${base} · ${modeLabels[compare.mode] ?? compare.mode}`;
+  }
+  if (compare.kind === "cumulative" && compare.mode) {
+    return `${base} · ${compare.mode}`;
+  }
+  return base;
+}
+
 type DashboardCompareSpecSectionProps = {
   agg: DashboardCompareAggSlice;
   updateAgg: (patch: Partial<DashboardCompareAggSlice>) => void;
@@ -73,19 +109,33 @@ type DashboardCompareSpecSectionProps = {
   widgetType?: string;
 };
 
-function previewCompareSample(
+function previewCompareLineText(
   previewRows: Record<string, unknown>[] | undefined,
   compare: CompareSpec,
   metricAlias: string
 ): string | null {
   if (!previewRows?.length || compare.kind === "none" || !metricAlias) return null;
-  const row = previewRows[previewRows.length - 1] as Record<string, unknown>;
+  const row =
+    pickDashboardKpiCompareRow(previewRows, compare) ??
+    (previewRows[previewRows.length - 1] as Record<string, unknown>);
   const vals = readComparePresentation(compare, metricAlias, row);
   if (vals.delta == null && vals.deltaPct == null) return null;
   const parts: string[] = [];
-  if (vals.delta != null) parts.push(`Δ ${vals.delta}`);
-  if (vals.deltaPct != null) parts.push(`${vals.deltaPct}%`);
+  if (vals.delta != null) parts.push(`Δ ${formatValue(vals.delta, "none", "$", "none", 2)}`);
+  if (vals.deltaPct != null) parts.push(`${formatValue(vals.deltaPct, "percent", "$", "none", 1)}`);
   return parts.length ? parts.join(" · ") : null;
+}
+
+function previewMainKpiTotal(
+  previewRows: Record<string, unknown>[] | undefined,
+  metricAlias: string
+): string | null {
+  if (!previewRows?.length || !metricAlias) return null;
+  const total = resolveDashboardKpiMainValue(previewRows, metricAlias);
+  if (!Number.isFinite(total)) return null;
+  const abs = Math.abs(total);
+  const scale = abs >= 1_000_000_000 ? "Bi" : abs >= 1_000_000 ? "M" : abs >= 1_000 ? "K" : "none";
+  return formatValue(total, "none", "$", scale, scale === "none" ? 2 : 1);
 }
 
 export function DashboardCompareSpecSection({
@@ -122,8 +172,14 @@ export function DashboardCompareSpecSection({
   const placements = normalizeComparePlacements(ui.placement);
   const showKpiTemporalSeriesHint =
     widgetType === "kpi" && compareNeedsTimeGroupedRows(compare) && !agg.dateGroupByGranularity;
+  const showKpiTotalVsPeriodHint =
+    widgetType === "kpi" && compareNeedsTimeGroupedRows(compare) && compare.kind !== "none";
 
-  const comparePreviewLine = previewCompareSample(previewRows, compare, primaryMetricAlias);
+  const compareBadge = compareKindBadgeLabel(compare);
+  const previewMainTotal =
+    widgetType === "kpi" ? previewMainKpiTotal(previewRows, primaryMetricAlias) : null;
+  const previewCompareLine = previewCompareLineText(previewRows, compare, primaryMetricAlias);
+  const hasPreview = !!(previewMainTotal || previewCompareLine);
 
   const togglePlacement = (p: DashboardComparePlacement, checked: boolean) => {
     const set = new Set(normalizeComparePlacements(ui.placement));
@@ -172,12 +228,18 @@ export function DashboardCompareSpecSection({
 
   return (
     <div className="space-y-4 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)]/40 p-3">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Comparación</Label>
+        {compareBadge && (
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--studio-accent)]/15 text-[var(--studio-accent)] font-medium">
+            {compareBadge}
+          </span>
+        )}
       </div>
 
       <p className="text-[10px] text-[var(--studio-fg-muted)] leading-snug">
-        Los cambios de comparación recargan los datos automáticamente.
+        Configurá aquí el tipo de comparación y cómo se muestra. Los cambios recargan los datos automáticamente; el
+        valor principal del KPI no cambia al activar comparación (solo al cambiar filtros).
       </p>
 
       {savedWithCompare.length > 0 && (
@@ -203,28 +265,52 @@ export function DashboardCompareSpecSection({
         </div>
       )}
 
-      <CompareSpecFields
-        variant="studio"
-        compare={compare}
-        setCompare={setCompare}
-        timeColumnDefault={timeColumnDefault}
-        timeColumnOptions={timeColumnDefault ? [timeColumnDefault, ...dims.filter((d) => d !== timeColumnDefault)] : dims}
-        granularity={granularity}
-        dims={dims}
-        compareColumnCandidates={compareColumnCandidates}
-        fixedValue={String(agg.transformCompareFixedValue ?? "")}
-        onFixedValueChange={(v) => updateAgg({ transformCompareFixedValue: v })}
-        showKpiTemporalSeriesHint={showKpiTemporalSeriesHint}
-      />
+      <div className="space-y-3">
+        <Label className="text-[11px] font-medium text-[var(--studio-fg-muted)]">1. Tipo y parámetros</Label>
+        <CompareSpecFields
+          variant="studio"
+          compare={compare}
+          setCompare={setCompare}
+          timeColumnDefault={timeColumnDefault}
+          timeColumnOptions={timeColumnDefault ? [timeColumnDefault, ...dims.filter((d) => d !== timeColumnDefault)] : dims}
+          granularity={granularity}
+          dims={dims}
+          compareColumnCandidates={compareColumnCandidates}
+          fixedValue={String(agg.transformCompareFixedValue ?? "")}
+          onFixedValueChange={(v) => updateAgg({ transformCompareFixedValue: v })}
+          showKpiTemporalSeriesHint={showKpiTemporalSeriesHint}
+          showKpiTotalVsPeriodHint={showKpiTotalVsPeriodHint}
+        />
+      </div>
 
-      {comparePreviewLine && compare.kind !== "none" && (
-        <p className="text-[10px] text-[var(--studio-accent)]">
-          Vista previa (última fila, {primaryMetricAlias}): {comparePreviewLine}
-        </p>
+      {hasPreview && compare.kind !== "none" && (
+        <div className="rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/60 px-2.5 py-2 space-y-1">
+          <Label className="text-[10px] font-medium text-[var(--studio-fg-muted)]">Vista previa (datos actuales)</Label>
+          {previewMainTotal && (
+            <p className="text-[11px] text-[var(--studio-fg)]">
+              <span className="text-[var(--studio-fg-muted)]">Valor principal (total del rango):</span>{" "}
+              <span className="font-semibold tabular-nums">{previewMainTotal}</span>
+              {primaryMetricAlias ? (
+                <span className="text-[var(--studio-fg-muted)]"> · {primaryMetricAlias}</span>
+              ) : null}
+            </p>
+          )}
+          {previewCompareLine && (
+            <p className="text-[11px] text-[var(--studio-accent)]">
+              <span className="text-[var(--studio-fg-muted)]">Comparación (último período):</span> {previewCompareLine}
+            </p>
+          )}
+          {!previewCompareLine && (
+            <p className="text-[10px] text-[var(--studio-fg-muted)]">
+              La comparación se mostrará cuando haya datos con columnas de referencia calculadas.
+            </p>
+          )}
+        </div>
       )}
 
       {compare.kind !== "none" && (
         <div className="space-y-3 border-t border-[var(--studio-border)] pt-3">
+          <Label className="text-[11px] font-medium text-[var(--studio-fg-muted)]">2. Presentación en el dashboard</Label>
           <label className="flex items-center gap-2 text-xs text-[var(--studio-fg)]">
             <Checkbox
               checked={ui.enabled}

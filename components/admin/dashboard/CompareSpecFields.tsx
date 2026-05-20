@@ -25,6 +25,8 @@ export type CompareSpecFieldsProps = {
   onMissingTimeColumn?: () => void;
   onMissingColumnCandidate?: () => void;
   showKpiTemporalSeriesHint?: boolean;
+  /** KPI: explica que el valor grande es el total y la comparación es del último período. */
+  showKpiTotalVsPeriodHint?: boolean;
 };
 
 function fieldClass(variant: "studio" | "etl"): string {
@@ -155,6 +157,7 @@ export function CompareSpecFields({
   onMissingTimeColumn,
   onMissingColumnCandidate,
   showKpiTemporalSeriesHint,
+  showKpiTotalVsPeriodHint,
 }: CompareSpecFieldsProps) {
   const timeOptions =
     timeColumnOptions && timeColumnOptions.length > 0
@@ -165,10 +168,17 @@ export function CompareSpecFields({
 
   return (
     <div className={variant === "studio" ? "space-y-4" : "space-y-4 mb-4"}>
+      {showKpiTotalVsPeriodHint && variant === "studio" && (
+        <p className="text-[10px] text-[var(--studio-fg-muted)] leading-snug">
+          El número grande del KPI es el <strong className="font-medium text-[var(--studio-fg)]">total del rango</strong>{" "}
+          (filtros actuales). La comparación debajo muestra la variación del{" "}
+          <strong className="font-medium text-[var(--studio-fg)]">último período</strong> respecto al anterior.
+        </p>
+      )}
       {showKpiTemporalSeriesHint && variant === "studio" && (
         <p className="text-[10px] text-amber-700 dark:text-amber-500/90 leading-snug">
-          En KPI, la comparación temporal necesita agrupar por fecha (elegí mes/día/etc. arriba). Sin granularidad el
-          agregado puede ser un solo total y no se calculará «vs periodo anterior».
+          Recomendado: definí la columna de fecha y granularidad (mes/día) en la métrica para alinear períodos con los
+          filtros del tablero.
         </p>
       )}
 

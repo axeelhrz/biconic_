@@ -237,6 +237,22 @@ export function readComparePresentation(
   return { current, reference, delta, deltaPct };
 }
 
+/**
+ * Valor principal del KPI: suma de la métrica en todas las filas del agregado.
+ * Con comparación temporal la API puede devolver varios buckets; el total del rango no debe
+ * sustituirse por el último período (eso va en la línea de comparación debajo).
+ */
+export function resolveDashboardKpiMainValue(
+  rows: Record<string, unknown>[],
+  yKey: string
+): number {
+  if (!rows.length || !yKey) return 0;
+  return rows.reduce((acc, row) => {
+    const n = Number((row as Record<string, unknown>)[yKey] ?? 0);
+    return acc + (Number.isFinite(n) ? n : 0);
+  }, 0);
+}
+
 /** Fila recomendada para KPI con serie temporal: bucket de mayor fecha (alineado al período actual tras expansión de filtros). */
 export function pickDashboardKpiCompareRow(
   rows: Record<string, unknown>[],

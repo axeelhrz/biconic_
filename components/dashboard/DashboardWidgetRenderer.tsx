@@ -49,7 +49,7 @@ import {
   placementEnabled,
   getCompareColumnKeys,
   legacyCompareInputFromWidgetAgg,
-  compareNeedsTimeGroupedRows,
+  resolveDashboardKpiMainValue,
   pickDashboardKpiCompareRow,
   readComparePresentation,
   formatDashboardCompareText,
@@ -367,41 +367,6 @@ export function DashboardWidgetRenderer({
     const style = widget.chartStyle as ChartStyleConfig | undefined;
     const rows = widget.rows as Record<string, unknown>[];
     const aggCfg = widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"];
-    const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(aggCfg));
-    const parseOpts =
-      (aggCfg as { dateSlashOrder?: string } | undefined)?.dateSlashOrder === "MDY"
-        ? ({ slashDateOrder: "MDY" } as const)
-        : ({ slashDateOrder: "DMY" } as const);
-    const compareUiOpts = { widgetType: widget.type, chartType: effectiveWidgetChartType(widget) };
-    const compareUi = getEffectiveDashboardCompareUi(
-      aggCfg as import("@/lib/dashboard/ensureDashboardCompareUi").AggForDashboardCompareUi,
-      compareUiOpts
-    );
-    const useLastBucket =
-      Boolean(compareUi?.enabled) &&
-      compareNeedsTimeGroupedRows(spec) &&
-      rows.length > 1;
-
-    if (useLastBucket) {
-      const lastRow = pickDashboardKpiCompareRow(rows, spec, parseOpts) ?? rows[rows.length - 1] ?? {};
-      const resultKeys = Object.keys(lastRow);
-      const metricAliases =
-        aggCfg?.enabled && aggCfg.metrics?.length
-          ? aggCfg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
-          : [];
-      const metricsKpi = (aggCfg?.metrics ?? []) as { alias?: string; func?: string; field?: string }[];
-      const rawKpiY =
-        Array.isArray(aggCfg?.chartYAxes) && aggCfg.chartYAxes[0] != null ? String(aggCfg.chartYAxes[0]).trim() : "";
-      const resolvedKpiY = rawKpiY ? resolveChartYAxisEntryToResultKey(rawKpiY, metricsKpi, resultKeys) : null;
-      const yKey =
-        resolvedKpiY ??
-        metricAliases.find((k) => resultKeys.includes(k)) ??
-        resultKeys.find((k) => typeof lastRow[k] === "number") ??
-        resultKeys[0];
-      if (yKey && Number.isFinite(Number(lastRow[yKey]))) {
-        return formatKpiValue(Number(lastRow[yKey]), style);
-      }
-    }
 
     const fromConfig = chartConfig?.datasets?.[0]?.data?.[0];
     if (fromConfig != null && Number.isFinite(Number(fromConfig))) {
@@ -409,28 +374,50 @@ export function DashboardWidgetRenderer({
     }
 
     const firstRow = rows[0] ?? {};
+    const resultKeys = Object.keys(firstRow);
+    const metricAliases =
+      aggCfg?.enabled && aggCfg.metrics?.length
+        ? aggCfg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
+        : [];
+    const metricsKpi = (aggCfg?.metrics ?? []) as { alias?: string; func?: string; field?: string }[];
+    const rawKpiY =
+      Array.isArray(aggCfg?.chartYAxes) && aggCfg.chartYAxes[0] != null ? String(aggCfg.chartYAxes[0]).trim() : "";
+    const resolvedKpiY = rawKpiY ? resolveChartYAxisEntryToResultKey(rawKpiY, metricsKpi, resultKeys) : null;
+    const yKey =
+      resolvedKpiY ??
+      metricAliases.find((k) => resultKeys.includes(k)) ??
+      resultKeys.find((k) => typeof firstRow[k] === "number") ??
+      resultKeys[0];
+
+    if (yKey) {
+      const total = resolveDashboardKpiMainValue(rows, yKey);
+      if (Number.isFinite(total)) {
+        return formatKpiValue(total, style);
+      }
+    }
 
     const explicitY = (widget.aggregationConfig as { chartYAxes?: string[] } | undefined)?.chartYAxes?.[0];
-    if (explicitY && Number.isFinite(Number(firstRow[explicitY]))) {
-      return formatKpiValue(Number(firstRow[explicitY]), style);
+    if (explicitY) {
+      const total = resolveDashboardKpiMainValue(rows, String(explicitY));
+      if (Number.isFinite(total)) {
+        return formatKpiValue(total, style);
+      }
     }
 
     const metrics = (widget.aggregationConfig as { metrics?: { alias?: string; field?: string }[] } | undefined)?.metrics;
     const metricAlias = metrics?.[metrics.length - 1]?.alias;
-    if (metricAlias && Number.isFinite(Number(firstRow[metricAlias]))) {
-      return formatKpiValue(Number(firstRow[metricAlias]), style);
-    }
-
-    const preferredKeys = ["value", "metric_0"];
-    for (const key of preferredKeys) {
-      const candidate = Number(firstRow[key]);
-      if (Number.isFinite(candidate)) {
-        return formatKpiValue(candidate, style);
+    if (metricAlias) {
+      const total = resolveDashboardKpiMainValue(rows, String(metricAlias));
+      if (Number.isFinite(total)) {
+        return formatKpiValue(total, style);
       }
     }
-    const firstNumeric = Object.values(firstRow).find((value) => Number.isFinite(Number(value)));
-    if (firstNumeric != null) {
-      return formatKpiValue(Number(firstNumeric), style);
+
+    for (const key of ["value", "metric_0"]) {
+      const total = resolveDashboardKpiMainValue(rows, key);
+      if (Number.isFinite(total) && total !== 0) {
+        return formatKpiValue(total, style);
+      }
     }
     return null;
   }, [chartType, chartConfig, widget.rows, widget.chartStyle, widget.aggregationConfig]);
