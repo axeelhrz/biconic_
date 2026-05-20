@@ -22,3 +22,24 @@ export function shouldRefetchWidgetOnComparePatch(patch: Record<string, unknown>
 
   return true;
 }
+
+/** Campos cuyo cambio altera el dataset agregado (filtros, dimensiones, métricas). */
+export const AGG_DATA_REFETCH_KEYS = new Set([
+  "filters",
+  "dimensionDefaultFilters",
+  "excludeGlobalFilters",
+  "metrics",
+  "dimension",
+  "dimensions",
+  "dimension2",
+  "dateDimension",
+  "dateGroupByGranularity",
+]);
+
+export function shouldRefetchWidgetOnAggDataPatch(patch: Record<string, unknown>): boolean {
+  return Object.keys(patch).some((k) => AGG_DATA_REFETCH_KEYS.has(k));
+}
+
+export function shouldRefetchWidgetOnAggregationPatch(patch: Record<string, unknown>): boolean {
+  return shouldRefetchWidgetOnComparePatch(patch) || shouldRefetchWidgetOnAggDataPatch(patch);
+}

@@ -44,7 +44,7 @@ import {
 } from "@/lib/dashboard/buildChartConfig";
 import type { ChartLabelDisplayMode, ChartPercentBasis, ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
-import { shouldRefetchWidgetOnComparePatch } from "@/lib/dashboard/compareAggRefetch";
+import { shouldRefetchWidgetOnAggregationPatch } from "@/lib/dashboard/compareAggRefetch";
 import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import {
   compactGeoComponentOverridesForRequest,
@@ -401,6 +401,8 @@ export function AdminDashboardStudio({
 }: AdminDashboardStudioProps) {
   const [widgets, setWidgets] = useState<StudioWidget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<GlobalFilter[]>([]);
+  /** Valores en vivo de filtros globales (por id) y widgets tipo filter en el lienzo. */
+  const [studioFilterValues, setStudioFilterValues] = useState<Record<string, unknown>>({});
   const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>({ ...DEFAULT_DASHBOARD_THEME });
   const [mode, setMode] = useState<StudioMode>("disenar");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -432,6 +434,8 @@ export function AdminDashboardStudio({
   /** Tras merge de savedMetrics desde ETL, recargar widgets de análisis (expand depende de tarjetas por id). */
   const analysisReloadLastSavedMetricsLenRef = useRef(-1);
   const compareRefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const filterReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const filtersDataKeyRef = useRef<string | null>(null);
   const layoutHydratedForAnalysisRef = useRef(false);
   const resizeStateRef = useRef<{
     widgetId: string;
@@ -708,17 +712,18 @@ export function AdminDashboardStudio({
             .map((w) => String((w as { filterConfig?: { field?: string } }).filterConfig?.field ?? ""))
         );
         const mappedGlobalFilters: GlobalFilter[] = [];
-        const globalFilterValuesById = Object.fromEntries(globalFilters.map((x) => [x.id, x.value])) as Record<
-          string,
-          unknown
-        >;
+        const filtersForDataLoad: Record<string, unknown> = {
+          ...Object.fromEntries(globalFilters.map((x) => [x.id, x.value])),
+          ...studioFilterValues,
+        };
         if (!widget.excludeGlobalFilters) {
           for (const f of globalFilters) {
             if (f.applyTo === "selected" && Array.isArray(f.applyToWidgetIds) && f.applyToWidgetIds.length > 0) {
               if (!f.applyToWidgetIds.includes(widgetId)) continue;
             }
             if (fieldsWithWidgets.has(f.field)) continue;
-            let v: unknown = f.value;
+            let v: unknown =
+              filtersForDataLoad[f.id] !== undefined ? filtersForDataLoad[f.id] : f.value;
             const rawOp = f.operator || "=";
             const rawOpUpper = String(rawOp).toUpperCase();
             const inputT = f.inputType;
@@ -726,7 +731,7 @@ export function AdminDashboardStudio({
               v = v[0];
             }
             if (rawOpUpper === "MONTH") {
-              v = expandMonthFilterValueWithYear(globalFilters, globalFilterValuesById, {
+              v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
                 field: f.field,
                 operator: f.operator,
                 value: v,
@@ -754,6 +759,69 @@ export function AdminDashboardStudio({
               op === "IN" ? (Array.isArray(v) ? v : [v]) : v;
             mappedGlobalFilters.push({ ...f, field: physicalField, operator: op, value });
           }
+        }
+
+        const filterWidgetsOnPage = widgets.filter(
+          (w) =>
+            w.type === "filter" &&
+            pageOf(w) === targetPage &&
+            (w as { filterConfig?: { field?: string } }).filterConfig?.field
+        );
+        for (const fw of filterWidgetsOnPage) {
+          const fc = (fw as { filterConfig: { label?: string; field: string; operator?: string; inputType?: string; scopeMetricIds?: string[] } })
+            .filterConfig;
+          let v: unknown = filtersForDataLoad[fw.id];
+          if (v === "" || v == null) continue;
+          if (Array.isArray(v) && v.length === 0) continue;
+          const rawOpFw = fc.operator || "=";
+          const rawOpFwUpper = String(rawOpFw).toUpperCase();
+          if (rawOpFwUpper === "YEAR" && Array.isArray(v) && v.length > 0 && fc.inputType !== "multi") {
+            v = v[0];
+          }
+          if (rawOpFwUpper === "MONTH") {
+            v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
+              field: fc.field,
+              operator: fc.operator,
+              value: v,
+            });
+            if (v === "" || v == null) continue;
+            if (Array.isArray(v) && v.length === 0) continue;
+          }
+          const scopeIds = fc.scopeMetricIds;
+          if (Array.isArray(scopeIds) && scopeIds.length > 0) {
+            const allowed = new Set(scopeIds.map(String));
+            const mid = String((widget as { metricId?: string }).metricId ?? "").trim();
+            const midsRaw = (widget as { metricIds?: unknown }).metricIds;
+            const mids = Array.isArray(midsRaw) ? midsRaw.map((x) => String(x)) : [];
+            const applies =
+              (mid !== "" && allowed.has(mid)) ||
+              mids.some((id) => allowed.has(String(id))) ||
+              allowed.has(widgetId);
+            if (!applies) continue;
+          }
+          const physicalFw = resolveAggregationFilterPhysicalField({
+            filterSemanticOrPhysicalField: fc.field,
+            operatorUpper: rawOpFwUpper,
+            datasetDimensions,
+            sourceId,
+            agg: agg ?? null,
+            mapDatasetField,
+          });
+          if (physicalFw == null) continue;
+          const useInFw =
+            rawOpFw === "IN" ||
+            (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpFwUpper) &&
+              fc.inputType === "multi" &&
+              Array.isArray(v) &&
+              v.length > 0);
+          const opFw = useInFw ? "IN" : rawOpFw;
+          const valueFw: unknown = opFw === "IN" ? (Array.isArray(v) ? v : [v]) : v;
+          mappedGlobalFilters.push({
+            id: fw.id,
+            field: physicalFw,
+            operator: opFw,
+            value: valueFw,
+          } as GlobalFilter);
         }
         const mappedDimensionDefaultFilters = mapDimensionDefaultFiltersToAggregationFilters(
           agg?.dimensionDefaultFilters as DimensionDefaultFilterEdit[] | undefined,
@@ -1069,7 +1137,7 @@ export function AdminDashboardStudio({
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, getTableName, derivedColumnsFromLayout, savedMetrics, activePageId]
+    [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, activePageId]
   );
 
   useEffect(() => {
@@ -1116,6 +1184,59 @@ export function AdminDashboardStudio({
   );
 
   const widgetsForCurrentPage = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
+
+  const reloadWidgetsOnActivePage = useCallback(() => {
+    const pageId = activePageId ?? "page-1";
+    const toLoad = widgets.filter(
+      (w) => (w.pageId ?? "page-1") === pageId && w.aggregationConfig?.enabled && w.type !== "image" && w.type !== "text"
+    );
+    if (toLoad.length === 0) return;
+    void Promise.all(toLoad.map((w) => loadMetricData(w.id)));
+  }, [widgets, activePageId, loadMetricData]);
+
+  const handleStudioFilterChange = useCallback((widgetId: string, value: unknown) => {
+    setStudioFilterValues((prev) => ({ ...prev, [widgetId]: value }));
+  }, []);
+
+  const globalFiltersFingerprint = useMemo(
+    () =>
+      JSON.stringify(
+        globalFilters.map((f) => ({
+          id: f.id,
+          field: f.field,
+          operator: f.operator,
+          value: f.value,
+          applyTo: f.applyTo,
+          applyToWidgetIds: f.applyToWidgetIds,
+        }))
+      ),
+    [globalFilters]
+  );
+
+  const studioFiltersFingerprint = useMemo(() => JSON.stringify(studioFilterValues), [studioFilterValues]);
+
+  const filtersDataFingerprint = useMemo(
+    () => `${globalFiltersFingerprint}\x1e${studioFiltersFingerprint}`,
+    [globalFiltersFingerprint, studioFiltersFingerprint]
+  );
+
+  useEffect(() => {
+    if (!layoutLoaded || !etlData || etlLoading) return;
+    const key = filtersDataFingerprint;
+    if (filtersDataKeyRef.current === null) {
+      filtersDataKeyRef.current = key;
+      return;
+    }
+    if (filtersDataKeyRef.current === key) return;
+    filtersDataKeyRef.current = key;
+    if (filterReloadTimerRef.current) clearTimeout(filterReloadTimerRef.current);
+    filterReloadTimerRef.current = setTimeout(() => {
+      reloadWidgetsOnActivePage();
+    }, 300);
+    return () => {
+      if (filterReloadTimerRef.current) clearTimeout(filterReloadTimerRef.current);
+    };
+  }, [filtersDataFingerprint, layoutLoaded, etlData, etlLoading, reloadWidgetsOnActivePage]);
 
   // Auto-cargar datos de todos los widgets al abrir el dashboard (solo una vez)
   useEffect(() => {
@@ -1587,6 +1708,7 @@ export function AdminDashboardStudio({
   useEffect(() => {
     return () => {
       if (compareRefetchTimerRef.current) clearTimeout(compareRefetchTimerRef.current);
+      if (filterReloadTimerRef.current) clearTimeout(filterReloadTimerRef.current);
     };
   }, []);
 
@@ -1645,7 +1767,7 @@ export function AdminDashboardStudio({
       );
       setIsDirty(true);
 
-      if (aggPatch && shouldRefetchWidgetOnComparePatch(aggPatch)) {
+      if (aggPatch && shouldRefetchWidgetOnAggregationPatch(aggPatch)) {
         const widgetId = selectedId;
         if (compareRefetchTimerRef.current) clearTimeout(compareRefetchTimerRef.current);
         compareRefetchTimerRef.current = setTimeout(() => {
@@ -2099,6 +2221,10 @@ export function AdminDashboardStudio({
                   );
                   setEditingFilterId(null);
                   setIsDirty(true);
+                  if (filterReloadTimerRef.current) clearTimeout(filterReloadTimerRef.current);
+                  filterReloadTimerRef.current = setTimeout(() => {
+                    reloadWidgetsOnActivePage();
+                  }, 300);
                 }}
               >
                 Guardar
@@ -2298,6 +2424,8 @@ export function AdminDashboardStudio({
                       chartGridColor={(w.aggregationConfig as { chartGridColor?: string })?.chartGridColor}
                       chartAxisXVisible={(w.aggregationConfig as { chartAxisXVisible?: boolean })?.chartAxisXVisible}
                       chartAxisYVisible={(w.aggregationConfig as { chartAxisYVisible?: boolean })?.chartAxisYVisible}
+                      filterValue={w.type === "filter" ? studioFilterValues[w.id] : undefined}
+                      onFilterChange={embeddedPreview ? undefined : handleStudioFilterChange}
                       widgetForRenderer={{
                         id: w.id,
                         type: chartType,
@@ -2336,6 +2464,19 @@ export function AdminDashboardStudio({
                         })(),
                         diagnosticPreview: w.diagnosticPreview,
                         minHeight: minH,
+                        filterConfig:
+                          w.type === "filter" && w.filterConfig?.field
+                            ? {
+                                label: w.filterConfig.label ?? w.filterConfig.field,
+                                field: w.filterConfig.field,
+                                operator: w.filterConfig.operator ?? "=",
+                                inputType:
+                                  (w.filterConfig.inputType as "text" | "select" | "date" | "number" | "multi") ??
+                                  "select",
+                                scopeMetricIds: w.filterConfig.scopeMetricIds,
+                              }
+                            : undefined,
+                        facetValues: (w as { facetValues?: Record<string, unknown[]> }).facetValues,
                       }}
                       showTechnicalPreview={embeddedPreview ? false : showDiagnostics}
                       darkChartTheme={resolveDarkChartTheme(effectiveTheme, true)}

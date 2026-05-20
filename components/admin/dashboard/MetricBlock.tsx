@@ -83,6 +83,9 @@ type MetricBlockProps = {
   darkChartTheme?: boolean;
   /** Vista previa admin: sin menú, sin selección, mismo aspecto del lienzo */
   readOnly?: boolean;
+  /** Solo widgets filter: valor actual en el lienzo del studio */
+  filterValue?: unknown;
+  onFilterChange?: (widgetId: string, value: unknown) => void;
   /** Cambiar orden en el lienzo (persiste gridOrder al guardar dashboard). */
   onMoveOrder?: (direction: -1 | 1) => void;
   canMoveUp?: boolean;
@@ -122,6 +125,8 @@ export function MetricBlock({
   showTechnicalPreview = false,
   darkChartTheme = false,
   readOnly = false,
+  filterValue,
+  onFilterChange,
   onMoveOrder,
   canMoveUp = false,
   canMoveDown = false,
@@ -349,6 +354,8 @@ export function MetricBlock({
               darkChartTheme={darkChartTheme}
               minHeight={minHeight}
               className="!border-0 !p-0 !shadow-none h-full"
+              filterValue={filterValue}
+              onFilterChange={onFilterChange}
             />
           </div>
         )}
