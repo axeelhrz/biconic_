@@ -467,3 +467,8 @@
 [data-theme="client"] .client-view-filters-radio-group input[type="radio"] {
   accent-color: var(--client-accent);
 }
+
+/* Ocultar chrome de UI durante exportación PDF/PPT (iconos de advertencia, etc.) */
+.dashboard-exporting [data-export-chrome] {
+  visibility: hidden !important;
+}

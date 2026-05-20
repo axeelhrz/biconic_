@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { ChevronDown, ChevronUp, Loader2, Play, Trash2, MoreHorizontal } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Loader2, Play, Trash2, MoreHorizontal } from "lucide-react";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "@/components/dashboard/DashboardWidgetRenderer";
 import {
   DropdownMenu,
@@ -90,6 +90,10 @@ type MetricBlockProps = {
   onMoveOrder?: (direction: -1 | 1) => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  /** Modo manual: asa para arrastrar la tarjeta en el lienzo. */
+  showDragHandle?: boolean;
+  onDragHandleStart?: (e: React.PointerEvent) => void;
+  isDragging?: boolean;
 };
 
 const STATE_LABELS: Record<MetricBlockState, string> = {
@@ -130,6 +134,9 @@ export function MetricBlock({
   onMoveOrder,
   canMoveUp = false,
   canMoveDown = false,
+  showDragHandle = false,
+  onDragHandleStart,
+  isDragging = false,
 }: MetricBlockProps) {
   const hasViz = useMemo(() => {
     if (chartType === "image") {
@@ -175,7 +182,7 @@ export function MetricBlock({
       role={readOnly ? undefined : "button"}
       tabIndex={readOnly ? undefined : 0}
       data-selected={isSelected ? "true" : undefined}
-      className={`metric-block group relative flex flex-col transition-all ${readOnly ? "cursor-default" : "cursor-pointer"}`}
+      className={`metric-block group relative flex flex-col transition-all ${readOnly ? "cursor-default" : "cursor-pointer"} ${isDragging ? "metric-block--dragging" : ""}`}
       style={{ minHeight }}
       onClick={readOnly ? undefined : onSelect}
       onKeyDown={
@@ -185,6 +192,20 @@ export function MetricBlock({
       }
     >
       <header className="metric-block-header flex flex-shrink-0 items-start justify-between gap-3">
+        {showDragHandle && onDragHandleStart ? (
+          <button
+            type="button"
+            className="metric-block-drag-handle flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-lg text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)] hover:text-[var(--studio-accent)] active:cursor-grabbing"
+            aria-label="Arrastrar tarjeta"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onDragHandleStart(e);
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        ) : null}
         <div className="min-w-0 flex-1">
           <h3 className="metric-block-title truncate">{title}</h3>
           {purpose && (

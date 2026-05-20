@@ -315,11 +315,26 @@
   }
 }
 
+.studio-blocks--dragging {
+  outline: 1px dashed rgba(34, 211, 238, 0.35);
+  outline-offset: 4px;
+  border-radius: var(--studio-radius-sm);
+}
+
 .studio-block-cell {
   display: flex;
   align-items: flex-start;
   min-width: 0;
   position: relative;
+}
+
+.metric-block--dragging {
+  opacity: 0.92;
+  box-shadow: 0 0 0 2px var(--studio-accent-glow);
+}
+
+.metric-block-drag-handle {
+  touch-action: none;
 }
 /* Asas de redimensionado desde los bordes (solo cuando el widget está seleccionado) */
 .studio-resize-handle {

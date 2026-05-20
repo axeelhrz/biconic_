@@ -85,7 +85,7 @@ La API soporta `dimensions`, `cumulative`, `compare` / `comparePeriod` (legacy),
 | ✅ | Botón **“Actualizar métricas”** en la vista: llama a `reloadAll()` y recarga todos los widgets (cada uno vuelve a llamar a aggregate o raw). |
 | ✅ | Al cambiar **filtros globales** o filtros de widget, hay un efecto con debounce que recarga los widgets afectados. |
 | ❌ | **Actualización automática en el tiempo**: No hay un intervalo (por ejemplo cada X minutos) que refresque los datos del dashboard sin que el usuario pulse el botón. Para el MVP se puede implementar: un intervalo configurable (ej. 5 min) que llame a `reloadAll()` cuando la pestaña esté visible (usar `document.visibilityState` o similar para no refrescar en segundo plano si no se desea). |
-| ⚠️ | **Datos del ETL**: Los datos mostrados son los que ya están cargados en Supabase (última ejecución del ETL). No hay “actualización automática” del ETL en sí (ej. cron). Eso es un tema de diseño: el usuario puede ejecutar el ETL manualmente y luego refrescar el dashboard; para MVP puede ser suficiente. |
+| ✅ | **Actualización automática del ETL**: Frecuencia configurable en el flujo guiado y en métricas (`layout.guided_config.schedule`). Cron Vercel cada 15 min invoca `/api/etl/run-scheduled` (requiere `CRON_SECRET` o `ETL_SCHEDULER_SECRET` en producción). |
 
 ---
 

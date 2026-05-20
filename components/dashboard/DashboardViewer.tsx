@@ -4,14 +4,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import { useDashboardEtlData } from "@/hooks/useDashboardEtlData";
 import {
+  type DashboardCardLayoutMode,
   type DashboardTheme,
   DEFAULT_DASHBOARD_THEME,
   mergeCardTheme,
   mergeTheme,
+  normalizeCardLayoutMode,
   themeToCssVars,
   themeToWrapperBackground,
 } from "@/types/dashboard";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./DashboardWidgetRenderer";
+import { DashboardLogoOverlay } from "./DashboardLogoOverlay";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
@@ -28,9 +31,13 @@ import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
 import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2 } from "lucide-react";
 import {
+  buildFilterSummaryFromGlobals,
+  collectExportWidgetTargets,
   exportDashboardExcel,
-  exportDashboardPdfFromElement,
-  exportDashboardSummaryPpt,
+  exportDashboardPdfPerWidget,
+  exportDashboardPptPerWidget,
+  prepareForExport,
+  type ExportReportMeta,
 } from "@/lib/dashboard/dashboardExport";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -45,16 +52,14 @@ import {
   expandMonthFilterValueWithYear,
 } from "@/lib/dashboard/expandMonthFilterWithYear";
 import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
+import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
+import { fetchGlobalFilterDistinctValues } from "@/lib/dashboard/fetchGlobalFilterDistinctValues";
+import { GLOBAL_MONTH_FILTER_VALUES } from "@/lib/dashboard/globalMonthFilterValues";
 import {
   mapDimensionDefaultFiltersToAggregationFilters,
   dimensionDefaultDistinctCacheKey,
   type DimensionDefaultFilterEdit,
 } from "@/lib/dashboard/dimensionDefaultFilters";
-
-/** Meses 1–12 para filtro global MONTH (sin año en la UI). */
-const GLOBAL_MONTH_FILTER_VALUES = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
-] as const;
 const MONTH_LABELS_ES = [
   "Enero",
   "Febrero",
@@ -514,6 +519,7 @@ export function DashboardViewer({
   >({});
   const [dimensionDefaultDistinctValues, setDimensionDefaultDistinctValues] = useState<Record<string, unknown[]>>({});
   const canvasExportRef = useRef<HTMLDivElement>(null);
+  const exportRootRef = useRef<HTMLDivElement>(null);
   const [exportBusy, setExportBusy] = useState(false);
   /** Si viene del layout guardado: misma página activa que AdminDashboardStudio (vista previa = lienzo). */
   const [pageLayout, setPageLayout] = useState<{
@@ -521,6 +527,7 @@ export function DashboardViewer({
     activePageId: string;
     pagesMeta?: { id: string; name: string }[];
   } | null>(null);
+  const [cardLayoutMode, setCardLayoutMode] = useState<DashboardCardLayoutMode>("auto");
   const stateRef = useRef({ widgets, setWidgets });
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
@@ -631,7 +638,9 @@ export function DashboardViewer({
       theme?: Partial<DashboardTheme>;
       pages?: { id: string; name?: string }[];
       activePageId?: string;
+      cardLayoutMode?: DashboardCardLayoutMode;
     } | undefined;
+    setCardLayoutMode(normalizeCardLayoutMode(layout?.cardLayoutMode));
     const pages =
       Array.isArray(layout?.pages) && layout!.pages!.length > 0
         ? layout!.pages!
@@ -695,84 +704,38 @@ export function DashboardViewer({
     }
   }, [layoutFingerprint, initialWidgets, initialTitle, initialGlobalFilters, filterCommitMode]);
 
-  // Cargar distinct values para cada filtro global; si el campo es dimensión semántica, usar tabla y columna física de la fuente primaria
+  // Distinct values para filtros globales (multi-fuente cuando hay dataset semántico)
   useEffect(() => {
-    const dataSources = (etlData as any)?.dataSources as { id: string; schema?: string; tableName?: string; fields?: { date?: string[] } }[] | undefined;
-    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>>; primarySourceId?: string })?.datasetDimensions;
+    const dataSources = (etlData as { dataSources?: { id: string; schema?: string; tableName?: string; fields?: { date?: string[] } }[] })?.dataSources;
+    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
     const primarySourceId = (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
     let primaryTableName: string | undefined;
     if (dataSources?.[0]?.tableName) {
       primaryTableName = `${dataSources[0].schema ?? "etl_output"}.${dataSources[0].tableName}`;
     } else {
-      const name = (etlData as any)?.etlData?.name;
+      const name = (etlData as { etlData?: { name?: string } })?.etlData?.name;
       primaryTableName = name && String(name).includes(".") ? name : name ? `etl_output.${name}` : undefined;
     }
     if (!primaryTableName || !globalFilters.length) return;
     const distinctUrl = apiEndpoints?.distinctValues ?? "/api/dashboard/distinct-values";
-    const selectFilters = globalFilters.filter(
-      (gf) =>
-        gf.field &&
-        ((gf as any).inputType === "select" ||
-          (gf as any).inputType === "multi" ||
-          (gf as any).filterType === "single" ||
-          (gf as any).filterType === "multi")
-    );
-    let cancelled = false;
     const primaryDateFields = dataSources?.[0]?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
-    const dateDistinctTransforms = new Set(["YEAR", "MONTH", "DAY", "QUARTER", "SEMESTER"]);
+    let cancelled = false;
     (async () => {
-      for (const gf of selectFilters) {
-        if (cancelled) break;
-        try {
-          const filterOp = String((gf as { operator?: string }).operator ?? "").toUpperCase();
-
-          const physicalField =
-            datasetDimensions?.[gf.field!]?.[primarySourceId!] ?? gf.field!;
-          const isDateField =
-            physicalField &&
-            primaryDateFields.some((d: string) => (d || "").toLowerCase() === (physicalField || "").toLowerCase());
-          /** Solo mes calendario (1–12), sin año en la UI ni distinct YYYY-MM. */
-          if (filterOp === "MONTH" && isDateField) {
-            if (!cancelled) {
-              setGlobalFilterDistinctValues((prev) => ({
-                ...prev,
-                [gf.id]: [...GLOBAL_MONTH_FILTER_VALUES],
-              }));
-            }
-            continue;
-          }
-          if (filterOp === "DAY" && isDateField) {
-            continue;
-          }
-          const body: { tableName: string; field: string; limit: number; transform?: string } = {
-            tableName: primaryTableName,
-            field: physicalField,
-            limit: 200,
-          };
-          if (isDateField) {
-            const t =
-              filterOp === "YEAR_MONTH"
-                ? "MONTH"
-                : dateDistinctTransforms.has(filterOp)
-                  ? filterOp
-                  : "YEAR";
-            body.transform = t;
-          }
-          const res = await fetch(distinctUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-          if (!res.ok) continue;
-          const data = await safeJsonResponse(res);
-          if (cancelled) break;
-          const values = Array.isArray(data) ? data : (data as { values?: unknown[] })?.values;
-          if (Array.isArray(values)) {
-            setGlobalFilterDistinctValues((prev) => ({ ...prev, [gf.id]: values }));
-          }
-        } catch {
-          // ignore per-field errors
-        }
+      const values = await fetchGlobalFilterDistinctValues({
+        globalFilters: globalFilters as { id: string; field: string; operator?: string; inputType?: string; filterType?: string }[],
+        dataSources: (dataSources ?? []).filter(
+          (ds): ds is { id: string; schema?: string; tableName: string; fields?: { date?: string[] } } =>
+            !!ds.tableName
+        ),
+        primarySourceId,
+        primaryTableName,
+        primaryDateFields,
+        datasetDimensions,
+        distinctUrl,
+        safeJsonResponse,
+      });
+      if (!cancelled) {
+        setGlobalFilterDistinctValues((prev) => ({ ...prev, ...values }));
       }
     })();
     return () => {
@@ -930,13 +893,13 @@ export function DashboardViewer({
               if (v === "" || v == null) continue;
               if (Array.isArray(v) && v.length === 0) continue;
             }
-            const physicalField = resolveAggregationFilterPhysicalField({
-              filterSemanticOrPhysicalField: f.field,
+            const physicalField = resolveGlobalFilterPhysicalField({
+              filterField: f.field,
               operatorUpper: rawOpUpper,
               datasetDimensions,
+              dataset: (etlData as { dashboardDataset?: import("@/lib/dashboard/dashboardDataset").DashboardDataset })?.dashboardDataset,
               sourceId: widgetSourceId,
               agg: aggConfig ?? null,
-              mapDatasetField,
             });
             if (physicalField == null) continue;
             const useIn =
@@ -1357,10 +1320,20 @@ export function DashboardViewer({
         list = widgets;
       }
     }
+    if (cardLayoutMode === "manual") {
+      return [...list].sort((a, b) => {
+        const fa = a.fixedGrid;
+        const fb = b.fixedGrid;
+        const ra = fa?.row ?? 9999;
+        const rb = fb?.row ?? 9999;
+        if (ra !== rb) return ra - rb;
+        return (fa?.col ?? 9999) - (fb?.col ?? 9999);
+      });
+    }
     const hasOrder = list.some((w) => typeof w.gridOrder === "number");
     if (hasOrder) return [...list].sort((a, b) => (a.gridOrder ?? 0) - (b.gridOrder ?? 0));
     return list;
-  }, [widgets, pageLayout]);
+  }, [widgets, pageLayout, cardLayoutMode]);
 
   const exportableWidgets = useMemo(
     () =>
@@ -1369,6 +1342,28 @@ export function DashboardViewer({
       ),
     [orderedWidgets]
   );
+
+  const exportableWidgetIds = useMemo(
+    () => new Set(exportableWidgets.map((w) => w.id)),
+    [exportableWidgets]
+  );
+
+  const exportWidgetsLoading = useMemo(
+    () => exportableWidgets.some((w) => w.isLoading === true),
+    [exportableWidgets]
+  );
+
+  const buildExportMeta = useCallback((): ExportReportMeta => {
+    const pageName =
+      pageLayout?.pagesMeta?.find((p) => p.id === pageLayout.activePageId)?.name ??
+      pageLayout?.pagesMeta?.[0]?.name;
+    return {
+      dashboardTitle: title,
+      pageName: pageName || undefined,
+      exportedAt: new Date(),
+      filterSummary: buildFilterSummaryFromGlobals(globalFilters, filtersForDataLoad),
+    };
+  }, [title, pageLayout, globalFilters, filtersForDataLoad]);
 
   const { packCols, packRowGapPx } = useDashboardPackLayout("client");
 
@@ -1404,28 +1399,33 @@ export function DashboardViewer({
     }
   }, [dashboardId, exportableWidgets]);
 
-  const runExportPdf = useCallback(async () => {
-    const el = canvasExportRef.current;
-    if (!el) return;
-    setExportBusy(true);
-    try {
-      await exportDashboardPdfFromElement(el, `dashboard-${dashboardId}`);
-    } finally {
-      setExportBusy(false);
-    }
-  }, [dashboardId]);
+  const runVisualExport = useCallback(
+    async (format: "pdf" | "ppt") => {
+      const root = canvasExportRef.current;
+      const exportRoot = exportRootRef.current;
+      if (!root) return;
+      setExportBusy(true);
+      if (exportRoot) exportRoot.classList.add("dashboard-exporting");
+      try {
+        await prepareForExport();
+        const targets = collectExportWidgetTargets(exportableWidgets, root);
+        const meta = buildExportMeta();
+        const fileBase = `dashboard-${dashboardId}`;
+        if (format === "pdf") {
+          await exportDashboardPdfPerWidget(targets, meta, fileBase);
+        } else {
+          await exportDashboardPptPerWidget(targets, meta, fileBase);
+        }
+      } finally {
+        if (exportRoot) exportRoot.classList.remove("dashboard-exporting");
+        setExportBusy(false);
+      }
+    },
+    [dashboardId, exportableWidgets, buildExportMeta]
+  );
 
-  const runExportPpt = useCallback(async () => {
-    setExportBusy(true);
-    try {
-      await exportDashboardSummaryPpt(
-        `dashboard-${dashboardId}`,
-        exportableWidgets.map((w) => ({ title: w.title, rows: w.rows }))
-      );
-    } finally {
-      setExportBusy(false);
-    }
-  }, [dashboardId, exportableWidgets]);
+  const runExportPdf = useCallback(() => runVisualExport("pdf"), [runVisualExport]);
+  const runExportPpt = useCallback(() => runVisualExport("ppt"), [runVisualExport]);
 
   // Filtros dinámicos: por cada widget, etiquetas de filtros globales que tienen valor pero no aplican a este gráfico (no contiene esa columna)
   const nonApplicableFilterLabelsByWidget = useMemo(() => {
@@ -1485,8 +1485,11 @@ export function DashboardViewer({
     return themeToWrapperBackground(themeMerged);
   }, [useClientTheme, themeMerged]);
 
+  const exportVisualDisabled = exportBusy || exportWidgetsLoading;
+
   return (
     <div
+      ref={exportRootRef}
       className={`flex flex-col h-full w-full ${rootClassName}${useClientTheme ? " client-view-root" : ""}`}
       data-theme={useClientTheme ? "client" : undefined}
       style={{ ...themeVars, ...wrapperBackground }}
@@ -1533,10 +1536,11 @@ export function DashboardViewer({
                   size="sm"
                   className="h-8 gap-1 text-xs rounded-lg"
                   style={{ borderColor: "var(--platform-border)" }}
-                  disabled={exportBusy}
+                  disabled={exportVisualDisabled}
+                  title={exportWidgetsLoading ? "Espere a que terminen de cargar los gráficos" : undefined}
                   onClick={() => void runExportPdf()}
                 >
-                  <FileDown className="h-3.5 w-3.5" />
+                  {exportBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
                   PDF
                 </Button>
                 <Button
@@ -1545,10 +1549,11 @@ export function DashboardViewer({
                   size="sm"
                   className="h-8 gap-1 text-xs rounded-lg"
                   style={{ borderColor: "var(--platform-border)" }}
-                  disabled={exportBusy}
+                  disabled={exportVisualDisabled}
+                  title={exportWidgetsLoading ? "Espere a que terminen de cargar los gráficos" : undefined}
                   onClick={() => void runExportPpt()}
                 >
-                  <FileDown className="h-3.5 w-3.5" />
+                  {exportBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
                   PPT
                 </Button>
               </div>
@@ -1557,7 +1562,10 @@ export function DashboardViewer({
         </header>
       )}
 
-      <div className={useClientTheme ? "client-view-body flex flex-1 flex-col min-h-0" : "flex flex-1 flex-col min-h-0"}>
+      <div className={useClientTheme ? "client-view-body flex flex-1 flex-col min-h-0" : "flex flex-1 flex-col min-h-0 relative"}>
+      {useClientTheme && themeMerged.logoUrl?.trim() ? (
+        <DashboardLogoOverlay theme={themeMerged} />
+      ) : null}
       {pageLayout?.pagesMeta && pageLayout.pagesMeta.length > 1 && (
         <div
           role="tablist"
@@ -1845,9 +1853,11 @@ export function DashboardViewer({
               // `background: var(--client-card)` en `.client-view-widget`. El Card interno es
               // transparente en tema cliente; sin esto, al quitar el overlay de carga se veía
               // el fondo del lienzo en lugar del color de tarjeta del editor.
+              const isExportableWidget = exportableWidgetIds.has(widget.id);
               return (
                 <div
                   key={widget.id}
+                  {...(isExportableWidget ? { "data-export-widget": widget.id } : {})}
                   className={useClientTheme ? "client-view-widget" : undefined}
                   style={{
                     gridColumn,
@@ -1862,6 +1872,7 @@ export function DashboardViewer({
                 >
                   {filterWarningTooltip && (
                     <div
+                      data-export-chrome
                       className="absolute right-2 top-2 z-10 flex shrink-0"
                       title={filterWarningTooltip}
                       style={{ color: "var(--platform-fg-muted)" }}
@@ -1869,6 +1880,9 @@ export function DashboardViewer({
                       <AlertTriangle className="h-4 w-4" aria-hidden />
                     </div>
                   )}
+                  {widget.cardTheme?.logoUrl?.trim() ? (
+                    <DashboardLogoOverlay theme={effectiveTheme} />
+                  ) : null}
                   <DashboardWidgetRenderer
                     widget={{
                       ...widget,

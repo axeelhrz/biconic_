@@ -306,6 +306,7 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
     dateRangeFilter: cfg.dateRangeFilter,
     geoHints: cfg.geoHints,
     mapDefaultCountry: cfg.mapDefaultCountry,
+    mapDisplayModeDefault: cfg.mapDisplayModeDefault,
     mapValueEncoding: cfg.mapValueEncoding,
     mapColorLow: cfg.mapColorLow,
     mapColorHigh: cfg.mapColorHigh,

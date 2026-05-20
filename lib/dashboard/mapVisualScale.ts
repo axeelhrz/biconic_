@@ -4,7 +4,12 @@
 
 export type MapValueEncoding = "both" | "color" | "size";
 
+/** Vista del mapa: puntos (círculos) o provincias coloreadas (solo Argentina). */
+export type MapDisplayMode = "markers" | "choropleth";
+
 export type MapVisualConfigInput = {
+  /** Modo inicial al abrir el mapa; el visitante puede cambiarlo en el visor. */
+  mapDisplayModeDefault?: MapDisplayMode;
   mapValueEncoding?: MapValueEncoding;
   mapColorLow?: string;
   mapColorHigh?: string;
@@ -94,6 +99,9 @@ export function pickMapVisualFromCfg(cfg: unknown): MapVisualConfigInput {
   if (!cfg || typeof cfg !== "object") return {};
   const c = cfg as MapVisualConfigInput;
   const out: MapVisualConfigInput = {};
+  if (c.mapDisplayModeDefault === "markers" || c.mapDisplayModeDefault === "choropleth") {
+    out.mapDisplayModeDefault = c.mapDisplayModeDefault;
+  }
   if (c.mapValueEncoding === "both" || c.mapValueEncoding === "color" || c.mapValueEncoding === "size") {
     out.mapValueEncoding = c.mapValueEncoding;
   }

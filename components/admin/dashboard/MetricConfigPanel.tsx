@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback } from "react";
-import type { DashboardTheme } from "@/types/dashboard";
+import type { DashboardCardLayoutMode, DashboardTheme } from "@/types/dashboard";
 import { mergeCardTheme, mergeTheme } from "@/types/dashboard";
 import { X, Trash2, Play, BookmarkPlus, Plus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,8 @@ import {
 import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
 import type { CompareSpec } from "@/lib/dashboard/compareSpec";
 import { CONTENT_ICON_POSITION_OPTIONS, type ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
+import { ImageConfigFields } from "@/components/dashboard/ImageConfigFields";
+import { CONTENT_ICON_SIZE_OPTIONS, DEFAULT_IMAGE_CONFIG } from "@/lib/dashboard/imageLayout";
 import {
   normalizeChartPercentBasis,
   type ChartLabelDisplayMode,
@@ -168,6 +170,8 @@ export type AggregationConfigEdit = {
     lonField?: string;
   };
   mapDefaultCountry?: string;
+  /** Mapa: vista inicial (puntos vs provincias coloreadas). */
+  mapDisplayModeDefault?: "markers" | "choropleth";
   /** Mapa: codificación visual por valor. */
   mapValueEncoding?: "both" | "color" | "size";
   mapColorLow?: string;
@@ -210,12 +214,8 @@ export type MetricConfigWidget = {
   /** Tema visual solo para esta tarjeta (opcional). */
   cardTheme?: Partial<DashboardTheme>;
   imageUrl?: string;
-  imageConfig?: {
-    width?: number;
-    height?: number;
-    objectFit?: "contain" | "cover" | "fill" | "none" | "scale-down";
-    opacity?: number;
-  };
+  imageConfig?: import("@/lib/dashboard/imageLayout").DashboardImageConfig;
+  contentIconSize?: import("@/lib/dashboard/imageLayout").ContentIconSize;
   content?: string;
   fixedGrid?: DashboardFixedGrid;
   zIndex?: number;
@@ -283,6 +283,9 @@ const OPERATORS = [
 
 type MetricConfigPanelProps = {
   widget: MetricConfigWidget;
+  cardLayoutMode?: DashboardCardLayoutMode;
+  onCardLayoutModeChange?: (mode: DashboardCardLayoutMode) => void;
+  onReorganizeAuto?: () => void;
   /** Tema global del dashboard (barra de apariencia); base para fusionar con `cardTheme`. */
   dashboardTheme?: DashboardTheme;
   /** Etiquetas de datasets del preview (colores por serie además de chartYAxes). */
@@ -327,6 +330,9 @@ const LEGEND_POSITION_OPTIONS: Array<{ value: "top" | "bottom" | "left" | "right
 
 export function MetricConfigPanel({
   widget,
+  cardLayoutMode = "auto",
+  onCardLayoutModeChange,
+  onReorganizeAuto,
   dashboardTheme,
   previewChartDatasetLabels = [],
   previewRows = [],
@@ -808,22 +814,42 @@ export function MetricConfigPanel({
                 className="h-9 rounded-lg border-[var(--studio-border)] text-sm"
               />
               {(widget.headerIconKey || (widget.headerIconUrl ?? "").trim()) && (
-                <div>
-                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición en el área del gráfico</Label>
-                  <select
-                    className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
-                    value={widget.contentIconPosition ?? "topLeft"}
-                    onChange={(e) =>
-                      onUpdate({ contentIconPosition: e.target.value as ContentIconPosition })
-                    }
-                  >
-                    {CONTENT_ICON_POSITION_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <>
+                  <div>
+                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tamaño del icono</Label>
+                    <select
+                      className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+                      value={widget.contentIconSize ?? "md"}
+                      onChange={(e) =>
+                        onUpdate({
+                          contentIconSize: e.target.value as NonNullable<typeof widget.contentIconSize>,
+                        })
+                      }
+                    >
+                      {CONTENT_ICON_SIZE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición en el área del gráfico</Label>
+                    <select
+                      className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+                      value={widget.contentIconPosition ?? "topLeft"}
+                      onChange={(e) =>
+                        onUpdate({ contentIconPosition: e.target.value as ContentIconPosition })
+                      }
+                    >
+                      {CONTENT_ICON_POSITION_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -849,83 +875,13 @@ export function MetricConfigPanel({
                     className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
                   />
                 </div>
-                <div>
-                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Object-fit</Label>
-                  <select
-                    className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
-                    value={widget.imageConfig?.objectFit ?? "contain"}
-                    onChange={(e) =>
-                      onUpdate({
-                        imageConfig: {
-                          ...widget.imageConfig,
-                          objectFit: e.target.value as NonNullable<typeof widget.imageConfig>["objectFit"],
-                        },
-                      })
-                    }
-                  >
-                    <option value="contain">contain</option>
-                    <option value="cover">cover</option>
-                    <option value="fill">fill</option>
-                    <option value="none">none</option>
-                    <option value="scale-down">scale-down</option>
-                  </select>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label className="text-[10px] text-[var(--studio-fg-muted)]">Ancho (px)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={widget.imageConfig?.width ?? ""}
-                      onChange={(e) =>
-                        onUpdate({
-                          imageConfig: {
-                            ...widget.imageConfig,
-                            width: e.target.value === "" ? undefined : e.target.valueAsNumber,
-                          },
-                        })
-                      }
-                      className="mt-1 h-8 rounded-lg border-[var(--studio-border)] text-sm"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-[10px] text-[var(--studio-fg-muted)]">Alto (px)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={widget.imageConfig?.height ?? ""}
-                      onChange={(e) =>
-                        onUpdate({
-                          imageConfig: {
-                            ...widget.imageConfig,
-                            height: e.target.value === "" ? undefined : e.target.valueAsNumber,
-                          },
-                        })
-                      }
-                      className="mt-1 h-8 rounded-lg border-[var(--studio-border)] text-sm"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Opacidad (0–1)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={widget.imageConfig?.opacity ?? 1}
-                    onChange={(e) => {
-                      const v = e.target.valueAsNumber;
-                      onUpdate({
-                        imageConfig: {
-                          ...widget.imageConfig,
-                          opacity: Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1,
-                        },
-                      });
-                    }}
-                    className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
-                  />
-                </div>
+                <ImageConfigFields
+                  config={{ ...DEFAULT_IMAGE_CONFIG, ...widget.imageConfig }}
+                  onChange={(imageConfig) => onUpdate({ imageConfig })}
+                  labelClassName="text-xs font-medium text-[var(--studio-fg-muted)]"
+                  inputClassName="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
+                  selectClassName="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                />
               </div>
             ) : null}
 
@@ -951,6 +907,64 @@ export function MetricConfigPanel({
               </select>
             </div>
             ) : null}
+
+            <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3 space-y-3">
+              <p className="text-xs font-semibold text-[var(--studio-fg)]">Ubicación de tarjetas</p>
+              <div className="flex rounded-lg border border-[var(--studio-border)] p-0.5" role="group">
+                {(
+                  [
+                    { id: "auto" as const, label: "Automático" },
+                    { id: "manual" as const, label: "Manual" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    disabled={!onCardLayoutModeChange}
+                    className={`flex-1 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
+                      cardLayoutMode === opt.id
+                        ? "bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
+                        : "text-[var(--studio-fg-muted)] hover:text-[var(--studio-fg)]"
+                    }`}
+                    onClick={() => onCardLayoutModeChange?.(opt.id)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-[var(--studio-fg-muted)] leading-snug">
+                {cardLayoutMode === "auto"
+                  ? "El lienzo optimiza huecos entre tarjetas. Usá «Mover arriba/abajo» en el menú de cada tarjeta."
+                  : "Arrastrá cada tarjeta con el asa ≡ en su cabecera. Las coordenadas se actualizan al soltar."}
+              </p>
+              {cardLayoutMode === "auto" && onReorganizeAuto ? (
+                <Button type="button" variant="outline" size="sm" className="h-8 w-full text-xs" onClick={onReorganizeAuto}>
+                  Reorganizar automáticamente
+                </Button>
+              ) : null}
+              {cardLayoutMode === "auto" && onCardLayoutModeChange ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-full text-xs text-[var(--studio-fg-muted)]"
+                  onClick={() => onCardLayoutModeChange("manual")}
+                >
+                  Pasar a ubicación manual
+                </Button>
+              ) : null}
+              {cardLayoutMode === "manual" && onCardLayoutModeChange ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-full text-xs text-[var(--studio-accent)]"
+                  onClick={() => onCardLayoutModeChange("auto")}
+                >
+                  Volver a automático y reorganizar
+                </Button>
+              ) : null}
+            </div>
 
             <div>
               <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columnas en grid</Label>
@@ -994,63 +1008,29 @@ export function MetricConfigPanel({
               />
             </div>
 
-            <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="fixed-grid-studio"
-                  checked={!!widget.fixedGrid}
-                  onCheckedChange={(c) => {
-                    if (c === true) {
-                      const fg: DashboardFixedGrid = {
-                        col: 1,
-                        row: 1,
-                        colSpan: clampGridSpan(widget.gridSpan, 2),
-                        rowSpan: 4,
-                      };
-                      onUpdate({ fixedGrid: fg });
-                    } else {
-                      onUpdate({ fixedGrid: undefined });
-                    }
-                  }}
-                />
-                <Label htmlFor="fixed-grid-studio" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
-                  Posición fija (columna/fila en la rejilla)
-                </Label>
-              </div>
-              {widget.fixedGrid ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {(["col", "row", "colSpan", "rowSpan"] as const).map((key) => {
-                    const fg = widget.fixedGrid as DashboardFixedGrid;
-                    return (
-                    <div key={key}>
-                      <Label className="text-[10px] text-[var(--studio-fg-muted)]">
-                        {key === "col"
-                          ? "Col (1-based)"
-                          : key === "row"
-                            ? "Fila (1-based)"
-                            : key === "colSpan"
-                              ? "Span columnas"
-                              : "Span filas"}
-                      </Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={key === "col" || key === "colSpan" ? DASHBOARD_GRID_COLUMN_COUNT : 99}
-                        value={fg[key]}
-                        onChange={(e) => {
-                          const n = Math.max(1, e.target.valueAsNumber || 1);
-                          onUpdate({
-                            fixedGrid: { ...fg, [key]: n },
-                          });
-                        }}
-                        className="mt-0.5 h-8 rounded-lg border-[var(--studio-border)] text-sm"
-                      />
-                    </div>
-                    );
-                  })}
+            {cardLayoutMode === "manual" && widget.fixedGrid ? (
+              <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3 space-y-2">
+                <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Posición en rejilla (solo lectura)</p>
+                <div className="grid grid-cols-2 gap-2 text-sm text-[var(--studio-fg)]">
+                  <div>
+                    <span className="text-[10px] text-[var(--studio-fg-muted)]">Columna</span>
+                    <p className="font-medium">{widget.fixedGrid.col}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[var(--studio-fg-muted)]">Fila</span>
+                    <p className="font-medium">{widget.fixedGrid.row}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[var(--studio-fg-muted)]">Ancho (cols)</span>
+                    <p className="font-medium">{widget.fixedGrid.colSpan}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[var(--studio-fg-muted)]">Alto (filas)</span>
+                    <p className="font-medium">{widget.fixedGrid.rowSpan}</p>
+                  </div>
                 </div>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
 
             {sources && sources.length > 1 ? (
               <div>

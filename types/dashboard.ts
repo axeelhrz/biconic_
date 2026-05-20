@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 /**
  * Tema visual del dashboard (vista cliente).
  * Colores y tipografía editables por el cliente en el editor.
@@ -42,6 +44,35 @@ export type DashboardTheme = {
   /** Radio del borde de las tarjetas (px) */
   cardBorderRadius?: number;
 }
+
+/** Ubicación de tarjetas: empaquetado automático o posiciones fijas (manual). */
+export type DashboardCardLayoutMode = "auto" | "manual";
+
+export function normalizeCardLayoutMode(raw: unknown): DashboardCardLayoutMode {
+  return raw === "manual" ? "manual" : "auto";
+}
+
+import type { DashboardDataset } from "@/lib/dashboard/dashboardDataset";
+
+/** semantic_name -> data_source_id -> physical_column_name (vista legacy) */
+export type DatasetDimensionsMap = Record<string, Record<string, string>>;
+
+/** Payload persistido en `dashboard.layout` (Supabase). */
+export type DashboardPersistedLayout = {
+  widgets?: unknown[];
+  theme?: DashboardTheme;
+  pages?: { id: string; name: string }[];
+  activePageId?: string;
+  savedMetrics?: unknown[];
+  datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] };
+  /** Dataset del Dashboard: capa semántica multi-ETL (auto + correcciones manuales) */
+  dashboardDataset?: DashboardDataset;
+  /** Vista derivada para compatibilidad con código existente */
+  datasetDimensions?: DatasetDimensionsMap;
+  /** Huellas de columnas por fuente para detectar cambios de esquema */
+  sourceFingerprints?: Record<string, string>;
+  cardLayoutMode?: DashboardCardLayoutMode;
+};
 
 export const DEFAULT_DASHBOARD_THEME: DashboardTheme = {
   accentColor: "#2dd4bf",
@@ -140,4 +171,68 @@ export function themeToWrapperBackground(theme: DashboardTheme): {
     };
   }
   return { backgroundColor: bg };
+}
+
+export type LogoPosition = NonNullable<DashboardTheme["logoPosition"]>;
+
+export const LOGO_POSITION_OPTIONS: { value: LogoPosition; label: string }[] = [
+  { value: "center", label: "Centro" },
+  { value: "top-left", label: "Arriba izquierda" },
+  { value: "top-right", label: "Arriba derecha" },
+  { value: "bottom-left", label: "Abajo izquierda" },
+  { value: "bottom-right", label: "Abajo derecha" },
+];
+
+/** Estilos del overlay de logo (watermark) según tema. */
+export function themeToLogoOverlayStyle(theme: DashboardTheme): {
+  containerStyle: CSSProperties;
+  imgStyle: CSSProperties;
+} | null {
+  const url = theme.logoUrl?.trim();
+  if (!url) return null;
+
+  const size = theme.logoSize ?? DEFAULT_DASHBOARD_THEME.logoSize ?? 24;
+  const opacity = theme.logoOpacity ?? DEFAULT_DASHBOARD_THEME.logoOpacity ?? 0.06;
+  const position = theme.logoPosition ?? DEFAULT_DASHBOARD_THEME.logoPosition ?? "center";
+
+  const maxWidth = size <= 100 ? `${size}%` : `${size}px`;
+
+  const containerStyle: CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "1.5rem",
+  };
+
+  switch (position) {
+    case "top-left":
+      containerStyle.alignItems = "flex-start";
+      containerStyle.justifyContent = "flex-start";
+      break;
+    case "top-right":
+      containerStyle.alignItems = "flex-start";
+      containerStyle.justifyContent = "flex-end";
+      break;
+    case "bottom-left":
+      containerStyle.alignItems = "flex-end";
+      containerStyle.justifyContent = "flex-start";
+      break;
+    case "bottom-right":
+      containerStyle.alignItems = "flex-end";
+      containerStyle.justifyContent = "flex-end";
+      break;
+    default:
+      break;
+  }
+
+  return {
+    containerStyle,
+    imgStyle: {
+      maxWidth,
+      width: "auto",
+      height: "auto",
+      objectFit: "contain",
+      opacity: Math.min(1, Math.max(0, opacity)),
+    },
+  };
 }

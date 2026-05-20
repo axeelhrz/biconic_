@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import type { DashboardDataset, DashboardDatasetWarnings } from "@/lib/dashboard/dashboardDataset";
+import type { DatasetDimensionsMap } from "@/types/dashboard";
 
 export interface DashboardDataSource {
   id: string;
@@ -54,6 +56,11 @@ export interface ETLDataResponse {
     string: string[];
     date: string[];
   };
+  /** Métricas guardadas del ETL (layout.saved_metrics) para resolver por nombre en aggregate-data */
+  savedMetrics?: unknown[];
+  dashboardDataset?: DashboardDataset;
+  datasetDimensions?: DatasetDimensionsMap;
+  datasetWarnings?: DashboardDatasetWarnings;
 }
 
 export interface UseDashboardEtlDataReturn {

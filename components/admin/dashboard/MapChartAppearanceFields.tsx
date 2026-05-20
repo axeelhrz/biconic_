@@ -4,6 +4,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
   MAP_VISUAL_DEFAULTS,
+  type MapDisplayMode,
   type MapValueEncoding,
   type MapVisualConfigInput,
 } from "@/lib/dashboard/mapVisualScale";
@@ -44,13 +45,43 @@ export function MapChartAppearanceFields({
       : "h-8 rounded-lg border-[var(--studio-border)] text-xs");
   const resolvedLabelClass = labelClassName ?? `text-[11px] ${isPlatform ? "text-[var(--platform-fg-muted)]" : "text-[var(--studio-fg-muted)]"}`;
 
+  const displayDefault = agg.mapDisplayModeDefault;
   const enc = (agg.mapValueEncoding as MapValueEncoding | undefined) ?? MAP_VISUAL_DEFAULTS.mapValueEncoding;
   const colorLow = agg.mapColorLow ?? MAP_VISUAL_DEFAULTS.mapColorLow;
   const colorHigh = agg.mapColorHigh ?? MAP_VISUAL_DEFAULTS.mapColorHigh;
   const emptyColor = agg.mapChoroplethEmptyColor ?? MAP_VISUAL_DEFAULTS.mapChoroplethEmptyColor;
+  const showMarkerRadius = displayDefault !== "choropleth";
 
   return (
     <div className="space-y-3">
+      <div>
+        <Label className={resolvedLabelClass}>Vista por defecto del mapa</Label>
+        <select
+          value={displayDefault ?? ""}
+          onChange={(e) => {
+            const v = e.target.value;
+            updateAgg({
+              mapDisplayModeDefault:
+                v === "markers" || v === "choropleth" ? (v as MapDisplayMode) : undefined,
+            });
+          }}
+          className="mt-1 w-full rounded-lg border px-2 py-2 text-xs"
+          style={{
+            borderColor: borderVar,
+            background: surfaceVar,
+            color: fgVar,
+          }}
+        >
+          <option value="">Automático (provincias si hay datos en Argentina)</option>
+          <option value="markers">Puntos (círculos)</option>
+          <option value="choropleth">Provincias coloreadas</option>
+        </select>
+        <p className="mt-1 text-[10px]" style={{ color: mutedVar }}>
+          Quien ve el dashboard puede cambiar entre Puntos y Provincias con el control en la esquina del mapa
+          (solo con país por defecto Argentina).
+        </p>
+      </div>
+
       <div>
         <Label className={resolvedLabelClass}>Codificación según valor</Label>
         <select
@@ -130,50 +161,77 @@ export function MapChartAppearanceFields({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <Label className={resolvedLabelClass}>Radio mín. (px)</Label>
-          <Input
-            type="number"
-            min={1}
-            max={80}
-            value={agg.mapRadiusMin ?? ""}
-            onChange={(e) =>
-              updateAgg({
-                mapRadiusMin: e.target.value ? parseInt(e.target.value, 10) : undefined,
-              })
-            }
-            className={`mt-0.5 ${resolvedInputClass}`}
-            style={
-              isPlatform
-                ? { borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }
-                : undefined
-            }
-            placeholder={String(MAP_VISUAL_DEFAULTS.mapRadiusMin)}
-          />
+      {showMarkerRadius ? (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <Label className={resolvedLabelClass}>Radio mín. (px)</Label>
+            <Input
+              type="number"
+              min={1}
+              max={80}
+              value={agg.mapRadiusMin ?? ""}
+              onChange={(e) =>
+                updateAgg({
+                  mapRadiusMin: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                })
+              }
+              className={`mt-0.5 ${resolvedInputClass}`}
+              style={
+                isPlatform
+                  ? { borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }
+                  : undefined
+              }
+              placeholder={String(MAP_VISUAL_DEFAULTS.mapRadiusMin)}
+            />
+          </div>
+          <div>
+            <Label className={resolvedLabelClass}>Radio máx. (px)</Label>
+            <Input
+              type="number"
+              min={1}
+              max={80}
+              value={agg.mapRadiusMax ?? ""}
+              onChange={(e) =>
+                updateAgg({
+                  mapRadiusMax: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                })
+              }
+              className={`mt-0.5 ${resolvedInputClass}`}
+              style={
+                isPlatform
+                  ? { borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }
+                  : undefined
+              }
+              placeholder={String(MAP_VISUAL_DEFAULTS.mapRadiusMax)}
+            />
+          </div>
         </div>
-        <div>
-          <Label className={resolvedLabelClass}>Radio máx. (px)</Label>
-          <Input
-            type="number"
-            min={1}
-            max={80}
-            value={agg.mapRadiusMax ?? ""}
-            onChange={(e) =>
-              updateAgg({
-                mapRadiusMax: e.target.value ? parseInt(e.target.value, 10) : undefined,
-              })
-            }
-            className={`mt-0.5 ${resolvedInputClass}`}
-            style={
-              isPlatform
-                ? { borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }
-                : undefined
-            }
-            placeholder={String(MAP_VISUAL_DEFAULTS.mapRadiusMax)}
-          />
-        </div>
+      ) : null}
+
+      {showMarkerRadius ? (
+      <div>
+        <Label className={resolvedLabelClass}>Grosor borde del punto (px)</Label>
+        <Input
+          type="number"
+          min={0}
+          max={6}
+          step={0.5}
+          value={agg.mapStrokeWidth ?? ""}
+          onChange={(e) =>
+            updateAgg({
+              mapStrokeWidth: e.target.value !== "" ? Number(e.target.value) : undefined,
+            })
+          }
+          className={`mt-0.5 max-w-[8rem] ${resolvedInputClass}`}
+          style={
+            isPlatform
+              ? { borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }
+              : undefined
+          }
+          placeholder={String(MAP_VISUAL_DEFAULTS.mapStrokeWidth)}
+        />
       </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-2">
         <div>
@@ -223,30 +281,7 @@ export function MapChartAppearanceFields({
       </div>
 
       <div>
-        <Label className={resolvedLabelClass}>Grosor borde del punto (px)</Label>
-        <Input
-          type="number"
-          min={0}
-          max={6}
-          step={0.5}
-          value={agg.mapStrokeWidth ?? ""}
-          onChange={(e) =>
-            updateAgg({
-              mapStrokeWidth: e.target.value !== "" ? Number(e.target.value) : undefined,
-            })
-          }
-          className={`mt-0.5 max-w-[8rem] ${resolvedInputClass}`}
-          style={
-            isPlatform
-              ? { borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }
-              : undefined
-          }
-          placeholder={String(MAP_VISUAL_DEFAULTS.mapStrokeWidth)}
-        />
-      </div>
-
-      <div>
-        <Label className={resolvedLabelClass}>Coropleto — provincia sin dato</Label>
+        <Label className={resolvedLabelClass}>Provincias — sin dato</Label>
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <input
             type="color"

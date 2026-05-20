@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { DashboardTheme } from "@/types/dashboard";
+import { LOGO_POSITION_OPTIONS } from "@/types/dashboard";
 
 export const FONT_FAMILY_OPTIONS: { value: string; label: string }[] = [
   { value: "'DM Sans', system-ui, -apple-system, sans-serif", label: "DM Sans" },
@@ -116,6 +117,73 @@ export function DashboardThemeFormSections({
               className={`${inputClassName} mt-1`}
               placeholder="https://..."
             />
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-3 border-t border-[var(--studio-border)] pt-4">
+        <h4 className={sectionTitle}>Logo / marca</h4>
+        <p className="text-[11px] text-[var(--studio-fg-muted)]">
+          Marca de agua sutil sobre el {scope === "card" ? "área de la celda" : "lienzo"}; no interfiere con clics.
+        </p>
+        <div className={grid}>
+          <div className="sm:col-span-2 lg:col-span-3">
+            <Label className={labelClassName}>URL del logo</Label>
+            <Input
+              value={value.logoUrl ?? ""}
+              onChange={(e) => onPatch({ logoUrl: e.target.value.trim() ? e.target.value : undefined })}
+              className={`${inputClassName} mt-1`}
+              placeholder="https://..."
+            />
+          </div>
+          <div>
+            <Label className={labelClassName}>Tamaño (% ancho)</Label>
+            <Input
+              type="number"
+              min={5}
+              max={40}
+              value={value.logoSize ?? 24}
+              onChange={(e) => {
+                const v = e.target.valueAsNumber;
+                onPatch({ logoSize: Number.isFinite(v) ? Math.min(40, Math.max(5, v)) : undefined });
+              }}
+              className={`${inputClassName} mt-1`}
+            />
+          </div>
+          <div>
+            <Label className={labelClassName}>Opacidad (0–1)</Label>
+            <Input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={value.logoOpacity ?? 0.06}
+              onChange={(e) => {
+                const v = e.target.valueAsNumber;
+                onPatch({
+                  logoOpacity: Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined,
+                });
+              }}
+              className={`${inputClassName} mt-1`}
+            />
+          </div>
+          <div>
+            <Label className={labelClassName}>Posición</Label>
+            <select
+              className={`${inputClassName} mt-1 h-9 w-full`}
+              value={value.logoPosition ?? "center"}
+              onChange={(e) =>
+                onPatch({
+                  logoPosition: e.target.value as NonNullable<DashboardTheme["logoPosition"]>,
+                })
+              }
+            >
+              {LOGO_POSITION_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </div>

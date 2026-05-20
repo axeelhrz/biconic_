@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,23 +10,33 @@ import { useDashboardEtlData } from "@/hooks/useDashboardEtlData";
 import FieldSelector from "./FieldSelector";
 import { DashboardViewer, type Widget } from "./DashboardViewer";
 import {
+  type DashboardCardLayoutMode,
   type DashboardTheme,
   DEFAULT_DASHBOARD_THEME,
   mergeTheme,
+  normalizeCardLayoutMode,
 } from "@/types/dashboard";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
 import {
   clampGridSpan,
+  computeDashboardGridPlacementsPacked,
   DASHBOARD_GRID_COLUMN_COUNT,
+  DASHBOARD_GRID_ROW_UNIT_PX,
   type DashboardFixedGrid,
 } from "@/lib/dashboard/gridLayout";
+import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
 import {
   CONTENT_ICON_POSITION_OPTIONS,
   type ContentIconPosition,
 } from "@/components/dashboard/DashboardWidgetRenderer";
+import { ImageConfigFields } from "@/components/dashboard/ImageConfigFields";
+import {
+  CONTENT_ICON_SIZE_OPTIONS,
+  DEFAULT_IMAGE_CONFIG,
+} from "@/lib/dashboard/imageLayout";
 
 type AggregationFilter = {
   id: string;
@@ -113,7 +123,7 @@ function createDefaultWidget(type: Widget["type"]): Widget {
     ...(type === "image"
       ? {
           imageUrl: "",
-          imageConfig: { objectFit: "contain" as const, opacity: 1 },
+          imageConfig: { ...DEFAULT_IMAGE_CONFIG },
           zIndex: 0,
         }
       : {}),
@@ -133,9 +143,31 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [layoutLoading, setLayoutLoading] = useState(true);
+  const [cardLayoutMode, setCardLayoutMode] = useState<DashboardCardLayoutMode>("auto");
 
   const { data: etlData } = useDashboardEtlData(dashboardId);
   const selected = widgets.find((w) => w.id === selectedId) ?? null;
+  const { packCols, packRowGapPx } = useDashboardPackLayout("studio");
+
+  const orderedWidgets = useMemo(() => {
+    const list = [...widgets].sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999));
+    if (cardLayoutMode === "manual") {
+      return [...list].sort((a, b) => {
+        const fa = a.fixedGrid;
+        const fb = b.fixedGrid;
+        const ra = fa?.row ?? 9999;
+        const rb = fb?.row ?? 9999;
+        if (ra !== rb) return ra - rb;
+        return (fa?.col ?? 9999) - (fb?.col ?? 9999);
+      });
+    }
+    return list;
+  }, [widgets, cardLayoutMode]);
+
+  const editorPlacements = useMemo(
+    () => computeDashboardGridPlacementsPacked(orderedWidgets, packCols, undefined, packRowGapPx),
+    [orderedWidgets, packCols, packRowGapPx]
+  );
 
   const loadLayout = useCallback(async () => {
     setLayoutLoading(true);
@@ -147,10 +179,15 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
         setLayoutLoading(false);
         return;
       }
-      const data = json.data as { layout?: { widgets?: Widget[]; theme?: Partial<DashboardTheme> }; title?: string; global_filters_config?: AggregationFilter[] };
+      const data = json.data as {
+        layout?: { widgets?: Widget[]; theme?: Partial<DashboardTheme>; cardLayoutMode?: DashboardCardLayoutMode };
+        title?: string;
+        global_filters_config?: AggregationFilter[];
+      };
       const layout = data.layout;
       const loadedWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
       const loadedTheme = layout?.theme && typeof layout.theme === "object" ? layout.theme : {};
+      setCardLayoutMode(normalizeCardLayoutMode(layout?.cardLayoutMode));
       setWidgets(loadedWidgets);
       setTitle(data.title ?? "Dashboard");
       setDashboardTheme((prev) => ({ ...DEFAULT_DASHBOARD_THEME, ...prev, ...loadedTheme }));
@@ -172,6 +209,7 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
       const layout = {
         widgets: widgets.map(({ rows, config, columns, facetValues, ...rest }) => rest),
         theme: dashboardTheme,
+        cardLayoutMode,
       };
       const res = await fetch(`/api/dashboard/${dashboardId}/layout`, {
         method: "PUT",
@@ -190,7 +228,7 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
     } finally {
       setIsSaving(false);
     }
-  }, [dashboardId, widgets, dashboardTheme, globalFilters, title]);
+  }, [dashboardId, widgets, dashboardTheme, cardLayoutMode, globalFilters, title]);
 
   const addWidget = useCallback((type: Widget["type"]) => {
     const next = createDefaultWidget(type);
@@ -312,16 +350,21 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
           ) : (
             <div
               className="grid gap-3"
-              style={{ gridTemplateColumns: `repeat(${DASHBOARD_GRID_COLUMN_COUNT}, minmax(0, 1fr))` }}
+              style={{
+                gridTemplateColumns: `repeat(${packCols}, minmax(0, 1fr))`,
+                gridAutoRows: `minmax(${DASHBOARD_GRID_ROW_UNIT_PX}px, auto)`,
+                rowGap: "0.75rem",
+              }}
             >
-              {widgets.map((w) => {
-                const span = clampGridSpan(w.gridSpan, 2);
+              {editorPlacements.map(({ widget: w, gridColumn, gridRow }) => {
                 return (
                   <div
                     key={w.id}
                     className="rounded-xl border-2 transition-colors"
                     style={{
-                      gridColumn: `span ${span}`,
+                      gridColumn,
+                      gridRow,
+                      minHeight: w.minHeight ?? 280,
                       borderColor: selectedId === w.id ? "var(--platform-accent)" : "var(--platform-border)",
                       background: "var(--platform-surface)",
                     }}
@@ -425,24 +468,44 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                   className="border-[var(--platform-border)] text-sm"
                 />
                 {(selected.headerIconKey || (selected.headerIconUrl ?? "").trim()) && (
-                  <div>
-                    <Label className="text-xs text-[var(--platform-fg-muted)]">Posición en el área del gráfico</Label>
-                    <select
-                      className="mt-1 h-9 w-full rounded-md border border-[var(--platform-border)] bg-[var(--platform-bg)] px-3 text-sm"
-                      value={selected.contentIconPosition ?? "topLeft"}
-                      onChange={(e) =>
-                        updateWidget(selected.id, {
-                          contentIconPosition: e.target.value as ContentIconPosition,
-                        })
-                      }
-                    >
-                      {CONTENT_ICON_POSITION_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <>
+                    <div>
+                      <Label className="text-xs text-[var(--platform-fg-muted)]">Tamaño del icono</Label>
+                      <select
+                        className="mt-1 h-9 w-full rounded-md border border-[var(--platform-border)] bg-[var(--platform-bg)] px-3 text-sm"
+                        value={(selected as { contentIconSize?: string }).contentIconSize ?? "md"}
+                        onChange={(e) =>
+                          updateWidget(selected.id, {
+                            contentIconSize: e.target.value,
+                          } as Partial<Widget>)
+                        }
+                      >
+                        {CONTENT_ICON_SIZE_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-[var(--platform-fg-muted)]">Posición en el área del gráfico</Label>
+                      <select
+                        className="mt-1 h-9 w-full rounded-md border border-[var(--platform-border)] bg-[var(--platform-bg)] px-3 text-sm"
+                        value={selected.contentIconPosition ?? "topLeft"}
+                        onChange={(e) =>
+                          updateWidget(selected.id, {
+                            contentIconPosition: e.target.value as ContentIconPosition,
+                          })
+                        }
+                      >
+                        {CONTENT_ICON_POSITION_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
                 )}
               </div>
               <label className="flex cursor-pointer items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
@@ -645,83 +708,10 @@ export function DashboardEditor({ dashboardId }: DashboardEditorProps) {
                       className="mt-1 border-[var(--platform-border)] text-sm"
                     />
                   </div>
-                  <div>
-                    <Label className="text-xs text-[var(--platform-fg-muted)]">Ajuste (object-fit)</Label>
-                    <select
-                      className="mt-1 h-9 w-full rounded-md border border-[var(--platform-border)] bg-[var(--platform-bg)] px-3 text-sm"
-                      value={selected.imageConfig?.objectFit ?? "contain"}
-                      onChange={(e) =>
-                        updateWidget(selected.id, {
-                          imageConfig: {
-                            ...selected.imageConfig,
-                            objectFit: e.target.value as NonNullable<typeof selected.imageConfig>["objectFit"],
-                          },
-                        })
-                      }
-                    >
-                      <option value="contain">contain</option>
-                      <option value="cover">cover</option>
-                      <option value="fill">fill</option>
-                      <option value="none">none</option>
-                      <option value="scale-down">scale-down</option>
-                    </select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <Label className="text-xs text-[var(--platform-fg-muted)]">Ancho img (px, opc.)</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={selected.imageConfig?.width ?? ""}
-                        onChange={(e) =>
-                          updateWidget(selected.id, {
-                            imageConfig: {
-                              ...selected.imageConfig,
-                              width: e.target.value === "" ? undefined : e.target.valueAsNumber,
-                            },
-                          })
-                        }
-                        className="mt-1 border-[var(--platform-border)] text-sm"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-[var(--platform-fg-muted)]">Alto img (px, opc.)</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={selected.imageConfig?.height ?? ""}
-                        onChange={(e) =>
-                          updateWidget(selected.id, {
-                            imageConfig: {
-                              ...selected.imageConfig,
-                              height: e.target.value === "" ? undefined : e.target.valueAsNumber,
-                            },
-                          })
-                        }
-                        className="mt-1 border-[var(--platform-border)] text-sm"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="text-xs text-[var(--platform-fg-muted)]">Opacidad (0–1)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={selected.imageConfig?.opacity ?? 1}
-                      onChange={(e) => {
-                        const v = e.target.valueAsNumber;
-                        updateWidget(selected.id, {
-                          imageConfig: {
-                            ...selected.imageConfig,
-                            opacity: Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1,
-                          },
-                        });
-                      }}
-                      className="mt-1 border-[var(--platform-border)] text-sm"
-                    />
-                  </div>
+                  <ImageConfigFields
+                    config={{ ...DEFAULT_IMAGE_CONFIG, ...selected.imageConfig }}
+                    onChange={(imageConfig) => updateWidget(selected.id, { imageConfig })}
+                  />
                 </div>
               )}
             </div>

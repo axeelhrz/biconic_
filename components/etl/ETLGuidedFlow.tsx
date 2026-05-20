@@ -30,6 +30,8 @@ import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { deriveColumnTypesFromSample } from "@/lib/derive-column-types";
+import { mergeScheduleIntoGuidedConfig } from "@/lib/etl/schedule";
+import EtlScheduleSettings from "@/components/etl/EtlScheduleSettings";
 
 const STEPS = [
   { id: "conexion", label: "Conexión", icon: Link2 },
@@ -199,6 +201,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [outputTableName, setOutputTableName] = useState("");
   const [outputMode, setOutputMode] = useState<"overwrite" | "append">("overwrite");
   const [scheduleFrequency, setScheduleFrequency] = useState<string>("");
+  const [scheduleLastRunAt, setScheduleLastRunAt] = useState<string | undefined>(undefined);
   const [loadingMeta, setLoadingMeta] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState<string | null>(null);
   const [inferringTypes, setInferringTypes] = useState(false);
@@ -385,6 +388,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (end?.mode) setOutputMode(end.mode);
     const sched = cfg.schedule;
     setScheduleFrequency(sched?.frequency ? String(sched.frequency) : "");
+    setScheduleLastRunAt(sched?.lastRunAt ? String(sched.lastRunAt) : undefined);
     const union = cfg.union;
     if (union) {
       setUseUnion(true);
@@ -1084,7 +1088,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       body.filter = filterPayload;
     }
     if (cleanConfig) body.clean = cleanConfig;
-    if (scheduleFrequency) body.schedule = { frequency: scheduleFrequency };
     return body;
   }, [
     connectionId,
@@ -1275,6 +1278,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (!options?.silent) toast.error("Completá al menos la conexión para guardar.");
       return false;
     }
+    guidedConfig = mergeScheduleIntoGuidedConfig(guidedConfig, scheduleFrequency || null, scheduleLastRunAt);
     // Persistir siempre la tabla seleccionada desde el estado
     const tableToSave = (selectedTable ?? "")?.trim() || undefined;
     if (tableToSave && typeof guidedConfig.filter === "object" && guidedConfig.filter !== null) {
@@ -1301,16 +1305,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       toast.error(msg);
       return false;
     }
-  }, [etlId, buildGuidedConfigBody, selectedTable]);
+  }, [etlId, buildGuidedConfigBody, selectedTable, scheduleFrequency, scheduleLastRunAt]);
 
   const handleRun = useCallback(async () => {
     if (!canRun || !connectionId || !selectedTable) return;
     setRunning(true);
-    const guidedBody = buildGuidedConfigBody();
-    if (!guidedBody) {
+    const rawBody = buildGuidedConfigBody();
+    if (!rawBody) {
       setRunning(false);
       return;
     }
+    const guidedBody = mergeScheduleIntoGuidedConfig(rawBody, scheduleFrequency || null, scheduleLastRunAt);
     // Guardar toda la configuración antes de ejecutar para que layout tenga conexión, tabla, columnas, filtros, join/union, destino, etc.
     await saveGuidedConfigToServer({ silent: true });
     // waitForCompletion: false evita FUNCTION_INVOCATION_TIMEOUT en Vercel; el ETL corre en segundo plano
@@ -1340,7 +1345,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       toast.error(e instanceof Error ? e.message : "Error al ejecutar");
       setRunning(false);
     }
-  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, saveGuidedConfigToServer, etlId, router]);
+  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, saveGuidedConfigToServer, etlId, router, scheduleFrequency, scheduleLastRunAt]);
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
   const connectionName =
@@ -3013,28 +3018,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     </div>
                   )}
                 </div>
-                <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                  <h3 className="text-base font-medium" style={{ color: "var(--platform-fg)" }}>Frecuencia de actualización automática</h3>
-                  <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Programá con qué frecuencia el sistema traerá los nuevos registros de la base del cliente.</p>
-                  <div className="max-w-xs">
-                    <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Frecuencia</Label>
-                    <Select
-                      value={scheduleFrequency}
-                      onChange={(v: string) => setScheduleFrequency(v ?? "")}
-                      options={[
-                        { value: "", label: "Ninguna (solo manual)" },
-                        { value: "15m", label: "15 minutos" },
-                        { value: "1h", label: "1 hora" },
-                        { value: "6h", label: "6 horas" },
-                        { value: "12h", label: "12 horas" },
-                        { value: "24h", label: "24 horas" },
-                        { value: "1w", label: "1 semana" },
-                        { value: "1M", label: "1 mes" },
-                      ]}
-                      placeholder="Elegir frecuencia"
-                    />
-                  </div>
-                </div>
+                <EtlScheduleSettings
+                  etlId={etlId}
+                  embedded
+                  frequency={scheduleFrequency}
+                  onFrequencyChange={setScheduleFrequency}
+                  showEditFlowLink={false}
+                />
                 <div className="flex gap-3 pt-2">
                   <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={() => goToStepAndSave("destino")}>
                     Atrás

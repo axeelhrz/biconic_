@@ -13,7 +13,7 @@ import {
   type ArProvinceGadmId,
 } from "@/lib/geo/argentinaProvinces";
 import { findArProvinceGadmIdForLatLon } from "@/lib/geo/pointInProvinceGeoJson";
-import type { MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
+import type { MapDisplayMode, MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
 import { resolveChoroplethVisual, resolveMapVisualStyle, resolveMarkerVisual } from "@/lib/dashboard/mapVisualScale";
 import {
   buildDetailCardLineStringsFromRowMap,
@@ -105,6 +105,56 @@ function FitArgentinaGeoJson({ data }: { data: ArFeatureCollection | null }) {
     }
   }, [data, map]);
   return null;
+}
+
+function MapDisplayModeToggle({
+  mode,
+  onChange,
+  choroplethDisabled,
+}: {
+  mode: MapDisplayMode;
+  onChange: (m: MapDisplayMode) => void;
+  choroplethDisabled: boolean;
+}) {
+  return (
+    <div
+      className="absolute top-2 right-2 z-[1000] flex rounded-lg border p-0.5 text-[11px] font-medium shadow-sm"
+      style={{
+        borderColor: "var(--platform-border, #e2e8f0)",
+        background: "rgba(255,255,255,0.95)",
+        color: "var(--platform-fg, #0f172a)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => onChange("markers")}
+        className="rounded-md px-2.5 py-1 transition-colors"
+        style={{
+          background: mode === "markers" ? "var(--platform-accent, #0f6fa8)" : "transparent",
+          color: mode === "markers" ? "#fff" : "inherit",
+        }}
+      >
+        Puntos
+      </button>
+      <button
+        type="button"
+        disabled={choroplethDisabled}
+        title={
+          choroplethDisabled
+            ? "Configurá dimensión provincia y métricas reconocibles para Argentina"
+            : undefined
+        }
+        onClick={() => !choroplethDisabled && onChange("choropleth")}
+        className="rounded-md px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-45"
+        style={{
+          background: mode === "choropleth" ? "var(--platform-accent, #0f6fa8)" : "transparent",
+          color: mode === "choropleth" ? "#fff" : "inherit",
+        }}
+      >
+        Provincias
+      </button>
+    </div>
+  );
 }
 
 function escapeHtml(s: string): string {
@@ -326,7 +376,6 @@ export function DashboardMapWidget({
       };
     }
 
-    /** En Argentina con GeoJSON cargado, no se usan puntos: el valor va al polígono de la provincia. */
     const markersRes: Array<{
       lat: number;
       lon: number;
@@ -335,25 +384,23 @@ export function DashboardMapWidget({
       source: string;
       detailRow: Record<string, unknown>;
     }> = [];
-    if (!useProvincePolygons) {
-      for (const row of rows.slice(0, 500)) {
-        const r = row as Record<string, unknown>;
-        const lat = Number(r[latColRes!]);
-        const lon = Number(r[lonColRes!]);
-        const rawLabel = labelKeyRes ? r[labelKeyRes] : "";
-        const label = rawLabel != null ? String(rawLabel) : "";
-        const valueCandidate = valueKeyRes ? Number(r[valueKeyRes]) : NaN;
-        const sourceValue = geoSourceKey ? String(r[geoSourceKey] ?? "") : "native";
-        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-        markersRes.push({
-          lat,
-          lon,
-          value: Number.isFinite(valueCandidate) ? valueCandidate : null,
-          label,
-          source: sourceValue,
-          detailRow: { ...r },
-        });
-      }
+    for (const row of rows.slice(0, 500)) {
+      const r = row as Record<string, unknown>;
+      const lat = Number(r[latColRes!]);
+      const lon = Number(r[lonColRes!]);
+      const rawLabel = labelKeyRes ? r[labelKeyRes] : "";
+      const label = rawLabel != null ? String(rawLabel) : "";
+      const valueCandidate = valueKeyRes ? Number(r[valueKeyRes]) : NaN;
+      const sourceValue = geoSourceKey ? String(r[geoSourceKey] ?? "") : "native";
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      markersRes.push({
+        lat,
+        lon,
+        value: Number.isFinite(valueCandidate) ? valueCandidate : null,
+        label,
+        source: sourceValue,
+        detailRow: { ...r },
+      });
     }
 
     const unresolvedCountRes = rows.reduce((acc, row) => {
@@ -378,8 +425,24 @@ export function DashboardMapWidget({
 
   const mapVisual = useMemo(() => resolveMapVisualStyle(aggregationConfig), [aggregationConfig]);
 
-  const useArChoropleth =
-    argentinaMode && arGeo && !arGeoError && provinceSums.size > 0;
+  const canChoropleth = argentinaMode && arGeo && !arGeoError && provinceSums.size > 0;
+  const canShowArgentinaToggle = argentinaMode && arGeo && !arGeoError;
+
+  const cfgDisplayDefault = aggregationConfig?.mapDisplayModeDefault;
+  const [displayMode, setDisplayMode] = useState<MapDisplayMode>("markers");
+  const [displayModeTouched, setDisplayModeTouched] = useState(false);
+
+  useEffect(() => {
+    if (displayModeTouched) return;
+    if (cfgDisplayDefault === "markers" || cfgDisplayDefault === "choropleth") {
+      setDisplayMode(cfgDisplayDefault);
+      return;
+    }
+    if (canChoropleth) setDisplayMode("choropleth");
+    else setDisplayMode("markers");
+  }, [cfgDisplayDefault, canChoropleth, displayModeTouched]);
+
+  const showChoropleth = displayMode === "choropleth" && canChoropleth;
 
   const choroplethNumeric = useMemo(() => [...provinceSums.values()].filter((v) => Number.isFinite(v)), [provinceSums]);
   const chMin = choroplethNumeric.length > 0 ? Math.min(...choroplethNumeric) : null;
@@ -415,7 +478,12 @@ export function DashboardMapWidget({
     );
   }
 
-  if (useArChoropleth) {
+  const handleDisplayModeChange = (m: MapDisplayMode) => {
+    setDisplayModeTouched(true);
+    setDisplayMode(m);
+  };
+
+  if (showChoropleth) {
     const styleFeature = (feature: ArProvinceFeature | null | undefined) => {
       const id = feature?.properties?.id as ArProvinceGadmId | undefined;
       const v = id ? provinceSums.get(id) : undefined;
@@ -444,6 +512,13 @@ export function DashboardMapWidget({
         className="relative rounded overflow-hidden border"
         style={{ height: `${height}px`, borderColor: "var(--platform-border, #e2e8f0)" }}
       >
+        {canShowArgentinaToggle ? (
+          <MapDisplayModeToggle
+            mode={displayMode}
+            onChange={handleDisplayModeChange}
+            choroplethDisabled={!canChoropleth}
+          />
+        ) : null}
         <MapContainer
           center={AR_DEFAULT_CENTER}
           zoom={AR_DEFAULT_ZOOM}
@@ -503,6 +578,31 @@ export function DashboardMapWidget({
     );
   }
 
+  if (displayMode === "choropleth" && argentinaMode && arGeo && !arGeoError && provinceSums.size === 0) {
+    return (
+      <div
+        className="relative flex flex-1 flex-col items-center justify-center rounded border text-center text-sm"
+        style={{
+          height: `${height}px`,
+          borderColor: "var(--platform-border, #e2e8f0)",
+          color: "var(--platform-fg-muted, #64748b)",
+        }}
+      >
+        {canShowArgentinaToggle ? (
+          <MapDisplayModeToggle
+            mode={displayMode}
+            onChange={handleDisplayModeChange}
+            choroplethDisabled={true}
+          />
+        ) : null}
+        <p className="mb-1">Sin provincias reconocidas en los datos</p>
+        <p className="text-xs px-4">
+          Usá una dimensión con nombres de provincia (ej. Córdoba) o cambiá a «Puntos» si tenés latitud/longitud.
+        </p>
+      </div>
+    );
+  }
+
   if (markers.length === 0) {
     return (
       <div
@@ -537,6 +637,21 @@ export function DashboardMapWidget({
 
   return (
     <div className="relative rounded overflow-hidden border" style={{ height: `${height}px`, borderColor: "var(--platform-border, #e2e8f0)" }}>
+      {canShowArgentinaToggle ? (
+        <MapDisplayModeToggle
+          mode={displayMode}
+          onChange={handleDisplayModeChange}
+          choroplethDisabled={!canChoropleth}
+        />
+      ) : null}
+      {arGeoError && argentinaMode ? (
+        <div
+          className="pointer-events-none absolute bottom-2 right-2 z-[1000] rounded px-2 py-1 text-[11px]"
+          style={{ background: "rgba(15,23,42,0.75)", color: "#f8fafc" }}
+        >
+          No se pudo cargar el mapa de provincias
+        </div>
+      ) : null}
       <MapContainer
         center={argentinaMode ? AR_DEFAULT_CENTER : DEFAULT_CENTER}
         zoom={argentinaMode ? AR_DEFAULT_ZOOM : DEFAULT_ZOOM}

@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { formatNextExecutionDisplay, parseScheduleFromLayout } from "@/lib/etl/schedule";
 import postgres from "postgres";
 
 // Lista de clientes para filtros (id + nombre)
@@ -106,11 +107,16 @@ export async function getEtlsAdmin(options?: { clientId?: string | null }) {
     }
   }
 
-  const enrichedRows = (rows ?? []).map((r: { id: string; created_at?: string | null }) => ({
-    ...r,
-    lastExecution: lastRunByEtlId[String(r.id)] ?? null,
-    createdAt: r.created_at ?? null,
-  }));
+  const enrichedRows = (rows ?? []).map((r: { id: string; created_at?: string | null; layout?: unknown }) => {
+    const schedule = parseScheduleFromLayout(r.layout);
+    const frequency = schedule?.frequency?.trim() || null;
+    return {
+      ...r,
+      lastExecution: lastRunByEtlId[String(r.id)] ?? null,
+      nextExecution: formatNextExecutionDisplay(schedule?.lastRunAt, frequency),
+      createdAt: r.created_at ?? null,
+    };
+  });
 
   return { ok: true, data: enrichedRows as unknown[], owners, clients, error: null };
 }

@@ -24,6 +24,7 @@ import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector"
 import { DashboardWidgetRenderer } from "@/components/dashboard/DashboardWidgetRenderer";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import EtlScheduleSettings from "@/components/etl/EtlScheduleSettings";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import {
@@ -3117,6 +3118,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     const nextGridOrder =
       samePageWidgets.reduce((max, w) => Math.max(max, Number(w.gridOrder ?? 0)), -1) + 1;
 
+    let dataSourceId: string | null = null;
+    try {
+      const etlDataRes = await fetch(`/api/dashboard/${dashboardId}/etl-data`);
+      const etlDataJson = await safeJsonResponse<{
+        ok?: boolean;
+        data?: { dataSources?: { id: string; etlId: string }[] };
+      }>(etlDataRes);
+      if (etlDataRes.ok && etlDataJson?.ok && Array.isArray(etlDataJson.data?.dataSources)) {
+        const match = etlDataJson.data.dataSources.find((s) => s.etlId === etlId);
+        if (match) dataSourceId = match.id;
+      }
+    } catch {
+      // fallback: widget usará fuente primaria
+    }
+
     const nextWidget: Record<string, unknown> = {
       id: `w-${Date.now()}`,
       type: chartType,
@@ -3130,6 +3146,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       minHeight: 320,
       gridOrder: nextGridOrder,
       ...(activePageId ? { pageId: activePageId } : {}),
+      ...(dataSourceId ? { dataSourceId } : {}),
       aggregationConfig: {
         enabled: true,
         ...(metricItem.aggregationConfig ?? {}),
@@ -4217,6 +4234,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           )}
         </div>
       </header>
+
+      {!datasetOnly && (
+        <EtlScheduleSettings etlId={etlId} showEditFlowLink />
+      )}
 
       {hideDatasetTab && hasData && (
         <div

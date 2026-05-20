@@ -11,6 +11,10 @@
     {
       "path": "/api/etl/mark-stale-runs-failed",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/etl/run-scheduled",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

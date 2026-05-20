@@ -74,6 +74,11 @@ import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { useDevicePixelRatio } from "@/hooks/useDevicePixelRatio";
 import { DashboardTextWidget } from "./DashboardTextWidget";
+import {
+  contentIconSizeClass,
+  resolveImageContainerAlignment,
+  resolveImageElementStyle,
+} from "@/lib/dashboard/imageLayout";
 
 const DashboardMapWidget = dynamic(
   () => import("./DashboardMapWidget").then((m) => m.DashboardMapWidget),
@@ -169,13 +174,8 @@ export interface DashboardWidgetRendererWidget {
   kpiSecondaryValue?: string;
   /** Texto bajo el valor del KPI (si no hay línea secundaria manual). */
   kpiCaption?: string;
-  imageConfig?: {
-    width?: number;
-    height?: number;
-    objectFit?: "contain" | "cover" | "fill" | "none" | "scale-down";
-    /** 0–1, p. ej. watermark sobre el lienzo */
-    opacity?: number;
-  };
+  imageConfig?: import("@/lib/dashboard/imageLayout").DashboardImageConfig;
+  contentIconSize?: import("@/lib/dashboard/imageLayout").ContentIconSize;
   imageUrl?: string;
   /** Mini imagen decorativa en el área del gráfico (ver `contentIconPosition`). */
   headerIconUrl?: string;
@@ -217,6 +217,7 @@ function ContentAreaIconOverlay({ widget }: { widget: DashboardWidgetRendererWid
   const url = widget.headerIconUrl?.trim();
   if (!preset && !url) return null;
   const pos = (widget.contentIconPosition as ContentIconPosition | undefined) ?? "topLeft";
+  const sizeClass = contentIconSizeClass(widget.contentIconSize);
   return (
     <div
       className={`pointer-events-none absolute z-[4] ${contentIconPositionClass(pos)}`}
@@ -232,10 +233,10 @@ function ContentAreaIconOverlay({ widget }: { widget: DashboardWidgetRendererWid
         {preset ? (
           <DashboardPresetHeaderIcon
             iconKey={preset}
-            className="h-7 w-7 text-[var(--platform-accent,#0ea5e9)]"
+            className={`${sizeClass} text-[var(--platform-accent,#0ea5e9)]`}
           />
         ) : (
-          <img src={url!} alt="" className="h-7 w-7 rounded object-contain" />
+          <img src={url!} alt="" className={`${sizeClass} rounded object-contain`} />
         )}
       </div>
     </div>
@@ -1891,21 +1892,13 @@ export function DashboardWidgetRenderer({
               <DashboardTextWidget content={widget.content ?? ""} isEditing={false} />
             )}
             {chartType === "image" && widget.imageUrl && (
-              <div className="flex flex-1 items-center justify-center overflow-hidden">
+              <div className={resolveImageContainerAlignment(widget.imageConfig)}>
                 {/* eslint-disable-next-line @next/next/no-img-element -- URLs arbitrarias del layout */}
                 <img
                   src={widget.imageUrl as string}
                   alt={widget.title}
-                  className="max-h-full max-w-full object-contain"
-                  style={{
-                    width: widget.imageConfig?.width,
-                    height: widget.imageConfig?.height,
-                    objectFit: widget.imageConfig?.objectFit ?? "contain",
-                    opacity:
-                      widget.imageConfig?.opacity != null && Number.isFinite(widget.imageConfig.opacity)
-                        ? Math.min(1, Math.max(0, widget.imageConfig.opacity))
-                        : 1,
-                  }}
+                  className="block"
+                  style={resolveImageElementStyle(widget.imageConfig)}
                 />
               </div>
             )}
