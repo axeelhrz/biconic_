@@ -52,7 +52,6 @@ import {
   resolveDashboardKpiMainValue,
   pickDashboardKpiCompareRow,
   readComparePresentation,
-  resolveDashboardKpiMainValueForScope,
   formatDashboardCompareText,
   buildCompareTooltipLineFromAgg,
   compareTrendTone,
@@ -67,7 +66,10 @@ import { createChartPercentDenominatorResolver } from "@/lib/dashboard/chartPerc
 import type { ChartPercentWidgetLike } from "@/lib/dashboard/chartPercentEngine";
 import { buildChartTooltipDetailParts, isChartDetailCardActive } from "@/lib/dashboard/chartDetailCard";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
-import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
+import {
+  resolveDashboardKpiMainValueForScope,
+  type KpiUserTimeScopeOptions,
+} from "@/lib/dashboard/kpiFilterScope";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { useDevicePixelRatio } from "@/hooks/useDevicePixelRatio";
