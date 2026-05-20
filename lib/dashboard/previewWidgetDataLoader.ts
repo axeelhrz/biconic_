@@ -10,6 +10,9 @@ import { legacyCompareInputFromWidgetAgg, compareNeedsTimeGroupedRows } from "@/
 import { normalizeAggregationCompare, type ComparePeriodSource } from "@/lib/dashboard/compareSpec";
 import { resolveEffectiveDateGroupByForFetch, type AggForCompareDateGroupBy } from "@/lib/dashboard/aggregateCompareRequest";
 import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
+import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
+import type { CompareSpec } from "@/lib/dashboard/compareSpec";
+import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
 
 type AggregationMetric = {
   id?: string;
@@ -107,7 +110,36 @@ export type LoadedPreviewWidgetData = {
   chartConfig?: ChartConfig;
   processedRows: Record<string, unknown>[];
   hasData: boolean;
+  /** Filtros pre-expansión para acotar el total del KPI (no la línea de comparación). */
+  kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
 };
+
+function buildKpiUserTimeScopeOptions(
+  type: string,
+  agg: AggregationConfigLike | undefined,
+  compareSpec: CompareSpec,
+  dg: { dateGroupByField?: string; dateGroupByGranularity?: DateGranularity },
+  userFiltersBeforeExpand: Array<{ field?: string; operator?: string; value?: unknown }>
+): KpiUserTimeScopeOptions | null {
+  if (type !== "kpi" || !compareNeedsTimeGroupedRows(compareSpec)) return null;
+  const timeColumn =
+    dg.dateGroupByField?.trim() ||
+    (compareSpec.kind === "temporal" || compareSpec.kind === "cumulative"
+      ? compareSpec.timeColumn?.trim()
+      : "") ||
+    String(agg?.dateDimension ?? "").trim();
+  if (!timeColumn) return null;
+  const granularity =
+    (compareSpec.kind === "temporal" || compareSpec.kind === "cumulative"
+      ? compareSpec.granularity
+      : agg?.dateGroupByGranularity) ?? "month";
+  return {
+    timeColumn,
+    granularity: granularity as DateGranularity,
+    userFilters: userFiltersBeforeExpand,
+    parseOpts: agg?.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
+  };
+}
 
 function extractRowsFromApiResult(result: unknown): Record<string, unknown>[] {
   if (Array.isArray(result)) return result as Record<string, unknown>[];
@@ -184,6 +216,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
   const hasAgg = !!(agg?.enabled && (agg.metrics?.length ?? 0) > 0);
 
   let rows: Record<string, unknown>[] = [];
+  let kpiUserTimeScope: KpiUserTimeScopeOptions | null = null;
   if (hasAgg) {
     const dimensions = (agg?.dimensions?.length ? agg.dimensions : [agg?.dimension, agg?.dimension2].filter(Boolean)) as string[];
     const metricsPayload = (agg?.metrics ?? []).map((m) => ({
@@ -223,14 +256,21 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       (compareSpec.kind === "temporal" ? mapPhysical(compareSpec.timeColumn) : undefined) ??
       (compareSpec.kind === "cumulative" ? mapPhysical(compareSpec.timeColumn) : undefined);
 
-    let mergedFilters = [...globalFiltersMapped, ...aggFiltersMapped];
+    const userFiltersBeforeExpand = [...globalFiltersMapped, ...aggFiltersMapped];
+    let mergedFilters = userFiltersBeforeExpand;
+    const relatedDateFields = [
+      agg?.dateDimension,
+      compareSpec.kind === "temporal" || compareSpec.kind === "cumulative" ? compareSpec.timeColumn : undefined,
+    ].filter((x): x is string => !!String(x ?? "").trim());
     if (compareNeedsTimeGroupedRows(compareSpec) && compareFieldForExpand) {
       mergedFilters = expandAggregationFiltersForTemporalCompare(mergedFilters, {
         compareField: compareFieldForExpand,
         compareSpec,
         aggComparePeriodSource: (agg as { comparePeriodSource?: ComparePeriodSource }).comparePeriodSource,
+        relatedDateFields,
       });
     }
+    kpiUserTimeScope = buildKpiUserTimeScopeOptions(type, agg, compareSpec, dg, userFiltersBeforeExpand);
 
     const dateRangeRaw = agg?.dateRangeFilter as { field?: string; last?: number; unit?: string; from?: string; to?: string } | undefined;
     const dateRangeMapped =
@@ -321,7 +361,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
   }
 
   if (rows.length === 0) {
-    return { rows: [], processedRows: [], hasData: false };
+    return { rows: [], processedRows: [], hasData: false, kpiUserTimeScope: null };
   }
 
   const displayWidget = resolveWidgetAggregationForDisplay(
@@ -333,7 +373,12 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
   const chartWidget = displayWidget as BuildChartConfigWidget;
 
   const processedRows = type === "table" ? getProcessedRowsForChart(rows, chartWidget) : rows;
-  const chartConfig = type === "table" ? undefined : buildChartConfig(rows, chartWidget, accentColor);
+  const chartConfig =
+    type === "table"
+      ? undefined
+      : buildChartConfig(rows, chartWidget, accentColor, {
+          kpiUserTimeScope: hasAgg ? kpiUserTimeScope : null,
+        });
   const hasChartData =
     type === "kpi" || type === "table" || type === "map"
       ? processedRows.length > 0
@@ -344,5 +389,6 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     chartConfig,
     processedRows,
     hasData: hasChartData,
+    kpiUserTimeScope: hasAgg ? kpiUserTimeScope : null,
   };
 }

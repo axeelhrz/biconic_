@@ -25,6 +25,8 @@ import {
 } from "@/lib/geo/geo-enrichment";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { applyCompareSpecToRows } from "@/lib/dashboard/compareMetricRows";
+import { compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
+import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import {
   coerceArithmeticOperandsToNumeric,
   findMatchingCloseParen,
@@ -516,6 +518,37 @@ export async function POST(req: NextRequest) {
       validFilters.push(...(body.filters || []));
     }
 
+    const compareSpecForQuery = normalizeAggregationCompare({
+      compare: body.compare,
+      comparePeriod: body.comparePeriod,
+      compareFixedValue: body.compareFixedValue,
+      transformCompare: body.transformCompare,
+      transformCompareFixedValue: body.transformCompareFixedValue,
+      dateGroupBy: body.dateGroupBy,
+      dateDimension: body.dateDimension,
+    });
+    let filtersForQuery: Filter[] = [...validFilters];
+    const compareFieldForQuery =
+      body.dateGroupBy?.field?.trim() ||
+      (compareSpecForQuery.kind === "temporal" || compareSpecForQuery.kind === "cumulative"
+        ? compareSpecForQuery.timeColumn?.trim()
+        : "") ||
+      String(body.dateDimension ?? "").trim();
+    if (compareNeedsTimeGroupedRows(compareSpecForQuery) && compareFieldForQuery) {
+      const relatedDateFields = [
+        body.dateDimension,
+        compareSpecForQuery.kind === "temporal" || compareSpecForQuery.kind === "cumulative"
+          ? compareSpecForQuery.timeColumn
+          : undefined,
+      ].filter((x): x is string => !!String(x ?? "").trim());
+      filtersForQuery = expandAggregationFiltersForTemporalCompare(filtersForQuery, {
+        compareField: compareFieldForQuery,
+        compareSpec: compareSpecForQuery,
+        aggComparePeriodSource: (body as { comparePeriodSource?: string }).comparePeriodSource,
+        relatedDateFields,
+      }) as Filter[];
+    }
+
     // Helper: condición WHEN para métrica (solo la parte "campo op valor")
     const buildWhenClause = (cond: MetricCondition): string => {
       const op = (cond.operator || "=").toUpperCase().trim();
@@ -995,8 +1028,8 @@ export async function POST(req: NextRequest) {
       return `${drDateExpr} >= (${maxDateSubquery} - INTERVAL '${n} ${unit}')`;
     })();
 
-    if (validFilters.length > 0) {
-      const whereClauses = validFilters
+    if (filtersForQuery.length > 0) {
+      const whereClauses = filtersForQuery
         .map((f) => {
           const col = quotedColumn(f.field);
           const op = (f.operator || "=").toUpperCase().trim();

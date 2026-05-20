@@ -1149,6 +1149,7 @@ export function DashboardViewer({
                       ...w,
                       config: loaded.chartConfig ?? { labels: [], datasets: [] },
                       rows: loaded.processedRows,
+                      kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
                       columns: columnsDetected,
                       isLoading: false,
                     }
@@ -1215,6 +1216,7 @@ export function DashboardViewer({
                       ...w,
                       config: loaded.chartConfig ?? { labels: [], datasets: [] },
                       rows: loaded.processedRows,
+                      kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
                       columns: columnsDetected,
                       isLoading: false,
                     }

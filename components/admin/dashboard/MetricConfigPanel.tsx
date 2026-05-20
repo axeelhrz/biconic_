@@ -39,6 +39,7 @@ import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaul
 import type { ChartDetailCardConfig, ChartDetailCardLine } from "@/lib/dashboard/chartDetailCard";
 import type { DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
 import { DashboardCompareSpecSection } from "@/components/admin/dashboard/DashboardCompareSpecSection";
+import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
 
 export type MetricConditionEdit = {
   field: string;
@@ -288,6 +289,7 @@ type MetricConfigPanelProps = {
   previewChartDatasetLabels?: string[];
   /** Filas del preview del widget (p. ej. inferencia de geocodificación en mapas). */
   previewRows?: Record<string, unknown>[];
+  kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
   etlData: ETLDataResponse | null;
   etlLoading: boolean;
   /** Carga de datos de esta métrica (aggregate/raw) en el estudio */
@@ -328,6 +330,7 @@ export function MetricConfigPanel({
   dashboardTheme,
   previewChartDatasetLabels = [],
   previewRows = [],
+  kpiUserTimeScope = null,
   etlData,
   etlLoading,
   metricDataLoading = false,
@@ -2820,6 +2823,7 @@ export function MetricConfigPanel({
                         updateAgg={updateAgg}
                         savedMetrics={savedMetrics}
                         previewRows={previewRows}
+                        kpiUserTimeScope={kpiUserTimeScope}
                         widgetType={widget.type}
                       />
                       <div>

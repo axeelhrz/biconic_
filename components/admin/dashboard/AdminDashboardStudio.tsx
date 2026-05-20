@@ -44,6 +44,7 @@ import {
 } from "@/lib/dashboard/buildChartConfig";
 import type { ChartLabelDisplayMode, ChartPercentBasis, ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
 import { shouldRefetchWidgetOnAggregationPatch } from "@/lib/dashboard/compareAggRefetch";
 import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import {
@@ -436,6 +437,8 @@ export function AdminDashboardStudio({
   const compareRefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filterReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filtersDataKeyRef = useRef<string | null>(null);
+  /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
+  const widgetLoadGenRef = useRef<Record<string, number>>({});
   const layoutHydratedForAnalysisRef = useRef(false);
   const resizeStateRef = useRef<{
     widgetId: string;
@@ -679,6 +682,10 @@ export function AdminDashboardStudio({
     async (widgetId: string) => {
       const widget = widgets.find((w) => w.id === widgetId);
       if (!widget || !etlData) return;
+      const genMap = widgetLoadGenRef.current;
+      genMap[widgetId] = (genMap[widgetId] ?? 0) + 1;
+      const myGen = genMap[widgetId]!;
+      const isStale = () => widgetLoadGenRef.current[widgetId] !== myGen;
       if (widget.type === "image" || widget.type === "text") {
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
         return;
@@ -1061,26 +1068,32 @@ export function AdminDashboardStudio({
             rawLimit: 500,
             accentColor: (widget as { color?: string }).color ?? "",
           });
+          if (isStale()) return;
           if (!loaded.hasData) {
-            setWidgets((prev) =>
-              prev.map((w) =>
-                w.id === widgetId ? { ...w, config: { labels: [], datasets: [] }, rows: [], isLoading: false } : w
-              )
-            );
+            if (!isStale()) {
+              setWidgets((prev) =>
+                prev.map((w) =>
+                  w.id === widgetId ? { ...w, config: { labels: [], datasets: [] }, rows: [], isLoading: false } : w
+                )
+              );
+            }
             return;
           }
-          setWidgets((prev) =>
-            prev.map((w) =>
-              w.id === widgetId
-                ? {
-                    ...w,
-                    config: loaded.chartConfig ?? { labels: [], datasets: [] },
-                    rows: loaded.processedRows,
-                    isLoading: false,
-                  }
-                : w
-            )
-          );
+          if (!isStale()) {
+            setWidgets((prev) =>
+              prev.map((w) =>
+                w.id === widgetId
+                  ? {
+                      ...w,
+                      config: loaded.chartConfig ?? { labels: [], datasets: [] },
+                      rows: loaded.processedRows,
+                      kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                      isLoading: false,
+                    }
+                  : w
+              )
+            );
+          }
         } else {
           const widgetForBuild = { type: widget.type, aggregationConfig: agg, source: widget.source, color: (widget as { color?: string }).color };
           const rawPayload = { tableName, filters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters], limit: 500 };
@@ -1111,30 +1124,38 @@ export function AdminDashboardStudio({
             accentColor: (widget as { color?: string }).color ?? "",
             rawExtraPayload: rawPayload,
           });
+          if (isStale()) return;
           if (!loaded.hasData) {
-            setWidgets((prev) =>
-              prev.map((w) =>
-                w.id === widgetId ? { ...w, config: { labels: [], datasets: [] }, rows: [], isLoading: false } : w
-              )
-            );
+            if (!isStale()) {
+              setWidgets((prev) =>
+                prev.map((w) =>
+                  w.id === widgetId ? { ...w, config: { labels: [], datasets: [] }, rows: [], isLoading: false } : w
+                )
+              );
+            }
             return;
           }
-          setWidgets((prev) =>
-            prev.map((w) =>
-              w.id === widgetId
-                ? {
-                    ...w,
-                    config: loaded.chartConfig ?? { labels: [], datasets: [] },
-                    rows: loaded.processedRows,
-                    isLoading: false,
-                  }
-                : w
-            )
-          );
+          if (!isStale()) {
+            setWidgets((prev) =>
+              prev.map((w) =>
+                w.id === widgetId
+                  ? {
+                      ...w,
+                      config: loaded.chartConfig ?? { labels: [], datasets: [] },
+                      rows: loaded.processedRows,
+                      kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                      isLoading: false,
+                    }
+                  : w
+              )
+            );
+          }
         }
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Error al cargar datos");
-        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        if (!isStale()) {
+          toast.error(err instanceof Error ? err.message : "Error al cargar datos");
+          setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        }
       }
     },
     [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, activePageId]
@@ -1191,8 +1212,14 @@ export function AdminDashboardStudio({
       (w) => (w.pageId ?? "page-1") === pageId && w.aggregationConfig?.enabled && w.type !== "image" && w.type !== "text"
     );
     if (toLoad.length === 0) return;
-    void Promise.all(toLoad.map((w) => loadMetricData(w.id)));
-  }, [widgets, activePageId, loadMetricData]);
+    const sid = selectedId;
+    void (async () => {
+      if (sid && toLoad.some((w) => w.id === sid)) {
+        await loadMetricData(sid);
+      }
+      await Promise.all(toLoad.filter((w) => w.id !== sid).map((w) => loadMetricData(w.id)));
+    })();
+  }, [widgets, activePageId, loadMetricData, selectedId]);
 
   const handleStudioFilterChange = useCallback((widgetId: string, value: unknown) => {
     setStudioFilterValues((prev) => ({ ...prev, [widgetId]: value }));
@@ -1205,12 +1232,12 @@ export function AdminDashboardStudio({
           id: f.id,
           field: f.field,
           operator: f.operator,
-          value: f.value,
+          value: studioFilterValues[f.id] !== undefined ? studioFilterValues[f.id] : f.value,
           applyTo: f.applyTo,
           applyToWidgetIds: f.applyToWidgetIds,
         }))
       ),
-    [globalFilters]
+    [globalFilters, studioFilterValues]
   );
 
   const studioFiltersFingerprint = useMemo(() => JSON.stringify(studioFilterValues), [studioFilterValues]);
@@ -2432,6 +2459,7 @@ export function AdminDashboardStudio({
                         title: w.title,
                         config: w.config ?? undefined,
                         rows: w.rows,
+                        kpiUserTimeScope: (w as { kpiUserTimeScope?: KpiUserTimeScopeOptions | null }).kpiUserTimeScope ?? null,
                         aggregationConfig: w.aggregationConfig,
                         color: w.color,
                         kpiSecondaryLabel: w.kpiSecondaryLabel,
@@ -2538,6 +2566,9 @@ export function AdminDashboardStudio({
                     .filter(Boolean) ?? []
                 }
                 previewRows={selectedWidgetForPanel.rows}
+                kpiUserTimeScope={
+                  (selectedWidgetForPanel as { kpiUserTimeScope?: KpiUserTimeScopeOptions | null }).kpiUserTimeScope ?? null
+                }
                 widget={{
                   id: selectedWidgetForPanel.id,
                   type: selectedWidgetForPanel.type,

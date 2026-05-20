@@ -12,9 +12,12 @@ import {
   normalizeComparePlacements,
   compareNeedsTimeGroupedRows,
   readComparePresentation,
-  resolveDashboardKpiMainValue,
   pickDashboardKpiCompareRow,
 } from "@/lib/dashboard/compareDisplayKeys";
+import {
+  resolveDashboardKpiMainValueForScope,
+  type KpiUserTimeScopeOptions,
+} from "@/lib/dashboard/kpiFilterScope";
 import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import { formatValue } from "@/lib/dashboard/chartOptions";
 import { CompareSpecFields } from "@/components/admin/dashboard/CompareSpecFields";
@@ -107,6 +110,7 @@ type DashboardCompareSpecSectionProps = {
   savedMetrics: SavedMetricWithOptionalAgg[];
   previewRows?: Record<string, unknown>[];
   widgetType?: string;
+  kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
 };
 
 function previewCompareLineText(
@@ -128,10 +132,11 @@ function previewCompareLineText(
 
 function previewMainKpiTotal(
   previewRows: Record<string, unknown>[] | undefined,
-  metricAlias: string
+  metricAlias: string,
+  kpiUserTimeScope?: KpiUserTimeScopeOptions | null
 ): string | null {
   if (!previewRows?.length || !metricAlias) return null;
-  const total = resolveDashboardKpiMainValue(previewRows, metricAlias);
+  const total = resolveDashboardKpiMainValueForScope(previewRows, metricAlias, kpiUserTimeScope ?? null);
   if (!Number.isFinite(total)) return null;
   const abs = Math.abs(total);
   const scale = abs >= 1_000_000_000 ? "Bi" : abs >= 1_000_000 ? "M" : abs >= 1_000 ? "K" : "none";
@@ -144,6 +149,7 @@ export function DashboardCompareSpecSection({
   savedMetrics,
   previewRows,
   widgetType,
+  kpiUserTimeScope,
 }: DashboardCompareSpecSectionProps) {
   const compare = effectiveCompare(agg);
   const ui = defaultCompareUi(agg.dashboardCompareUi);
@@ -177,7 +183,7 @@ export function DashboardCompareSpecSection({
 
   const compareBadge = compareKindBadgeLabel(compare);
   const previewMainTotal =
-    widgetType === "kpi" ? previewMainKpiTotal(previewRows, primaryMetricAlias) : null;
+    widgetType === "kpi" ? previewMainKpiTotal(previewRows, primaryMetricAlias, kpiUserTimeScope) : null;
   const previewCompareLine = previewCompareLineText(previewRows, compare, primaryMetricAlias);
   const hasPreview = !!(previewMainTotal || previewCompareLine);
 

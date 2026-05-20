@@ -14,6 +14,10 @@ import {
 } from "@/lib/dashboard/dateFormatting";
 import { appendCompareLineDatasetsIfConfigured } from "@/lib/dashboard/compareChartMerge";
 import { resolveDashboardKpiMainValue } from "@/lib/dashboard/compareDisplayKeys";
+import {
+  resolveDashboardKpiMainValueForScope,
+  type KpiUserTimeScopeOptions,
+} from "@/lib/dashboard/kpiFilterScope";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
 
 function aggregationDateParseOpts(agg?: { dateSlashOrder?: string }): ParseDateLikeOptions {
@@ -525,6 +529,8 @@ function resolveChartLineBorderWidth(agg: BuildChartConfigWidget["aggregationCon
 export type BuildChartConfigOptions = {
   /** Si true, no aplica Top N; útil para totales de porcentaje sobre todo el análisis. */
   skipRanking?: boolean;
+  /** Filtros del usuario (pre-expansión) para acotar la suma del KPI. */
+  kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
 };
 
 export function buildChartConfig(
@@ -562,9 +568,10 @@ export function buildChartConfig(
         : yKey;
     const kpiLegend =
       typeof dsKpi?.[yKey] === "string" && dsKpi[yKey]!.trim() !== "" ? dsKpi[yKey]!.trim() : kpiDefaultLabel;
-    const kpiNumber = resolveDashboardKpiMainValue(
+    const kpiNumber = resolveDashboardKpiMainValueForScope(
       dataArray as Record<string, unknown>[],
-      yKey
+      yKey,
+      buildOptions?.kpiUserTimeScope ?? null
     );
     return { labels: ["Total"], xRawCategoryKeys: [""], datasets: [{ label: kpiLegend, data: [kpiNumber] }] };
   }

@@ -52,9 +52,11 @@ import {
   resolveDashboardKpiMainValue,
   pickDashboardKpiCompareRow,
   readComparePresentation,
+  resolveDashboardKpiMainValueForScope,
   formatDashboardCompareText,
   buildCompareTooltipLineFromAgg,
   compareTrendTone,
+  kpiCompareRowsFingerprint,
 } from "@/lib/dashboard/compareDisplayKeys";
 import {
   getEffectiveDashboardCompareUi,
@@ -65,6 +67,7 @@ import { createChartPercentDenominatorResolver } from "@/lib/dashboard/chartPerc
 import type { ChartPercentWidgetLike } from "@/lib/dashboard/chartPercentEngine";
 import { buildChartTooltipDetailParts, isChartDetailCardActive } from "@/lib/dashboard/chartDetailCard";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
+import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { useDevicePixelRatio } from "@/hooks/useDevicePixelRatio";
@@ -187,6 +190,8 @@ export interface DashboardWidgetRendererWidget {
     source: "aggregate" | "raw";
     capturedAt?: string;
   };
+  /** Alcance temporal del usuario para el total del KPI (pre-expansión de comparación). */
+  kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
   [key: string]: unknown;
 }
 
@@ -390,7 +395,8 @@ export function DashboardWidgetRenderer({
       resultKeys[0];
 
     if (yKey) {
-      const total = resolveDashboardKpiMainValue(rows, yKey);
+      const scope = (widget as DashboardWidgetRendererWidget).kpiUserTimeScope ?? null;
+      const total = resolveDashboardKpiMainValueForScope(rows, yKey, scope);
       if (Number.isFinite(total)) {
         return formatKpiValue(total, style);
       }
@@ -414,13 +420,19 @@ export function DashboardWidgetRenderer({
     }
 
     for (const key of ["value", "metric_0"]) {
-      const total = resolveDashboardKpiMainValue(rows, key);
+      const scope = (widget as DashboardWidgetRendererWidget).kpiUserTimeScope ?? null;
+      const total = resolveDashboardKpiMainValueForScope(rows, key, scope);
       if (Number.isFinite(total) && total !== 0) {
         return formatKpiValue(total, style);
       }
     }
     return null;
-  }, [chartType, chartConfig, widget.rows, widget.chartStyle, widget.aggregationConfig]);
+  }, [chartType, chartConfig, widget.rows, widget.chartStyle, widget.aggregationConfig, widget.kpiUserTimeScope]);
+
+  const kpiCompareFingerprint = useMemo(
+    () => kpiCompareRowsFingerprint(widget.rows, widget.aggregationConfig as never),
+    [widget.rows, widget.aggregationConfig]
+  );
 
   const kpiCompareDisplay = useMemo(() => {
     if (chartType !== "kpi" || !Array.isArray(widget.rows) || widget.rows.length === 0) return null;
@@ -479,7 +491,14 @@ export function DashboardWidgetRenderer({
       showIcon: ind === "icon" || ind === "both",
       showColor: ind === "color" || ind === "both",
     };
-  }, [chartType, widget.rows, widget.aggregationConfig, widget.chartStyle]);
+  }, [
+    chartType,
+    widget.rows,
+    widget.aggregationConfig,
+    widget.chartStyle,
+    widget.kpiUserTimeScope,
+    kpiCompareFingerprint,
+  ]);
 
   const aggConfig = widget.aggregationConfig as {
     chartComboSyncAxes?: boolean;

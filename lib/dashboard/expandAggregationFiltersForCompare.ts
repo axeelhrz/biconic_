@@ -17,6 +17,16 @@ function fieldsMatch(a: string | undefined, b: string | undefined): boolean {
   return normFieldKey(a) === normFieldKey(b);
 }
 
+/** Coincide campo de filtro con eje temporal (compareField, dateDimension, etc.). */
+function filterFieldMatchesCompareAxis(
+  filterField: string,
+  compareField: string,
+  relatedFields?: string[]
+): boolean {
+  if (fieldsMatch(filterField, compareField)) return true;
+  return (relatedFields ?? []).some((r) => fieldsMatch(filterField, r));
+}
+
 /** Desplaza año-mes calendario (mes 1–12). */
 export function shiftCalendarYearMonth(year: number, month1: number, deltaMonths: number): { year: number; month1: number } {
   const idx = year * 12 + (month1 - 1) + deltaMonths;
@@ -74,9 +84,12 @@ export function expandAggregationFiltersForTemporalCompare(
     /** Si no se pasa, se toma de `compareSpec` / default dashboard. */
     periodSource?: ComparePeriodSource;
     aggComparePeriodSource?: ComparePeriodSource | string | null;
+    /** Campos fecha adicionales (dateDimension, timeColumn semántico). */
+    relatedDateFields?: string[];
   }
 ): AggregationFilterLike[] {
   const { compareField, compareSpec } = options;
+  const related = options.relatedDateFields ?? [];
   const periodSource = options.periodSource ?? getComparePeriodSource(compareSpec, options.aggComparePeriodSource);
 
   if (periodSource === "fixed" || periodSource === "data_max") {
@@ -103,7 +116,7 @@ export function expandAggregationFiltersForTemporalCompare(
 
   return filters.map((f) => {
     const field = String(f.field ?? "").trim();
-    if (!field || !fieldsMatch(field, compareField)) return { ...f };
+    if (!field || !filterFieldMatchesCompareAxis(field, compareField, related)) return { ...f };
 
     const op = String(f.operator ?? "").toUpperCase().trim();
 

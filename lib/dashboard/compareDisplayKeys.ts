@@ -277,6 +277,22 @@ export function pickDashboardKpiCompareRow(
   return rows[0] as Record<string, unknown>;
 }
 
+/** Huella estable de la línea de comparación KPI (invalida memo al cambiar filtros / refetch). */
+export function kpiCompareRowsFingerprint(
+  rows: Record<string, unknown>[] | undefined,
+  agg: Parameters<typeof legacyCompareInputFromWidgetAgg>[0]
+): string {
+  if (!rows?.length) return "len:0";
+  const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg ?? undefined));
+  if (spec.kind === "none") return `len:${rows.length}|none`;
+  const metrics = (agg as { metrics?: { alias?: string }[] } | null | undefined)?.metrics ?? [];
+  const alias =
+    metrics.map((m) => String(m.alias ?? "").trim()).filter(Boolean)[0] ?? "metric_0";
+  const row = pickDashboardKpiCompareRow(rows, spec) ?? (rows[rows.length - 1] as Record<string, unknown>);
+  const vals = readComparePresentation(spec, alias, row);
+  return `len:${rows.length}|${vals.delta ?? ""}|${vals.deltaPct ?? ""}|${vals.reference ?? ""}`;
+}
+
 export function compareTrendTone(values: ComparePresentationValues): "up" | "down" | "flat" {
   const primary =
     values.delta != null

@@ -41,6 +41,21 @@ describe("expandAggregationFiltersForTemporalCompare", () => {
     expect(v.sort()).toEqual(["2025-03", "2026-03"].sort());
   });
 
+  it("YEAR=2026 + same_period_prior_year incluye 2025", () => {
+    const spec = {
+      kind: "temporal" as const,
+      mode: "same_period_prior_year" as const,
+      timeColumn: "fecha",
+      granularity: "month" as const,
+    };
+    const out = expandAggregationFiltersForTemporalCompare(
+      [{ field: "fecha", operator: "YEAR", value: 2026 }],
+      { compareField: "fecha", compareSpec: spec }
+    );
+    const v = out[0]?.value;
+    expect(Array.isArray(v) ? [...(v as number[])].sort((a, b) => a - b) : [v]).toEqual([2025, 2026]);
+  });
+
   it("no modifica con periodSource fixed", () => {
     const spec = {
       kind: "temporal" as const,
