@@ -83,7 +83,7 @@ import {
 import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
-  mergeSavedAnalysisIntoWidget,
+  resolveWidgetAnalysisMergePatch,
   resolveDarkChartTheme,
   resolveWidgetLabelDisplayMode,
 } from "@/lib/dashboard/widgetRenderParity";
@@ -727,21 +727,17 @@ export function AdminDashboardStudio({
     async (widgetId: string) => {
       const widget = widgets.find((w) => w.id === widgetId);
       if (!widget || !etlData) return;
-      const analysisId = String((widget as { analysisId?: string }).analysisId ?? "").trim();
-      const linkedAnalysis = analysisId ? savedAnalyses.find((a) => String(a.id) === analysisId) : undefined;
-      const analysisPatch =
-        linkedAnalysis != null
-          ? mergeSavedAnalysisIntoWidget(
-              widget as Record<string, unknown>,
-              linkedAnalysis as Record<string, unknown> & { id: string; name: string },
-              savedMetrics
-            )
-          : null;
+      const analysisPatch = resolveWidgetAnalysisMergePatch(
+        widget as Record<string, unknown>,
+        savedAnalyses as Parameters<typeof resolveWidgetAnalysisMergePatch>[1],
+        savedMetrics
+      );
       const effectiveWidget: StudioWidget = analysisPatch
         ? {
             ...widget,
             type: analysisPatch.type,
             title: analysisPatch.title ?? widget.title,
+            analysisId: analysisPatch.analysisId,
             aggregationConfig: analysisPatch.aggregationConfig as AggregationConfig,
             metricIds: analysisPatch.metricIds ?? (widget as { metricIds?: string[] }).metricIds,
             labelDisplayMode: analysisPatch.labelDisplayMode ?? widget.labelDisplayMode,
@@ -1243,23 +1239,23 @@ export function AdminDashboardStudio({
     if (analysisRehydrateKeyRef.current === key) return;
     analysisRehydrateKeyRef.current = key;
     const toReload: string[] = [];
+    let markedDirty = false;
     setWidgets((prev) => {
       let changed = false;
       const next = prev.map((w) => {
-        const aid = String((w as { analysisId?: string }).analysisId ?? "").trim();
-        if (!aid) return w;
-        const analysis = savedAnalyses.find((a) => String(a.id) === aid);
-        if (!analysis) return w;
-        const patch = mergeSavedAnalysisIntoWidget(
+        const patch = resolveWidgetAnalysisMergePatch(
           w as Record<string, unknown>,
-          analysis as Record<string, unknown> & { id: string; name: string },
+          savedAnalyses as Parameters<typeof resolveWidgetAnalysisMergePatch>[1],
           savedMetrics
         );
         if (!patch) return w;
+        const prevAid = String((w as { analysisId?: string }).analysisId ?? "").trim();
+        if (prevAid !== patch.analysisId) markedDirty = true;
         changed = true;
         toReload.push(w.id);
         return {
           ...w,
+          analysisId: patch.analysisId,
           type: patch.type,
           title: patch.title ?? w.title,
           aggregationConfig: patch.aggregationConfig as AggregationConfig,
@@ -1275,6 +1271,7 @@ export function AdminDashboardStudio({
       });
       return changed ? next : prev;
     });
+    if (markedDirty) setIsDirty(true);
     if (toReload.length > 0 && etlData && !etlLoading) {
       const t = window.setTimeout(() => {
         toReload.forEach((id) => void loadMetricData(id));

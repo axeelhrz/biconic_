@@ -359,11 +359,75 @@ export type SavedAnalysisForMerge = Record<string, unknown> & {
 export type WidgetAnalysisMergePatch = {
   aggregationConfig: Record<string, unknown>;
   type: string;
+  analysisId: string;
   title?: string;
   metricIds?: string[];
   labelDisplayMode?: ChartLabelDisplayMode;
   minHeight?: number;
 };
+
+function normalizeMatchKey(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Encuentra el análisis guardado del ETL vinculado a un widget aunque falte analysisId en el layout.
+ */
+export function findSavedAnalysisForWidget(
+  widget: Record<string, unknown>,
+  savedAnalyses: SavedAnalysisForMerge[]
+): SavedAnalysisForMerge | null {
+  if (!Array.isArray(savedAnalyses) || savedAnalyses.length === 0) return null;
+
+  const widgetAnalysisId = String(widget.analysisId ?? "").trim();
+  if (widgetAnalysisId) {
+    const byId = savedAnalyses.find((a) => String(a.id ?? "").trim() === widgetAnalysisId);
+    if (byId) return byId;
+  }
+
+  const widgetMetricId = String(widget.metricId ?? "").trim();
+  if (widgetMetricId) {
+    const byMetric = savedAnalyses.find((a) =>
+      (a.metricIds ?? []).some((mid) => String(mid).trim() === widgetMetricId)
+    );
+    if (byMetric) return byMetric;
+  }
+
+  const widgetMetricIds = Array.isArray(widget.metricIds)
+    ? (widget.metricIds as unknown[]).map((id) => String(id ?? "").trim()).filter(Boolean)
+    : [];
+  if (widgetMetricIds.length > 0) {
+    const widgetSet = new Set(widgetMetricIds);
+    const byMetricIds = savedAnalyses.find((a) => {
+      const analysisIds = (a.metricIds ?? []).map((id) => String(id).trim()).filter(Boolean);
+      if (analysisIds.length === 0) return false;
+      return analysisIds.every((id) => widgetSet.has(id));
+    });
+    if (byMetricIds) return byMetricIds;
+  }
+
+  const titleKey = normalizeMatchKey(widget.title);
+  if (titleKey) {
+    const byTitle = savedAnalyses.find((a) => normalizeMatchKey(a.name) === titleKey);
+    if (byTitle) return byTitle;
+  }
+
+  return null;
+}
+
+/** Busca análisis y devuelve el patch de merge, o null si no hay coincidencia. */
+export function resolveWidgetAnalysisMergePatch(
+  widget: Record<string, unknown>,
+  savedAnalyses: SavedAnalysisForMerge[],
+  savedMetrics: SavedMetricForAnalysisMerge[]
+): WidgetAnalysisMergePatch | null {
+  const analysis = findSavedAnalysisForWidget(widget, savedAnalyses);
+  if (!analysis) return null;
+  return mergeSavedAnalysisIntoWidget(widget, analysis, savedMetrics);
+}
 
 type AnalysisMetricRow = {
   id: string;
@@ -398,15 +462,14 @@ function toMetricListFromUnknown(
 
 /**
  * Fusiona un análisis guardado del ETL en un widget del dashboard (misma lógica que buildWidgetFromSavedAnalysis).
- * Devuelve null si el widget no está vinculado al análisis.
  */
 export function mergeSavedAnalysisIntoWidget(
   widget: Record<string, unknown>,
   analysis: SavedAnalysisForMerge,
   savedMetrics: SavedMetricForAnalysisMerge[]
 ): WidgetAnalysisMergePatch | null {
-  const analysisId = String(widget.analysisId ?? "").trim();
-  if (!analysisId || analysisId !== String(analysis.id ?? "").trim()) return null;
+  const analysisId = String(analysis.id ?? "").trim();
+  if (!analysisId) return null;
 
   const linkedSavedMetrics = (analysis.metricIds ?? [])
     .map((mid) => savedMetrics.find((s) => String(s.id) === String(mid)))
@@ -473,6 +536,7 @@ export function mergeSavedAnalysisIntoWidget(
   return {
     aggregationConfig,
     type: chartType,
+    analysisId,
     title: String(analysis.name ?? widget.title ?? "").trim() || undefined,
     metricIds: [...(analysis.metricIds ?? [])],
     labelDisplayMode,

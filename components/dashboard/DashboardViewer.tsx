@@ -26,7 +26,10 @@ import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
   resolveDarkChartTheme,
+  resolveWidgetAnalysisMergePatch,
   resolveWidgetLabelDisplayMode,
+  type SavedAnalysisForMerge,
+  type SavedMetricForAnalysisMerge,
 } from "@/lib/dashboard/widgetRenderParity";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
@@ -532,6 +535,9 @@ export function DashboardViewer({
   const stateRef = useRef({ widgets, setWidgets });
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
+  const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalysisForMerge[]>([]);
+  const [savedMetricsFromEtl, setSavedMetricsFromEtl] = useState<SavedMetricForAnalysisMerge[]>([]);
+  const etlMetricsFetchedRef = useRef(false);
 
   const { data: etlData, error: etlDataError } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
   const etlDataRef = useRef(etlData);
@@ -744,6 +750,49 @@ export function DashboardViewer({
     };
   }, [etlData, globalFilters, apiEndpoints?.distinctValues]);
 
+  useEffect(() => {
+    if (!etlData || etlMetricsFetchedRef.current) return;
+    const etlIds = new Set<string>();
+    if ((etlData as { etl?: { id?: string } }).etl?.id) etlIds.add((etlData as { etl: { id: string } }).etl.id);
+    (etlData as { dataSources?: { etlId: string }[] }).dataSources?.forEach((s) => etlIds.add(s.etlId));
+    if (etlIds.size === 0) return;
+    etlMetricsFetchedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      const allMetrics: SavedMetricForAnalysisMerge[] = [];
+      const allAnalyses: SavedAnalysisForMerge[] = [];
+      for (const etlId of etlIds) {
+        try {
+          const res = await fetch(`/api/etl/${etlId}/metrics`);
+          const json = await safeJsonResponse<{
+            ok?: boolean;
+            data?: { savedMetrics?: unknown[]; savedAnalyses?: unknown[] };
+          }>(res);
+          if (json.ok && Array.isArray(json.data?.savedMetrics)) {
+            allMetrics.push(...(json.data.savedMetrics as SavedMetricForAnalysisMerge[]));
+          }
+          if (json.ok && Array.isArray(json.data?.savedAnalyses)) {
+            allAnalyses.push(...(json.data.savedAnalyses as SavedAnalysisForMerge[]));
+          }
+        } catch {
+          // ignore per-ETL errors
+        }
+      }
+      if (cancelled) return;
+      if (allMetrics.length > 0) setSavedMetricsFromEtl(allMetrics);
+      if (allAnalyses.length > 0) setSavedAnalyses(allAnalyses);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [etlData]);
+
+  useEffect(() => {
+    etlMetricsFetchedRef.current = false;
+    setSavedAnalyses([]);
+    setSavedMetricsFromEtl([]);
+  }, [dashboardId]);
+
   const getTableNameForWidget = useCallback(
     (widget: Widget): string | null => {
       const dataSources = (etlData as { dataSources?: { id: string; schema?: string; tableName: string }[] })?.dataSources;
@@ -818,7 +867,22 @@ export function DashboardViewer({
       }, 30000);
 
       try {
-        const aggConfig = widget.aggregationConfig;
+        const analysisPatch =
+          savedAnalyses.length > 0
+            ? resolveWidgetAnalysisMergePatch(
+                widget as Record<string, unknown>,
+                savedAnalyses,
+                savedMetricsFromEtl
+              )
+            : null;
+        const aggConfig = (
+          analysisPatch
+            ? (analysisPatch.aggregationConfig as AggregationConfig)
+            : widget.aggregationConfig
+        ) as AggregationConfig | undefined;
+        const effectiveWidgetType = analysisPatch?.type ?? widget.type;
+        const effectiveLabelDisplayMode =
+          analysisPatch?.labelDisplayMode ?? (widget as Widget).labelDisplayMode;
         const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
         const dataSourcesList = (etlData as { dataSources?: { id: string; etlId?: string }[]; primarySourceId?: string })?.dataSources;
         const widgetSourceId = widget.dataSourceId ?? (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSourcesList?.[0]?.id;
@@ -1030,8 +1094,8 @@ export function DashboardViewer({
         if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
           const expandedEdits = expandAnalysisMetricsForFetch(
             {
-              analysisId: (widget as Widget).analysisId,
-              metricIds: (widget as Widget).metricIds,
+              analysisId: analysisPatch?.analysisId ?? (widget as Widget).analysisId,
+              metricIds: analysisPatch?.metricIds ?? (widget as Widget).metricIds,
             },
             savedMetricsPool as SavedMetricForExpand[]
           );
@@ -1066,10 +1130,11 @@ export function DashboardViewer({
             }
           );
           const widgetForBuild = {
-            type: widget.type,
+            type: effectiveWidgetType,
             aggregationConfig: normalizedAgg,
             source: widget.source,
             color: (widget as { color?: string }).color,
+            labelDisplayMode: effectiveLabelDisplayMode,
           };
 
           const loaded = await loadPreviewWidgetData({
@@ -1134,10 +1199,11 @@ export function DashboardViewer({
           );
           const mergedForRaw = [...mappedGlobalFilters, ...ddForRaw];
           const widgetForBuild = {
-            type: widget.type,
+            type: effectiveWidgetType,
             aggregationConfig: aggConfig,
             source: widget.source,
             color: (widget as { color?: string }).color,
+            labelDisplayMode: effectiveLabelDisplayMode,
           };
           const rawPayload = { tableName: fullTableName, filters: mergedForRaw, limit: 500 };
           const loaded = await loadPreviewWidgetData({
@@ -1207,8 +1273,22 @@ export function DashboardViewer({
       isPublic,
       accentColor,
       pageLayout,
+      savedAnalyses,
+      savedMetricsFromEtl,
     ]
   );
+
+  useEffect(() => {
+    if (!etlData || savedAnalyses.length === 0 || widgets.length === 0) return;
+    const timer = window.setTimeout(() => {
+      stateRef.current.widgets.forEach((w) => {
+        if (w.type === "filter" || w.type === "text" || w.type === "image") return;
+        if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
+        loadDataForWidget(w.id);
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [savedAnalyses, savedMetricsFromEtl, etlData, pageLayout, loadDataForWidget, widgets.length]);
 
   const reloadAll = useCallback(() => {
     stateRef.current.widgets.forEach((w) => {

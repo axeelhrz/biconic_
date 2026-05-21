@@ -60,6 +60,10 @@ import {
 } from "@/lib/geo/geo-enrichment";
 import { MapChartAppearanceFields } from "@/components/admin/dashboard/MapChartAppearanceFields";
 import { pickMapVisualFromCfg, type MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
+import {
+  mergeSavedAnalysisIntoWidget,
+  type SavedAnalysisForMerge,
+} from "@/lib/dashboard/widgetRenderParity";
 
 // Reserved for future UI (e.g. aggregate function selector)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -3083,7 +3087,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return newDashboardId;
   }, [linkedDashboardId, etlTitle, etlId, etlClientId]);
 
-  const upsertMetricWidgetOnDashboard = useCallback(async (dashboardId: string, metricItem: SavedMetricForm) => {
+  const upsertMetricWidgetOnDashboard = useCallback(async (
+    dashboardId: string,
+    metricItem: SavedMetricForm,
+    publishAnalysis?: Record<string, unknown> | null
+  ) => {
     const getRes = await fetch(`/api/dashboard/${dashboardId}/layout`);
     const getJson = await safeJsonResponse(getRes);
     if (!getRes.ok || !getJson?.ok || !getJson?.data) {
@@ -3133,10 +3141,48 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       // fallback: widget usará fuente primaria
     }
 
-    const isHorizontalBar = chartType === "horizontalBar";
+    const analysisForMerge =
+      publishAnalysis ??
+      (data?.savedAnalyses ?? []).find((a) =>
+        (a.metricIds ?? []).some((mid) => String(mid).trim() === String(metricItem.id).trim())
+      ) ??
+      null;
+
+    let mergedChartType = chartType;
+    let mergedAggConfig: Record<string, unknown> = {
+      enabled: true,
+      ...(metricItem.aggregationConfig ?? {}),
+      metrics:
+        Array.isArray(metricItem.aggregationConfig?.metrics) && metricItem.aggregationConfig.metrics.length > 0
+          ? metricItem.aggregationConfig.metrics
+          : [metricItem.metric],
+      chartType,
+    };
+    let mergedAnalysisId: string | undefined;
+    let mergedMetricIds: string[] | undefined;
+    let mergedLabelDisplayMode: "percent" | "value" | "both" | undefined;
+    let mergedMinHeight: number | undefined;
+
+    if (analysisForMerge) {
+      const patch = mergeSavedAnalysisIntoWidget(
+        { metricId: metricItem.id, title: metricItem.name },
+        analysisForMerge as SavedAnalysisForMerge,
+        savedMetrics
+      );
+      if (patch) {
+        mergedChartType = patch.type;
+        mergedAggConfig = patch.aggregationConfig;
+        mergedAnalysisId = patch.analysisId;
+        mergedMetricIds = patch.metricIds;
+        mergedLabelDisplayMode = patch.labelDisplayMode;
+        mergedMinHeight = patch.minHeight;
+      }
+    }
+
+    const isHorizontalBar = mergedChartType === "horizontalBar";
     const nextWidget: Record<string, unknown> = {
       id: `w-${Date.now()}`,
-      type: chartType,
+      type: mergedChartType,
       title: metricItem.name,
       metricId: metricItem.id,
       x: 0,
@@ -3144,20 +3190,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       w: 2,
       h: 2,
       gridSpan: 2,
-      minHeight: isHorizontalBar ? 360 : 320,
+      minHeight: mergedMinHeight ?? (isHorizontalBar ? 360 : 320),
       gridOrder: nextGridOrder,
-      ...(isHorizontalBar ? { labelDisplayMode: "percent" as const } : {}),
+      ...(mergedAnalysisId ? { analysisId: mergedAnalysisId } : {}),
+      ...(mergedMetricIds?.length ? { metricIds: mergedMetricIds } : {}),
+      ...(mergedLabelDisplayMode
+        ? { labelDisplayMode: mergedLabelDisplayMode }
+        : isHorizontalBar
+          ? { labelDisplayMode: "percent" as const }
+          : {}),
       ...(activePageId ? { pageId: activePageId } : {}),
       ...(dataSourceId ? { dataSourceId } : {}),
-      aggregationConfig: {
-        enabled: true,
-        ...(metricItem.aggregationConfig ?? {}),
-        metrics:
-          Array.isArray(metricItem.aggregationConfig?.metrics) && metricItem.aggregationConfig.metrics.length > 0
-            ? metricItem.aggregationConfig.metrics
-            : [metricItem.metric],
-        chartType,
-      },
+      aggregationConfig: mergedAggConfig,
     };
 
     const existingIndex = currentWidgets.findIndex(
@@ -3169,10 +3213,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             idx === existingIndex
               ? {
                   ...w,
-                  type: chartType,
+                  type: mergedChartType,
                   title: metricItem.name,
                   minHeight: isHorizontalBar ? Math.max(Number(w.minHeight ?? 0), 360) : w.minHeight,
-                  ...(isHorizontalBar ? { labelDisplayMode: "percent" as const } : {}),
+                  ...(mergedAnalysisId ? { analysisId: mergedAnalysisId } : {}),
+                  ...(mergedMetricIds?.length ? { metricIds: mergedMetricIds } : {}),
+                  ...(mergedLabelDisplayMode
+                    ? { labelDisplayMode: mergedLabelDisplayMode }
+                    : isHorizontalBar
+                      ? { labelDisplayMode: "percent" as const }
+                      : {}),
                   aggregationConfig: nextWidget.aggregationConfig,
                 }
               : w
@@ -3201,7 +3251,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     if (!putRes.ok || !putJson?.ok) {
       throw new Error(putJson?.error ?? "No se pudo subir la métrica al dashboard");
     }
-  }, []);
+  }, [etlId, savedMetrics, data?.savedAnalyses]);
 
   const saveMetric = async (options?: { publishToDashboard?: boolean; redirectToDashboard?: boolean }) => {
     const name = formName.trim();
@@ -3401,7 +3451,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setData((prev) => (prev ? { ...prev, savedMetrics: next, datasetConfig: datasetConfigToSave } : null));
       if (createDerivedColumn) setDerivedColumns(nextDerivedColumns);
       if (options?.publishToDashboard && targetDashboardId) {
-        await upsertMetricWidgetOnDashboard(targetDashboardId, item);
+        const publishAnalysis =
+          editingSavedAnalysisId && analysisSelectedMetricIds.length > 0
+            ? buildAnalysisPayload(analysisNameToSave.trim() || name, editingSavedAnalysisId)
+            : null;
+        await upsertMetricWidgetOnDashboard(targetDashboardId, item, publishAnalysis);
         toast.success("Métrica subida al dashboard");
       }
       closeForm();
