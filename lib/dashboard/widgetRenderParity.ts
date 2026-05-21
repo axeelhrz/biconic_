@@ -366,6 +366,29 @@ export type WidgetAnalysisMergePatch = {
   minHeight?: number;
 };
 
+/** Dimensiones efectivas para GROUP BY (paridad con previewPipelineWidget del ETL). */
+export function resolveAnalysisDimensionsFromConfig(cfg: Record<string, unknown>): {
+  dimensions: string[];
+  dimension?: string;
+  dimension2?: string;
+} {
+  const chartXAxis = String(cfg.chartXAxis ?? "").trim();
+  const fromArray = Array.isArray(cfg.dimensions)
+    ? (cfg.dimensions as unknown[]).map((d) => String(d ?? "").trim()).filter(Boolean)
+    : [];
+  const legacy = [cfg.dimension, cfg.dimension2]
+    .map((d) => String(d ?? "").trim())
+    .filter(Boolean);
+  const base = fromArray.length > 0 ? fromArray : legacy;
+  const merged =
+    chartXAxis && !base.includes(chartXAxis) ? [chartXAxis, ...base] : base.length > 0 ? base : chartXAxis ? [chartXAxis] : [];
+  return {
+    dimensions: merged,
+    dimension: merged[0],
+    dimension2: merged[1],
+  };
+}
+
 function normalizeMatchKey(value: unknown): string {
   return String(value ?? "")
     .trim()
@@ -483,9 +506,8 @@ export function mergeSavedAnalysisIntoWidget(
   const chartType = String(
     mergedCfg.chartType ?? firstMetricCfg.chartType ?? firstLinked?.chartType ?? legacyChartType ?? widget.type ?? "bar"
   ).trim();
-  const dims = Array.isArray(mergedCfg.dimensions)
-    ? mergedCfg.dimensions.map((d) => String(d))
-    : [mergedCfg.dimension, mergedCfg.dimension2].filter(Boolean).map((d) => String(d));
+  const { dimensions: dims, dimension: primaryDim, dimension2: secondaryDim } =
+    resolveAnalysisDimensionsFromConfig(mergedCfg);
   const metricIdsOrdered = (analysis.metricIds ?? []).map((id) => String(id));
   const expandedFromAnalysis =
     metricIdsOrdered.length > 0 && linkedSavedMetrics.length > 0
@@ -515,8 +537,8 @@ export function mergeSavedAnalysisIntoWidget(
   const aggregationConfig: Record<string, unknown> = {
     ...mergedCfg,
     enabled: true,
-    dimension: dims[0] || (typeof mergedCfg.dimension === "string" ? mergedCfg.dimension : undefined),
-    dimension2: dims[1] || (typeof mergedCfg.dimension2 === "string" ? mergedCfg.dimension2 : undefined),
+    dimension: primaryDim,
+    dimension2: secondaryDim,
     dimensions: dims.length > 0 ? dims : undefined,
     metrics: sanitizedMetrics,
     chartType,

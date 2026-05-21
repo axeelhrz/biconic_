@@ -61,7 +61,9 @@ import {
 import { MapChartAppearanceFields } from "@/components/admin/dashboard/MapChartAppearanceFields";
 import { pickMapVisualFromCfg, type MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
 import {
+  findSavedAnalysisForWidget,
   mergeSavedAnalysisIntoWidget,
+  resolveAnalysisDimensionsFromConfig,
   type SavedAnalysisForMerge,
 } from "@/lib/dashboard/widgetRenderParity";
 
@@ -2123,10 +2125,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         }
       }
 
+      const effectiveDims = resolveAnalysisDimensionsFromConfig({
+        dimensions: formDimensions,
+        dimension: formDimensions[0],
+        dimension2: formDimensions[1],
+        chartXAxis,
+      });
       const body: Record<string, unknown> = {
         tableName,
         etlId,
-        dimensions: formDimensions.length > 0 ? formDimensions.filter(Boolean) : undefined,
+        dimensions: effectiveDims.dimensions.length > 0 ? effectiveDims.dimensions : undefined,
+        dimension: effectiveDims.dimension,
+        dimension2: effectiveDims.dimension2,
         metrics: metricsPayload,
         filters: filtersForRequest.length > 0 ? filtersForRequest : undefined,
         orderBy: formOrderBy?.field
@@ -2343,13 +2353,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         ? analysisGranularity
         : undefined
     ) as DateGranularity | undefined;
+    const previewDims = resolveAnalysisDimensionsFromConfig({
+      dimensions: formDimensions,
+      dimension: formDimensions[0],
+      dimension2: formDimensions[1],
+      chartXAxis,
+    });
     return {
       type: formChartType,
       color: chartPrimaryColor,
       aggregationConfig: {
         enabled: true,
-        dimension: chartXAxis || formDimensions[0],
-        dimensions: formDimensions,
+        dimension: previewDims.dimension,
+        dimension2: previewDims.dimension2,
+        dimensions: previewDims.dimensions,
         geoHints,
         ratioReuseMode: ratioReuseDisplayMode || undefined,
         metrics,
@@ -3253,6 +3270,91 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     }
   }, [etlId, savedMetrics, data?.savedAnalyses]);
 
+  /** Actualiza widgets del dashboard vinculado con la config completa del análisis (formato, ranking, dimensiones). */
+  const syncLinkedDashboardWidgetsForAnalysis = useCallback(
+    async (analysis: Record<string, unknown>): Promise<number> => {
+      const dashboardId = linkedDashboardId;
+      const analysisId = String(analysis.id ?? "").trim();
+      if (!dashboardId || !analysisId) return 0;
+
+      const getRes = await fetch(`/api/dashboard/${dashboardId}/layout`);
+      const getJson = await safeJsonResponse(getRes);
+      if (!getRes.ok || !getJson?.ok || !getJson?.data) return 0;
+
+      const dashboardData = getJson.data as {
+        title?: string;
+        global_filters_config?: unknown;
+        layout?: { widgets?: Array<Record<string, unknown>>; savedMetrics?: SavedMetricForm[]; [key: string]: unknown };
+      };
+      const layout = dashboardData.layout && typeof dashboardData.layout === "object" ? dashboardData.layout : {};
+      const currentWidgets = Array.isArray(layout.widgets) ? layout.widgets : [];
+      const analysisForMerge = analysis as SavedAnalysisForMerge;
+      let updatedCount = 0;
+
+      const widgetsUpdated = currentWidgets.map((w) => {
+        const matches =
+          String(w.analysisId ?? "").trim() === analysisId ||
+          findSavedAnalysisForWidget(w, [analysisForMerge]) != null;
+        if (!matches) return w;
+        const patch = mergeSavedAnalysisIntoWidget(
+          { ...w, title: w.title ?? analysis.name },
+          analysisForMerge,
+          savedMetrics
+        );
+        if (!patch) return w;
+        updatedCount += 1;
+        const isHorizontalBar = patch.type === "horizontalBar";
+        return {
+          ...w,
+          analysisId: patch.analysisId,
+          type: patch.type,
+          title: patch.title ?? w.title,
+          metricIds: patch.metricIds ?? w.metricIds,
+          labelDisplayMode:
+            patch.labelDisplayMode ??
+            (isHorizontalBar ? ("percent" as const) : w.labelDisplayMode),
+          minHeight:
+            patch.minHeight != null
+              ? Math.max(Number(w.minHeight ?? 0), patch.minHeight)
+              : w.minHeight,
+          aggregationConfig: patch.aggregationConfig,
+          config: undefined,
+          rows: undefined,
+        };
+      });
+
+      if (updatedCount === 0) {
+        const firstMetricId = Array.isArray(analysis.metricIds)
+          ? String((analysis.metricIds as string[])[0] ?? "").trim()
+          : "";
+        const metricItem = firstMetricId
+          ? savedMetrics.find((m) => String(m.id).trim() === firstMetricId)
+          : undefined;
+        if (metricItem) {
+          await upsertMetricWidgetOnDashboard(dashboardId, metricItem, analysis);
+          return 1;
+        }
+        return 0;
+      }
+
+      const putRes = await fetch(`/api/dashboard/${dashboardId}/layout`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: dashboardData.title,
+          global_filters_config: dashboardData.global_filters_config,
+          layout: { ...layout, widgets: widgetsUpdated },
+        }),
+      });
+      const putJson = await safeJsonResponse(putRes);
+      if (!putRes.ok || !putJson?.ok) {
+        throw new Error(putJson?.error ?? "No se pudo actualizar el dashboard");
+      }
+      return updatedCount;
+    },
+    [linkedDashboardId, savedMetrics, upsertMetricWidgetOnDashboard]
+  );
+
   const saveMetric = async (options?: { publishToDashboard?: boolean; redirectToDashboard?: boolean }) => {
     const name = formName.trim();
     if (!name) {
@@ -3749,13 +3851,36 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   };
 
   const buildAnalysisPayload = useCallback((name: string, existingAnalysisId?: string | null) => {
+    const effectiveDims = resolveAnalysisDimensionsFromConfig({
+      dimensions: formDimensions,
+      dimension: formDimensions[0],
+      dimension2: formDimensions[1],
+      chartXAxis,
+    });
+    const chartMetricFormatsPayload =
+      chartYAxes.length > 0
+        ? Object.fromEntries(
+            chartYAxes.map((key) => [
+              key,
+              chartMetricFormats[key] ?? {
+                valueType: chartValueType,
+                valueScale: chartValueScale,
+                currencySymbol: chartCurrencySymbol,
+                decimals: chartDecimals,
+                thousandSep: chartThousandSep,
+              },
+            ])
+          )
+        : Object.keys(chartMetricFormats).length > 0
+          ? chartMetricFormats
+          : undefined;
     return {
       id: existingAnalysisId && String(existingAnalysisId).trim() !== "" ? String(existingAnalysisId) : `sa-${Date.now()}`,
       name,
       metricIds: [...analysisSelectedMetricIds],
-      dimensions: formDimensions.length > 0 ? formDimensions : undefined,
-      dimension: formDimensions[0] || undefined,
-      dimension2: formDimensions[1] || undefined,
+      dimensions: effectiveDims.dimensions.length > 0 ? effectiveDims.dimensions : undefined,
+      dimension: effectiveDims.dimension,
+      dimension2: effectiveDims.dimension2,
       chartType: formChartType || undefined,
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
@@ -3767,20 +3892,29 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
       chartValueType: chartValueType !== "number" ? chartValueType : undefined,
       chartValueScale: chartValueScale !== "none" ? chartValueScale : undefined,
+      chartNumberFormat: chartValueScale !== "none" ? chartValueScale : chartValueType !== "number" ? chartValueType : undefined,
       chartCurrencySymbol: chartValueType === "currency" ? chartCurrencySymbol : undefined,
       chartThousandSep,
       chartDecimals,
+      chartMetricFormats: chartMetricFormatsPayload,
+      chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
+      chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
+      chartSortByMetric: chartSortByMetric || undefined,
+      chartAxisOrder: chartAxisOrder !== "alpha" ? chartAxisOrder : undefined,
+      chartScaleMode: chartScaleMode !== "auto" ? chartScaleMode : undefined,
+      chartScaleMin: chartScaleMode === "custom" && chartScaleMin !== "" ? chartScaleMin : undefined,
+      chartScaleMax: chartScaleMode === "custom" && chartScaleMax !== "" ? chartScaleMax : undefined,
+      chartAxisStep: chartAxisStep !== "" ? chartAxisStep : undefined,
       ...(chartCategoryColorMode === "uniform" ? ({ chartCategoryColorMode: "uniform" as const } as const) : {}),
       chartPrimaryColor: chartPrimaryColor.trim() ? chartPrimaryColor.trim() : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
+      chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
       chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
       chartGridColor: chartGridColor.trim() || undefined,
       chartAxisXVisible: chartAxisXVisible === false ? false : undefined,
       chartAxisYVisible: chartAxisYVisible === false ? false : undefined,
-      chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
-      chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
-      chartSortByMetric: chartSortByMetric || undefined,
+      chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartRankingEnabled: chartRankingEnabled || undefined,
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
@@ -3878,6 +4012,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartSortDirection,
     chartSortBy,
     chartSortByMetric,
+    chartAxisOrder,
+    chartScaleMode,
+    chartScaleMin,
+    chartScaleMax,
+    chartAxisStep,
+    chartPinnedDimensions,
+    chartColorScheme,
+    chartMetricFormats,
     chartRankingEnabled,
     chartRankingTop,
     chartRankingMetric,
@@ -3896,7 +4038,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   ]);
 
   const saveAnalysisToEtl = async () => {
-    const name = analysisNameToSave.trim();
+    const existingName = editingSavedAnalysisId
+      ? String(
+          (
+            (data?.savedAnalyses ?? []).find(
+              (x) => String((x as { id?: string }).id) === String(editingSavedAnalysisId)
+            ) as { name?: string } | undefined
+          )?.name ?? ""
+        ).trim()
+      : "";
+    const name = analysisNameToSave.trim() || existingName;
     if (!name) {
       toast.error("Escribí un nombre para el análisis.");
       return;
@@ -3923,11 +4074,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         return;
       }
       setData((prev) => (prev ? { ...prev, savedAnalyses: nextAnalyses } : null));
+      let dashboardSyncCount = 0;
+      try {
+        dashboardSyncCount = await syncLinkedDashboardWidgetsForAnalysis(newAnalysis);
+      } catch {
+        toast.warning("Análisis guardado, pero no se pudo actualizar el dashboard vinculado.", { duration: 5000 });
+      }
       toast.success(
         editingSavedAnalysisId
           ? `Análisis «${name}» actualizado.`
           : `Análisis «${name}» guardado. Aparecerá al añadir al dashboard.`
       );
+      if (dashboardSyncCount > 0) {
+        toast.success(
+          `Dashboard actualizado (${dashboardSyncCount} widget${dashboardSyncCount !== 1 ? "s" : ""}). Recargá la vista previa del dashboard.`,
+          { duration: 5000 }
+        );
+      }
       setAnalysisNameToSave("");
       setEditingSavedAnalysisId(null);
       clearAnalysisDraft();
