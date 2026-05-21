@@ -26,6 +26,7 @@ import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
   resolveDarkChartTheme,
+  resolveWidgetLabelDisplayMode,
 } from "@/lib/dashboard/widgetRenderParity";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
@@ -1892,6 +1893,10 @@ export function DashboardViewer({
                         effectiveTheme.fontFamily
                       ),
                       chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
+                      labelDisplayMode: resolveWidgetLabelDisplayMode(
+                        widget as { labelDisplayMode?: import("@/lib/dashboard/chartOptions").ChartLabelDisplayMode; analysisId?: unknown },
+                        String(widget.type ?? "")
+                      ),
                     } as DashboardWidgetRendererWidget}
                     isLoading={widget.isLoading === true}
                     filterValue={uiFilterValues[widget.id]}

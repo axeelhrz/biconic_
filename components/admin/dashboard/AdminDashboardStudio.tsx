@@ -83,7 +83,9 @@ import {
 import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
+  mergeSavedAnalysisIntoWidget,
   resolveDarkChartTheme,
+  resolveWidgetLabelDisplayMode,
 } from "@/lib/dashboard/widgetRenderParity";
 import {
   MetricConfigPanel,
@@ -440,6 +442,7 @@ export function AdminDashboardStudio({
   const [layoutLoaded, setLayoutLoaded] = useState(false);
   const loadedOnce = useRef(false);
   const etlMetricsMergedRef = useRef(false);
+  const analysisRehydrateKeyRef = useRef("");
   const autoLoadWidgetsDoneRef = useRef(false);
   /** Tras merge de savedMetrics desde ETL, recargar widgets de análisis (expand depende de tarjetas por id). */
   const analysisReloadLastSavedMetricsLenRef = useRef(-1);
@@ -724,24 +727,50 @@ export function AdminDashboardStudio({
     async (widgetId: string) => {
       const widget = widgets.find((w) => w.id === widgetId);
       if (!widget || !etlData) return;
+      const analysisId = String((widget as { analysisId?: string }).analysisId ?? "").trim();
+      const linkedAnalysis = analysisId ? savedAnalyses.find((a) => String(a.id) === analysisId) : undefined;
+      const analysisPatch =
+        linkedAnalysis != null
+          ? mergeSavedAnalysisIntoWidget(
+              widget as Record<string, unknown>,
+              linkedAnalysis as Record<string, unknown> & { id: string; name: string },
+              savedMetrics
+            )
+          : null;
+      const effectiveWidget: StudioWidget = analysisPatch
+        ? {
+            ...widget,
+            type: analysisPatch.type,
+            title: analysisPatch.title ?? widget.title,
+            aggregationConfig: analysisPatch.aggregationConfig as AggregationConfig,
+            metricIds: analysisPatch.metricIds ?? (widget as { metricIds?: string[] }).metricIds,
+            labelDisplayMode: analysisPatch.labelDisplayMode ?? widget.labelDisplayMode,
+            minHeight:
+              analysisPatch.minHeight != null
+                ? Math.max(typeof widget.minHeight === "number" ? widget.minHeight : 0, analysisPatch.minHeight)
+                : widget.minHeight,
+          }
+        : widget;
       const genMap = widgetLoadGenRef.current;
       genMap[widgetId] = (genMap[widgetId] ?? 0) + 1;
       const myGen = genMap[widgetId]!;
       const isStale = () => widgetLoadGenRef.current[widgetId] !== myGen;
-      if (widget.type === "image" || widget.type === "text") {
-        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+      if (effectiveWidget.type === "image" || effectiveWidget.type === "text") {
+        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...effectiveWidget, isLoading: false } : w)));
         return;
       }
-      const tableName = await getTableName(widget);
+      const tableName = await getTableName(effectiveWidget);
       if (!tableName) {
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
         toast.warning("No hay ejecución completada del ETL");
         return;
       }
-      setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: true } : w)));
+      setWidgets((prev) =>
+        prev.map((w) => (w.id === widgetId ? { ...effectiveWidget, isLoading: true } : w))
+      );
       try {
-        const agg = widget.aggregationConfig;
-        const sourceId = widget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
+        const agg = effectiveWidget.aggregationConfig;
+        const sourceId = effectiveWidget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
         const mapDatasetField = (rawField: unknown): string => {
           const field = String(rawField ?? "").trim();
           if (!field || !sourceId) return field;
@@ -749,7 +778,7 @@ export function AdminDashboardStudio({
         };
         const datasetDimensions = etlData?.datasetDimensions;
         const pageOf = (w: StudioWidget) => w.pageId ?? activePageId ?? "page-1";
-        const targetPage = pageOf(widget);
+        const targetPage = pageOf(effectiveWidget);
         const fieldsWithWidgets = new Set(
           widgets
             .filter(
@@ -885,8 +914,8 @@ export function AdminDashboardStudio({
         if (agg?.enabled && agg.metrics.length > 0) {
           const expandedEdits = expandAnalysisMetricsForFetch(
             {
-              analysisId: (widget as { analysisId?: unknown }).analysisId,
-              metricIds: (widget as { metricIds?: unknown }).metricIds,
+              analysisId: (effectiveWidget as { analysisId?: unknown }).analysisId,
+              metricIds: (effectiveWidget as { metricIds?: unknown }).metricIds,
             },
             savedMetrics
           );
@@ -912,7 +941,12 @@ export function AdminDashboardStudio({
             ...aggForLoad,
             filters: mappedWidgetFilters,
           };
-          const widgetForBuild = { type: widget.type, aggregationConfig: normalizedAgg, source: widget.source, color: (widget as { color?: string }).color };
+          const widgetForBuild = {
+            type: effectiveWidget.type,
+            aggregationConfig: normalizedAgg,
+            source: effectiveWidget.source,
+            color: (effectiveWidget as { color?: string }).color,
+          };
           const sourceAllFields = sourceId
             ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.all ?? etlData?.fields?.all ?? [])
             : (etlData?.fields?.all ?? []);
@@ -1001,17 +1035,8 @@ export function AdminDashboardStudio({
               String(dateGroupBySourceField).trim().toLowerCase() === String(aggForLoad.dateDimension ?? "").trim().toLowerCase()
             ) ||
             !!isDateDimension;
-          const rankingLimit = aggForLoad.chartRankingEnabled && aggForLoad.chartRankingTop && aggForLoad.chartRankingTop > 0 && !isTemporalAxis
-            ? aggForLoad.chartRankingTop
-            : undefined;
-          const rankingDir =
-            String((aggForLoad as { chartRankingDirection?: string }).chartRankingDirection ?? "desc").toLowerCase() ===
-            "asc"
-              ? ("ASC" as const)
-              : ("DESC" as const);
-          const rankingOrderBy = rankingLimit && (aggForLoad.chartRankingMetric || metricAliasesForApi[0])
-            ? { field: aggForLoad.chartRankingMetric || metricAliasesForApi[0], direction: rankingDir }
-            : undefined;
+          const rankingActive =
+            !!aggForLoad.chartRankingEnabled && (aggForLoad.chartRankingTop ?? 0) > 0 && !isTemporalAxis;
           const toSavedMetricPayload = (s: SavedMetric) => {
             const first = (s as { aggregationConfig?: { metrics?: { field?: string; func?: string; alias?: string; expression?: string }[] }; metric?: { field?: string; func?: string; alias?: string; expression?: string } }).aggregationConfig?.metrics?.[0]
               ?? (s as { metric?: { field?: string; func?: string; alias?: string; expression?: string } }).metric;
@@ -1046,7 +1071,7 @@ export function AdminDashboardStudio({
             etlId: widgetEtlId || undefined,
             dimension: isInvalidIdentifierValue(aggForLoad.dimension) ? undefined : aggForLoad.dimension,
             dimensions: dimensions.length > 0 ? dimensions : undefined,
-            chartType: aggForLoad.chartType || widget.type,
+            chartType: aggForLoad.chartType || effectiveWidget.type,
             chartXAxis: isInvalidIdentifierValue(aggForLoad.chartXAxis) ? undefined : aggForLoad.chartXAxis || undefined,
             ...(aggForLoad.geoHints ? { geoHints: aggForLoad.geoHints } : {}),
             ...(typeof aggForLoad.mapDefaultCountry === "string" && aggForLoad.mapDefaultCountry.trim()
@@ -1060,8 +1085,15 @@ export function AdminDashboardStudio({
               : {}),
             metrics: metricsPayload,
             filters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters, ...mappedWidgetFilters],
-            orderBy: rankingOrderBy || aggForLoad.orderBy,
-            limit: rankingLimit ?? aggForLoad.limit ?? 100,
+            ...(rankingActive
+              ? {
+                  unlimited: true as const,
+                  ...(aggForLoad.orderBy?.field ? { orderBy: aggForLoad.orderBy } : {}),
+                }
+              : {
+                  orderBy: aggForLoad.orderBy,
+                  limit: aggForLoad.limit ?? 100,
+                }),
             cumulative: aggForLoad.cumulative || "none",
             comparePeriod: aggForLoad.comparePeriod || undefined,
             ...(aggForLoad.compare && typeof aggForLoad.compare === "object"
@@ -1200,8 +1232,56 @@ export function AdminDashboardStudio({
         }
       }
     },
-    [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, activePageId]
+    [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, savedAnalyses, activePageId]
   );
+
+  useEffect(() => {
+    if (!layoutLoaded || savedAnalyses.length === 0) return;
+    const key = savedAnalyses
+      .map((a) => `${a.id}:${a.chartRankingEnabled}:${a.chartRankingTop}:${a.chartXAxis}:${a.chartType}`)
+      .join("|");
+    if (analysisRehydrateKeyRef.current === key) return;
+    analysisRehydrateKeyRef.current = key;
+    const toReload: string[] = [];
+    setWidgets((prev) => {
+      let changed = false;
+      const next = prev.map((w) => {
+        const aid = String((w as { analysisId?: string }).analysisId ?? "").trim();
+        if (!aid) return w;
+        const analysis = savedAnalyses.find((a) => String(a.id) === aid);
+        if (!analysis) return w;
+        const patch = mergeSavedAnalysisIntoWidget(
+          w as Record<string, unknown>,
+          analysis as Record<string, unknown> & { id: string; name: string },
+          savedMetrics
+        );
+        if (!patch) return w;
+        changed = true;
+        toReload.push(w.id);
+        return {
+          ...w,
+          type: patch.type,
+          title: patch.title ?? w.title,
+          aggregationConfig: patch.aggregationConfig as AggregationConfig,
+          metricIds: patch.metricIds ?? (w as { metricIds?: string[] }).metricIds,
+          labelDisplayMode: patch.labelDisplayMode ?? w.labelDisplayMode,
+          minHeight:
+            patch.minHeight != null
+              ? Math.max(typeof w.minHeight === "number" ? w.minHeight : 0, patch.minHeight)
+              : w.minHeight,
+          config: undefined,
+          rows: undefined,
+        };
+      });
+      return changed ? next : prev;
+    });
+    if (toReload.length > 0 && etlData && !etlLoading) {
+      const t = window.setTimeout(() => {
+        toReload.forEach((id) => void loadMetricData(id));
+      }, 100);
+      return () => window.clearTimeout(t);
+    }
+  }, [layoutLoaded, savedAnalyses, savedMetrics, etlData, etlLoading, loadMetricData]);
 
   useEffect(() => {
     if (!addSourceOpen) return;
@@ -1497,9 +1577,11 @@ export function AdminDashboardStudio({
         x: 0,
         y: 0,
         w: 400,
-        h: 280,
+        h: chartType === "horizontalBar" ? 360 : 280,
         gridOrder: currentPageWidgets.length,
         gridSpan: chartType === "kpi" ? 1 : 2,
+        minHeight: chartType === "horizontalBar" ? 360 : undefined,
+        labelDisplayMode: chartType === "horizontalBar" ? ("percent" as const) : undefined,
         pageId: activePageId ?? "page-1",
         aggregationConfig,
         excludeGlobalFilters: false,
@@ -1582,6 +1664,8 @@ export function AdminDashboardStudio({
                   metricIds: [...(analysis.metricIds || [])],
                   aggregationConfig: newWidget.aggregationConfig,
                   dataSourceId: newWidget.dataSourceId,
+                  labelDisplayMode: newWidget.labelDisplayMode,
+                  minHeight: newWidget.minHeight ?? w.minHeight,
                   config: undefined,
                   rows: undefined,
                   isLoading: shouldLoadImmediately,
@@ -1601,6 +1685,8 @@ export function AdminDashboardStudio({
                     metricIds: [...(analysis.metricIds || [])],
                     aggregationConfig: newWidget.aggregationConfig,
                     dataSourceId: newWidget.dataSourceId,
+                    labelDisplayMode: newWidget.labelDisplayMode,
+                    minHeight: newWidget.minHeight ?? w.minHeight,
                     config: undefined,
                     rows: undefined,
                     isLoading: shouldLoadImmediately,
@@ -2757,7 +2843,10 @@ export function AdminDashboardStudio({
                           w.chartStyle as ChartStyleConfig | null | undefined,
                           effectiveTheme.fontFamily
                         ),
-                        labelDisplayMode: (w as { labelDisplayMode?: ChartLabelDisplayMode }).labelDisplayMode,
+                        labelDisplayMode: resolveWidgetLabelDisplayMode(
+                          w as { labelDisplayMode?: ChartLabelDisplayMode; analysisId?: unknown },
+                          chartType
+                        ),
                         chartPercentBasis: (w as { chartPercentBasis?: ChartPercentBasis }).chartPercentBasis,
                         chartPercentGroupField: (w as { chartPercentGroupField?: string }).chartPercentGroupField,
                         chartPercentDenominatorMetric: (w as { chartPercentDenominatorMetric?: string })

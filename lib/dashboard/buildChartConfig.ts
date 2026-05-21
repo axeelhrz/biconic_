@@ -509,10 +509,19 @@ function resolvePieSliceBorderWidth(agg: BuildChartConfigWidget["aggregationConf
   return Math.max(0, Math.min(8, Math.round(raw)));
 }
 
-function resolveChartMaxBarThickness(agg: BuildChartConfigWidget["aggregationConfig"] | undefined): number | undefined {
+function resolveChartMaxBarThickness(
+  agg: BuildChartConfigWidget["aggregationConfig"] | undefined,
+  options?: { chartType?: string; categoryCount?: number }
+): number | undefined {
   const raw = agg?.chartBarThickness;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
-  return Math.max(4, Math.min(120, Math.round(raw)));
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(4, Math.min(120, Math.round(raw)));
+  }
+  const count = options?.categoryCount ?? 0;
+  if (options?.chartType === "horizontalBar" && count > 0 && count <= 6) {
+    return 32;
+  }
+  return undefined;
 }
 
 function resolveChartLineBorderWidth(agg: BuildChartConfigWidget["aggregationConfig"] | undefined): number {
@@ -678,9 +687,11 @@ export function buildChartConfig(
 
   let rows = [...dataArray];
   const resolvedType = (agg?.chartType as string) || widget.type;
-  const maxBarThicknessPx = resolveChartMaxBarThickness(agg);
-  const barThicknessOpts = maxBarThicknessPx != null ? { maxBarThickness: maxBarThicknessPx } : {};
   const lineStrokeW = resolveChartLineBorderWidth(agg);
+  const barThicknessOptsForCount = (categoryCount: number): { maxBarThickness?: number } => {
+    const px = resolveChartMaxBarThickness(agg, { chartType: resolvedType, categoryCount });
+    return px != null ? { maxBarThickness: px } : {};
+  };
 
   // Ranking: top N por métrica (resolver metric_N a yKeys[N] cuando la API devuelve alias)
   const isTemporalXAxis = shouldApplyTemporalRankingRule(dataArray, xKey, agg);
@@ -816,7 +827,7 @@ export function buildChartConfig(
       backgroundColor: getColorForSeriesSplit(sv, idx) + "99",
       borderColor: getColorForSeriesSplit(sv, idx),
       borderWidth: 2,
-      ...barThicknessOpts,
+      ...barThicknessOptsForCount(uniqueX.length),
       ...(stackedBySeriesEnabled ? { stack: "series" } : {}),
       ...(resolvedType === "combo" ? { type: "bar" as const, yAxisID: "y" as const } : {}),
     }));
@@ -897,7 +908,7 @@ export function buildChartConfig(
           borderWidth: 2,
           type: "bar",
           yAxisID: "y",
-          ...barThicknessOpts,
+          ...barThicknessOptsForCount(labels.length),
         },
         {
           label: label1,
@@ -914,6 +925,7 @@ export function buildChartConfig(
   }
 
   const labels = rows.map((r) => formatXLabel((r as Record<string, unknown>)[xKey]));
+  const barThicknessOpts = barThicknessOptsForCount(labels.length);
   const xRawCategoryKeys = rows.map((r) => String((r as Record<string, unknown>)[xKey] ?? ""));
   const isBarOrHorizontalBar =
     resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "stackedColumn";

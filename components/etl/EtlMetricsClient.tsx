@@ -3734,6 +3734,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingPinnedXValues:
         chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
       chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
+      ...(formChartType === "horizontalBar" ? { labelDisplayMode: "percent" as const } : {}),
       dimensionDefaultFilters: dimensionDefaultFiltersForm.length > 0 ? dimensionDefaultFiltersForm : undefined,
       filters: formFilters.length
         ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator }))

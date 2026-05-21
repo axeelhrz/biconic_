@@ -301,7 +301,10 @@ function resolveHorizontalBarChartLayout(categoryCount: number, effectiveMinHeig
     HORIZONTAL_BAR_MAX_CHART_HEIGHT,
     Math.max(HORIZONTAL_BAR_MIN_CHART_HEIGHT, categoryCount * HORIZONTAL_BAR_ROW_PX + HORIZONTAL_BAR_LAYOUT_PADDING)
   );
-  const chartHeight = Math.max(containerHeight, idealHeight);
+  const chartHeight =
+    idealHeight <= containerHeight
+      ? idealHeight
+      : Math.min(HORIZONTAL_BAR_MAX_CHART_HEIGHT, idealHeight);
   return {
     chartHeight,
     containerHeight,

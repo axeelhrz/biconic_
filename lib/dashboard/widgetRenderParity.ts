@@ -1,5 +1,7 @@
 import type { DashboardTheme } from "@/types/dashboard";
-import type { ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
+import type { ChartLabelDisplayMode, ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
+import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
+import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 
 type MetricFormatEntry = {
   valueType?: string;
@@ -319,4 +321,171 @@ export function resolveWidgetAggregationForDisplay<
     }
   }
   return { ...widget, aggregationConfig: next as W["aggregationConfig"] };
+}
+
+export type SavedMetricForAnalysisMerge = {
+  id: string;
+  name?: string;
+  chartType?: string;
+  type?: string;
+  metric?: {
+    field?: string;
+    func?: string;
+    alias?: string;
+    expression?: string;
+    condition?: unknown;
+    formula?: string;
+  };
+  aggregationConfig?: Record<string, unknown> & {
+    metrics?: Array<{
+      id?: string;
+      field?: string;
+      func?: string;
+      alias?: string;
+      expression?: string;
+      condition?: unknown;
+      formula?: string;
+    }>;
+  };
+};
+
+export type SavedAnalysisForMerge = Record<string, unknown> & {
+  id: string;
+  name: string;
+  metricIds?: string[];
+  chartType?: string;
+};
+
+export type WidgetAnalysisMergePatch = {
+  aggregationConfig: Record<string, unknown>;
+  type: string;
+  title?: string;
+  metricIds?: string[];
+  labelDisplayMode?: ChartLabelDisplayMode;
+  minHeight?: number;
+};
+
+type AnalysisMetricRow = {
+  id: string;
+  field: string;
+  func: string;
+  alias: string;
+  condition?: unknown;
+  formula?: string;
+  expression?: string;
+};
+
+function toMetricListFromUnknown(
+  input: unknown,
+  fallbackMetric?: SavedMetricForAnalysisMerge["metric"]
+): AnalysisMetricRow[] {
+  const list = Array.isArray(input) ? input : fallbackMetric ? [fallbackMetric] : [];
+  const out = list.map((m, idx) => {
+    const met = (m ?? {}) as Record<string, unknown>;
+    return {
+      id: String(met.id ?? `m-${idx}`),
+      field: String(met.field ?? ""),
+      func: String(met.func ?? "SUM"),
+      alias: String(met.alias ?? ""),
+      condition: met.condition,
+      formula: typeof met.formula === "string" ? met.formula : undefined,
+      expression: typeof met.expression === "string" ? met.expression : undefined,
+    };
+  });
+  if (out.length > 0) return out;
+  return [{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" }];
+}
+
+/**
+ * Fusiona un análisis guardado del ETL en un widget del dashboard (misma lógica que buildWidgetFromSavedAnalysis).
+ * Devuelve null si el widget no está vinculado al análisis.
+ */
+export function mergeSavedAnalysisIntoWidget(
+  widget: Record<string, unknown>,
+  analysis: SavedAnalysisForMerge,
+  savedMetrics: SavedMetricForAnalysisMerge[]
+): WidgetAnalysisMergePatch | null {
+  const analysisId = String(widget.analysisId ?? "").trim();
+  if (!analysisId || analysisId !== String(analysis.id ?? "").trim()) return null;
+
+  const linkedSavedMetrics = (analysis.metricIds ?? [])
+    .map((mid) => savedMetrics.find((s) => String(s.id) === String(mid)))
+    .filter((s): s is SavedMetricForAnalysisMerge => s != null);
+  const firstMetricCfg = (linkedSavedMetrics[0]?.aggregationConfig ?? {}) as Record<string, unknown>;
+  const analysisCfg = analysis as Record<string, unknown>;
+  const mergedCfg = { ...firstMetricCfg, ...analysisCfg };
+  const firstLinked = linkedSavedMetrics[0];
+  const legacyChartType =
+    firstLinked && typeof firstLinked.type === "string" ? String(firstLinked.type) : undefined;
+  const chartType = String(
+    mergedCfg.chartType ?? firstMetricCfg.chartType ?? firstLinked?.chartType ?? legacyChartType ?? widget.type ?? "bar"
+  ).trim();
+  const dims = Array.isArray(mergedCfg.dimensions)
+    ? mergedCfg.dimensions.map((d) => String(d))
+    : [mergedCfg.dimension, mergedCfg.dimension2].filter(Boolean).map((d) => String(d));
+  const metricIdsOrdered = (analysis.metricIds ?? []).map((id) => String(id));
+  const expandedFromAnalysis =
+    metricIdsOrdered.length > 0 && linkedSavedMetrics.length > 0
+      ? expandSavedMetricsWithGlobalRefs(
+          metricIdsOrdered,
+          linkedSavedMetrics as Parameters<typeof expandSavedMetricsWithGlobalRefs>[1],
+          { setDisplayAliasToSavedName: true }
+        )
+      : [];
+  const sanitizedMetrics =
+    expandedFromAnalysis.length > 0
+      ? expandedFromAnalysis.map((m, idx) => ({
+          id: String(m.id ?? `m-${idx}`),
+          field: String(m.field ?? ""),
+          func: String(m.func ?? "SUM"),
+          alias: String(m.alias ?? ""),
+          condition: m.condition,
+          formula: typeof m.formula === "string" ? m.formula : undefined,
+          expression: typeof m.expression === "string" ? m.expression : undefined,
+        }))
+      : toMetricListFromUnknown(mergedCfg.metrics, firstLinked?.metric);
+
+  const compareUi = ensureDashboardCompareUi(mergedCfg as Parameters<typeof ensureDashboardCompareUi>[0], {
+    widgetType: chartType,
+    chartType,
+  });
+  const aggregationConfig: Record<string, unknown> = {
+    ...mergedCfg,
+    enabled: true,
+    dimension: dims[0] || (typeof mergedCfg.dimension === "string" ? mergedCfg.dimension : undefined),
+    dimension2: dims[1] || (typeof mergedCfg.dimension2 === "string" ? mergedCfg.dimension2 : undefined),
+    dimensions: dims.length > 0 ? dims : undefined,
+    metrics: sanitizedMetrics,
+    chartType,
+    ...(compareUi ? { dashboardCompareUi: compareUi } : {}),
+  };
+
+  const analysisLabelMode = analysisCfg.labelDisplayMode;
+  const labelDisplayMode: ChartLabelDisplayMode | undefined =
+    chartType === "horizontalBar"
+      ? analysisLabelMode === "percent" || analysisLabelMode === "value" || analysisLabelMode === "both"
+        ? (analysisLabelMode as ChartLabelDisplayMode)
+        : "percent"
+      : typeof widget.labelDisplayMode === "string"
+        ? (widget.labelDisplayMode as ChartLabelDisplayMode)
+        : undefined;
+
+  return {
+    aggregationConfig,
+    type: chartType,
+    title: String(analysis.name ?? widget.title ?? "").trim() || undefined,
+    metricIds: [...(analysis.metricIds ?? [])],
+    labelDisplayMode,
+    minHeight: chartType === "horizontalBar" ? 360 : undefined,
+  };
+}
+
+/** Paridad con preview ETL (step Guardar): barras horizontales muestran % si no hay modo guardado. */
+export function resolveWidgetLabelDisplayMode(
+  widget: { labelDisplayMode?: ChartLabelDisplayMode; analysisId?: unknown },
+  chartType: string
+): ChartLabelDisplayMode | undefined {
+  if (widget.labelDisplayMode) return widget.labelDisplayMode;
+  if (chartType === "horizontalBar") return "percent";
+  return undefined;
 }
