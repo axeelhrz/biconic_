@@ -1,10 +1,7 @@
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import {
-  compactGeoComponentOverridesForRequest,
-  compactGeoOverridesByXLabelForRequest,
-} from "@/lib/geo/geo-enrichment";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget, type ChartConfig } from "@/lib/dashboard/buildChartConfig";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
+import { buildAggregateRequestPayload } from "@/lib/dashboard/buildAggregateRequestPayload";
 import { resolveWidgetAggregationForDisplay } from "@/lib/dashboard/widgetRenderParity";
 import { legacyCompareInputFromWidgetAgg, compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
 import { normalizeAggregationCompare, type ComparePeriodSource } from "@/lib/dashboard/compareSpec";
@@ -101,6 +98,9 @@ export type LoadPreviewWidgetDataParams = {
   rawEndpoint?: string;
   rawLimit?: number;
   accentColor?: string;
+  /** Métricas ya resueltas (p. ej. AdminDashboardStudio); si no, se usan las del widget. */
+  metricsOverride?: AggregationMetric[];
+  derivedColumns?: Array<{ name: string; expression: string; defaultAggregation?: string }>;
   aggregateExtraPayload?: Record<string, unknown>;
   rawExtraPayload?: Record<string, unknown>;
 };
@@ -169,30 +169,6 @@ function mapField(
   return datasetDimensions[field]?.[sourceId] ?? field;
 }
 
-function buildSavedMetricsPayload(savedMetrics: SavedMetricLike[] | undefined, metrics: AggregationMetric[] | undefined) {
-  const metricFieldNames = new Set(
-    (metrics ?? [])
-      .filter((m) => (m.func ?? "").toUpperCase() !== "FORMULA" && (m.field ?? "").trim() !== "")
-      .map((m) => String(m.field).trim().toLowerCase())
-  );
-  if (metricFieldNames.size === 0 || !Array.isArray(savedMetrics) || savedMetrics.length === 0) return [];
-
-  return savedMetrics
-    .filter((item) => (item.name ?? "").trim() !== "" && metricFieldNames.has(String(item.name).trim().toLowerCase()))
-    .map((item) => {
-      const name = String(item.name).trim();
-      const first = item.aggregationConfig?.metrics?.[0] ?? item.metric;
-      if (!first) return { name, field: name, func: "SUM", alias: name };
-      return {
-        name,
-        field: String(first.field ?? "").trim() || name,
-        func: String(first.func ?? "SUM"),
-        alias: String(first.alias ?? name),
-        ...(first.expression ? { expression: String(first.expression).trim() } : {}),
-      };
-    });
-}
-
 export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams): Promise<LoadedPreviewWidgetData> {
   const {
     widget,
@@ -206,6 +182,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     rawEndpoint = "/api/dashboard/raw-data",
     rawLimit = 500,
     accentColor = "#0ea5e9",
+    metricsOverride,
+    derivedColumns,
     aggregateExtraPayload,
     rawExtraPayload,
   } = params;
@@ -213,35 +191,18 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
   const agg = widget.aggregationConfig;
   /** Paridad con `DashboardWidgetRenderer`: evita `chartType: ""` → forzar "bar" y vaciar filas en vista previa. */
   const type = effectiveWidgetChartType(widget);
-  const hasAgg = !!(agg?.enabled && (agg.metrics?.length ?? 0) > 0);
+  const hasAgg = !!(agg?.enabled && ((metricsOverride?.length ?? 0) > 0 || (agg.metrics?.length ?? 0) > 0));
 
   let rows: Record<string, unknown>[] = [];
   let kpiUserTimeScope: KpiUserTimeScopeOptions | null = null;
   if (hasAgg) {
-    const dimensions = (agg?.dimensions?.length ? agg.dimensions : [agg?.dimension, agg?.dimension2].filter(Boolean)) as string[];
-    const metricsPayload = (agg?.metrics ?? []).map((m) => ({
-      ...m,
-      field: mapField(m.field, sourceId, datasetDimensions),
-    }));
     const compareSpec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg));
-    const mapPhysical = (field: string | undefined) => mapField(field, sourceId, datasetDimensions);
-
     const dg = resolveEffectiveDateGroupByForFetch({
       effectiveChartType: type,
       agg: agg as AggForCompareDateGroupBy,
       compareSpec,
-      mapPhysicalField: mapPhysical,
+      mapPhysicalField: (field) => mapField(field, sourceId, datasetDimensions),
     });
-
-    /**
-     * Paridad con EtlMetricsClient.fetchPreview: Top N solo en buildChartConfig/getProcessedRowsForChart.
-     * Evita ORDER BY + LIMIT en SQL (incorrecto con metric_N, FORMULA en capa externa, etc.).
-     */
-    const rankingActive = !!agg?.chartRankingEnabled && (agg?.chartRankingTop ?? 0) > 0;
-
-    const defaultTemporalOrderBy = dg.defaultTemporalOrderBy;
-
-    const mappedChartX = agg?.chartXAxis ? mapField(agg.chartXAxis, sourceId, datasetDimensions) : undefined;
     const mapAggFilterField = <T extends { field?: string }>(f: T): T => {
       const fld = f.field;
       if (fld == null || fld === "") return f;
@@ -250,88 +211,23 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     };
     const aggFiltersMapped = (agg?.filters ?? []).map((f) => mapAggFilterField(f));
     const globalFiltersMapped = (globalFilters ?? []).map((f) => mapAggFilterField(f));
-
-    const compareFieldForExpand =
-      dg.dateGroupByField ??
-      (compareSpec.kind === "temporal" ? mapPhysical(compareSpec.timeColumn) : undefined) ??
-      (compareSpec.kind === "cumulative" ? mapPhysical(compareSpec.timeColumn) : undefined);
-
     const userFiltersBeforeExpand = [...globalFiltersMapped, ...aggFiltersMapped];
-    let mergedFilters = userFiltersBeforeExpand;
-    const relatedDateFields = [
-      agg?.dateDimension,
-      compareSpec.kind === "temporal" || compareSpec.kind === "cumulative" ? compareSpec.timeColumn : undefined,
-    ].filter((x): x is string => !!String(x ?? "").trim());
-    if (compareNeedsTimeGroupedRows(compareSpec) && compareFieldForExpand) {
-      mergedFilters = expandAggregationFiltersForTemporalCompare(mergedFilters, {
-        compareField: compareFieldForExpand,
-        compareSpec,
-        aggComparePeriodSource: (agg as { comparePeriodSource?: ComparePeriodSource }).comparePeriodSource,
-        relatedDateFields,
-      });
-    }
     kpiUserTimeScope = buildKpiUserTimeScopeOptions(type, agg, compareSpec, dg, userFiltersBeforeExpand);
 
-    const dateRangeRaw = agg?.dateRangeFilter as { field?: string; last?: number; unit?: string; from?: string; to?: string } | undefined;
-    const dateRangeMapped =
-      dateRangeRaw && typeof dateRangeRaw.field === "string"
-        ? {
-            ...dateRangeRaw,
-            field: mapField(dateRangeRaw.field, sourceId, datasetDimensions) ?? dateRangeRaw.field,
-          }
-        : dateRangeRaw;
     const payload = {
-      tableName,
-      etlId: etlId ?? undefined,
-      chartType: type,
-      ...(mappedChartX ? { chartXAxis: mappedChartX } : {}),
-      dimension: mapField(agg?.dimension, sourceId, datasetDimensions),
-      dimensions: dimensions.map((d) => mapField(d, sourceId, datasetDimensions)),
-      metrics: metricsPayload,
-      filters: mergedFilters,
-      ...(rankingActive || dg.hasDateGroupByEffective
-        ? {
-            unlimited: true as const,
-            ...(agg?.orderBy?.field
-              ? { orderBy: agg.orderBy }
-              : defaultTemporalOrderBy
-                ? { orderBy: defaultTemporalOrderBy }
-                : {}),
-          }
-        : {
-            orderBy: agg?.orderBy,
-            limit: agg?.limit ?? 100,
-          }),
-      cumulative: agg?.cumulative ?? "none",
-      comparePeriod: agg?.comparePeriod,
-      ...(agg && "compare" in agg && agg.compare && typeof agg.compare === "object"
-        ? { compare: agg.compare as Record<string, unknown> }
-        : {}),
-      compareFixedValue: typeof agg?.compareFixedValue === "number" ? agg.compareFixedValue : undefined,
-      transformCompare: (agg as { transformCompare?: string }).transformCompare,
-      transformCompareFixedValue: (agg as { transformCompareFixedValue?: string }).transformCompareFixedValue,
-      dateDimension: mapField(agg?.dateDimension, sourceId, datasetDimensions),
-      ...(dg.hasDateGroupByEffective && dg.dateGroupByField && dg.dateGroupByGranularity
-        ? {
-            dateGroupBy: {
-              field: dg.dateGroupByField,
-              granularity: dg.dateGroupByGranularity,
-            },
-          }
-        : {}),
-      ...(dateRangeMapped ? { dateRangeFilter: dateRangeMapped } : {}),
-      ...(savedMetrics?.length ? { savedMetrics: buildSavedMetricsPayload(savedMetrics, agg?.metrics) } : {}),
-      ...(agg?.geoHints ? { geoHints: agg.geoHints } : {}),
-      ...(typeof agg?.mapDefaultCountry === "string" && agg.mapDefaultCountry.trim()
-        ? { mapDefaultCountry: agg.mapDefaultCountry.trim() }
-        : {}),
-      ...(compactGeoComponentOverridesForRequest(agg?.geoComponentOverrides)
-        ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(agg.geoComponentOverrides) }
-        : {}),
-      ...(compactGeoOverridesByXLabelForRequest(agg?.geoOverridesByXLabel)
-        ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(agg.geoOverridesByXLabel) }
-        : {}),
-      dateSlashOrder: agg?.dateSlashOrder === "MDY" ? "MDY" : "DMY",
+      ...buildAggregateRequestPayload({
+        tableName,
+        etlId,
+        chartType: type,
+        agg: agg as Parameters<typeof buildAggregateRequestPayload>[0]["agg"],
+        sourceId,
+        datasetDimensions,
+        globalFilters,
+        savedMetrics,
+        metricsOverride,
+        derivedColumns,
+        forceUnlimited: true,
+      }),
       ...(aggregateExtraPayload ?? {}),
     };
 

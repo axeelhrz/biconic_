@@ -80,6 +80,7 @@ import {
   mapDimensionDefaultFiltersToAggregationFilters,
   type DimensionDefaultFilterEdit,
 } from "@/lib/dashboard/dimensionDefaultFilters";
+import { buildAggregateRequestPayload } from "@/lib/dashboard/buildAggregateRequestPayload";
 import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
@@ -443,6 +444,8 @@ export function AdminDashboardStudio({
   const [layoutLoaded, setLayoutLoaded] = useState(false);
   const loadedOnce = useRef(false);
   const etlMetricsMergedRef = useRef(false);
+  /** Métricas/análisis del ETL ya fusionados (evita cargar widgets antes del merge). */
+  const [etlSidecarReady, setEtlSidecarReady] = useState(false);
   const analysisRehydrateKeyRef = useRef("");
   const autoLoadWidgetsDoneRef = useRef(false);
   /** Tras merge de savedMetrics desde ETL, recargar widgets de análisis (expand depende de tarjetas por id). */
@@ -494,6 +497,7 @@ export function AdminDashboardStudio({
     autoLoadWidgetsDoneRef.current = false;
     analysisReloadLastSavedMetricsLenRef.current = -1;
     layoutHydratedForAnalysisRef.current = false;
+    setEtlSidecarReady(false);
     setLayoutLoaded(false);
   }, [dashboardId]);
 
@@ -623,6 +627,7 @@ export function AdminDashboardStudio({
           return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
         });
       }
+      setEtlSidecarReady(true);
     })();
     return () => {
       cancelled = true;
@@ -948,10 +953,8 @@ export function AdminDashboardStudio({
             ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.all ?? etlData?.fields?.all ?? [])
             : (etlData?.fields?.all ?? []);
           const sourceFieldSet = new Set(sourceAllFields.map((field) => String(field).trim().toLowerCase()));
-          const dimensionsRaw = (aggForLoad as any).dimensions?.length > 0
-            ? (aggForLoad as any).dimensions as string[]
-            : [aggForLoad.dimension, aggForLoad.dimension2].filter(Boolean) as string[];
-          const dimensions = dimensionsRaw
+          const dimResolved = resolveAnalysisDimensionsFromConfig(aggForLoad as Record<string, unknown>);
+          const dimensions = dimResolved.dimensions
             .map((d) => String(d ?? "").trim())
             .filter((d) => !isInvalidIdentifierValue(d));
           const derivedByName = Object.fromEntries(
@@ -1063,54 +1066,19 @@ export function AdminDashboardStudio({
             ? savedByLinkedIds
             : savedMetrics.filter((s) => (s.name || "").trim() && metricFieldNames.has((s.name || "").trim().toLowerCase()))
           ).map(toSavedMetricPayload);
-          const aggregatePayload = {
+          const aggregatePayload = buildAggregateRequestPayload({
             tableName,
-            etlId: widgetEtlId || undefined,
-            dimension: isInvalidIdentifierValue(aggForLoad.dimension) ? undefined : aggForLoad.dimension,
-            dimensions: dimensions.length > 0 ? dimensions : undefined,
-            chartType: aggForLoad.chartType || effectiveWidget.type,
-            chartXAxis: isInvalidIdentifierValue(aggForLoad.chartXAxis) ? undefined : aggForLoad.chartXAxis || undefined,
-            ...(aggForLoad.geoHints ? { geoHints: aggForLoad.geoHints } : {}),
-            ...(typeof aggForLoad.mapDefaultCountry === "string" && aggForLoad.mapDefaultCountry.trim()
-              ? { mapDefaultCountry: aggForLoad.mapDefaultCountry.trim() }
-              : {}),
-            ...(compactGeoComponentOverridesForRequest(aggForLoad.geoComponentOverrides)
-              ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(aggForLoad.geoComponentOverrides) }
-              : {}),
-            ...(compactGeoOverridesByXLabelForRequest(aggForLoad.geoOverridesByXLabel)
-              ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(aggForLoad.geoOverridesByXLabel) }
-              : {}),
-            metrics: metricsPayload,
-            filters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters, ...mappedWidgetFilters],
-            ...(rankingActive
-              ? {
-                  unlimited: true as const,
-                  ...(aggForLoad.orderBy?.field ? { orderBy: aggForLoad.orderBy } : {}),
-                }
-              : {
-                  orderBy: aggForLoad.orderBy,
-                  limit: aggForLoad.limit ?? 100,
-                }),
-            cumulative: aggForLoad.cumulative || "none",
-            comparePeriod: aggForLoad.comparePeriod || undefined,
-            ...(aggForLoad.compare && typeof aggForLoad.compare === "object"
-              ? { compare: aggForLoad.compare as Record<string, unknown> }
-              : {}),
-            compareFixedValue:
-              typeof aggForLoad.compareFixedValue === "number" ? aggForLoad.compareFixedValue : undefined,
-            transformCompare: aggForLoad.transformCompare,
-            transformCompareFixedValue: aggForLoad.transformCompareFixedValue,
-            dateDimension: aggForLoad.dateDimension || undefined,
-            ...(dateGroupByGranularity &&
-              dateGroupBySourceField && {
-                dateGroupBy: { field: dateGroupBySourceField, granularity: dateGroupByGranularity },
-              }),
-            ...((aggForLoad as { dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string } }).dateRangeFilter && {
-              dateRangeFilter: (aggForLoad as { dateRangeFilter: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string } }).dateRangeFilter,
-            }),
-            ...(derivedColumnsFromLayout.length > 0 && { derivedColumns: derivedColumnsFromLayout }),
-            ...(savedMetricsForBody.length > 0 && { savedMetrics: savedMetricsForBody }),
-          };
+            etlId: widgetEtlId,
+            chartType: String(aggForLoad.chartType || effectiveWidget.type),
+            agg: aggForLoad as Parameters<typeof buildAggregateRequestPayload>[0]["agg"],
+            sourceId,
+            datasetDimensions: etlData.datasetDimensions,
+            globalFilters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters, ...mappedWidgetFilters],
+            savedMetrics: savedByLinkedIds.length > 0 ? savedByLinkedIds : savedMetrics,
+            metricsOverride: metricsPayload as Parameters<typeof buildAggregateRequestPayload>[0]["metricsOverride"],
+            derivedColumns: derivedColumnsFromLayout.length > 0 ? derivedColumnsFromLayout : undefined,
+            forceUnlimited: true,
+          });
           setWidgets((prev) =>
             prev.map((w) =>
               w.id === widgetId
@@ -1126,14 +1094,22 @@ export function AdminDashboardStudio({
                 : w
             )
           );
+          const aggForFetch = {
+            ...normalizedAgg,
+            dimension: dimResolved.dimension,
+            dimension2: dimResolved.dimension2,
+            dimensions: dimResolved.dimensions.length > 0 ? dimResolved.dimensions : undefined,
+          };
           const loaded = await loadPreviewWidgetData({
-            widget: widgetForBuild,
+            widget: { ...widgetForBuild, aggregationConfig: aggForFetch },
             tableName,
             etlId: widgetEtlId,
             sourceId,
             datasetDimensions: etlData.datasetDimensions,
             savedMetrics: savedMetrics as unknown as Array<{ name?: string; metric?: { field?: string; func?: string; alias?: string; expression?: string }; aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> } }>,
             globalFilters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters],
+            metricsOverride: metricsPayload as Parameters<typeof loadPreviewWidgetData>[0]["metricsOverride"],
+            derivedColumns: derivedColumnsFromLayout.length > 0 ? derivedColumnsFromLayout : undefined,
             aggregateEndpoint: "/api/dashboard/aggregate-data",
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -1405,7 +1381,7 @@ export function AdminDashboardStudio({
 
   // Auto-cargar datos de todos los widgets al abrir el dashboard (solo una vez)
   useEffect(() => {
-    if (!layoutLoaded || !etlData || etlLoading || widgets.length === 0 || autoLoadWidgetsDoneRef.current) return;
+    if (!layoutLoaded || !etlData || etlLoading || !etlSidecarReady || widgets.length === 0 || autoLoadWidgetsDoneRef.current) return;
     autoLoadWidgetsDoneRef.current = true;
     const toLoad = widgets.filter((w) => w.aggregationConfig?.enabled);
     if (toLoad.length === 0) return;
@@ -1417,7 +1393,7 @@ export function AdminDashboardStudio({
         setIsRunning(false);
       }
     })();
-  }, [layoutLoaded, etlData, etlLoading, widgets, loadMetricData]);
+  }, [layoutLoaded, etlData, etlLoading, etlSidecarReady, widgets, loadMetricData]);
 
   // Cuando el layout trae pocos savedMetrics y el efecto ETL añade tarjetas completas, volver a cargar análisis.
   useEffect(() => {
