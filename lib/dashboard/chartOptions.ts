@@ -599,14 +599,23 @@ export function buildChartOptions(
       ticks: { ...valueTickOpts },
     };
     if (type === "horizontalBar") {
+      const horizontalCategoryTicks =
+        style?.categoryMaxTicks != null && Number.isFinite(style.categoryMaxTicks)
+          ? categoryTickOpts
+          : { ...categoryTickOpts, autoSkip: false };
       scales.x = axisXValue;
-      scales.y = { ...axisYCategory, grid: gridY };
+      scales.y = {
+        ...axisYCategory,
+        grid: gridY,
+        ticks: horizontalCategoryTicks,
+      };
     } else {
       scales.x = axisXCategory;
       scales.y = axisYValue;
     }
     return {
       ...base,
+      ...(type === "horizontalBar" ? { indexAxis: "y" as const } : {}),
       scales,
       ...(type === "bar" || type === "horizontalBar"
         ? {

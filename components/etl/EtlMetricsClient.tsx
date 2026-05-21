@@ -3133,6 +3133,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       // fallback: widget usará fuente primaria
     }
 
+    const isHorizontalBar = chartType === "horizontalBar";
     const nextWidget: Record<string, unknown> = {
       id: `w-${Date.now()}`,
       type: chartType,
@@ -3143,8 +3144,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       w: 2,
       h: 2,
       gridSpan: 2,
-      minHeight: 320,
+      minHeight: isHorizontalBar ? 360 : 320,
       gridOrder: nextGridOrder,
+      ...(isHorizontalBar ? { labelDisplayMode: "percent" as const } : {}),
       ...(activePageId ? { pageId: activePageId } : {}),
       ...(dataSourceId ? { dataSourceId } : {}),
       aggregationConfig: {
@@ -3169,6 +3171,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                   ...w,
                   type: chartType,
                   title: metricItem.name,
+                  minHeight: isHorizontalBar ? Math.max(Number(w.minHeight ?? 0), 360) : w.minHeight,
+                  ...(isHorizontalBar ? { labelDisplayMode: "percent" as const } : {}),
                   aggregationConfig: nextWidget.aggregationConfig,
                 }
               : w

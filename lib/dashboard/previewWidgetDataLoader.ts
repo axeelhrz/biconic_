@@ -300,7 +300,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
           }
         : {
             orderBy: agg?.orderBy,
-            limit: agg?.limit ?? 1000,
+            limit: agg?.limit ?? 100,
           }),
       cumulative: agg?.cumulative ?? "none",
       comparePeriod: agg?.comparePeriod,

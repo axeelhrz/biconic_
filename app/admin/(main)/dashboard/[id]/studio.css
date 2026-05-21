@@ -462,6 +462,19 @@
   padding: 1.25rem 1.25rem;
   min-height: 200px;
   flex: 1;
+  min-width: 0;
+}
+
+/* Barras horizontales: scroll interno sin recortar etiquetas del eje Y */
+.metric-block-body .dashboard-chart-horizontal-scroll {
+  overflow-y: auto;
+  overflow-x: visible;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.studio-block-cell .metric-block:has(.dashboard-chart-horizontal-scroll) {
+  overflow: visible;
 }
 
 .metric-state-badge {

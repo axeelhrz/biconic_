@@ -283,6 +283,32 @@ function getChartOptionsBase(darkTheme: boolean, devicePixelRatio: number) {
   };
 }
 
+const HORIZONTAL_BAR_ROW_PX = 28;
+const HORIZONTAL_BAR_LAYOUT_PADDING = 72;
+const HORIZONTAL_BAR_MIN_CHART_HEIGHT = 220;
+const HORIZONTAL_BAR_MAX_CHART_HEIGHT = 900;
+
+function resolveHorizontalBarChartLayout(categoryCount: number, effectiveMinHeight: number): {
+  chartHeight: number;
+  containerHeight: number;
+  scrollable: boolean;
+} {
+  const containerHeight = Math.max(
+    HORIZONTAL_BAR_MIN_CHART_HEIGHT,
+    effectiveMinHeight - HORIZONTAL_BAR_LAYOUT_PADDING
+  );
+  const idealHeight = Math.min(
+    HORIZONTAL_BAR_MAX_CHART_HEIGHT,
+    Math.max(HORIZONTAL_BAR_MIN_CHART_HEIGHT, categoryCount * HORIZONTAL_BAR_ROW_PX + HORIZONTAL_BAR_LAYOUT_PADDING)
+  );
+  const chartHeight = Math.max(containerHeight, idealHeight);
+  return {
+    chartHeight,
+    containerHeight,
+    scrollable: chartHeight > containerHeight,
+  };
+}
+
 function formatKpiValue(value: unknown, style?: ChartStyleConfig | null): string {
   if (value == null || value === "") return "—";
   const n = Number(value);
@@ -360,6 +386,13 @@ export function DashboardWidgetRenderer({
   const isTableWidget = chartType === "table";
   const chartConfig = widget.config;
   const tableRows = widget.rows;
+  const horizontalBarLayout = useMemo(() => {
+    if (chartType !== "horizontalBar") return null;
+    const categoryCount = chartConfig?.labels?.length ?? 0;
+    if (categoryCount === 0) return null;
+    return resolveHorizontalBarChartLayout(categoryCount, effectiveMinHeight);
+  }, [chartType, chartConfig?.labels?.length, effectiveMinHeight]);
+  const defaultCartesianChartHeight = Math.max(220, effectiveMinHeight - 72);
   const hasViz = useMemo(() => {
     if (chartType === "kpi") return true;
     if (chartType === "table") return Array.isArray(tableRows) && tableRows.length > 0;
@@ -1994,8 +2027,22 @@ export function DashboardWidgetRenderer({
             {chartType !== "kpi" && chartType !== "table" && chartType !== "text" && chartType !== "image" && chartType !== "filter" && chartType !== "map" && chartConfig && (
               <div
                 ref={chartType === "pie" || chartType === "doughnut" ? pieChartWrapRef : undefined}
-                className="w-full"
-                style={{ height: Math.max(220, (effectiveMinHeight ?? 240) - 72) }}
+                className={
+                  chartType === "horizontalBar" && horizontalBarLayout?.scrollable
+                    ? "dashboard-chart-horizontal-scroll w-full min-h-0"
+                    : "w-full"
+                }
+                style={{
+                  height:
+                    chartType === "horizontalBar" && horizontalBarLayout
+                      ? horizontalBarLayout.scrollable
+                        ? horizontalBarLayout.containerHeight
+                        : horizontalBarLayout.chartHeight
+                      : defaultCartesianChartHeight,
+                  ...(chartType === "horizontalBar" && horizontalBarLayout?.scrollable
+                    ? { maxHeight: horizontalBarLayout.containerHeight, overflowY: "auto", overflowX: "visible" }
+                    : {}),
+                }}
               >
                 {(chartType === "bar" || chartType === "stackedColumn" || chartType === "combo") && (
                   <Bar
@@ -2005,24 +2052,15 @@ export function DashboardWidgetRenderer({
                   />
                 )}
                 {chartType === "horizontalBar" && (
-                  (() => {
-                    const optionsRecord = chartOptions as Record<string, unknown>;
-                    const scales = (optionsRecord.scales as Record<string, unknown> | undefined) ?? {};
-                    const yScale = (scales.y as Record<string, unknown> | undefined) ?? {};
-                    const yTicks = (yScale.ticks as Record<string, unknown> | undefined) ?? {};
-                    const horizontalOptions = {
-                      ...optionsRecord,
-                      indexAxis: "y" as const,
-                      scales: {
-                        ...scales,
-                        y: {
-                          ...yScale,
-                          ticks: { ...yTicks, maxTicksLimit: 12, clip: false },
-                        },
-                      },
-                    };
-                    return <Bar data={chartConfig as never} options={horizontalOptions as never} plugins={chartPlugins} />;
-                  })()
+                  <div
+                    className="w-full"
+                    style={{
+                      height: horizontalBarLayout?.chartHeight ?? defaultCartesianChartHeight,
+                      minHeight: horizontalBarLayout?.chartHeight ?? defaultCartesianChartHeight,
+                    }}
+                  >
+                    <Bar data={chartConfig as never} options={chartOptions as never} plugins={chartPlugins} />
+                  </div>
                 )}
                 {(chartType === "line" || chartType === "area") && (
                   <Line
