@@ -471,6 +471,17 @@ export function mergeAnalysisAggregationWithDashboardOverrides(
   return { ...base, ...extractDashboardVisualOverrides(widgetAgg) };
 }
 
+/** aggregationConfig del widget + overrides visuales persistidos en layout (`dashboardVisualOverrides`). */
+export function widgetAggregationWithStoredVisualOverrides(widget: {
+  aggregationConfig?: Record<string, unknown> | null;
+  dashboardVisualOverrides?: Record<string, unknown> | null;
+}): Record<string, unknown> {
+  const agg = (widget.aggregationConfig ?? {}) as Record<string, unknown>;
+  const stored = widget.dashboardVisualOverrides;
+  if (!stored || typeof stored !== "object") return agg;
+  return { ...agg, ...extractDashboardVisualOverrides(stored) };
+}
+
 export type ResolveSeriesColorKeysParams = {
   chartType: string;
   agg: Record<string, unknown>;
@@ -753,7 +764,10 @@ export function mergeSavedAnalysisIntoWidget(
     chartType,
     ...(compareUi ? { dashboardCompareUi: compareUi } : {}),
     ...extractDashboardVisualOverrides(
-      (widget.aggregationConfig ?? null) as Record<string, unknown> | null
+      widgetAggregationWithStoredVisualOverrides({
+        aggregationConfig: (widget.aggregationConfig ?? null) as Record<string, unknown> | null,
+        dashboardVisualOverrides: (widget.dashboardVisualOverrides ?? null) as Record<string, unknown> | null,
+      })
     ),
   };
 

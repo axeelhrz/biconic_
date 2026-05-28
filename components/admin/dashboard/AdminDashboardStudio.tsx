@@ -85,6 +85,8 @@ import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
   mergeAnalysisAggregationWithDashboardOverrides,
+  extractDashboardVisualOverrides,
+  widgetAggregationWithStoredVisualOverrides,
   resolveAnalysisDimensionsFromConfig,
   resolveWidgetAnalysisMergePatch,
   resolveDarkChartTheme,
@@ -304,6 +306,8 @@ type StudioWidget = {
   headerIconKey?: string;
   contentIconPosition?: "topLeft" | "topRight" | "bottomLeft" | "bottomRight" | "center";
   hideWidgetHeader?: boolean;
+  /** Overrides visuales del panel (leyenda, colores, ejes…) persistidos aparte del análisis ETL. */
+  dashboardVisualOverrides?: Record<string, unknown>;
   [key: string]: unknown;
 };
 
@@ -370,6 +374,22 @@ function isInvalidIdentifierValue(value: unknown): boolean {
 }
 
 const NON_CHART_STUDIO_TYPES = new Set(["table", "filter", "text", "image", "map"]);
+
+function studioWidgetAggForVisualMerge(
+  w: Pick<StudioWidget, "aggregationConfig" | "dashboardVisualOverrides">
+): Record<string, unknown> {
+  return widgetAggregationWithStoredVisualOverrides(w);
+}
+
+function normalizeLoadedStudioWidget(w: StudioWidget): StudioWidget {
+  const stored = w.dashboardVisualOverrides;
+  if (!stored || typeof stored !== "object" || Object.keys(stored).length === 0) return w;
+  const mergedAgg = {
+    ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
+    ...extractDashboardVisualOverrides(stored),
+  } as AggregationConfig;
+  return { ...w, aggregationConfig: mergedAgg };
+}
 
 /** Regenera config del canvas con la aggregationConfig/color actuales del widget (estilos del panel). */
 function rebuildStudioWidgetChartConfig(
@@ -483,6 +503,9 @@ export function AdminDashboardStudio({
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
   const layoutHydratedForAnalysisRef = useRef(false);
+  const widgetsRef = useRef<StudioWidget[]>([]);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const layoutPersistReadyRef = useRef(false);
   const resizeStateRef = useRef<{
     widgetId: string;
     edge: string;
@@ -578,12 +601,14 @@ export function AdminDashboardStudio({
           }
           const firstPageId = loadedPages[0].id;
           if (Array.isArray(layout.widgets)) {
-            loadedWidgets = layout.widgets.map((w: unknown, i: number) => ({
-              ...(w as object),
-              gridOrder: (w as StudioWidget).gridOrder ?? i,
-              gridSpan: (w as StudioWidget).gridSpan ?? 2,
-              pageId: (w as StudioWidget).pageId ?? firstPageId,
-            })) as StudioWidget[];
+            loadedWidgets = layout.widgets.map((w: unknown, i: number) =>
+              normalizeLoadedStudioWidget({
+                ...(w as object),
+                gridOrder: (w as StudioWidget).gridOrder ?? i,
+                gridSpan: (w as StudioWidget).gridSpan ?? 2,
+                pageId: (w as StudioWidget).pageId ?? firstPageId,
+              } as StudioWidget)
+            );
           }
           if (layout.theme) loadedTheme = mergeTheme(layout.theme);
           if (!cancelled) {
@@ -661,11 +686,18 @@ export function AdminDashboardStudio({
     };
   }, [layoutLoaded, etlData, etlLoading]);
 
-  const saveDashboard = useCallback(async (overrides?: { widgets?: StudioWidget[] }) => {
+  const saveDashboard = useCallback(async (overrides?: { widgets?: StudioWidget[]; silent?: boolean }) => {
     setIsSaving(true);
     try {
-      const widgetsToSave = overrides?.widgets ?? widgets;
-      const cleanWidgets = widgetsToSave.map(({ rows, config, columns, facetValues, diagnosticPreview, ...rest }) => rest);
+      const widgetsToSave = overrides?.widgets ?? widgetsRef.current;
+      const cleanWidgets = widgetsToSave.map(({ rows, config, columns, facetValues, diagnosticPreview, ...rest }) => {
+        const agg = (rest.aggregationConfig ?? {}) as Record<string, unknown>;
+        const dashboardVisualOverrides = extractDashboardVisualOverrides(agg);
+        return {
+          ...rest,
+          ...(Object.keys(dashboardVisualOverrides).length > 0 ? { dashboardVisualOverrides } : {}),
+        };
+      });
       let datasetConfig: { derivedColumns: { name: string; expression: string; defaultAggregation: string }[] } | undefined;
       const etlId = etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId;
       if (etlId) {
@@ -709,13 +741,43 @@ export function AdminDashboardStudio({
       if (datasetConfig) setDerivedColumnsFromLayout(datasetConfig.derivedColumns);
       setLastSavedAt(new Date());
       setIsDirty(false);
-      toast.success("Guardado");
+      if (!overrides?.silent) toast.success("Guardado");
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "No se pudo guardar");
     } finally {
       setIsSaving(false);
     }
-  }, [widgets, globalFilters, dashboardTheme, dashboardId, pages, activePageId, cardLayoutMode, savedMetrics, etlData?.etl?.id, etlData?.dataSources]);
+  }, [globalFilters, dashboardTheme, dashboardId, pages, activePageId, cardLayoutMode, savedMetrics, etlData?.etl?.id, etlData?.dataSources]);
+
+  useEffect(() => {
+    widgetsRef.current = widgets;
+  }, [widgets]);
+
+  useEffect(() => {
+    if (layoutLoaded) layoutPersistReadyRef.current = true;
+  }, [layoutLoaded]);
+
+  useEffect(() => {
+    if (!layoutPersistReadyRef.current || !isDirty || isSaving) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      void saveDashboard({ silent: true });
+    }, 900);
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [
+    widgets,
+    dashboardTheme,
+    globalFilters,
+    pages,
+    activePageId,
+    cardLayoutMode,
+    savedMetrics,
+    isDirty,
+    isSaving,
+    saveDashboard,
+  ]);
 
   const saveMetricAsTemplate = useCallback((name: string, metric: AggregationMetric) => {
     const trimmed = name.trim();
@@ -784,7 +846,7 @@ export function AdminDashboardStudio({
           ? (analysisPatch.aggregationConfig as AggregationConfig)
           : widget.aggregationConfig
       ) as AggregationConfig | undefined;
-      const widgetAggRecord = (widget.aggregationConfig ?? {}) as Record<string, unknown>;
+      const widgetAggRecord = studioWidgetAggForVisualMerge(widget);
       const withVisualOverrides = (data: Record<string, unknown>) =>
         mergeAnalysisAggregationWithDashboardOverrides(data, widgetAggRecord) as AggregationConfig;
       const genMap = widgetLoadGenRef.current;
@@ -1278,7 +1340,7 @@ export function AdminDashboardStudio({
           title: patch.title ?? w.title,
           aggregationConfig: mergeAnalysisAggregationWithDashboardOverrides(
             patch.aggregationConfig as Record<string, unknown>,
-            (w.aggregationConfig ?? {}) as Record<string, unknown>
+            studioWidgetAggForVisualMerge(w)
           ) as AggregationConfig,
           metricIds: patch.metricIds ?? (w as { metricIds?: string[] }).metricIds,
           labelDisplayMode: patch.labelDisplayMode ?? w.labelDisplayMode,
@@ -2083,6 +2145,9 @@ export function AdminDashboardStudio({
               ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
               ...aggDelta,
             } as AggregationConfig;
+            const visuals = extractDashboardVisualOverrides(next.aggregationConfig as Record<string, unknown>);
+            next.dashboardVisualOverrides =
+              Object.keys(visuals).length > 0 ? visuals : undefined;
           }
           if (aggDelta != null || percentLayoutPatch || "color" in restPatch) {
             const rows = w.rows;
@@ -2918,7 +2983,13 @@ export function AdminDashboardStudio({
         <Dialog
           open={Boolean(selectedWidgetForPanel && selectedWidgetForPanel.type !== "filter")}
           onOpenChange={(open) => {
-            if (!open) setSelectedId(null);
+            if (!open) {
+              if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+              if (isDirty && layoutPersistReadyRef.current) {
+                void saveDashboard({ silent: true });
+              }
+              setSelectedId(null);
+            }
           }}
         >
           <DialogContent
