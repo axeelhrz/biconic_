@@ -188,7 +188,23 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
     (compareSpec.kind === "temporal" ? mapPhysical(compareSpec.timeColumn) : undefined) ??
     (compareSpec.kind === "cumulative" ? mapPhysical(compareSpec.timeColumn) : undefined);
 
-  let mergedFilters = [...globalFiltersMapped, ...aggFiltersMapped];
+  // Dedup: en algunos call sites (AdminDashboardStudio) los filtros del widget se concatenan tanto en
+  // `globalFilters` como dentro de `agg.filters`. Sin dedup terminan duplicados en el payload.
+  const filterKey = (f: { id?: unknown; field?: unknown; operator?: unknown; value?: unknown }) =>
+    JSON.stringify({
+      id: f.id ?? null,
+      field: String(f.field ?? ""),
+      operator: String(f.operator ?? ""),
+      value: f.value ?? null,
+    });
+  const seenFilterKeys = new Set<string>();
+  const mergedFiltersRaw = [...globalFiltersMapped, ...aggFiltersMapped];
+  let mergedFilters = mergedFiltersRaw.filter((f) => {
+    const k = filterKey(f as Parameters<typeof filterKey>[0]);
+    if (seenFilterKeys.has(k)) return false;
+    seenFilterKeys.add(k);
+    return true;
+  });
   if (compareNeedsTimeGroupedRows(compareSpec) && compareFieldForExpand) {
     mergedFilters = expandAggregationFiltersForTemporalCompare(mergedFilters, {
       compareField: compareFieldForExpand,

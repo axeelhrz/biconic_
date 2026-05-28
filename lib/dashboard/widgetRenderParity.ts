@@ -497,11 +497,46 @@ export function mergeSavedAnalysisIntoWidget(
   const linkedSavedMetrics = (analysis.metricIds ?? [])
     .map((mid) => savedMetrics.find((s) => String(s.id) === String(mid)))
     .filter((s): s is SavedMetricForAnalysisMerge => s != null);
-  const firstMetricCfg = (linkedSavedMetrics[0]?.aggregationConfig ?? {}) as Record<string, unknown>;
+  const firstMetricCfgRaw = (linkedSavedMetrics[0]?.aggregationConfig ?? {}) as Record<string, unknown>;
   const analysisCfg = analysis as Record<string, unknown>;
-  // El spread copia `undefined`, lo que borraba chartXAxis/dimensions cuando el análisis los serializa
-  // como undefined (p. ej. cuando se guarda con `chartXAxis: chartXAxis || undefined`). Eso colapsaba
-  // el GROUP BY del dashboard a una sola fila vs. el preview del wizard.
+  // El análisis es la fuente autoritativa de la configuración del chart. La aggregationConfig del savedMetric
+  // puede traer residuos de cuando se creó (p. ej. `dateGroupByGranularity: "month"` aunque el análisis ya
+  // no agrupe por fecha). Filtramos esas claves del firstMetricCfg para no contaminar el GROUP BY del dashboard.
+  // Mantenemos del savedMetric solo lo que define a la métrica en sí (metrics, derivedColumns, etc.).
+  const CHART_LEVEL_KEYS_FROM_ANALYSIS = new Set([
+    "chartType",
+    "chartXAxis",
+    "chartYAxes",
+    "chartSeriesField",
+    "dimensions",
+    "dimension",
+    "dimension2",
+    "dateDimension",
+    "dateGroupByGranularity",
+    "dateRangeFilter",
+    "chartRankingEnabled",
+    "chartRankingTop",
+    "chartRankingMetric",
+    "chartRankingDirection",
+    "chartRankingPinnedXValues",
+    "chartRankingShowRankInLabel",
+    "chartSortDirection",
+    "chartSortBy",
+    "chartSortByMetric",
+    "cumulative",
+    "comparePeriod",
+    "compare",
+    "labelDisplayMode",
+    "labelVisibilityMode",
+    "filters",
+    "dimensionDefaultFilters",
+    "orderBy",
+    "limit",
+  ]);
+  const firstMetricCfg: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(firstMetricCfgRaw)) {
+    if (!CHART_LEVEL_KEYS_FROM_ANALYSIS.has(k)) firstMetricCfg[k] = v;
+  }
   const analysisCfgDefined: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(analysisCfg)) {
     if (v !== undefined) analysisCfgDefined[k] = v;
