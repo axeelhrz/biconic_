@@ -18,6 +18,8 @@ export type MetricBlockState = "estable" | "alerta" | "cambio";
 
 export type ChartConfig = {
   labels: string[];
+  /** Valores crudos del eje categoría (misma longitud que labels), para colores por serie / Top N. */
+  xRawCategoryKeys?: string[];
   datasets: Array<{
     label: string;
     data: number[];
