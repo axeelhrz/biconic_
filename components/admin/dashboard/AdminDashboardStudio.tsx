@@ -369,6 +369,32 @@ function isInvalidIdentifierValue(value: unknown): boolean {
   return normalized === "" || normalized === "undefined" || normalized === "null";
 }
 
+const NON_CHART_STUDIO_TYPES = new Set(["table", "filter", "text", "image", "map"]);
+
+/** Regenera config del canvas con la aggregationConfig/color actuales del widget (estilos del panel). */
+function rebuildStudioWidgetChartConfig(
+  w: Pick<StudioWidget, "type" | "aggregationConfig" | "source" | "color">,
+  rows: Record<string, unknown>[],
+  fallback?: ChartConfig
+): ChartConfig | undefined {
+  if (NON_CHART_STUDIO_TYPES.has(w.type)) return fallback;
+  const aggForBuild = w.aggregationConfig as BuildChartConfigWidget["aggregationConfig"];
+  if (!aggForBuild || rows.length === 0) return fallback;
+  try {
+    const widgetForBuild: BuildChartConfigWidget = {
+      type: w.type,
+      aggregationConfig: aggForBuild,
+      source: w.source,
+      color: w.color,
+    };
+    const processed = getProcessedRowsForChart(rows, widgetForBuild);
+    const cfg = buildChartConfig(processed, widgetForBuild, String(w.color ?? "").trim());
+    return cfg ? (cfg as ChartConfig) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function toAggregationMetricList(input: unknown, fallbackMetric?: SavedMetricForm["metric"]): AggregationMetric[] {
   const list = Array.isArray(input) ? input : fallbackMetric ? [fallbackMetric] : [];
   const out = list.map((m) => {
@@ -1137,24 +1163,20 @@ export function AdminDashboardStudio({
           }
           if (!isStale()) {
             setWidgets((prev) =>
-              prev.map((w) =>
-                w.id === widgetId
-                  ? {
-                      ...w,
-                      config: loaded.chartConfig ?? { labels: [], datasets: [] },
-                      rows: loaded.processedRows,
-                      kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
-                      ...(analysisPatch
-                        ? {
-                            aggregationConfig: withVisualOverrides(
-                              analysisPatch.aggregationConfig as Record<string, unknown>
-                            ),
-                          }
-                        : {}),
-                      isLoading: false,
-                    }
-                  : w
-              )
+              prev.map((w) => {
+                if (w.id !== widgetId) return w;
+                const rows = loaded.processedRows;
+                const fallbackCfg = (loaded.chartConfig ?? { labels: [], datasets: [] }) as ChartConfig;
+                const nextConfig =
+                  rebuildStudioWidgetChartConfig(w, rows, fallbackCfg) ?? fallbackCfg;
+                return {
+                  ...w,
+                  config: nextConfig,
+                  rows,
+                  kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                  isLoading: false,
+                };
+              })
             );
           }
         } else {
@@ -1200,17 +1222,20 @@ export function AdminDashboardStudio({
           }
           if (!isStale()) {
             setWidgets((prev) =>
-              prev.map((w) =>
-                w.id === widgetId
-                  ? {
-                      ...w,
-                      config: loaded.chartConfig ?? { labels: [], datasets: [] },
-                      rows: loaded.processedRows,
-                      kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
-                      isLoading: false,
-                    }
-                  : w
-              )
+              prev.map((w) => {
+                if (w.id !== widgetId) return w;
+                const rows = loaded.processedRows;
+                const fallbackCfg = (loaded.chartConfig ?? { labels: [], datasets: [] }) as ChartConfig;
+                const nextConfig =
+                  rebuildStudioWidgetChartConfig(w, rows, fallbackCfg) ?? fallbackCfg;
+                return {
+                  ...w,
+                  config: nextConfig,
+                  rows,
+                  kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                  isLoading: false,
+                };
+              })
             );
           }
         }
@@ -2042,7 +2067,6 @@ export function AdminDashboardStudio({
     (patch: Partial<MetricConfigWidget>) => {
       if (!selectedId) return;
       const aggPatch = patch.aggregationConfig as Record<string, unknown> | undefined;
-      const nonChartStudioTypes = new Set(["table", "filter", "text", "image", "map"]);
       setWidgets((prev) =>
         prev.map((w) => {
           if (w.id !== selectedId) return w;
@@ -2060,29 +2084,16 @@ export function AdminDashboardStudio({
               ...patch.aggregationConfig,
             } as AggregationConfig;
           }
-          if (patch.aggregationConfig != null || percentLayoutPatch) {
+          if (patch.aggregationConfig != null || percentLayoutPatch || "color" in restPatch) {
             const rows = w.rows;
-            const aggForBuild = (next.aggregationConfig ?? w.aggregationConfig) as BuildChartConfigWidget["aggregationConfig"];
             if (
-              !nonChartStudioTypes.has(w.type) &&
+              !NON_CHART_STUDIO_TYPES.has(w.type) &&
               Array.isArray(rows) &&
               rows.length > 0 &&
-              aggForBuild
+              next.aggregationConfig
             ) {
-              const widgetForBuild: BuildChartConfigWidget = {
-                type: w.type,
-                aggregationConfig: aggForBuild,
-                source: w.source,
-                color: (w as { color?: string }).color,
-              };
-              try {
-                const processed = getProcessedRowsForChart(rows as Record<string, unknown>[], widgetForBuild);
-                const accent = String((w as { color?: string }).color ?? "").trim();
-                const cfg = buildChartConfig(processed, widgetForBuild, accent);
-                if (cfg) next.config = cfg as ChartConfig;
-              } catch {
-                /* mantener config anterior si el preview local falla */
-              }
+              const rebuilt = rebuildStudioWidgetChartConfig(next, rows as Record<string, unknown>[]);
+              if (rebuilt) next.config = rebuilt;
             }
           }
           if (patchImg != null) {
