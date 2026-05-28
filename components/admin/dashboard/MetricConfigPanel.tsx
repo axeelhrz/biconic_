@@ -230,6 +230,11 @@ export type MetricConfigWidget = {
   hideWidgetHeader?: boolean;
 };
 
+/** Patch parcial del widget; `aggregationConfig` admite deltas (el parent hace merge). */
+export type MetricConfigWidgetPatch = Omit<Partial<MetricConfigWidget>, "aggregationConfig"> & {
+  aggregationConfig?: Partial<AggregationConfigEdit> & Record<string, unknown>;
+};
+
 export type SavedMetricPanel = {
   id: string;
   name: string;
@@ -305,7 +310,7 @@ type MetricConfigPanelProps = {
   etlLoading: boolean;
   /** Carga de datos de esta métrica (aggregate/raw) en el estudio */
   metricDataLoading?: boolean;
-  onUpdate: (patch: Partial<MetricConfigWidget>) => void;
+  onUpdate: (patch: MetricConfigWidgetPatch) => void;
   onLoadData: () => void;
   onClose: () => void;
   /** Métricas guardadas para reutilizar */
@@ -934,7 +939,7 @@ export function MetricConfigPanel({
                   const newType = e.target.value;
                   onUpdate({
                     type: newType,
-                    aggregationConfig: { ...agg, chartType: newType },
+                    aggregationConfig: { chartType: newType },
                   });
                 }}
                 className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
@@ -2352,7 +2357,7 @@ export function MetricConfigPanel({
                 <input
                   type="checkbox"
                   checked={!!agg.chartComboSyncAxes}
-                  onChange={(e) => onUpdate({ aggregationConfig: { ...agg, chartComboSyncAxes: e.target.checked } })}
+                  onChange={(e) => onUpdate({ aggregationConfig: { chartComboSyncAxes: e.target.checked } })}
                   className="rounded"
                 />
                 <span className="text-xs text-[var(--studio-fg-muted)]">Sincronizar ejes</span>
@@ -2368,7 +2373,7 @@ export function MetricConfigPanel({
                 const valueType = (m.valueType ?? agg.chartValueType ?? "number") as string;
                 const valueScale = (m.valueScale ?? agg.chartValueScale ?? "none") as string;
                 const updateM = (upd: Partial<{ valueType: string; valueScale: string; currencySymbol: string; decimals: number; thousandSep: boolean }>) =>
-                  onUpdate({ aggregationConfig: { ...agg, chartMetricFormats: { ...(agg.chartMetricFormats ?? {}), [key]: { ...m, ...upd } } } });
+                  onUpdate({ aggregationConfig: { chartMetricFormats: { ...(agg.chartMetricFormats ?? {}), [key]: { ...m, ...upd } } } });
                 return (
                   <div key={key} className="rounded border p-2" style={{ borderColor: "var(--studio-border)", background: "var(--studio-surface)" }}>
                     <p className="text-[11px] font-medium mb-1.5" style={{ color: "var(--studio-fg)" }}>{label}</p>
@@ -2456,7 +2461,6 @@ export function MetricConfigPanel({
                   onChange={(e) =>
                     onUpdate({
                       aggregationConfig: {
-                        ...agg,
                         chartDetailCard: {
                           ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
                           title: e.target.value,
@@ -2476,7 +2480,6 @@ export function MetricConfigPanel({
                   onChange={(e) =>
                     onUpdate({
                       aggregationConfig: {
-                        ...agg,
                         chartDetailCard: {
                           ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
                           description: e.target.value,
@@ -2515,7 +2518,6 @@ export function MetricConfigPanel({
                       ];
                       onUpdate({
                         aggregationConfig: {
-                          ...agg,
                           chartDetailCard: {
                             ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
                             lines: next,
@@ -2539,7 +2541,6 @@ export function MetricConfigPanel({
                         copy[idx] = { ...copy[idx]!, ...patch } as ChartDetailCardLine;
                         onUpdate({
                           aggregationConfig: {
-                            ...agg,
                             chartDetailCard: {
                               ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
                               lines: copy,
@@ -2551,7 +2552,6 @@ export function MetricConfigPanel({
                         const copy = lines.filter((_, j) => j !== idx);
                         onUpdate({
                           aggregationConfig: {
-                            ...agg,
                             chartDetailCard:
                               copy.length === 0
                                 ? undefined
