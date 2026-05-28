@@ -389,6 +389,83 @@ export function resolveAnalysisDimensionsFromConfig(cfg: Record<string, unknown>
   };
 }
 
+/** Claves editables desde MetricConfigPanel que pertenecen al layout del dashboard, no al análisis ETL. */
+export const DASHBOARD_VISUAL_OVERRIDE_KEYS = new Set([
+  "chartColorScheme",
+  "chartCategoryColorMode",
+  "chartPrimaryColor",
+  "chartSeriesColors",
+  "showDataLabels",
+  "labelVisibilityMode",
+  "labelVisibilityMaxCount",
+  "chartLabelOverrides",
+  "chartDatasetLabelOverrides",
+  "chartMetricFormats",
+  "chartComboSyncAxes",
+  "chartGridXDisplay",
+  "chartGridYDisplay",
+  "chartGridColor",
+  "chartAxisXVisible",
+  "chartAxisYVisible",
+  "chartDataLabelFontSize",
+  "chartDataLabelColor",
+  "chartAxisFontSize",
+  "chartLayoutPadding",
+  "chartBarThickness",
+  "chartLineBorderWidth",
+  "chartGridLineWidth",
+  "chartAxisTickColor",
+  "chartCategoryTickMaxRotation",
+  "chartCategoryTickMinRotation",
+  "chartCategoryMaxTicks",
+  "chartFontFamily",
+  "chartLegendPosition",
+  "chartLegendVisible",
+  "pieLegendVisible",
+  "pieLegendResponsive",
+  "pieLegendMode",
+  "pieIntegratedNameOrder",
+  "pieSliceBorderWidth",
+  "chartStackBySeries",
+  "chartValueType",
+  "chartValueScale",
+  "chartNumberFormat",
+  "chartCurrencySymbol",
+  "chartDecimals",
+  "chartThousandSep",
+  "chartSortDirection",
+  "chartSortBy",
+  "chartSortByMetric",
+  "chartAxisOrder",
+  "chartScaleMode",
+  "chartScaleMin",
+  "chartScaleMax",
+  "chartAxisStep",
+  "chartPinnedDimensions",
+  "tableColumnLabelOverrides",
+]);
+
+/** Extrae overrides visuales del layout del dashboard (solo valores definidos). */
+export function extractDashboardVisualOverrides(
+  agg: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  if (!agg || typeof agg !== "object") return {};
+  const out: Record<string, unknown> = {};
+  for (const key of DASHBOARD_VISUAL_OVERRIDE_KEYS) {
+    if (agg[key] !== undefined) out[key] = agg[key];
+  }
+  return out;
+}
+
+/** Fusiona config de datos del análisis con overrides visuales del widget del dashboard. */
+export function mergeAnalysisAggregationWithDashboardOverrides(
+  dataAgg: Record<string, unknown> | null | undefined,
+  widgetAgg: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const base = dataAgg && typeof dataAgg === "object" ? { ...dataAgg } : {};
+  return { ...base, ...extractDashboardVisualOverrides(widgetAgg) };
+}
+
 function normalizeMatchKey(value: unknown): string {
   return String(value ?? "")
     .trim()
@@ -585,16 +662,21 @@ export function mergeSavedAnalysisIntoWidget(
     metrics: sanitizedMetrics,
     chartType,
     ...(compareUi ? { dashboardCompareUi: compareUi } : {}),
+    ...extractDashboardVisualOverrides(
+      (widget.aggregationConfig ?? null) as Record<string, unknown> | null
+    ),
   };
 
   const analysisLabelMode = analysisCfg.labelDisplayMode;
+  const widgetLabelMode = widget.labelDisplayMode;
   const labelDisplayMode: ChartLabelDisplayMode | undefined =
-    chartType === "horizontalBar"
-      ? analysisLabelMode === "percent" || analysisLabelMode === "value" || analysisLabelMode === "both"
-        ? (analysisLabelMode as ChartLabelDisplayMode)
-        : "percent"
-      : typeof widget.labelDisplayMode === "string"
-        ? (widget.labelDisplayMode as ChartLabelDisplayMode)
+    typeof widgetLabelMode === "string" &&
+    (widgetLabelMode === "percent" || widgetLabelMode === "value" || widgetLabelMode === "both")
+      ? (widgetLabelMode as ChartLabelDisplayMode)
+      : chartType === "horizontalBar"
+        ? analysisLabelMode === "percent" || analysisLabelMode === "value" || analysisLabelMode === "both"
+          ? (analysisLabelMode as ChartLabelDisplayMode)
+          : "percent"
         : undefined;
 
   return {

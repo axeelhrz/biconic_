@@ -84,6 +84,7 @@ import { buildAggregateRequestPayload } from "@/lib/dashboard/buildAggregateRequ
 import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
+  mergeAnalysisAggregationWithDashboardOverrides,
   resolveAnalysisDimensionsFromConfig,
   resolveWidgetAnalysisMergePatch,
   resolveDarkChartTheme,
@@ -744,7 +745,6 @@ export function AdminDashboardStudio({
             type: analysisPatch.type,
             title: analysisPatch.title ?? widget.title,
             analysisId: analysisPatch.analysisId,
-            aggregationConfig: analysisPatch.aggregationConfig as AggregationConfig,
             metricIds: analysisPatch.metricIds ?? (widget as { metricIds?: string[] }).metricIds,
             labelDisplayMode: analysisPatch.labelDisplayMode ?? widget.labelDisplayMode,
             minHeight:
@@ -753,6 +753,14 @@ export function AdminDashboardStudio({
                 : widget.minHeight,
           }
         : widget;
+      const dataAgg = (
+        analysisPatch
+          ? (analysisPatch.aggregationConfig as AggregationConfig)
+          : widget.aggregationConfig
+      ) as AggregationConfig | undefined;
+      const widgetAggRecord = (widget.aggregationConfig ?? {}) as Record<string, unknown>;
+      const withVisualOverrides = (data: Record<string, unknown>) =>
+        mergeAnalysisAggregationWithDashboardOverrides(data, widgetAggRecord) as AggregationConfig;
       const genMap = widgetLoadGenRef.current;
       genMap[widgetId] = (genMap[widgetId] ?? 0) + 1;
       const myGen = genMap[widgetId]!;
@@ -771,7 +779,7 @@ export function AdminDashboardStudio({
         prev.map((w) => (w.id === widgetId ? { ...effectiveWidget, isLoading: true } : w))
       );
       try {
-        const agg = effectiveWidget.aggregationConfig;
+        const agg = dataAgg;
         const sourceId = effectiveWidget.dataSourceId ?? etlData?.primarySourceId ?? etlData?.dataSources?.[0]?.id;
         const mapDatasetField = (rawField: unknown): string => {
           const field = String(rawField ?? "").trim();
@@ -945,9 +953,9 @@ export function AdminDashboardStudio({
           };
           const widgetForBuild = {
             type: effectiveWidget.type,
-            aggregationConfig: normalizedAgg,
+            aggregationConfig: withVisualOverrides(normalizedAgg as Record<string, unknown>),
             source: effectiveWidget.source,
-            color: (effectiveWidget as { color?: string }).color,
+            color: (widget as { color?: string }).color,
           };
           const sourceAllFields = sourceId
             ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.all ?? etlData?.fields?.all ?? [])
@@ -1100,8 +1108,9 @@ export function AdminDashboardStudio({
             dimension2: dimResolved.dimension2,
             dimensions: dimResolved.dimensions.length > 0 ? dimResolved.dimensions : undefined,
           };
+          const aggForDisplayFetch = withVisualOverrides(aggForFetch as Record<string, unknown>);
           const loaded = await loadPreviewWidgetData({
-            widget: { ...widgetForBuild, aggregationConfig: aggForFetch },
+            widget: { ...widgetForBuild, aggregationConfig: aggForDisplayFetch },
             tableName,
             etlId: widgetEtlId,
             sourceId,
@@ -1135,6 +1144,13 @@ export function AdminDashboardStudio({
                       config: loaded.chartConfig ?? { labels: [], datasets: [] },
                       rows: loaded.processedRows,
                       kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                      ...(analysisPatch
+                        ? {
+                            aggregationConfig: withVisualOverrides(
+                              analysisPatch.aggregationConfig as Record<string, unknown>
+                            ),
+                          }
+                        : {}),
                       isLoading: false,
                     }
                   : w
@@ -1235,7 +1251,10 @@ export function AdminDashboardStudio({
           analysisId: patch.analysisId,
           type: patch.type,
           title: patch.title ?? w.title,
-          aggregationConfig: patch.aggregationConfig as AggregationConfig,
+          aggregationConfig: mergeAnalysisAggregationWithDashboardOverrides(
+            patch.aggregationConfig as Record<string, unknown>,
+            (w.aggregationConfig ?? {}) as Record<string, unknown>
+          ) as AggregationConfig,
           metricIds: patch.metricIds ?? (w as { metricIds?: string[] }).metricIds,
           labelDisplayMode: patch.labelDisplayMode ?? w.labelDisplayMode,
           minHeight:
