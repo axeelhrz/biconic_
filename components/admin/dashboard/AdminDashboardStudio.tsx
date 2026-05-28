@@ -802,7 +802,7 @@ export function AdminDashboardStudio({
         return;
       }
       setWidgets((prev) =>
-        prev.map((w) => (w.id === widgetId ? { ...effectiveWidget, isLoading: true } : w))
+        prev.map((w) => (w.id === widgetId ? { ...w, isLoading: true } : w))
       );
       try {
         const agg = dataAgg;

@@ -457,7 +457,6 @@ export function MetricConfigPanel({
     }
     onUpdate({
       aggregationConfig: {
-        ...agg,
         chartLabelOverrides: Object.keys(next).length ? next : undefined,
       },
     });
@@ -465,7 +464,7 @@ export function MetricConfigPanel({
 
   const updateAgg = (patch: Partial<AggregationConfigEdit>) => {
     onUpdate({
-      aggregationConfig: { ...agg, ...patch },
+      aggregationConfig: patch,
     });
   };
 
@@ -473,12 +472,11 @@ export function MetricConfigPanel({
     (next: Record<string, string>) => {
       onUpdate({
         aggregationConfig: {
-          ...agg,
           chartSeriesColors: pruneChartSeriesColorsToVisibleKeys(next, seriesColorKeys),
         },
       });
     },
-    [agg, onUpdate, seriesColorKeys]
+    [onUpdate, seriesColorKeys]
   );
 
   const updateMetric = (index: number, patch: Partial<AggregationMetricEdit>) => {
