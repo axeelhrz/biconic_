@@ -34,6 +34,10 @@ import {
 } from "@/lib/dashboard/chartOptions";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import {
+  pruneChartSeriesColorsToVisibleKeys,
+  resolveSeriesColorKeys,
+} from "@/lib/dashboard/widgetRenderParity";
+import {
   ChartLabelOverridesSection,
   ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS,
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
@@ -290,6 +294,10 @@ type MetricConfigPanelProps = {
   dashboardTheme?: DashboardTheme;
   /** Etiquetas de datasets del preview (colores por serie además de chartYAxes). */
   previewChartDatasetLabels?: string[];
+  /** Labels visibles del chart (`config.labels`, con ranking aplicado). */
+  previewChartLabels?: string[];
+  /** Claves crudas del eje X visibles (`config.xRawCategoryKeys`). */
+  previewChartRawCategoryKeys?: string[];
   /** Filas del preview del widget (p. ej. inferencia de geocodificación en mapas). */
   previewRows?: Record<string, unknown>[];
   kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
@@ -335,6 +343,8 @@ export function MetricConfigPanel({
   onReorganizeAuto,
   dashboardTheme,
   previewChartDatasetLabels = [],
+  previewChartLabels = [],
+  previewChartRawCategoryKeys = [],
   previewRows = [],
   kpiUserTimeScope = null,
   etlData,
@@ -405,21 +415,41 @@ export function MetricConfigPanel({
       a.localeCompare(b, undefined, { numeric: true })
     );
   }, [previewRows]);
-  const includePreviewAxisInColorKeys = useMemo(() => {
-    if (chartType === "pie" || chartType === "doughnut") return true;
-    return (
-      (chartType === "bar" || chartType === "horizontalBar" || chartType === "stackedColumn") &&
-      yAxisKeysForUi.length === 1
-    );
-  }, [chartType, yAxisKeysForUi.length]);
-  const seriesColorKeys = useMemo(() => {
-    const fromPreview = previewChartDatasetLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
-    const fromAxis =
-      includePreviewAxisInColorKeys && previewAxisRawValues.length > 0
-        ? previewAxisRawValues.map((s) => String(s ?? "").trim()).filter(Boolean)
-        : [];
-    return Array.from(new Set([...yAxisKeysForUi, ...fromPreview, ...fromAxis]));
-  }, [yAxisKeysForUi, previewChartDatasetLabels, includePreviewAxisInColorKeys, previewAxisRawValues]);
+  const widgetForSeriesColorKeys = useMemo(
+    (): BuildChartConfigWidget => ({
+      type: widget.type,
+      aggregationConfig: {
+        ...agg,
+        chartType: (agg.chartType as string) || widget.type,
+        enabled: true,
+      },
+      color: widget.color,
+    }),
+    [widget.type, widget.color, agg]
+  );
+  const seriesColorKeys = useMemo(
+    () =>
+      resolveSeriesColorKeys({
+        chartType,
+        agg: agg as Record<string, unknown>,
+        yAxisKeys: yAxisKeysForUi,
+        previewChartLabels,
+        previewChartRawCategoryKeys,
+        previewChartDatasetLabels,
+        previewRows,
+        widgetForBuild: widgetForSeriesColorKeys,
+      }),
+    [
+      chartType,
+      agg,
+      yAxisKeysForUi,
+      previewChartLabels,
+      previewChartRawCategoryKeys,
+      previewChartDatasetLabels,
+      previewRows,
+      widgetForSeriesColorKeys,
+    ]
+  );
   const fillChartLabelOverridesFromPreview = useCallback(() => {
     const next = { ...(agg.chartLabelOverrides ?? {}) };
     for (const raw of previewAxisRawValues) {
@@ -438,6 +468,18 @@ export function MetricConfigPanel({
       aggregationConfig: { ...agg, ...patch },
     });
   };
+
+  const applyChartSeriesColors = useCallback(
+    (next: Record<string, string>) => {
+      onUpdate({
+        aggregationConfig: {
+          ...agg,
+          chartSeriesColors: pruneChartSeriesColorsToVisibleKeys(next, seriesColorKeys),
+        },
+      });
+    },
+    [agg, onUpdate, seriesColorKeys]
+  );
 
   const updateMetric = (index: number, patch: Partial<AggregationMetricEdit>) => {
     const next = [...metrics];
@@ -1897,17 +1939,21 @@ export function MetricConfigPanel({
           <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Color por serie</Label>
             <p className="text-[11px] text-[var(--studio-fg-muted)]">
-              Claves de métrica, valores del eje o serie del preview. Vacío en hex quita el color personalizado.
+              Solo categorías o series visibles en el gráfico (Top N / ranking aplicado). Vacío en hex quita el color personalizado.
               {agg.chartCategoryColorMode === "uniform"
                 ? " Con «Un solo color» activo, solo las claves con hex definido se apartan del color principal."
                 : null}
             </p>
             {seriesColorKeys.map((sKey) => {
+              const displayName =
+                (typeof agg.chartLabelOverrides?.[sKey] === "string" &&
+                  agg.chartLabelOverrides[sKey]!.trim()) ||
+                sKey;
               const hex = agg.chartSeriesColors?.[sKey] || widget.color || "#0ea5e9";
               return (
                 <div key={sKey} className="flex flex-wrap items-center gap-2">
-                  <span className="min-w-0 max-w-[140px] truncate font-mono text-[11px] text-[var(--studio-fg-muted)]" title={sKey}>
-                    {sKey}
+                  <span className="min-w-0 max-w-[140px] truncate font-mono text-[11px] text-[var(--studio-fg-muted)]" title={displayName}>
+                    {displayName}
                   </span>
                   <input
                     type="color"
@@ -1915,7 +1961,7 @@ export function MetricConfigPanel({
                     onChange={(e) => {
                       const next = { ...(agg.chartSeriesColors ?? {}) };
                       next[sKey] = e.target.value;
-                      updateAgg({ chartSeriesColors: next });
+                      applyChartSeriesColors(next);
                     }}
                     className="h-8 w-10 shrink-0 cursor-pointer rounded border border-[var(--studio-border)]"
                   />
@@ -1926,9 +1972,7 @@ export function MetricConfigPanel({
                       const next = { ...(agg.chartSeriesColors ?? {}) };
                       if (v.trim() === "") delete next[sKey];
                       else next[sKey] = v;
-                      updateAgg({
-                        chartSeriesColors: Object.keys(next).length ? next : undefined,
-                      });
+                      applyChartSeriesColors(next);
                     }}
                     className="h-8 min-w-[6rem] flex-1 font-mono text-[11px]"
                     placeholder="#hex"

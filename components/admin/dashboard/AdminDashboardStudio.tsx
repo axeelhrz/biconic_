@@ -2926,6 +2926,16 @@ export function AdminDashboardStudio({
                     ?.map((d) => String((d as { label?: string }).label ?? "").trim())
                     .filter(Boolean) ?? []
                 }
+                previewChartLabels={
+                  (selectedWidgetForPanel.config?.labels as string[] | undefined)?.map((s) =>
+                    String(s ?? "").trim()
+                  ).filter(Boolean) ?? []
+                }
+                previewChartRawCategoryKeys={
+                  (selectedWidgetForPanel.config?.xRawCategoryKeys as string[] | undefined)?.map((s) =>
+                    String(s ?? "").trim()
+                  ).filter(Boolean) ?? []
+                }
                 previewRows={selectedWidgetForPanel.rows}
                 kpiUserTimeScope={
                   (selectedWidgetForPanel as { kpiUserTimeScope?: KpiUserTimeScopeOptions | null }).kpiUserTimeScope ?? null

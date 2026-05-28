@@ -2,6 +2,11 @@ import type { DashboardTheme } from "@/types/dashboard";
 import type { ChartLabelDisplayMode, ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
 import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
 import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import {
+  getProcessedRowsForChart,
+  resolveWidgetAxisKeys,
+  type BuildChartConfigWidget,
+} from "@/lib/dashboard/buildChartConfig";
 
 type MetricFormatEntry = {
   valueType?: string;
@@ -464,6 +469,91 @@ export function mergeAnalysisAggregationWithDashboardOverrides(
 ): Record<string, unknown> {
   const base = dataAgg && typeof dataAgg === "object" ? { ...dataAgg } : {};
   return { ...base, ...extractDashboardVisualOverrides(widgetAgg) };
+}
+
+export type ResolveSeriesColorKeysParams = {
+  chartType: string;
+  agg: Record<string, unknown>;
+  yAxisKeys: string[];
+  /** Labels visibles del chart (`config.labels`). */
+  previewChartLabels?: string[];
+  /** Claves crudas del eje X visibles (`config.xRawCategoryKeys`). */
+  previewChartRawCategoryKeys?: string[];
+  /** Labels de datasets del preview (`config.datasets[].label`). */
+  previewChartDatasetLabels?: string[];
+  previewRows?: Record<string, unknown>[];
+  widgetForBuild?: BuildChartConfigWidget;
+};
+
+/**
+ * Claves para «Color por serie» alineadas con lo que renderiza el chart (paridad EtlMetricsClient colorLabels).
+ * Para barras con una métrica y muchas categorías usa xRawCategoryKeys (Top N / ranking), no todas las filas API.
+ */
+export function resolveSeriesColorKeys(params: ResolveSeriesColorKeysParams): string[] {
+  const {
+    chartType,
+    agg,
+    yAxisKeys,
+    previewChartLabels = [],
+    previewChartRawCategoryKeys = [],
+    previewChartDatasetLabels = [],
+    previewRows = [],
+    widgetForBuild,
+  } = params;
+
+  const ct = String(chartType ?? "").trim().toLowerCase();
+  const chartSeriesField = String(agg.chartSeriesField ?? "").trim();
+  const yKeys = yAxisKeys.map((k) => String(k ?? "").trim()).filter(Boolean);
+
+  const isBarOneMetricManyCategories =
+    (ct === "bar" || ct === "horizontalbar" || ct === "stackedcolumn") &&
+    !chartSeriesField &&
+    yKeys.length === 1;
+
+  if (ct === "pie" || ct === "doughnut") {
+    return previewChartLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
+  }
+
+  if (chartSeriesField && previewChartDatasetLabels.length > 0) {
+    return previewChartDatasetLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
+  }
+
+  if (isBarOneMetricManyCategories) {
+    const fromConfig = previewChartRawCategoryKeys.map((s) => String(s ?? "").trim()).filter(Boolean);
+    if (fromConfig.length > 0) return fromConfig;
+
+    if (widgetForBuild && previewRows.length > 0) {
+      const processed = getProcessedRowsForChart(previewRows, widgetForBuild);
+      const axis = resolveWidgetAxisKeys(processed, widgetForBuild);
+      if (!axis) return [];
+      const uniq = new Set<string>();
+      for (const row of processed) {
+        const v = String((row as Record<string, unknown>)[axis.xKey] ?? "").trim();
+        if (v) uniq.add(v);
+      }
+      return [...uniq];
+    }
+    return [];
+  }
+
+  if (yKeys.length > 0) return yKeys;
+
+  return previewChartDatasetLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
+}
+
+/** Elimina entradas de chartSeriesColors que ya no están visibles en el chart. */
+export function pruneChartSeriesColorsToVisibleKeys(
+  chartSeriesColors: Record<string, string> | undefined,
+  visibleKeys: string[]
+): Record<string, string> | undefined {
+  if (!chartSeriesColors || typeof chartSeriesColors !== "object") return undefined;
+  const allowed = new Set(visibleKeys.map((k) => String(k).trim()).filter(Boolean));
+  const next: Record<string, string> = {};
+  for (const [k, v] of Object.entries(chartSeriesColors)) {
+    const key = String(k).trim();
+    if (allowed.has(key)) next[key] = v;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function normalizeMatchKey(value: unknown): string {
