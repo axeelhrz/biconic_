@@ -235,6 +235,8 @@ export type MetricConfigWidgetPatch = Omit<Partial<MetricConfigWidget>, "aggrega
   aggregationConfig?: Partial<AggregationConfigEdit> & Record<string, unknown>;
 };
 
+export type MetricConfigWidgetUpdateFn = (patch: MetricConfigWidgetPatch) => void;
+
 export type SavedMetricPanel = {
   id: string;
   name: string;
@@ -310,7 +312,7 @@ type MetricConfigPanelProps = {
   etlLoading: boolean;
   /** Carga de datos de esta métrica (aggregate/raw) en el estudio */
   metricDataLoading?: boolean;
-  onUpdate: (patch: MetricConfigWidgetPatch) => void;
+  onUpdate: MetricConfigWidgetUpdateFn;
   onLoadData: () => void;
   onClose: () => void;
   /** Métricas guardadas para reutilizar */

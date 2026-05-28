@@ -92,7 +92,7 @@ import {
 } from "@/lib/dashboard/widgetRenderParity";
 import {
   MetricConfigPanel,
-  type MetricConfigWidget,
+  type MetricConfigWidgetUpdateFn,
   type AggregationConfigEdit,
 } from "./MetricConfigPanel";
 import { DashboardLogoOverlay } from "@/components/dashboard/DashboardLogoOverlay";
@@ -2063,14 +2063,14 @@ export function AdminDashboardStudio({
     };
   }, []);
 
-  const handleMetricPanelUpdate = useCallback(
-    (patch: Partial<MetricConfigWidget>) => {
+  const handleMetricPanelUpdate = useCallback<MetricConfigWidgetUpdateFn>(
+    (patch) => {
       if (!selectedId) return;
-      const aggPatch = patch.aggregationConfig as Record<string, unknown> | undefined;
+      const { imageConfig: patchImg, aggregationConfig: aggDelta, ...restPatch } = patch;
+      const aggPatch = aggDelta as Record<string, unknown> | undefined;
       setWidgets((prev) =>
         prev.map((w) => {
           if (w.id !== selectedId) return w;
-          const { imageConfig: patchImg, ...restPatch } = patch;
           const next: StudioWidget = { ...w, ...restPatch };
           const percentLayoutPatch =
             "chartPercentBasis" in patch ||
@@ -2078,13 +2078,13 @@ export function AdminDashboardStudio({
             "chartPercentDenominatorMetric" in patch ||
             "chartPercentDenominatorScope" in patch ||
             "chartPercentDenominatorGrandTotal" in patch;
-          if (patch.aggregationConfig != null) {
+          if (aggDelta != null) {
             next.aggregationConfig = {
               ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
-              ...patch.aggregationConfig,
+              ...aggDelta,
             } as AggregationConfig;
           }
-          if (patch.aggregationConfig != null || percentLayoutPatch || "color" in restPatch) {
+          if (aggDelta != null || percentLayoutPatch || "color" in restPatch) {
             const rows = w.rows;
             if (
               !NON_CHART_STUDIO_TYPES.has(w.type) &&
