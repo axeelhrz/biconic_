@@ -499,7 +499,14 @@ export function mergeSavedAnalysisIntoWidget(
     .filter((s): s is SavedMetricForAnalysisMerge => s != null);
   const firstMetricCfg = (linkedSavedMetrics[0]?.aggregationConfig ?? {}) as Record<string, unknown>;
   const analysisCfg = analysis as Record<string, unknown>;
-  const mergedCfg = { ...firstMetricCfg, ...analysisCfg };
+  // El spread copia `undefined`, lo que borraba chartXAxis/dimensions cuando el análisis los serializa
+  // como undefined (p. ej. cuando se guarda con `chartXAxis: chartXAxis || undefined`). Eso colapsaba
+  // el GROUP BY del dashboard a una sola fila vs. el preview del wizard.
+  const analysisCfgDefined: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(analysisCfg)) {
+    if (v !== undefined) analysisCfgDefined[k] = v;
+  }
+  const mergedCfg = { ...firstMetricCfg, ...analysisCfgDefined };
   const firstLinked = linkedSavedMetrics[0];
   const legacyChartType =
     firstLinked && typeof firstLinked.type === "string" ? String(firstLinked.type) : undefined;
