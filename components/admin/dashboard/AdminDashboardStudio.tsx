@@ -2904,7 +2904,11 @@ export function AdminDashboardStudio({
                       isLoading={w.isLoading}
                       isSelected={embeddedPreview ? false : isSelected}
                       readOnly={embeddedPreview}
-                      onSelect={embeddedPreview ? undefined : () => setSelectedId(w.id)}
+                      onConfigure={
+                        embeddedPreview || w.type === "filter"
+                          ? undefined
+                          : () => setSelectedId(w.id)
+                      }
                       onRun={embeddedPreview ? undefined : () => loadMetricData(w.id)}
                       onMoveOrder={
                         embeddedPreview || cardLayoutMode === "manual"

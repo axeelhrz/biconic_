@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { ChevronDown, ChevronUp, GripVertical, Loader2, Play, Trash2, MoreHorizontal } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Loader2, Play, Settings, Trash2, MoreHorizontal } from "lucide-react";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "@/components/dashboard/DashboardWidgetRenderer";
 import {
   DropdownMenu,
@@ -64,7 +64,7 @@ type MetricBlockProps = {
   chartType?: "bar" | "horizontalBar" | "stackedColumn" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter" | "map" | "image";
   isLoading?: boolean;
   isSelected?: boolean;
-  onSelect?: () => void;
+  onConfigure?: () => void;
   onRun?: () => void;
   onDelete?: () => void;
   kpiValue?: string | number;
@@ -114,7 +114,7 @@ export function MetricBlock({
   chartType = "bar",
   isLoading,
   isSelected,
-  onSelect,
+  onConfigure,
   onRun,
   onDelete,
   kpiValue,
@@ -181,17 +181,9 @@ export function MetricBlock({
 
   return (
     <article
-      role={readOnly ? undefined : "button"}
-      tabIndex={readOnly ? undefined : 0}
       data-selected={isSelected ? "true" : undefined}
-      className={`metric-block group relative flex flex-col transition-all ${readOnly ? "cursor-default" : "cursor-pointer"} ${isDragging ? "metric-block--dragging" : ""}`}
+      className={`metric-block group relative flex flex-col transition-all cursor-default ${isDragging ? "metric-block--dragging" : ""}`}
       style={{ minHeight }}
-      onClick={readOnly ? undefined : onSelect}
-      onKeyDown={
-        readOnly
-          ? undefined
-          : (e) => (e.key === "Enter" || e.key === " ") && onSelect?.()
-      }
     >
       <header className="metric-block-header flex flex-shrink-0 items-start justify-between gap-3">
         {showDragHandle && onDragHandleStart ? (
@@ -221,6 +213,21 @@ export function MetricBlock({
           >
             {STATE_LABELS[state]}
           </span>
+          {!readOnly && onConfigure ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="metric-block-configure-trigger h-9 w-9 rounded-lg text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)] hover:text-[var(--studio-fg)] focus-visible:ring-2 focus-visible:ring-[var(--studio-accent)]"
+              aria-label="Configurar gráfico"
+              onClick={(e) => {
+                e.stopPropagation();
+                onConfigure();
+              }}
+            >
+              <Settings className="h-5 w-5" />
+            </Button>
+          ) : null}
           {!readOnly && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
