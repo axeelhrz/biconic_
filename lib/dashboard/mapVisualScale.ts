@@ -364,7 +364,7 @@ export function resolveMarkerVisual(
   maxValue: number | null,
   style: ResolvedMapVisualStyle
 ): MarkerVisualResult {
-  const t = mapValueIntensity(value, minValue, maxValue, "linear");
+  const t = mapValueIntensity(value, minValue, maxValue, style.choroplethScaleMode);
   const { encoding, colorStops, colorLow, colorHigh, radiusMin, radiusMax, fillOpacityMin, fillOpacityMax, strokeWidth } =
     style;
   const midRadius = (radiusMin + radiusMax) / 2;

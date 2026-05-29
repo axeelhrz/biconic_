@@ -150,18 +150,34 @@ function MapDisplayModeToggle({
   mode,
   onChange,
   choroplethDisabled,
+  darkChartTheme = false,
 }: {
   mode: MapDisplayMode;
   onChange: (m: MapDisplayMode) => void;
   choroplethDisabled: boolean;
+  darkChartTheme?: boolean;
 }) {
+  const toggleTheme = darkChartTheme
+    ? {
+        bg: "var(--studio-bg-elevated, #141419)",
+        border: "var(--studio-border, #3f3f46)",
+        fg: "var(--studio-fg, #f4f4f5)",
+        fgMuted: "var(--studio-fg-muted, #a1a1aa)",
+      }
+    : {
+        bg: "rgba(255,255,255,0.95)",
+        border: "var(--platform-border, #e2e8f0)",
+        fg: "#0f172a",
+        fgMuted: "#64748b",
+      };
+
   return (
     <div
       className="absolute top-2 right-2 z-[1000] flex rounded-lg border p-0.5 text-[11px] font-medium shadow-sm"
       style={{
-        borderColor: "var(--platform-border, #e2e8f0)",
-        background: "rgba(255,255,255,0.95)",
-        color: "var(--platform-fg, #0f172a)",
+        borderColor: toggleTheme.border,
+        background: toggleTheme.bg,
+        color: toggleTheme.fg,
       }}
     >
       <button
@@ -176,7 +192,7 @@ function MapDisplayModeToggle({
         className="rounded-md px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-45"
         style={{
           background: mode === "choropleth" ? "var(--platform-accent, #0f6fa8)" : "transparent",
-          color: mode === "choropleth" ? "#fff" : "inherit",
+          color: mode === "choropleth" ? "#fff" : toggleTheme.fg,
         }}
       >
         Provincias
@@ -187,7 +203,7 @@ function MapDisplayModeToggle({
         className="rounded-md px-2.5 py-1 transition-colors"
         style={{
           background: mode === "markers" ? "var(--platform-accent, #0f6fa8)" : "transparent",
-          color: mode === "markers" ? "#fff" : "inherit",
+          color: mode === "markers" ? "#fff" : toggleTheme.fg,
         }}
       >
         Puntos
@@ -259,8 +275,8 @@ function ProvinceLabels({
   );
 }
 
-type RankedProvince = {
-  id: ArProvinceGadmId;
+type RankedMapItem = {
+  id: string;
   name: string;
   value: number;
   color: string;
@@ -280,7 +296,7 @@ function ChoroplethLegendPanel({
   minValue: number | null;
   maxValue: number | null;
   valueKey: string;
-  ranked: RankedProvince[];
+  ranked: RankedMapItem[];
   formatValue: (v: number) => string;
   show: boolean;
   darkChartTheme?: boolean;
@@ -707,7 +723,7 @@ export function DashboardMapWidget({
   const chMin = choroplethNumeric.length > 0 ? Math.min(...choroplethNumeric) : null;
   const chMax = choroplethNumeric.length > 0 ? Math.max(...choroplethNumeric) : null;
 
-  const rankedProvinces = useMemo((): RankedProvince[] => {
+  const rankedProvinces = useMemo((): RankedMapItem[] => {
     return [...provinceSums.entries()]
       .filter(([, v]) => Number.isFinite(v))
       .sort((a, b) => b[1] - a[1])
@@ -739,6 +755,26 @@ export function DashboardMapWidget({
   }, [provinceSums, provinceNameById, chMin, chMax, mapVisual]);
 
   const points = markers.map((m) => [m.lat, m.lon] as [number, number]);
+
+  const markerNumericValues = useMemo(
+    () => markers.map((m) => m.value).filter((v): v is number => Number.isFinite(v)),
+    [markers]
+  );
+  const markerMin = markerNumericValues.length > 0 ? Math.min(...markerNumericValues) : null;
+  const markerMax = markerNumericValues.length > 0 ? Math.max(...markerNumericValues) : null;
+
+  const rankedMarkers = useMemo((): RankedMapItem[] => {
+    return markers
+      .filter((m): m is typeof m & { value: number } => Number.isFinite(m.value))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 6)
+      .map((m, i) => ({
+        id: m.label ? `${m.label}-${i}` : `${m.lat},${m.lon}`,
+        name: m.label || `${m.lat.toFixed(2)}, ${m.lon.toFixed(2)}`,
+        value: m.value,
+        color: resolveChoroplethFillColor(m.value, markerMin, markerMax, mapVisual),
+      }));
+  }, [markers, markerMin, markerMax, mapVisual]);
 
   const mapWidgetForDetail = useMemo(
     (): BuildChartConfigWidget => ({
@@ -816,6 +852,7 @@ export function DashboardMapWidget({
             mode={displayMode}
             onChange={handleDisplayModeChange}
             choroplethDisabled={!canChoropleth}
+            darkChartTheme={darkChartTheme}
           />
         ) : null}
         <style
@@ -924,6 +961,7 @@ export function DashboardMapWidget({
             mode={displayMode}
             onChange={handleDisplayModeChange}
             choroplethDisabled={true}
+            darkChartTheme={darkChartTheme}
           />
         ) : null}
         <p className="mb-1">Sin provincias reconocidas en los datos</p>
@@ -956,9 +994,8 @@ export function DashboardMapWidget({
     );
   }
 
-  const numericValues = markers.map((m) => m.value).filter((v): v is number => Number.isFinite(v));
-  const minValue = numericValues.length > 0 ? Math.min(...numericValues) : null;
-  const maxValue = numericValues.length > 0 ? Math.max(...numericValues) : null;
+  const minValue = markerMin;
+  const maxValue = markerMax;
 
   const tileUrl =
     argentinaMode && arGeo && !arGeoError ? CARTO_LIGHT_TILE : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
@@ -967,13 +1004,21 @@ export function DashboardMapWidget({
       ? CARTO_ATTRIBUTION
       : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
+  const legendHeight = mapVisual.choroplethShowLegend ? 118 : 0;
+  const mapAreaHeight = Math.max(160, height - legendHeight);
+
   return (
-    <div className="relative rounded overflow-hidden border" style={{ height: `${height}px`, borderColor: "var(--platform-border, #e2e8f0)" }}>
+    <div
+      className="relative flex flex-col overflow-hidden rounded border"
+      style={{ height: `${height}px`, borderColor: "var(--platform-border, #e2e8f0)" }}
+    >
+      <div className="relative min-h-0 flex-1">
       {canShowArgentinaToggle ? (
         <MapDisplayModeToggle
           mode={displayMode}
           onChange={handleDisplayModeChange}
           choroplethDisabled={!canChoropleth}
+          darkChartTheme={darkChartTheme}
         />
       ) : null}
       {arGeoError && argentinaMode ? (
@@ -987,7 +1032,7 @@ export function DashboardMapWidget({
       <MapContainer
         center={argentinaMode ? AR_DEFAULT_CENTER : DEFAULT_CENTER}
         zoom={argentinaMode ? AR_DEFAULT_ZOOM : DEFAULT_ZOOM}
-        style={{ height: "100%", width: "100%" }}
+        style={{ height: `${mapAreaHeight}px`, width: "100%" }}
         scrollWheelZoom={true}
         {...(argentinaMode && arGeo && !arGeoError
           ? { maxBounds: AR_MAX_BOUNDS, maxBoundsViscosity: 0.82 }
@@ -1033,6 +1078,17 @@ export function DashboardMapWidget({
           {unresolvedCount} ubicaciones sin resolver
         </div>
       ) : null}
+      </div>
+      <ChoroplethLegendPanel
+        mapVisual={mapVisual}
+        minValue={minValue}
+        maxValue={maxValue}
+        valueKey={valueKey}
+        ranked={rankedMarkers}
+        formatValue={formatMetricValue}
+        show={mapVisual.choroplethShowLegend}
+        darkChartTheme={darkChartTheme}
+      />
     </div>
   );
 }
