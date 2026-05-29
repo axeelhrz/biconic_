@@ -976,12 +976,6 @@ export function AdminDashboardStudio({
           }
         }
 
-        const filterWidgetsOnPage = widgets.filter(
-          (w) =>
-            w.type === "filter" &&
-            pageOf(w) === targetPage &&
-            (w as { filterConfig?: { field?: string } }).filterConfig?.field
-        );
         for (const fw of filterWidgetsOnPage) {
           const fc = (fw as { filterConfig: { label?: string; field: string; operator?: string; inputType?: string; scopeMetricIds?: string[] } })
             .filterConfig;
