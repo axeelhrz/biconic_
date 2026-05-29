@@ -34,6 +34,10 @@ import {
   type SavedAnalysisForMerge,
   type SavedMetricForAnalysisMerge,
 } from "@/lib/dashboard/widgetRenderParity";
+import {
+  loadPreviewWidgetData,
+  type LoadPreviewWidgetDataParams,
+} from "@/lib/dashboard/previewWidgetDataLoader";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
 import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2 } from "lucide-react";
@@ -1078,12 +1082,12 @@ export function DashboardViewer({
 
         const dashLayoutSaved = (etlData as { dashboard?: { layout?: { savedMetrics?: unknown[] } } })?.dashboard?.layout?.savedMetrics;
         const layoutSavedMetrics = (Array.isArray(dashLayoutSaved) ? dashLayoutSaved : []) as NonNullable<
-          Parameters<typeof loadPreviewWidgetData>[0]["savedMetrics"]
+          LoadPreviewWidgetDataParams["savedMetrics"]
         >;
         const dsSavedRaw = (dataSourcesList?.find((s) => s.id === widgetSourceId) as { savedMetrics?: unknown[] } | undefined)
           ?.savedMetrics;
         const dsSavedMetrics = (Array.isArray(dsSavedRaw) ? dsSavedRaw : []) as NonNullable<
-          Parameters<typeof loadPreviewWidgetData>[0]["savedMetrics"]
+          LoadPreviewWidgetDataParams["savedMetrics"]
         >;
         const savedMetricsPoolMap = new Map<string, (typeof layoutSavedMetrics)[0] & { id?: string }>();
         for (const m of [...layoutSavedMetrics, ...dsSavedMetrics]) {
@@ -1158,7 +1162,7 @@ export function DashboardViewer({
           };
 
           const loaded = await loadPreviewWidgetData({
-            widget: widgetForBuild as Parameters<typeof loadPreviewWidgetData>[0]["widget"],
+            widget: widgetForBuild as LoadPreviewWidgetDataParams["widget"],
             tableName: fullTableName,
             etlId: widgetEtlId,
             sourceId: widgetSourceId,
@@ -1231,7 +1235,7 @@ export function DashboardViewer({
           };
           const rawPayload = { tableName: fullTableName, filters: mergedForRaw, limit: 500 };
           const loaded = await loadPreviewWidgetData({
-            widget: widgetForBuild as Parameters<typeof loadPreviewWidgetData>[0]["widget"],
+            widget: widgetForBuild as LoadPreviewWidgetDataParams["widget"],
             tableName: fullTableName,
             sourceId: widgetSourceId,
             datasetDimensions,
