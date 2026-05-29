@@ -49,6 +49,7 @@ import type { ChartLabelDisplayMode, ChartPercentBasis, ChartStyleConfig } from 
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
 import { DashboardCompareDefaultsSection } from "@/components/admin/dashboard/DashboardCompareDefaultsSection";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
+import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
 import { DashboardDatasetDiagnostics } from "./DashboardDatasetDiagnostics";
 import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
 import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
@@ -459,8 +460,8 @@ export function AdminDashboardStudio({
 }: AdminDashboardStudioProps) {
   const [widgets, setWidgets] = useState<StudioWidget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<GlobalFilter[]>([]);
-  const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults | undefined>(
-    undefined
+  const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults>(
+    () => ({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS })
   );
   /** Valores en vivo de filtros globales (por id) y widgets tipo filter en el lienzo. */
   const [studioFilterValues, setStudioFilterValues] = useState<Record<string, unknown>>({});
@@ -633,9 +634,11 @@ export function AdminDashboardStudio({
           } | undefined;
           setSavedMetrics(Array.isArray(layout?.savedMetrics) ? layout.savedMetrics : []);
           setDerivedColumnsFromLayout(Array.isArray(layout?.datasetConfig?.derivedColumns) ? layout.datasetConfig.derivedColumns : []);
-          if (layout?.dashboardCompareDefaults) {
-            setDashboardCompareDefaults(layout.dashboardCompareDefaults);
-          }
+          setDashboardCompareDefaults(
+            layout?.dashboardCompareDefaults
+              ? { ...EMPTY_DASHBOARD_COMPARE_DEFAULTS, ...layout.dashboardCompareDefaults }
+              : { ...EMPTY_DASHBOARD_COMPARE_DEFAULTS }
+          );
           setLayoutLoaded(true);
         }
       } catch (e) {
@@ -730,7 +733,7 @@ export function AdminDashboardStudio({
         activePageId,
         cardLayoutMode,
         savedMetrics,
-        ...(dashboardCompareDefaults ? { dashboardCompareDefaults } : {}),
+        dashboardCompareDefaults,
         ...(datasetConfig && { datasetConfig }),
         ...((etlData as { dashboardDataset?: import("@/lib/dashboard/dashboardDataset").DashboardDataset })?.dashboardDataset && {
           dashboardDataset: (etlData as { dashboardDataset: import("@/lib/dashboard/dashboardDataset").DashboardDataset }).dashboardDataset,
@@ -3037,6 +3040,7 @@ export function AdminDashboardStudio({
                       }}
                       showTechnicalPreview={embeddedPreview ? false : showDiagnostics}
                       darkChartTheme={resolveDarkChartTheme(effectiveTheme, true)}
+                      dashboardCompareDefaults={dashboardCompareDefaults}
                     />
                   </div>
                 );

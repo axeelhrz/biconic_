@@ -17,6 +17,7 @@ import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./D
 import { DashboardLogoOverlay } from "./DashboardLogoOverlay";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
+import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
 import {
   expandAnalysisMetricsForFetch,
@@ -541,8 +542,8 @@ export function DashboardViewer({
     pagesMeta?: { id: string; name: string }[];
   } | null>(null);
   const [cardLayoutMode, setCardLayoutMode] = useState<DashboardCardLayoutMode>("auto");
-  const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults | undefined>(
-    undefined
+  const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults>(
+    () => ({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS })
   );
   const stateRef = useRef({ widgets, setWidgets });
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
@@ -662,7 +663,12 @@ export function DashboardViewer({
     } | undefined;
     setCardLayoutMode(normalizeCardLayoutMode(layout?.cardLayoutMode));
     if (layout?.dashboardCompareDefaults) {
-      setDashboardCompareDefaults(layout.dashboardCompareDefaults);
+      setDashboardCompareDefaults({
+        ...EMPTY_DASHBOARD_COMPARE_DEFAULTS,
+        ...layout.dashboardCompareDefaults,
+      });
+    } else {
+      setDashboardCompareDefaults({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS });
     }
     const pages =
       Array.isArray(layout?.pages) && layout!.pages!.length > 0
@@ -2021,6 +2027,7 @@ export function DashboardViewer({
                     }
                     minHeight={widget.minHeight ?? 280}
                     darkChartTheme={resolveDarkChartTheme(effectiveTheme, true)}
+                    dashboardCompareDefaults={dashboardCompareDefaults}
                   />
                 </div>
               );

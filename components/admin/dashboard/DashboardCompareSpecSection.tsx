@@ -13,6 +13,7 @@ import {
   compareNeedsTimeGroupedRows,
   readComparePresentation,
   pickDashboardKpiCompareRow,
+  compareKindBadgeLabel,
 } from "@/lib/dashboard/compareDisplayKeys";
 import {
   resolveDashboardKpiMainValueForScope,
@@ -31,15 +32,6 @@ const PLACEMENT_OPTIONS: { value: DashboardComparePlacement; label: string }[] =
   { value: "tooltip", label: "Tooltip del gráfico" },
   { value: "detail_card", label: "Tarjeta de detalle" },
 ];
-
-const COMPARE_KIND_LABELS: Record<Exclude<CompareSpec["kind"], "none">, string> = {
-  temporal: "Temporal",
-  column: "Vs columna",
-  fixed: "Vs valor fijo",
-  average: "Vs promedio",
-  total_share: "% del total",
-  cumulative: "Acumulado / YTD",
-};
 
 export type DashboardCompareAggSlice = {
   enabled: boolean;
@@ -85,26 +77,6 @@ function defaultCompareUi(prev?: DashboardCompareUi): DashboardCompareUi {
     placement: prev?.placement ?? ["kpi_below"],
     indicator: prev?.indicator ?? "both",
   };
-}
-
-function compareKindBadgeLabel(compare: CompareSpec): string | null {
-  if (compare.kind === "none") return null;
-  const base = COMPARE_KIND_LABELS[compare.kind];
-  if (compare.kind === "temporal" && compare.mode) {
-    const modeLabels: Record<string, string> = {
-      prev_bucket: "período anterior",
-      same_period_prior_year: "mismo período año anterior",
-      calendar_prev_day: "día anterior",
-      calendar_prev_week: "semana anterior",
-      calendar_prev_month: "mes anterior",
-      calendar_prev_year: "año anterior",
-    };
-    return `${base} · ${modeLabels[compare.mode] ?? compare.mode}`;
-  }
-  if (compare.kind === "cumulative" && compare.mode) {
-    return `${base} · ${compare.mode}`;
-  }
-  return base;
 }
 
 type DashboardCompareSpecSectionProps = {
@@ -259,16 +231,28 @@ export function DashboardCompareSpecSection({
       <label className="flex items-center gap-2 text-xs text-[var(--studio-fg)]">
         <Checkbox
           checked={inheritDashboard}
-          onCheckedChange={(c) => updateAgg({ compareInheritDashboard: c === true })}
+          onCheckedChange={(c) => {
+            if (c === true) {
+              updateAgg({ compareInheritDashboard: true, compare: undefined });
+            } else {
+              updateAgg({ compareInheritDashboard: false });
+            }
+          }}
         />
         Heredar comparación del dashboard
       </label>
-      {inheritDashboard && dashboardCompareDefaults?.enabled && compare.kind !== "none" && (
-        <p className="text-[10px] rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/60 px-2 py-1.5 text-[var(--studio-fg-muted)]">
-          Usando preset del dashboard
-          {compareBadge ? `: ${compareBadge}` : ""}
-          {dashboardCompareDefaults.label ? ` · ${dashboardCompareDefaults.label}` : ""}
-        </p>
+      {inheritDashboard && (
+        <div className="rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/60 px-2.5 py-2 space-y-1">
+          <Label className="text-[10px] font-medium text-[var(--studio-fg-muted)]">Preset del dashboard</Label>
+          {!dashboardCompareDefaults?.enabled || compare.kind === "none" ? (
+            <p className="text-[11px] text-[var(--studio-fg-muted)]">Comparación desactivada en el dashboard</p>
+          ) : (
+            <p className="text-[11px] text-[var(--studio-fg)]">
+              {compareBadge ?? "Comparación activa"}
+              {dashboardCompareDefaults.label ? ` · ${dashboardCompareDefaults.label}` : ""}
+            </p>
+          )}
+        </div>
       )}
 
       {!inheritDashboard && savedWithCompare.length > 0 && (

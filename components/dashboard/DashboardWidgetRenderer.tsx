@@ -72,6 +72,14 @@ import {
 } from "@/lib/dashboard/kpiFilterScope";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, widgetAggregationWithStoredVisualOverrides, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
+import { CompareStatusStrip } from "@/components/dashboard/CompareStatusStrip";
+import {
+  legacyCompareInputFromWidgetAgg,
+  resolveWidgetCompareStatus,
+} from "@/lib/dashboard/compareDisplayKeys";
+import { resolveEffectiveCompareSpec } from "@/lib/dashboard/compareContext";
+import { getEffectiveDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { useDevicePixelRatio } from "@/hooks/useDevicePixelRatio";
 import { CompareUnavailableHint } from "@/components/dashboard/CompareUnavailableHint";
 import {
@@ -368,6 +376,7 @@ interface DashboardWidgetRendererProps {
   hideHeader?: boolean;
   /** Muestra vista técnica del payload efectivo (editor/admin). */
   showTechnicalPreview?: boolean;
+  dashboardCompareDefaults?: DashboardCompareDefaults;
 }
 
 export function DashboardWidgetRenderer({
@@ -383,6 +392,7 @@ export function DashboardWidgetRenderer({
   darkChartTheme = false,
   hideHeader = false,
   showTechnicalPreview = false,
+  dashboardCompareDefaults,
 }: DashboardWidgetRendererProps) {
   const chartDevicePixelRatio = useDevicePixelRatio();
   const chartPlugins = useMemo(() => [ChartDataLabels], []);
@@ -1638,6 +1648,36 @@ export function DashboardWidgetRenderer({
 
   const showCardHeader = !hideHeader && !widget.hideWidgetHeader;
 
+  const compareStatus = useMemo(() => {
+    if (chartType === "filter" || chartType === "text" || chartType === "image") return null;
+    const agg = widgetAggregationWithStoredVisualOverrides({
+      aggregationConfig: widget.aggregationConfig as Record<string, unknown> | null,
+      dashboardVisualOverrides: (widget as { dashboardVisualOverrides?: Record<string, unknown> | null })
+        .dashboardVisualOverrides,
+    });
+    const compareSpec = resolveEffectiveCompareSpec(
+      dashboardCompareDefaults,
+      legacyCompareInputFromWidgetAgg(agg)
+    );
+    const compareUi = getEffectiveDashboardCompareUi(agg, {
+      widgetType: widget.type,
+      chartType,
+    });
+    const metrics = (agg.metrics as { alias?: string }[] | undefined) ?? [];
+    const metricAlias = metrics.map((m) => String(m.alias ?? "").trim()).filter(Boolean)[0] ?? "";
+    return resolveWidgetCompareStatus({
+      compareSpec,
+      compareUi,
+      compareLabel: widget.compareLabel ?? dashboardCompareDefaults?.label,
+      compareUnavailable: widget.compareUnavailable,
+      compareUnavailableReason: widget.compareUnavailableReason,
+      rows: widget.rows,
+      metricAlias,
+      kpiUserTimeScope: widget.kpiUserTimeScope ?? null,
+      chartStyle: widget.chartStyle as ChartStyleConfig | undefined,
+    });
+  }, [chartType, widget, dashboardCompareDefaults]);
+
   return (
     <Card
       className={`overflow-visible border transition-all ${className}`}
@@ -1658,10 +1698,11 @@ export function DashboardWidgetRenderer({
       }}
     >
       {showCardHeader && (
-        <header className="flex min-h-0 flex-shrink-0 items-center justify-between gap-2 overflow-hidden border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
+        <header className="flex min-h-0 flex-shrink-0 flex-col gap-1 overflow-hidden border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
           <h3 className="min-w-0 truncate text-sm font-semibold" style={{ color: "var(--platform-fg, #0f172a)" }}>
             {widget.title}
           </h3>
+          {compareStatus ? <CompareStatusStrip status={compareStatus} /> : null}
         </header>
       )}
       <div

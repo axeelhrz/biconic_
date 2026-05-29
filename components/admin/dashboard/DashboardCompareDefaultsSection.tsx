@@ -1,6 +1,7 @@
 "use client";
 
 import type { DashboardCompareDefaults } from "@/types/dashboard";
+import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
 import type { CompareSpec } from "@/lib/dashboard/compareSpec";
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { buildDashboardCompareContexts } from "@/lib/dashboard/compareContext";
@@ -21,13 +22,7 @@ export type DashboardCompareDefaultsSectionProps = {
 };
 
 function emptyDefaults(): DashboardCompareDefaults {
-  return {
-    enabled: false,
-    compare: { kind: "none" },
-    label: "",
-    showDelta: true,
-    showDeltaPct: true,
-  };
+  return { ...EMPTY_DASHBOARD_COMPARE_DEFAULTS };
 }
 
 function resolveFilterValues(
@@ -59,7 +54,7 @@ export function DashboardCompareDefaultsSection({
       : null;
 
   const setCompare = (next: CompareSpec) => {
-    onChange({ ...d, compare: next, enabled: next.kind !== "none" ? true : d.enabled });
+    onChange({ ...d, compare: next, enabled: next.kind !== "none" });
   };
 
   return (
@@ -101,12 +96,14 @@ export function DashboardCompareDefaultsSection({
             />
           </div>
           {contextPreview ? (
-            <p className="text-[10px] text-[var(--studio-fg-muted)]">
+            <p className={`text-[10px] ${contextPreview.comparable ? "text-[var(--studio-fg-muted)]" : "text-amber-600 dark:text-amber-400"}`}>
               {contextPreview.comparable
                 ? contextPreview.compareLabel
                   ? `Contexto: ${contextPreview.compareLabel}`
                   : "Contexto comparativo listo según filtros activos."
-                : contextPreview.unavailableReason ?? "Sin período disponible con los filtros actuales."}
+                : contextPreview.unavailableReason === "Sin período disponible"
+                  ? "Agregá un filtro de año o rango de fechas en el dashboard para activar la comparación."
+                  : (contextPreview.unavailableReason ?? "Sin período disponible con los filtros actuales.")}
             </p>
           ) : null}
         </>

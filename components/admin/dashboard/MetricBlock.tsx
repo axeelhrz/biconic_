@@ -13,6 +13,15 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { toChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import { CompareStatusStrip } from "@/components/dashboard/CompareStatusStrip";
+import {
+  legacyCompareInputFromWidgetAgg,
+  resolveWidgetCompareStatus,
+} from "@/lib/dashboard/compareDisplayKeys";
+import { resolveEffectiveCompareSpec } from "@/lib/dashboard/compareContext";
+import { getEffectiveDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import type { DashboardCompareDefaults } from "@/types/dashboard";
+import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 
 export type MetricBlockState = "estable" | "alerta" | "cambio";
 
@@ -96,6 +105,7 @@ type MetricBlockProps = {
   showDragHandle?: boolean;
   onDragHandleStart?: (e: React.PointerEvent) => void;
   isDragging?: boolean;
+  dashboardCompareDefaults?: DashboardCompareDefaults;
 };
 
 const STATE_LABELS: Record<MetricBlockState, string> = {
@@ -139,6 +149,7 @@ export function MetricBlock({
   showDragHandle = false,
   onDragHandleStart,
   isDragging = false,
+  dashboardCompareDefaults,
 }: MetricBlockProps) {
   const hasViz = useMemo(() => {
     if (chartType === "image") {
@@ -151,6 +162,33 @@ export function MetricBlock({
     if (chartType === "table") return Array.isArray(tableRows) && tableRows.length > 0;
     return chartConfig?.labels?.length && (chartConfig.datasets?.length ?? 0) > 0;
   }, [chartType, chartConfig, kpiValue, tableRows, widgetForRenderer?.rows, widgetForRenderer?.imageUrl]);
+
+  const compareStatus = useMemo(() => {
+    const w = widgetForRenderer;
+    if (!w || w.type === "filter" || w.type === "text" || w.type === "image") return null;
+    const agg = (w.aggregationConfig ?? {}) as Record<string, unknown>;
+    const compareSpec = resolveEffectiveCompareSpec(
+      dashboardCompareDefaults,
+      legacyCompareInputFromWidgetAgg(agg)
+    );
+    const compareUi = getEffectiveDashboardCompareUi(agg, {
+      widgetType: w.type,
+      chartType: String(agg.chartType ?? w.type),
+    });
+    const metrics = (agg.metrics as { alias?: string }[] | undefined) ?? [];
+    const metricAlias = metrics.map((m) => String(m.alias ?? "").trim()).filter(Boolean)[0] ?? "";
+    return resolveWidgetCompareStatus({
+      compareSpec,
+      compareUi,
+      compareLabel: w.compareLabel ?? dashboardCompareDefaults?.label,
+      compareUnavailable: w.compareUnavailable,
+      compareUnavailableReason: w.compareUnavailableReason,
+      rows: w.rows,
+      metricAlias,
+      kpiUserTimeScope: w.kpiUserTimeScope ?? null,
+      chartStyle: w.chartStyle as ChartStyleConfig | undefined,
+    });
+  }, [widgetForRenderer, dashboardCompareDefaults]);
 
   const fallbackWidget = useMemo<DashboardWidgetRendererWidget>(() => {
     const kpiAsNumber = typeof kpiValue === "number" ? kpiValue : Number(kpiValue);
@@ -202,6 +240,7 @@ export function MetricBlock({
         ) : null}
         <div className="min-w-0 flex-1">
           <h3 className="metric-block-title truncate">{title}</h3>
+          {compareStatus ? <CompareStatusStrip status={compareStatus} className="mt-1" /> : null}
           {purpose && (
             <p className="mt-0.5 truncate text-[var(--studio-text-small)] text-[var(--studio-fg-muted)]">{purpose}</p>
           )}

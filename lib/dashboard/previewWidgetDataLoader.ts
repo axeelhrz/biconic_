@@ -307,7 +307,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
         (compareSpec.kind === "temporal" || compareSpec.kind === "cumulative"
           ? compareSpec.timeColumn
           : undefined);
-      const scalarKpi = type === "kpi" && !dg.hasDateGroupByEffective;
+      const useScalarCompare = !dg.hasDateGroupByEffective;
       rows = mergeCompareQueryResults({
         currentRows,
         comparativeRows,
@@ -319,7 +319,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
           ? compareSpec.granularity
           : dg.dateGroupByGranularity) as DateGranularity | undefined,
         parseOpts: agg?.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
-        scalarKpi,
+        scalarKpi: type === "kpi" && useScalarCompare,
+        useScalarCompare,
       });
     } else {
       rows = await fetchAggregate(userFiltersBeforeExpand);

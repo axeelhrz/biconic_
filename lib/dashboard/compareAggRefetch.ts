@@ -1,6 +1,7 @@
 /** Campos de `aggregationConfig` cuyo cambio requiere nuevo fetch a aggregate-data (columnas compare en servidor). */
 export const COMPARE_AGG_REFETCH_KEYS = new Set([
   "compare",
+  "compareInheritDashboard",
   "comparePeriod",
   "compareFixedValue",
   "transformCompare",

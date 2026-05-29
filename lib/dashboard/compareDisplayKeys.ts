@@ -5,6 +5,8 @@ import { getRowValue, resolveRowColumnKey, compareBucketSortTime } from "@/lib/d
 import { formatValue, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
 import type { ParseDateLikeOptions } from "@/lib/dashboard/dateFormatting";
+import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
+import { resolveDashboardKpiMainValueForScope } from "@/lib/dashboard/kpiFilterScope";
 
 function toNum(v: unknown): number | null {
   if (v == null || v === "") return null;
@@ -388,4 +390,151 @@ export function buildCompareTooltipLineFromAgg(
   const vals = readComparePresentation(spec, primaryMetricAlias, row);
   const text = formatDashboardCompareText(ui, vals, valueStyle);
   return text.trim() !== "" ? text : null;
+}
+
+const COMPARE_KIND_LABELS: Record<Exclude<CompareSpec["kind"], "none">, string> = {
+  temporal: "Temporal",
+  column: "Vs columna",
+  fixed: "Vs valor fijo",
+  average: "Vs promedio",
+  total_share: "% del total",
+  cumulative: "Acumulado / YTD",
+};
+
+export function compareKindBadgeLabel(compare: CompareSpec): string | null {
+  if (compare.kind === "none") return null;
+  const base = COMPARE_KIND_LABELS[compare.kind];
+  if (compare.kind === "temporal" && compare.mode) {
+    const modeLabels: Record<string, string> = {
+      prev_bucket: "período anterior",
+      same_period_prior_year: "mismo período año anterior",
+      calendar_prev_day: "día anterior",
+      calendar_prev_week: "semana anterior",
+      calendar_prev_month: "mes anterior",
+      calendar_prev_year: "año anterior",
+    };
+    return `${base} · ${modeLabels[compare.mode] ?? compare.mode}`;
+  }
+  if (compare.kind === "cumulative" && compare.mode) {
+    return `${base} · ${compare.mode}`;
+  }
+  return base;
+}
+
+function aggregateCompareLineFromRows(
+  rows: Record<string, unknown>[],
+  compare: CompareSpec,
+  metricAlias: string,
+  ui: DashboardCompareUi,
+  chartStyle?: ChartStyleConfig,
+  kpiUserTimeScope?: KpiUserTimeScopeOptions | null
+): string | null {
+  if (!rows.length || compare.kind === "none" || !metricAlias) return null;
+
+  const pickRow =
+    pickDashboardKpiCompareRow(rows, compare) ??
+    (rows[rows.length - 1] as Record<string, unknown>);
+  const fromRow = readComparePresentation(compare, metricAlias, pickRow);
+  if (fromRow.delta != null || fromRow.deltaPct != null) {
+    const text = formatDashboardCompareText(ui, fromRow, chartStyle);
+    if (text.trim()) return text;
+  }
+
+  const k = resolveRowColumnKey(rows[0]!, metricAlias) ?? metricAlias;
+  const prevKey = `${k}_prev`;
+  let hasPrevCol = false;
+  let current = 0;
+  let reference = 0;
+  for (const row of rows) {
+    const n = Number(row[k]);
+    if (Number.isFinite(n)) current += n;
+    if (Object.prototype.hasOwnProperty.call(row, prevKey)) {
+      hasPrevCol = true;
+      const p = Number(row[prevKey]);
+      if (Number.isFinite(p)) reference += p;
+    }
+  }
+  if (!hasPrevCol) {
+    const total = resolveDashboardKpiMainValueForScope(rows, metricAlias, kpiUserTimeScope ?? null);
+    if (Number.isFinite(total)) current = total;
+  }
+  if (current === 0 && reference === 0) return null;
+  const delta = current - reference;
+  const deltaPct = reference !== 0 ? ((current - reference) / reference) * 100 : null;
+  const text = formatDashboardCompareText(
+    ui,
+    { current, reference, delta, deltaPct },
+    chartStyle
+  );
+  return text.trim() ? text : null;
+}
+
+export type WidgetCompareStatus = {
+  active: boolean;
+  badge: string | null;
+  line: string | null;
+  unavailable: boolean;
+  reason?: string;
+};
+
+export function resolveWidgetCompareStatus(params: {
+  compareSpec: CompareSpec;
+  compareUi?: DashboardCompareUi;
+  compareLabel?: string | null;
+  compareUnavailable?: boolean;
+  compareUnavailableReason?: string;
+  rows?: Record<string, unknown>[];
+  metricAlias?: string;
+  kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
+  chartStyle?: ChartStyleConfig;
+}): WidgetCompareStatus {
+  const {
+    compareSpec,
+    compareUi,
+    compareUnavailable,
+    compareUnavailableReason,
+    rows,
+    metricAlias,
+    kpiUserTimeScope,
+    chartStyle,
+  } = params;
+
+  if (compareSpec.kind === "none" || compareUi?.enabled === false) {
+    return { active: false, badge: null, line: null, unavailable: false };
+  }
+
+  const badge = compareKindBadgeLabel(compareSpec);
+  const ui: DashboardCompareUi = compareUi ?? {
+    enabled: true,
+    showDelta: true,
+    showDeltaPct: true,
+    label: params.compareLabel ?? undefined,
+  };
+
+  if (compareUnavailable) {
+    return {
+      active: true,
+      badge,
+      line: null,
+      unavailable: true,
+      reason: compareUnavailableReason ?? "Sin período disponible",
+    };
+  }
+
+  const line = aggregateCompareLineFromRows(
+    rows ?? [],
+    compareSpec,
+    metricAlias ?? "",
+    ui,
+    chartStyle,
+    kpiUserTimeScope
+  );
+
+  return {
+    active: true,
+    badge,
+    line,
+    unavailable: !line,
+    reason: !line ? "Sin datos comparativos todavía" : undefined,
+  };
 }

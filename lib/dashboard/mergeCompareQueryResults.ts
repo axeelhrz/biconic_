@@ -1,4 +1,4 @@
-import type { CompareSpec } from "@/lib/dashboard/compareSpec";
+import type { CompareSpec, CompareTemporalMode } from "@/lib/dashboard/compareSpec";
 import { shiftBucketLabelOneYear } from "@/lib/dashboard/compareMetricRows";
 import { resolveRowColumnKey, getRowValue } from "@/lib/dashboard/compareMetricRows";
 import type { DateGranularity, ParseDateLikeOptions } from "@/lib/dashboard/dateFormatting";
@@ -48,7 +48,18 @@ export type MergeCompareQueryParams = {
   parseOpts?: ParseDateLikeOptions;
   /** KPI escalar: una fila sintética con totales. */
   scalarKpi?: boolean;
+  /** Sin agrupación temporal visible: totales o emparejado solo por dimensiones. */
+  useScalarCompare?: boolean;
 };
+
+function temporalModeShiftsYearBack(mode: CompareTemporalMode): boolean {
+  return mode === "same_period_prior_year" || mode === "calendar_prev_year";
+}
+
+function rowsHaveTimeColumn(rows: Record<string, unknown>[], timeCol: string): boolean {
+  if (!timeCol || rows.length === 0) return false;
+  return rows.some((r) => resolveRowColumnKey(r, timeCol) != null);
+}
 
 /**
  * Une resultados de consulta actual y comparativa (dual query dashboard).
@@ -65,6 +76,7 @@ export function mergeCompareQueryResults(params: MergeCompareQueryParams): Recor
     granularity = "month",
     parseOpts,
     scalarKpi = false,
+    useScalarCompare = false,
   } = params;
 
   if (!currentRows.length) return [];
@@ -72,7 +84,10 @@ export function mergeCompareQueryResults(params: MergeCompareQueryParams): Recor
     return currentRows.map((r) => ({ ...r }));
   }
 
-  if (scalarKpi || (!timeColumn && dimensionColumns.length === 0)) {
+  const timeCol = timeColumn?.trim();
+  const timeInRows = timeCol ? rowsHaveTimeColumn(currentRows, timeCol) : false;
+
+  if ((scalarKpi || useScalarCompare) && !timeInRows && dimensionColumns.length === 0) {
     const merged: Record<string, unknown> = { ...(currentRows[0] ?? {}) };
     for (const alias of metricAliases) {
       const k = resolveRowColumnKey(merged, alias) ?? alias;
@@ -86,9 +101,31 @@ export function mergeCompareQueryResults(params: MergeCompareQueryParams): Recor
     return [merged];
   }
 
-  const timeCol = timeColumn?.trim();
+  if (!timeInRows && dimensionColumns.length > 0) {
+    const compareMap = new Map<string, Record<string, unknown>>();
+    for (const row of comparativeRows) {
+      const pk = partitionKey(row, dimensionColumns, timeCol);
+      compareMap.set(pk, row);
+    }
+    return currentRows.map((row) => {
+      const next = { ...row };
+      const pk = partitionKey(row, dimensionColumns, timeCol);
+      const compareRow = compareMap.get(pk);
+      for (const alias of metricAliases) {
+        const k = resolveRowColumnKey(next, alias);
+        if (!k) continue;
+        const v = toNum(next[k]);
+        const vPrev = compareRow ? toNum(getRowValue(compareRow, alias)) : null;
+        next[`${k}_prev`] = vPrev;
+        next[`${k}_delta`] = v != null && vPrev != null ? v - vPrev : null;
+        next[`${k}_delta_pct`] = deltaPct(v, vPrev);
+      }
+      return next;
+    });
+  }
+
   if (!timeCol) {
-    return mergeCompareQueryResults({ ...params, scalarKpi: true });
+    return mergeCompareQueryResults({ ...params, scalarKpi: true, useScalarCompare: true });
   }
 
   const compareMap = new Map<string, Record<string, unknown>>();
@@ -104,7 +141,7 @@ export function mergeCompareQueryResults(params: MergeCompareQueryParams): Recor
     const pk = partitionKey(row, dimensionColumns, timeCol);
     const tVal = getRowValue(row, timeCol);
     const shifted =
-      compareSpec.kind === "temporal" && compareSpec.mode === "same_period_prior_year"
+      compareSpec.kind === "temporal" && temporalModeShiftsYearBack(compareSpec.mode)
         ? shiftBucketLabelOneYear(tVal, granularity, parseOpts)
         : null;
     const lookKey = shifted != null ? `${pk}\t${shifted}` : `${pk}\t${String(tVal ?? "")}`;

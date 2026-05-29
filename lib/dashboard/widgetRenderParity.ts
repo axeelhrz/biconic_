@@ -452,6 +452,19 @@ export const DASHBOARD_VISUAL_OVERRIDE_KEYS = new Set([
   "dashboardCompareUi",
 ]);
 
+/** Claves de comparación editables desde el panel del dashboard (no del análisis ETL). */
+export const DASHBOARD_COMPARE_OVERRIDE_KEYS = new Set([
+  "compare",
+  "compareInheritDashboard",
+  "comparePeriodSource",
+  "comparePeriod",
+  "compareFixedValue",
+  "transformCompare",
+  "transformCompareFixedValue",
+  "transformShowDelta",
+  "transformShowDeltaPct",
+]);
+
 /** Claves geo/map editables desde el panel del dashboard (no del análisis ETL). */
 export const DASHBOARD_GEO_OVERRIDE_KEYS = new Set([
   "mapDefaultCountry",
@@ -478,9 +491,10 @@ export const DASHBOARD_GEO_OVERRIDE_KEYS = new Set([
   "mapChoroplethLabelSize",
 ]);
 
-/** Todas las claves de override del widget del dashboard (visuales + geo). */
+/** Todas las claves de override del widget del dashboard (visuales + compare + geo). */
 export const DASHBOARD_WIDGET_OVERRIDE_KEYS = new Set([
   ...DASHBOARD_VISUAL_OVERRIDE_KEYS,
+  ...DASHBOARD_COMPARE_OVERRIDE_KEYS,
   ...DASHBOARD_GEO_OVERRIDE_KEYS,
 ]);
 

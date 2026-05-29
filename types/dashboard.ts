@@ -64,6 +64,14 @@ export type DashboardCompareDefaults = {
   showDeltaPct?: boolean;
 };
 
+export const EMPTY_DASHBOARD_COMPARE_DEFAULTS: DashboardCompareDefaults = {
+  enabled: false,
+  compare: { kind: "none" },
+  label: "",
+  showDelta: true,
+  showDeltaPct: true,
+};
+
 /** semantic_name -> data_source_id -> physical_column_name (vista legacy) */
 export type DatasetDimensionsMap = Record<string, Record<string, string>>;
 
