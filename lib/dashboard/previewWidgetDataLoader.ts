@@ -4,7 +4,6 @@ import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartTy
 import { buildAggregateRequestPayload } from "@/lib/dashboard/buildAggregateRequestPayload";
 import { resolveWidgetAggregationForDisplay } from "@/lib/dashboard/widgetRenderParity";
 import { legacyCompareInputFromWidgetAgg, compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
-import { type ComparePeriodSource } from "@/lib/dashboard/compareSpec";
 import { resolveEffectiveDateGroupByForFetch, type AggForCompareDateGroupBy } from "@/lib/dashboard/aggregateCompareRequest";
 import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
 import type { CompareSpec, ComparePeriodSource } from "@/lib/dashboard/compareSpec";
