@@ -186,6 +186,9 @@ export type AggregationConfigEdit = {
   mapFillOpacityMax?: number;
   mapStrokeWidth?: number;
   mapChoroplethEmptyColor?: string;
+  mapChoroplethShowLabels?: boolean;
+  mapChoroplethShowLegend?: boolean;
+  mapChoroplethHideBaseMap?: boolean;
   geoComponentOverrides?: GeoComponentOverrides;
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   /** Tabla: clave de columna → texto del encabezado. */

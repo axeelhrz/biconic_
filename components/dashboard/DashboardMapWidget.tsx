@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import L from "leaflet";
-import { CircleMarker, GeoJSON, MapContainer, Popup, TileLayer, useMap } from "react-leaflet";
+import { CircleMarker, GeoJSON, MapContainer, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import {
   AR_BOUNDING_BOX,
   AR_GEOJSON_PATH,
+  getArProvinceCentroid,
   isArgentinaDefaultCountry,
   isPointInArgentinaBBox,
   resolveArProvinceGadmId,
@@ -127,17 +128,6 @@ function MapDisplayModeToggle({
     >
       <button
         type="button"
-        onClick={() => onChange("markers")}
-        className="rounded-md px-2.5 py-1 transition-colors"
-        style={{
-          background: mode === "markers" ? "var(--platform-accent, #0f6fa8)" : "transparent",
-          color: mode === "markers" ? "#fff" : "inherit",
-        }}
-      >
-        Puntos
-      </button>
-      <button
-        type="button"
         disabled={choroplethDisabled}
         title={
           choroplethDisabled
@@ -153,6 +143,17 @@ function MapDisplayModeToggle({
       >
         Provincias
       </button>
+      <button
+        type="button"
+        onClick={() => onChange("markers")}
+        className="rounded-md px-2.5 py-1 transition-colors"
+        style={{
+          background: mode === "markers" ? "var(--platform-accent, #0f6fa8)" : "transparent",
+          color: mode === "markers" ? "#fff" : "inherit",
+        }}
+      >
+        Puntos
+      </button>
     </div>
   );
 }
@@ -163,6 +164,100 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function formatChoroplethLegendValue(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2 }).format(value);
+}
+
+function ProvinceLabels({ features, show }: { features: ArProvinceFeature[]; show: boolean }) {
+  if (!show) return null;
+  return (
+    <>
+      {features.map((feature) => {
+        const id = feature.properties?.id as ArProvinceGadmId | undefined;
+        const name = feature.properties?.name;
+        if (!id || !name) return null;
+        const centroid = getArProvinceCentroid(id);
+        if (!centroid) return null;
+        return (
+          <CircleMarker
+            key={id}
+            center={[centroid.lat, centroid.lon]}
+            radius={0}
+            pathOptions={{ opacity: 0, fillOpacity: 0, stroke: false }}
+            interactive={false}
+          >
+            <Tooltip
+              permanent
+              direction="center"
+              opacity={1}
+              className="ar-province-map-label"
+            >
+              <span
+                style={{
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  color: "#1e293b",
+                  textShadow: "0 0 3px #fff, 0 0 6px #fff",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {name}
+              </span>
+            </Tooltip>
+          </CircleMarker>
+        );
+      })}
+    </>
+  );
+}
+
+function ChoroplethLegend({
+  colorLow,
+  colorHigh,
+  minValue,
+  maxValue,
+  valueKey,
+  show,
+}: {
+  colorLow: string;
+  colorHigh: string;
+  minValue: number | null;
+  maxValue: number | null;
+  valueKey: string;
+  show: boolean;
+}) {
+  if (!show) return null;
+  return (
+    <div
+      className="pointer-events-none absolute bottom-3 right-3 z-[1000] flex items-stretch gap-2 rounded-lg border px-2.5 py-2 text-[10px] shadow-sm"
+      style={{
+        borderColor: "var(--platform-border, #e2e8f0)",
+        background: "rgba(255,255,255,0.95)",
+        color: "var(--platform-fg, #0f172a)",
+      }}
+    >
+      <div className="flex flex-col items-center justify-between py-0.5">
+        <span>{formatChoroplethLegendValue(maxValue)}</span>
+        <span>{formatChoroplethLegendValue(minValue)}</span>
+      </div>
+      <div
+        className="w-3 rounded-sm border"
+        style={{
+          borderColor: "#cbd5e1",
+          background: `linear-gradient(to top, ${colorLow}, ${colorHigh})`,
+          minHeight: "72px",
+        }}
+      />
+      {valueKey ? (
+        <div className="flex max-w-[5rem] items-center text-[9px] leading-tight opacity-80">
+          {valueKey}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function MapMarkerDetailBody({
@@ -429,18 +524,24 @@ export function DashboardMapWidget({
   const canShowArgentinaToggle = argentinaMode && arGeo && !arGeoError;
 
   const cfgDisplayDefault = aggregationConfig?.mapDisplayModeDefault;
-  const [displayMode, setDisplayMode] = useState<MapDisplayMode>("markers");
+  const [displayMode, setDisplayMode] = useState<MapDisplayMode>(() => {
+    if (cfgDisplayDefault === "markers" || cfgDisplayDefault === "choropleth") return cfgDisplayDefault;
+    return argentinaMode ? "choropleth" : "markers";
+  });
   const [displayModeTouched, setDisplayModeTouched] = useState(false);
 
   useEffect(() => {
     if (displayModeTouched) return;
-    if (cfgDisplayDefault === "markers" || cfgDisplayDefault === "choropleth") {
-      setDisplayMode(cfgDisplayDefault);
+    if (cfgDisplayDefault === "markers") {
+      setDisplayMode("markers");
       return;
     }
-    if (canChoropleth) setDisplayMode("choropleth");
-    else setDisplayMode("markers");
-  }, [cfgDisplayDefault, canChoropleth, displayModeTouched]);
+    if (cfgDisplayDefault === "choropleth" || (argentinaMode && canChoropleth)) {
+      setDisplayMode("choropleth");
+      return;
+    }
+    setDisplayMode("markers");
+  }, [cfgDisplayDefault, canChoropleth, displayModeTouched, argentinaMode]);
 
   const showChoropleth = displayMode === "choropleth" && canChoropleth;
 
@@ -484,6 +585,7 @@ export function DashboardMapWidget({
   };
 
   if (showChoropleth) {
+    const strokeBase = Math.max(0.5, mapVisual.strokeWidth);
     const styleFeature = (feature: ArProvinceFeature | null | undefined) => {
       const id = feature?.properties?.id as ArProvinceGadmId | undefined;
       const v = id ? provinceSums.get(id) : undefined;
@@ -492,8 +594,8 @@ export function DashboardMapWidget({
         return {
           fillColor: mapVisual.choroplethEmptyColor,
           fillOpacity: 0.92,
-          color: "#b8c5d6",
-          weight: 0.9,
+          color: "#94a3b8",
+          weight: strokeBase,
           opacity: 1,
         };
       }
@@ -510,7 +612,11 @@ export function DashboardMapWidget({
     return (
       <div
         className="relative rounded overflow-hidden border"
-        style={{ height: `${height}px`, borderColor: "var(--platform-border, #e2e8f0)" }}
+        style={{
+          height: `${height}px`,
+          borderColor: "var(--platform-border, #e2e8f0)",
+          background: mapVisual.choroplethHideBaseMap ? "#f1f5f9" : undefined,
+        }}
       >
         {canShowArgentinaToggle ? (
           <MapDisplayModeToggle
@@ -519,15 +625,22 @@ export function DashboardMapWidget({
             choroplethDisabled={!canChoropleth}
           />
         ) : null}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `.ar-province-map-label.leaflet-tooltip{background:transparent!important;border:none!important;box-shadow:none!important;padding:0!important}.ar-province-map-label.leaflet-tooltip:before{display:none!important}`,
+          }}
+        />
         <MapContainer
           center={AR_DEFAULT_CENTER}
           zoom={AR_DEFAULT_ZOOM}
-          style={{ height: "100%", width: "100%" }}
+          style={{ height: "100%", width: "100%", background: mapVisual.choroplethHideBaseMap ? "#f1f5f9" : undefined }}
           scrollWheelZoom={true}
           maxBounds={AR_MAX_BOUNDS}
           maxBoundsViscosity={0.82}
         >
-          <TileLayer attribution={CARTO_ATTRIBUTION} url={CARTO_LIGHT_TILE} />
+          {!mapVisual.choroplethHideBaseMap ? (
+            <TileLayer attribution={CARTO_ATTRIBUTION} url={CARTO_LIGHT_TILE} />
+          ) : null}
           <FitArgentinaGeoJson data={arGeo} />
           <GeoJSON
             data={arGeo as never}
@@ -552,17 +665,34 @@ export function DashboardMapWidget({
                   : null;
               if (custom) {
                 layer.bindPopup(custom);
-                return;
+              } else {
+                const safeName = escapeHtml(name);
+                const safeKey = escapeHtml(valueKey);
+                const safeVal = escapeHtml(valueStr);
+                layer.bindPopup(
+                  `<div class="text-xs space-y-1"><strong>${safeName}</strong>${valueKey ? `<div>${safeKey}: ${safeVal}</div>` : `<div>${safeVal}</div>`}</div>`
+                );
               }
-              const safeName = escapeHtml(name);
-              const safeKey = escapeHtml(valueKey);
-              const safeVal = escapeHtml(valueStr);
-              layer.bindPopup(
-                `<div class="text-xs space-y-1"><strong>${safeName}</strong>${valueKey ? `<div>${safeKey}: ${safeVal}</div>` : `<div>${safeVal}</div>`}</div>`
-              );
+              layer.on("mouseover", function () {
+                (this as L.Path).setStyle({ weight: strokeBase + 1.2 });
+              });
+              layer.on("mouseout", function () {
+                (this as L.Path).setStyle(styleFeature(feature as ArProvinceFeature));
+              });
             }}
           />
+          {arGeo?.features?.length ? (
+            <ProvinceLabels features={arGeo.features} show={mapVisual.choroplethShowLabels} />
+          ) : null}
         </MapContainer>
+        <ChoroplethLegend
+          colorLow={mapVisual.colorLow}
+          colorHigh={mapVisual.colorHigh}
+          minValue={chMin}
+          maxValue={chMax}
+          valueKey={valueKey}
+          show={mapVisual.choroplethShowLegend}
+        />
         {provinceMatchRows < rows.length ? (
           <div
             className="pointer-events-none absolute bottom-2 left-2 rounded px-2 py-1 text-[11px]"
@@ -596,8 +726,9 @@ export function DashboardMapWidget({
           />
         ) : null}
         <p className="mb-1">Sin provincias reconocidas en los datos</p>
-        <p className="text-xs px-4">
-          Usá una dimensión con nombres de provincia (ej. Córdoba) o cambiá a «Puntos» si tenés latitud/longitud.
+        <p className="text-xs px-4 max-w-md">
+          Revisá que la dimensión del eje X sea el nombre de provincia (ej. Córdoba, Buenos Aires, CABA).
+          Si usás ciudad o localidad, activá «Forzar Argentina en todas las filas» y actualizá los datos, o cambiá a «Puntos» si tenés latitud/longitud.
         </p>
       </div>
     );

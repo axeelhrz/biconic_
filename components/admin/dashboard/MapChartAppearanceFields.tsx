@@ -45,24 +45,27 @@ export function MapChartAppearanceFields({
       : "h-8 rounded-lg border-[var(--studio-border)] text-xs");
   const resolvedLabelClass = labelClassName ?? `text-[11px] ${isPlatform ? "text-[var(--platform-fg-muted)]" : "text-[var(--studio-fg-muted)]"}`;
 
-  const displayDefault = agg.mapDisplayModeDefault;
+  const displayDefault = agg.mapDisplayModeDefault ?? "choropleth";
   const enc = (agg.mapValueEncoding as MapValueEncoding | undefined) ?? MAP_VISUAL_DEFAULTS.mapValueEncoding;
   const colorLow = agg.mapColorLow ?? MAP_VISUAL_DEFAULTS.mapColorLow;
   const colorHigh = agg.mapColorHigh ?? MAP_VISUAL_DEFAULTS.mapColorHigh;
   const emptyColor = agg.mapChoroplethEmptyColor ?? MAP_VISUAL_DEFAULTS.mapChoroplethEmptyColor;
+  const showLabels = agg.mapChoroplethShowLabels ?? MAP_VISUAL_DEFAULTS.mapChoroplethShowLabels;
+  const showLegend = agg.mapChoroplethShowLegend ?? MAP_VISUAL_DEFAULTS.mapChoroplethShowLegend;
+  const hideBaseMap = agg.mapChoroplethHideBaseMap ?? MAP_VISUAL_DEFAULTS.mapChoroplethHideBaseMap;
   const showMarkerRadius = displayDefault !== "choropleth";
 
   return (
     <div className="space-y-3">
       <div>
-        <Label className={resolvedLabelClass}>Vista por defecto del mapa</Label>
+        <Label className={resolvedLabelClass}>Vista del mapa</Label>
         <select
-          value={displayDefault ?? ""}
+          value={displayDefault}
           onChange={(e) => {
             const v = e.target.value;
             updateAgg({
               mapDisplayModeDefault:
-                v === "markers" || v === "choropleth" ? (v as MapDisplayMode) : undefined,
+                v === "markers" || v === "choropleth" ? (v as MapDisplayMode) : "choropleth",
             });
           }}
           className="mt-1 w-full rounded-lg border px-2 py-2 text-xs"
@@ -72,14 +75,39 @@ export function MapChartAppearanceFields({
             color: fgVar,
           }}
         >
-          <option value="">Automático (provincias si hay datos en Argentina)</option>
+          <option value="choropleth">Provincias coloreadas (recomendado)</option>
           <option value="markers">Puntos (círculos)</option>
-          <option value="choropleth">Provincias coloreadas</option>
         </select>
         <p className="mt-1 text-[10px]" style={{ color: mutedVar }}>
-          Quien ve el dashboard puede cambiar entre Puntos y Provincias con el control en la esquina del mapa
-          (solo con país por defecto Argentina).
+          Con país por defecto Argentina, el mapa muestra provincias coloreadas según la métrica. El visitante puede cambiar a puntos desde el control en la esquina del mapa.
         </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <label className="flex items-center gap-2 text-xs" style={{ color: fgVar }}>
+          <input
+            type="checkbox"
+            checked={showLabels}
+            onChange={(e) => updateAgg({ mapChoroplethShowLabels: e.target.checked })}
+          />
+          Etiquetas de provincia
+        </label>
+        <label className="flex items-center gap-2 text-xs" style={{ color: fgVar }}>
+          <input
+            type="checkbox"
+            checked={showLegend}
+            onChange={(e) => updateAgg({ mapChoroplethShowLegend: e.target.checked })}
+          />
+          Leyenda de valores
+        </label>
+        <label className="flex items-center gap-2 text-xs" style={{ color: fgVar }}>
+          <input
+            type="checkbox"
+            checked={hideBaseMap}
+            onChange={(e) => updateAgg({ mapChoroplethHideBaseMap: e.target.checked })}
+          />
+          Fondo limpio (sin calles)
+        </label>
       </div>
 
       <div>
@@ -231,7 +259,30 @@ export function MapChartAppearanceFields({
           placeholder={String(MAP_VISUAL_DEFAULTS.mapStrokeWidth)}
         />
       </div>
-      ) : null}
+      ) : (
+      <div>
+        <Label className={resolvedLabelClass}>Grosor borde entre provincias (px)</Label>
+        <Input
+          type="number"
+          min={0}
+          max={6}
+          step={0.5}
+          value={agg.mapStrokeWidth ?? ""}
+          onChange={(e) =>
+            updateAgg({
+              mapStrokeWidth: e.target.value !== "" ? Number(e.target.value) : undefined,
+            })
+          }
+          className={`mt-0.5 max-w-[8rem] ${resolvedInputClass}`}
+          style={
+            isPlatform
+              ? { borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }
+              : undefined
+          }
+          placeholder={String(MAP_VISUAL_DEFAULTS.mapStrokeWidth)}
+        />
+      </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2">
         <div>

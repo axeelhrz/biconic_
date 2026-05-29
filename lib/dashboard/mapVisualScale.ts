@@ -19,6 +19,12 @@ export type MapVisualConfigInput = {
   mapFillOpacityMax?: number;
   mapStrokeWidth?: number;
   mapChoroplethEmptyColor?: string;
+  /** Coropleta: mostrar nombre de provincia en el polígono. */
+  mapChoroplethShowLabels?: boolean;
+  /** Coropleta: leyenda de escala (mín–máx). */
+  mapChoroplethShowLegend?: boolean;
+  /** Coropleta: ocultar capa de calles (fondo limpio). */
+  mapChoroplethHideBaseMap?: boolean;
 };
 
 /** Defaults alineados con el comportamiento histórico (HSL 199, radios 5–14). */
@@ -32,6 +38,9 @@ export const MAP_VISUAL_DEFAULTS = {
   mapFillOpacityMax: 0.85,
   mapStrokeWidth: 1.5,
   mapChoroplethEmptyColor: "#e8edf3",
+  mapChoroplethShowLabels: true,
+  mapChoroplethShowLegend: true,
+  mapChoroplethHideBaseMap: true,
 } as const;
 
 export type ResolvedMapVisualStyle = {
@@ -44,6 +53,9 @@ export type ResolvedMapVisualStyle = {
   fillOpacityMax: number;
   strokeWidth: number;
   choroplethEmptyColor: string;
+  choroplethShowLabels: boolean;
+  choroplethShowLegend: boolean;
+  choroplethHideBaseMap: boolean;
 };
 
 function clamp01(t: number): number {
@@ -121,6 +133,9 @@ export function pickMapVisualFromCfg(cfg: unknown): MapVisualConfigInput {
   if (Number.isFinite(sw)) out.mapStrokeWidth = sw;
   const empty = typeof c.mapChoroplethEmptyColor === "string" ? c.mapChoroplethEmptyColor.trim() : "";
   if (empty) out.mapChoroplethEmptyColor = empty;
+  if (typeof c.mapChoroplethShowLabels === "boolean") out.mapChoroplethShowLabels = c.mapChoroplethShowLabels;
+  if (typeof c.mapChoroplethShowLegend === "boolean") out.mapChoroplethShowLegend = c.mapChoroplethShowLegend;
+  if (typeof c.mapChoroplethHideBaseMap === "boolean") out.mapChoroplethHideBaseMap = c.mapChoroplethHideBaseMap;
   return out;
 }
 
@@ -140,6 +155,18 @@ export function resolveMapVisualStyle(cfg?: MapVisualConfigInput | null): Resolv
   const strokeWidth = Math.max(0, finiteOr(MAP_VISUAL_DEFAULTS.mapStrokeWidth, cfg?.mapStrokeWidth));
   const choroplethEmpty =
     String(cfg?.mapChoroplethEmptyColor ?? "").trim() || MAP_VISUAL_DEFAULTS.mapChoroplethEmptyColor;
+  const choroplethShowLabels =
+    typeof cfg?.mapChoroplethShowLabels === "boolean"
+      ? cfg.mapChoroplethShowLabels
+      : MAP_VISUAL_DEFAULTS.mapChoroplethShowLabels;
+  const choroplethShowLegend =
+    typeof cfg?.mapChoroplethShowLegend === "boolean"
+      ? cfg.mapChoroplethShowLegend
+      : MAP_VISUAL_DEFAULTS.mapChoroplethShowLegend;
+  const choroplethHideBaseMap =
+    typeof cfg?.mapChoroplethHideBaseMap === "boolean"
+      ? cfg.mapChoroplethHideBaseMap
+      : MAP_VISUAL_DEFAULTS.mapChoroplethHideBaseMap;
   return {
     encoding,
     colorLow,
@@ -150,6 +177,9 @@ export function resolveMapVisualStyle(cfg?: MapVisualConfigInput | null): Resolv
     fillOpacityMax: opMax,
     strokeWidth,
     choroplethEmptyColor: choroplethEmpty,
+    choroplethShowLabels,
+    choroplethShowLegend,
+    choroplethHideBaseMap,
   };
 }
 
@@ -234,13 +264,13 @@ export function resolveChoroplethVisual(
       fillColor: colorHigh,
       fillOpacity: fillOpacityMin + t * (fillOpacityMax - fillOpacityMin),
       strokeColor: "#64748b",
-      strokeWeight: 1,
+      strokeWeight: Math.max(0.5, style.strokeWidth),
     };
   }
   return {
     fillColor: interpolateMapColor(colorLow, colorHigh, t),
     fillOpacity: fillOpacityMin + t * (fillOpacityMax - fillOpacityMin),
     strokeColor: "#64748b",
-    strokeWeight: 1,
+    strokeWeight: Math.max(0.5, style.strokeWidth),
   };
 }

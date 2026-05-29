@@ -316,6 +316,9 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
     mapFillOpacityMax: cfg.mapFillOpacityMax,
     mapStrokeWidth: cfg.mapStrokeWidth,
     mapChoroplethEmptyColor: cfg.mapChoroplethEmptyColor,
+    mapChoroplethShowLabels: cfg.mapChoroplethShowLabels,
+    mapChoroplethShowLegend: cfg.mapChoroplethShowLegend,
+    mapChoroplethHideBaseMap: cfg.mapChoroplethHideBaseMap,
     geoComponentOverrides: cfg.geoComponentOverrides,
     geoOverridesByXLabel: cfg.geoOverridesByXLabel,
   };

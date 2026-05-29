@@ -2576,6 +2576,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         showDataLabels,
         labelVisibilityMode,
         chartComboSyncAxes,
+        ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
+        ...(formChartType === "map" && compactGeoComponentOverridesForRequest(geoComponentOverrides)
+          ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(geoComponentOverrides) }
+          : {}),
+        ...(formChartType === "map" && compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel)
+          ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
+          : {}),
+        ...(formChartType === "map" ? { ...mapVisualFields } : {}),
       },
       chartStyle: toChartStyleConfig({
         valueType: chartValueType,
@@ -2629,6 +2637,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     showDataLabels,
     labelVisibilityMode,
     chartComboSyncAxes,
+    mapDefaultCountry,
+    mapVisualFields,
+    geoComponentOverrides,
+    geoOverridesByXLabel,
     timeColumn,
     analysisGranularity,
   ]);
