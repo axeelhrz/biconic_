@@ -781,6 +781,7 @@ export function MetricConfigPanel({
                 <p className="text-xs leading-relaxed text-[var(--studio-fg)]">
                   Para la <strong className="text-[var(--studio-accent)]">ubicación de la leyenda</strong>,{" "}
                   <strong className="text-[var(--studio-accent)]">etiquetas sobre barras/líneas</strong>,{" "}
+                  <strong className="text-[var(--studio-accent)]">tarjeta de detalle (tooltip)</strong>,{" "}
                   <strong className="text-[var(--studio-accent)]">colores</strong> (serie, cuadrícula, ejes),{" "}
                   <strong className="text-[var(--studio-accent)]">grosor de barras, líneas de serie y cuadrícula</strong> y{" "}
                   <strong className="text-[var(--studio-accent)]">tipografía del gráfico</strong>, usá la pestaña{" "}
@@ -1269,6 +1270,9 @@ export function MetricConfigPanel({
 
                 <div>
                   <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">País por defecto</Label>
+                  <p className="mt-0.5 text-[10px] text-[var(--studio-fg-muted)]">
+                    Solo si la fila <strong>no trae país</strong> en sus columnas. Para forzar Argentina en todas las filas usá el botón de abajo o «Forzar valores».
+                  </p>
                   <Input
                     value={agg.mapDefaultCountry ?? ""}
                     onChange={(e) =>
@@ -1281,8 +1285,29 @@ export function MetricConfigPanel({
                   />
                 </div>
 
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-full text-xs"
+                  onClick={() =>
+                    updateAgg({
+                      mapDefaultCountry: "Argentina",
+                      geoComponentOverrides: {
+                        ...(agg.geoComponentOverrides ?? {}),
+                        country: "Argentina",
+                      },
+                    })
+                  }
+                >
+                  Forzar Argentina en todas las filas
+                </Button>
+
                 <div className="space-y-2">
                   <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Forzar valores (todas las filas)</p>
+                  <p className="text-[10px] text-[var(--studio-fg-muted)]">
+                    Sustituye país, provincia o ciudad inferidos en <strong>cada fila</strong> antes de geocodificar.
+                  </p>
                   <Input
                     value={agg.geoComponentOverrides?.country ?? ""}
                     onChange={(e) => setGlobalGeoOverride("country", e.target.value)}
@@ -1405,6 +1430,7 @@ export function MetricConfigPanel({
             <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
               Acá definís <strong className="text-[var(--studio-fg)]">leyenda</strong>,{" "}
               <strong className="text-[var(--studio-fg)]">etiquetas sobre los datos</strong>,{" "}
+              <strong className="text-[var(--studio-fg)]">tarjeta de detalle (tooltip)</strong>,{" "}
               <strong className="text-[var(--studio-fg)]">colores</strong> de la serie y de ejes/cuadrícula,{" "}
               <strong className="text-[var(--studio-fg)]">grosor de barras, líneas de serie y líneas de cuadrícula</strong> del
               gráfico, y <strong className="text-[var(--studio-fg)]">tipografía</strong> del dibujo. El fondo y borde de la{" "}
@@ -1848,6 +1874,294 @@ export function MetricConfigPanel({
           </div>
         )}
             </div>
+
+        {!["filter", "image", "text"].includes(widget.type) &&
+          ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "stackedColumn", "scatter", "map"].includes(
+            chartType
+          ) && (
+            <div className="space-y-4 border-b border-[var(--studio-border)] pb-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Tarjeta de detalle (tooltip / mapa)</h4>
+              <div className="space-y-3">
+              <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+                Al pasar el mouse sobre el gráfico o al abrir un polígono/punto en el mapa. Podés usar{" "}
+                <code className="rounded bg-[var(--studio-bg)] px-1 text-[10px]">{"{{category}}"}</code> y{" "}
+                <code className="rounded bg-[var(--studio-bg)] px-1 text-[10px]">{"{{series}}"}</code> en el título.
+                Las líneas «% del total» usan la suma de la columna en todos los datos visibles del widget.
+              </p>
+              <div className="space-y-2">
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Título (opcional)</Label>
+                <Input
+                  value={(agg.chartDetailCard as ChartDetailCardConfig | undefined)?.title ?? ""}
+                  onChange={(e) =>
+                    onUpdate({
+                      aggregationConfig: {
+                        chartDetailCard: {
+                          ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                          title: e.target.value,
+                          lines: ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[],
+                        },
+                      },
+                    })
+                  }
+                  placeholder="Ej. {{category}}"
+                  className="h-8 text-xs"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Descripción breve (opcional)</Label>
+                <textarea
+                  value={(agg.chartDetailCard as ChartDetailCardConfig | undefined)?.description ?? ""}
+                  onChange={(e) =>
+                    onUpdate({
+                      aggregationConfig: {
+                        chartDetailCard: {
+                          ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                          description: e.target.value,
+                          lines: ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[],
+                        },
+                      },
+                    })
+                  }
+                  rows={2}
+                  className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 py-1.5 text-xs"
+                  placeholder="Texto de ayuda para interpretar la métrica…"
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Líneas mostradas</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    onClick={() => {
+                      const prev = ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[];
+                      const col = percentFieldColumnOptions[0] ?? yAxisKeysForUi[0] ?? "metric_0";
+                      const next: ChartDetailCardLine[] = [
+                        ...prev,
+                        {
+                          id: `dl-${Date.now()}`,
+                          kind: "row",
+                          label: "Etiqueta",
+                          field: col,
+                          valueFormat: "none",
+                          valueScale: "none",
+                          decimals: 2,
+                        },
+                      ];
+                      onUpdate({
+                        aggregationConfig: {
+                          chartDetailCard: {
+                            ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                            lines: next,
+                          },
+                        },
+                      });
+                    }}
+                  >
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    Añadir línea
+                  </Button>
+                </div>
+                {(((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[]).length === 0 ? (
+                  <p className="text-[11px] text-[var(--studio-fg-muted)]">Sin líneas: se usa el tooltip por defecto.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {(((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[]).map((line, idx) => {
+                      const lines = ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[];
+                      const patchLine = (patch: Partial<ChartDetailCardLine>) => {
+                        const copy = [...lines];
+                        copy[idx] = { ...copy[idx]!, ...patch } as ChartDetailCardLine;
+                        onUpdate({
+                          aggregationConfig: {
+                            chartDetailCard: {
+                              ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                              lines: copy,
+                            },
+                          },
+                        });
+                      };
+                      const removeLine = () => {
+                        const copy = lines.filter((_, j) => j !== idx);
+                        onUpdate({
+                          aggregationConfig: {
+                            chartDetailCard:
+                              copy.length === 0
+                                ? undefined
+                                : {
+                                    ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                                    lines: copy,
+                                  },
+                          },
+                        });
+                      };
+                      const kind = line.kind === "computed" ? "computed" : "row";
+                      return (
+                        <div
+                          key={line.id || idx}
+                          className="rounded border p-2 space-y-2"
+                          style={{ borderColor: "var(--studio-border)", background: "var(--studio-surface)" }}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <select
+                              value={kind}
+                              onChange={(e) => {
+                                if (e.target.value === "computed") {
+                                  const numFromRow = line.kind === "row" ? line.field : line.numeratorField;
+                                  patchLine({
+                                    kind: "computed",
+                                    computed: "percent_of_total",
+                                    numeratorField: percentFieldColumnOptions[0] ?? numFromRow ?? "",
+                                    label: line.label,
+                                  } as ChartDetailCardLine);
+                                } else {
+                                  const fieldFromComputed =
+                                    line.kind === "computed" ? line.numeratorField : line.field;
+                                  patchLine({
+                                    kind: "row",
+                                    field: percentFieldColumnOptions[0] ?? fieldFromComputed ?? "",
+                                    label: line.label,
+                                  } as ChartDetailCardLine);
+                                }
+                              }}
+                              className="h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                            >
+                              <option value="row">Valor de columna</option>
+                              <option value="computed">% del total (columna)</option>
+                            </select>
+                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={removeLine}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="col-span-2">
+                              <Label className="text-[10px] text-[var(--studio-fg-muted)]">Etiqueta visible</Label>
+                              <Input
+                                value={line.label}
+                                onChange={(e) => patchLine({ label: e.target.value })}
+                                className="mt-0.5 h-7 text-[11px]"
+                              />
+                            </div>
+                            {kind === "row" ? (
+                              <div className="col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Columna en datos</Label>
+                                <select
+                                  value={(line as { field?: string }).field ?? ""}
+                                  onChange={(e) => patchLine({ field: e.target.value } as ChartDetailCardLine)}
+                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                                >
+                                  {percentFieldColumnOptions.map((k) => (
+                                    <option key={k} value={k}>
+                                      {k}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : (
+                              <div className="col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Columna numerador (para %)</Label>
+                                <select
+                                  value={(line as { numeratorField?: string }).numeratorField ?? ""}
+                                  onChange={(e) => patchLine({ numeratorField: e.target.value } as ChartDetailCardLine)}
+                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                                >
+                                  {percentFieldColumnOptions.map((k) => (
+                                    <option key={k} value={k}>
+                                      {k}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                            <div>
+                              <Label className="text-[10px] text-[var(--studio-fg-muted)]">Formato</Label>
+                              <select
+                                value={line.valueFormat ?? "none"}
+                                onChange={(e) => {
+                                  const vf = e.target.value as "none" | "currency" | "percent";
+                                  patchLine({
+                                    valueFormat: vf,
+                                    ...(vf === "percent" ? { valueScale: undefined } : {}),
+                                  });
+                                }}
+                                className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                              >
+                                <option value="none">Número</option>
+                                <option value="currency">Moneda</option>
+                                <option value="percent">Porcentaje</option>
+                              </select>
+                            </div>
+                            <div>
+                              <Label className="text-[10px] text-[var(--studio-fg-muted)]">Decimales</Label>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={8}
+                                value={line.decimals ?? 2}
+                                onChange={(e) => patchLine({ decimals: Math.min(8, Math.max(0, parseInt(e.target.value, 10) || 0)) })}
+                                className="mt-0.5 h-7 text-[11px]"
+                              />
+                            </div>
+                            {kind === "row" && line.valueFormat !== "percent" ? (
+                              <div className="col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Escala (K / M / B)</Label>
+                                <select
+                                  value={line.valueScale ?? "none"}
+                                  onChange={(e) =>
+                                    patchLine({
+                                      valueScale: e.target.value as "none" | "K" | "M" | "Bi" | "B",
+                                    })
+                                  }
+                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                                >
+                                  <option value="none">Ninguna</option>
+                                  <option value="K">Miles (K)</option>
+                                  <option value="M">Millones (M)</option>
+                                  <option value="Bi">Miles de millones (Bi)</option>
+                                  <option value="B">Billones (B)</option>
+                                </select>
+                                <p className="mt-0.5 text-[10px] text-[var(--studio-fg-muted)]">
+                                  Abrevia el número (p. ej. moneda con M) como en el formato por métrica del gráfico.
+                                </p>
+                              </div>
+                            ) : null}
+                            {line.valueFormat === "currency" ? (
+                              <div className="col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Símbolo moneda</Label>
+                                <Input
+                                  value={line.currencySymbol ?? ""}
+                                  onChange={(e) =>
+                                    patchLine({ currencySymbol: e.target.value || undefined })
+                                  }
+                                  placeholder="$"
+                                  className="mt-0.5 h-7 text-[11px]"
+                                />
+                              </div>
+                            ) : null}
+                            <label className="col-span-2 flex cursor-pointer items-center gap-2">
+                              <Checkbox
+                                checked={line.useGrouping !== false}
+                                onCheckedChange={(c) => patchLine({ useGrouping: c === true })}
+                              />
+                              <span className="text-[10px] text-[var(--studio-fg-muted)]">Separador de miles</span>
+                            </label>
+                            <label className="col-span-2 flex cursor-pointer items-center gap-2">
+                              <Checkbox
+                                checked={line.integerOnly === true}
+                                onCheckedChange={(c) => patchLine({ integerOnly: !!c })}
+                              />
+                              <span className="text-[10px] text-[var(--studio-fg-muted)]">Mostrar como entero</span>
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
             <div className="space-y-4 border-b border-[var(--studio-border)] pb-4">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Colores, ejes y cuadrícula</h4>
@@ -2444,271 +2758,6 @@ export function MetricConfigPanel({
           </div>
         )}
 
-        {!["filter", "image", "text"].includes(widget.type) &&
-          ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "stackedColumn", "scatter", "map"].includes(
-            chartType
-          ) && (
-            <div className="border-t border-[var(--studio-border)] pt-4 space-y-3">
-              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tarjeta de detalle (tooltip / mapa)</Label>
-              <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
-                Al pasar el mouse sobre el gráfico o al abrir un polígono/punto en el mapa. Podés usar{" "}
-                <code className="rounded bg-[var(--studio-bg)] px-1 text-[10px]">{"{{category}}"}</code> y{" "}
-                <code className="rounded bg-[var(--studio-bg)] px-1 text-[10px]">{"{{series}}"}</code> en el título.
-                Las líneas «% del total» usan la suma de la columna en todos los datos visibles del widget.
-              </p>
-              <div className="space-y-2">
-                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Título (opcional)</Label>
-                <Input
-                  value={(agg.chartDetailCard as ChartDetailCardConfig | undefined)?.title ?? ""}
-                  onChange={(e) =>
-                    onUpdate({
-                      aggregationConfig: {
-                        chartDetailCard: {
-                          ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
-                          title: e.target.value,
-                          lines: ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[],
-                        },
-                      },
-                    })
-                  }
-                  placeholder="Ej. {{category}}"
-                  className="h-8 text-xs"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Descripción breve (opcional)</Label>
-                <textarea
-                  value={(agg.chartDetailCard as ChartDetailCardConfig | undefined)?.description ?? ""}
-                  onChange={(e) =>
-                    onUpdate({
-                      aggregationConfig: {
-                        chartDetailCard: {
-                          ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
-                          description: e.target.value,
-                          lines: ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[],
-                        },
-                      },
-                    })
-                  }
-                  rows={2}
-                  className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 py-1.5 text-xs"
-                  placeholder="Texto de ayuda para interpretar la métrica…"
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Líneas mostradas</Label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-[11px]"
-                    onClick={() => {
-                      const prev = ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[];
-                      const col = percentFieldColumnOptions[0] ?? yAxisKeysForUi[0] ?? "metric_0";
-                      const next: ChartDetailCardLine[] = [
-                        ...prev,
-                        {
-                          id: `dl-${Date.now()}`,
-                          kind: "row",
-                          label: "Etiqueta",
-                          field: col,
-                          valueFormat: "none",
-                          valueScale: "none",
-                          decimals: 2,
-                        },
-                      ];
-                      onUpdate({
-                        aggregationConfig: {
-                          chartDetailCard: {
-                            ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
-                            lines: next,
-                          },
-                        },
-                      });
-                    }}
-                  >
-                    <Plus className="mr-1 h-3.5 w-3.5" />
-                    Añadir línea
-                  </Button>
-                </div>
-                {(((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[]).length === 0 ? (
-                  <p className="text-[11px] text-[var(--studio-fg-muted)]">Sin líneas: se usa el tooltip por defecto.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {(((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[]).map((line, idx) => {
-                      const lines = ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[];
-                      const patchLine = (patch: Partial<ChartDetailCardLine>) => {
-                        const copy = [...lines];
-                        copy[idx] = { ...copy[idx]!, ...patch } as ChartDetailCardLine;
-                        onUpdate({
-                          aggregationConfig: {
-                            chartDetailCard: {
-                              ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
-                              lines: copy,
-                            },
-                          },
-                        });
-                      };
-                      const removeLine = () => {
-                        const copy = lines.filter((_, j) => j !== idx);
-                        onUpdate({
-                          aggregationConfig: {
-                            chartDetailCard:
-                              copy.length === 0
-                                ? undefined
-                                : {
-                                    ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
-                                    lines: copy,
-                                  },
-                          },
-                        });
-                      };
-                      const kind = line.kind === "computed" ? "computed" : "row";
-                      return (
-                        <div
-                          key={line.id || idx}
-                          className="rounded border p-2 space-y-2"
-                          style={{ borderColor: "var(--studio-border)", background: "var(--studio-surface)" }}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <select
-                              value={kind}
-                              onChange={(e) => {
-                                if (e.target.value === "computed") {
-                                  const numFromRow = line.kind === "row" ? line.field : line.numeratorField;
-                                  patchLine({
-                                    kind: "computed",
-                                    computed: "percent_of_total",
-                                    numeratorField: percentFieldColumnOptions[0] ?? numFromRow ?? "",
-                                    label: line.label,
-                                  } as ChartDetailCardLine);
-                                } else {
-                                  const fieldFromComputed =
-                                    line.kind === "computed" ? line.numeratorField : line.field;
-                                  patchLine({
-                                    kind: "row",
-                                    field: percentFieldColumnOptions[0] ?? fieldFromComputed ?? "",
-                                    label: line.label,
-                                  } as ChartDetailCardLine);
-                                }
-                              }}
-                              className="h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
-                            >
-                              <option value="row">Valor de columna</option>
-                              <option value="computed">% del total (columna)</option>
-                            </select>
-                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={removeLine}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="col-span-2">
-                              <Label className="text-[10px] text-[var(--studio-fg-muted)]">Etiqueta visible</Label>
-                              <Input
-                                value={line.label}
-                                onChange={(e) => patchLine({ label: e.target.value })}
-                                className="mt-0.5 h-7 text-[11px]"
-                              />
-                            </div>
-                            {kind === "row" ? (
-                              <div className="col-span-2">
-                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Columna en datos</Label>
-                                <select
-                                  value={(line as { field?: string }).field ?? ""}
-                                  onChange={(e) => patchLine({ field: e.target.value } as ChartDetailCardLine)}
-                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
-                                >
-                                  {percentFieldColumnOptions.map((k) => (
-                                    <option key={k} value={k}>
-                                      {k}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                            ) : (
-                              <div className="col-span-2">
-                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Columna numerador (para %)</Label>
-                                <select
-                                  value={(line as { numeratorField?: string }).numeratorField ?? ""}
-                                  onChange={(e) => patchLine({ numeratorField: e.target.value } as ChartDetailCardLine)}
-                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
-                                >
-                                  {percentFieldColumnOptions.map((k) => (
-                                    <option key={k} value={k}>
-                                      {k}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                            )}
-                            <div>
-                              <Label className="text-[10px] text-[var(--studio-fg-muted)]">Formato</Label>
-                              <select
-                                value={line.valueFormat ?? "none"}
-                                onChange={(e) => {
-                                  const vf = e.target.value as "none" | "currency" | "percent";
-                                  patchLine({
-                                    valueFormat: vf,
-                                    ...(vf === "percent" ? { valueScale: undefined } : {}),
-                                  });
-                                }}
-                                className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
-                              >
-                                <option value="none">Número</option>
-                                <option value="currency">Moneda</option>
-                                <option value="percent">Porcentaje</option>
-                              </select>
-                            </div>
-                            <div>
-                              <Label className="text-[10px] text-[var(--studio-fg-muted)]">Decimales</Label>
-                              <Input
-                                type="number"
-                                min={0}
-                                max={8}
-                                value={line.decimals ?? 2}
-                                onChange={(e) => patchLine({ decimals: Math.min(8, Math.max(0, parseInt(e.target.value, 10) || 0)) })}
-                                className="mt-0.5 h-7 text-[11px]"
-                              />
-                            </div>
-                            {kind === "row" && line.valueFormat !== "percent" ? (
-                              <div className="col-span-2">
-                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Escala (K / M / B)</Label>
-                                <select
-                                  value={line.valueScale ?? "none"}
-                                  onChange={(e) =>
-                                    patchLine({
-                                      valueScale: e.target.value as "none" | "K" | "M" | "Bi" | "B",
-                                    })
-                                  }
-                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
-                                >
-                                  <option value="none">Ninguna</option>
-                                  <option value="K">Miles (K)</option>
-                                  <option value="M">Millones (M)</option>
-                                  <option value="Bi">Miles de millones (Bi)</option>
-                                  <option value="B">Billones (B)</option>
-                                </select>
-                                <p className="mt-0.5 text-[10px] text-[var(--studio-fg-muted)]">
-                                  Abrevia el número (p. ej. moneda con M) como en el formato por métrica del gráfico.
-                                </p>
-                              </div>
-                            ) : null}
-                            <label className="col-span-2 flex cursor-pointer items-center gap-2">
-                              <Checkbox
-                                checked={line.integerOnly === true}
-                                onCheckedChange={(c) => patchLine({ integerOnly: !!c })}
-                              />
-                              <span className="text-[10px] text-[var(--studio-fg-muted)]">Mostrar como entero</span>
-                            </label>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
           )}
 
             </TabsContent>

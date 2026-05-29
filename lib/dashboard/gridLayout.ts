@@ -32,8 +32,8 @@ export function packRowGapPxStudio(innerWidth: number): number {
   return innerWidth >= 768 ? DASHBOARD_GRID_ROW_GAP_PX_STUDIO_WIDE : DASHBOARD_GRID_ROW_GAP_PX_STUDIO_NARROW;
 }
 
-export function packRowGapPxClient(_innerWidth: number): number {
-  return DASHBOARD_GRID_ROW_GAP_PX_CLIENT;
+export function packRowGapPxClient(innerWidth: number): number {
+  return packRowGapPxStudio(innerWidth);
 }
 
 /**

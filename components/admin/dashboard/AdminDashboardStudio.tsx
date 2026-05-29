@@ -85,7 +85,7 @@ import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
   mergeAnalysisAggregationWithDashboardOverrides,
-  extractDashboardVisualOverrides,
+  extractDashboardWidgetOverrides,
   widgetAggregationWithStoredVisualOverrides,
   resolveAnalysisDimensionsFromConfig,
   resolveWidgetAnalysisMergePatch,
@@ -381,14 +381,21 @@ function studioWidgetAggForVisualMerge(
   return widgetAggregationWithStoredVisualOverrides(w);
 }
 
-function normalizeLoadedStudioWidget(w: StudioWidget): StudioWidget {
+function normalizeLoadedStudioWidget(w: StudioWidget, cardLayoutMode: "auto" | "manual"): StudioWidget {
+  let next = w;
   const stored = w.dashboardVisualOverrides;
-  if (!stored || typeof stored !== "object" || Object.keys(stored).length === 0) return w;
-  const mergedAgg = {
-    ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
-    ...extractDashboardVisualOverrides(stored),
-  } as AggregationConfig;
-  return { ...w, aggregationConfig: mergedAgg };
+  if (stored && typeof stored === "object" && Object.keys(stored).length > 0) {
+    const mergedAgg = {
+      ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
+      ...extractDashboardWidgetOverrides(stored),
+    } as AggregationConfig;
+    next = { ...w, aggregationConfig: mergedAgg };
+  }
+  if (cardLayoutMode === "auto" && next.fixedGrid) {
+    const { fixedGrid: _fg, ...without } = next;
+    next = without as StudioWidget;
+  }
+  return next;
 }
 
 /** Regenera config del canvas con la aggregationConfig/color actuales del widget (estilos del panel). */
@@ -600,19 +607,23 @@ export function AdminDashboardStudio({
             loadedActivePageId = layout.activePageId ?? layout.pages[0].id;
           }
           const firstPageId = loadedPages[0].id;
+          const loadedCardLayoutMode = normalizeCardLayoutMode(layout.cardLayoutMode);
           if (Array.isArray(layout.widgets)) {
             loadedWidgets = layout.widgets.map((w: unknown, i: number) =>
-              normalizeLoadedStudioWidget({
-                ...(w as object),
-                gridOrder: (w as StudioWidget).gridOrder ?? i,
-                gridSpan: (w as StudioWidget).gridSpan ?? 2,
-                pageId: (w as StudioWidget).pageId ?? firstPageId,
-              } as StudioWidget)
+              normalizeLoadedStudioWidget(
+                {
+                  ...(w as object),
+                  gridOrder: (w as StudioWidget).gridOrder ?? i,
+                  gridSpan: (w as StudioWidget).gridSpan ?? 2,
+                  pageId: (w as StudioWidget).pageId ?? firstPageId,
+                } as StudioWidget,
+                loadedCardLayoutMode
+              )
             );
           }
           if (layout.theme) loadedTheme = mergeTheme(layout.theme);
           if (!cancelled) {
-            setCardLayoutMode(normalizeCardLayoutMode(layout.cardLayoutMode));
+            setCardLayoutMode(loadedCardLayoutMode);
           }
         }
         if (!cancelled) {
@@ -692,7 +703,7 @@ export function AdminDashboardStudio({
       const widgetsToSave = overrides?.widgets ?? widgetsRef.current;
       const cleanWidgets = widgetsToSave.map(({ rows, config, columns, facetValues, diagnosticPreview, ...rest }) => {
         const agg = (rest.aggregationConfig ?? {}) as Record<string, unknown>;
-        const dashboardVisualOverrides = extractDashboardVisualOverrides(agg);
+        const dashboardVisualOverrides = extractDashboardWidgetOverrides(agg);
         return {
           ...rest,
           ...(Object.keys(dashboardVisualOverrides).length > 0 ? { dashboardVisualOverrides } : {}),
@@ -1844,6 +1855,11 @@ export function AdminDashboardStudio({
     saveDashboard();
   }, [saveDashboard]);
 
+  const handleBeforePreview = useCallback(async () => {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    if (isDirty) await saveDashboard({ silent: true });
+  }, [isDirty, saveDashboard]);
+
   const updateTheme = useCallback((patch: Partial<DashboardTheme>) => {
     setDashboardTheme((prev) => ({ ...prev, ...patch }));
     setIsDirty(true);
@@ -1878,12 +1894,15 @@ export function AdminDashboardStudio({
         const pageWs = prev.filter((x) => (x.pageId ?? "page-1") === pageId);
         return prev.map((w) => {
           if (w.id !== widgetId) return w;
-          const next = { ...w, ...patch };
+          let next: StudioWidget = { ...w, ...patch };
           if (cardLayoutMode === "manual") {
             const fg = reconcileManualFixedGrid(next, patch, packCols, packRowGapPx, pageWs);
             if (fg) next.fixedGrid = fg;
             if (patch.gridSpan != null) next.gridSpan = patch.gridSpan;
             if (patch.minHeight != null) next.minHeight = patch.minHeight;
+          } else if (next.fixedGrid) {
+            const { fixedGrid: _fg, ...without } = next;
+            next = without as StudioWidget;
           }
           return next;
         });
@@ -2130,10 +2149,25 @@ export function AdminDashboardStudio({
       if (!selectedId) return;
       const { imageConfig: patchImg, aggregationConfig: aggDelta, ...restPatch } = patch;
       const aggPatch = aggDelta as Record<string, unknown> | undefined;
-      setWidgets((prev) =>
-        prev.map((w) => {
+      const layoutSizePatch =
+        patch.gridSpan != null || patch.minHeight != null
+          ? { gridSpan: patch.gridSpan, minHeight: patch.minHeight }
+          : null;
+      setWidgets((prev) => {
+        const pageId = activePageId ?? "page-1";
+        const pageWs = prev.filter((x) => (x.pageId ?? "page-1") === pageId);
+        return prev.map((w) => {
           if (w.id !== selectedId) return w;
-          const next: StudioWidget = { ...w, ...restPatch };
+          let next: StudioWidget = { ...w, ...restPatch };
+          if (layoutSizePatch) {
+            if (cardLayoutMode === "manual") {
+              const fg = reconcileManualFixedGrid(next, layoutSizePatch, packCols, packRowGapPx, pageWs);
+              if (fg) next.fixedGrid = fg;
+            } else if (next.fixedGrid) {
+              const { fixedGrid: _fg, ...without } = next;
+              next = without as StudioWidget;
+            }
+          }
           const percentLayoutPatch =
             "chartPercentBasis" in patch ||
             "chartPercentGroupField" in patch ||
@@ -2145,7 +2179,7 @@ export function AdminDashboardStudio({
               ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
               ...aggDelta,
             } as AggregationConfig;
-            const visuals = extractDashboardVisualOverrides(next.aggregationConfig as Record<string, unknown>);
+            const visuals = extractDashboardWidgetOverrides(next.aggregationConfig as Record<string, unknown>);
             next.dashboardVisualOverrides =
               Object.keys(visuals).length > 0 ? visuals : undefined;
           }
@@ -2165,8 +2199,8 @@ export function AdminDashboardStudio({
             next.imageConfig = { ...(w.imageConfig ?? {}), ...patchImg };
           }
           return next;
-        })
-      );
+        });
+      });
       setIsDirty(true);
 
       if (aggPatch && shouldRefetchWidgetOnAggregationPatch(aggPatch)) {
@@ -2177,7 +2211,15 @@ export function AdminDashboardStudio({
         }, 500);
       }
     },
-    [selectedId, loadMetricData]
+    [
+      selectedId,
+      loadMetricData,
+      activePageId,
+      cardLayoutMode,
+      packCols,
+      packRowGapPx,
+      reconcileManualFixedGrid,
+    ]
   );
 
   const selectedWidgetForPanel = useMemo(() => {
@@ -2215,6 +2257,7 @@ export function AdminDashboardStudio({
           isDirty={isDirty}
           isSaving={isSaving}
           onSave={handleSave}
+          onBeforePreview={handleBeforePreview}
           onRun={runAllMetrics}
           hideRunButton
         />

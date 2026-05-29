@@ -448,6 +448,32 @@ export const DASHBOARD_VISUAL_OVERRIDE_KEYS = new Set([
   "chartAxisStep",
   "chartPinnedDimensions",
   "tableColumnLabelOverrides",
+  "chartDetailCard",
+  "dashboardCompareUi",
+]);
+
+/** Claves geo/map editables desde el panel del dashboard (no del análisis ETL). */
+export const DASHBOARD_GEO_OVERRIDE_KEYS = new Set([
+  "mapDefaultCountry",
+  "geoHints",
+  "geoComponentOverrides",
+  "geoOverridesByXLabel",
+  "mapDisplayModeDefault",
+  "mapValueEncoding",
+  "mapColorLow",
+  "mapColorHigh",
+  "mapRadiusMin",
+  "mapRadiusMax",
+  "mapFillOpacityMin",
+  "mapFillOpacityMax",
+  "mapStrokeWidth",
+  "mapChoroplethEmptyColor",
+]);
+
+/** Todas las claves de override del widget del dashboard (visuales + geo). */
+export const DASHBOARD_WIDGET_OVERRIDE_KEYS = new Set([
+  ...DASHBOARD_VISUAL_OVERRIDE_KEYS,
+  ...DASHBOARD_GEO_OVERRIDE_KEYS,
 ]);
 
 /** Extrae overrides visuales del layout del dashboard (solo valores definidos). */
@@ -462,16 +488,40 @@ export function extractDashboardVisualOverrides(
   return out;
 }
 
+/** Extrae overrides geo/map del layout del dashboard. */
+export function extractDashboardGeoOverrides(
+  agg: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  if (!agg || typeof agg !== "object") return {};
+  const out: Record<string, unknown> = {};
+  for (const key of DASHBOARD_GEO_OVERRIDE_KEYS) {
+    if (agg[key] !== undefined) out[key] = agg[key];
+  }
+  return out;
+}
+
+/** Extrae todos los overrides del widget del dashboard (visuales + geo). */
+export function extractDashboardWidgetOverrides(
+  agg: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  if (!agg || typeof agg !== "object") return {};
+  const out: Record<string, unknown> = {};
+  for (const key of DASHBOARD_WIDGET_OVERRIDE_KEYS) {
+    if (agg[key] !== undefined) out[key] = agg[key];
+  }
+  return out;
+}
+
 /** Fusiona config de datos del análisis con overrides visuales del widget del dashboard. */
 export function mergeAnalysisAggregationWithDashboardOverrides(
   dataAgg: Record<string, unknown> | null | undefined,
   widgetAgg: Record<string, unknown> | null | undefined
 ): Record<string, unknown> {
   const base = dataAgg && typeof dataAgg === "object" ? { ...dataAgg } : {};
-  return { ...base, ...extractDashboardVisualOverrides(widgetAgg) };
+  return { ...base, ...extractDashboardWidgetOverrides(widgetAgg) };
 }
 
-/** aggregationConfig del widget + overrides visuales persistidos en layout (`dashboardVisualOverrides`). */
+/** aggregationConfig del widget + overrides persistidos en layout (`dashboardVisualOverrides`). */
 export function widgetAggregationWithStoredVisualOverrides(widget: {
   aggregationConfig?: Record<string, unknown> | null;
   dashboardVisualOverrides?: Record<string, unknown> | null;
@@ -479,7 +529,7 @@ export function widgetAggregationWithStoredVisualOverrides(widget: {
   const agg = (widget.aggregationConfig ?? {}) as Record<string, unknown>;
   const stored = widget.dashboardVisualOverrides;
   if (!stored || typeof stored !== "object") return agg;
-  return { ...agg, ...extractDashboardVisualOverrides(stored) };
+  return { ...agg, ...extractDashboardWidgetOverrides(stored) };
 }
 
 export type ResolveSeriesColorKeysParams = {
@@ -763,7 +813,7 @@ export function mergeSavedAnalysisIntoWidget(
     metrics: sanitizedMetrics,
     chartType,
     ...(compareUi ? { dashboardCompareUi: compareUi } : {}),
-    ...extractDashboardVisualOverrides(
+    ...extractDashboardWidgetOverrides(
       widgetAggregationWithStoredVisualOverrides({
         aggregationConfig: (widget.aggregationConfig ?? null) as Record<string, unknown> | null,
         dashboardVisualOverrides: (widget.dashboardVisualOverrides ?? null) as Record<string, unknown> | null,

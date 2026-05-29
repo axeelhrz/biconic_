@@ -34,6 +34,10 @@ export const AGG_DATA_REFETCH_KEYS = new Set([
   "dimension2",
   "dateDimension",
   "dateGroupByGranularity",
+  "mapDefaultCountry",
+  "geoHints",
+  "geoComponentOverrides",
+  "geoOverridesByXLabel",
 ]);
 
 export function shouldRefetchWidgetOnAggDataPatch(patch: Record<string, unknown>): boolean {

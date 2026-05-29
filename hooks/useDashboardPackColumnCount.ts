@@ -17,11 +17,9 @@ export function packColumnCountStudio(width: number): number {
   return 1;
 }
 
-/** Debe coincidir con `.client-view-grid` en client-dashboard-view.css */
+/** Alineado a studio para paridad editor ↔ vista previa (/view). */
 export function packColumnCountClient(width: number): number {
-  if (width >= 1024) return DASHBOARD_GRID_COLUMN_COUNT;
-  if (width >= 640) return 2;
-  return 1;
+  return packColumnCountStudio(width);
 }
 
 export type DashboardPackLayout = {

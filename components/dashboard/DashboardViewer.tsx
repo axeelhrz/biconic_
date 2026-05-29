@@ -27,6 +27,8 @@ import {
   buildResolvedChartStyle,
   resolveDarkChartTheme,
   resolveWidgetAnalysisMergePatch,
+  mergeAnalysisAggregationWithDashboardOverrides,
+  widgetAggregationWithStoredVisualOverrides,
   resolveWidgetLabelDisplayMode,
   type SavedAnalysisForMerge,
   type SavedMetricForAnalysisMerge,
@@ -431,6 +433,8 @@ export type Widget = DashboardWidgetRendererWidget & {
   cardTheme?: Partial<DashboardTheme>;
   /** Celda fija en la rejilla (1-based); si existe, no se empaqueta automáticamente. */
   fixedGrid?: DashboardFixedGrid;
+  /** Overrides visuales/geo del panel persistidos en layout. */
+  dashboardVisualOverrides?: Record<string, unknown>;
   /** Apilamiento respecto a otras tarjetas (solapamiento con fixedGrid). */
   zIndex?: number;
 };
@@ -875,10 +879,18 @@ export function DashboardViewer({
                 savedMetricsFromEtl
               )
             : null;
-        const aggConfig = (
+        const dataAgg = (
           analysisPatch
-            ? (analysisPatch.aggregationConfig as AggregationConfig)
-            : widget.aggregationConfig
+            ? (analysisPatch.aggregationConfig as Record<string, unknown>)
+            : ((widget.aggregationConfig ?? {}) as Record<string, unknown>)
+        );
+        const widgetAgg = widgetAggregationWithStoredVisualOverrides({
+          aggregationConfig: widget.aggregationConfig as Record<string, unknown>,
+          dashboardVisualOverrides: (widget as Widget).dashboardVisualOverrides,
+        });
+        const aggConfig = mergeAnalysisAggregationWithDashboardOverrides(
+          dataAgg,
+          widgetAgg
         ) as AggregationConfig | undefined;
         const effectiveWidgetType = analysisPatch?.type ?? widget.type;
         const effectiveLabelDisplayMode =
