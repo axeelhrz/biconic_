@@ -908,6 +908,29 @@ export function AdminDashboardStudio({
           ...Object.fromEntries(globalFilters.map((x) => [x.id, x.value])),
           ...studioFilterValues,
         };
+        const filterWidgetsOnPage = widgets.filter(
+          (w) =>
+            w.type === "filter" &&
+            pageOf(w) === targetPage &&
+            (w as { filterConfig?: { field?: string } }).filterConfig?.field
+        );
+        const allFilterDefsForExpansion = [
+          ...globalFilters,
+          ...filterWidgetsOnPage.map((fw) => {
+            const fc = (
+              fw as {
+                filterConfig: { field: string; operator?: string; inputType?: string };
+              }
+            ).filterConfig;
+            return {
+              id: fw.id,
+              field: fc.field,
+              operator: fc.operator,
+              inputType: fc.inputType,
+              value: filtersForDataLoad[fw.id],
+            };
+          }),
+        ];
         if (!widget.excludeGlobalFilters) {
           for (const f of globalFilters) {
             if (f.applyTo === "selected" && Array.isArray(f.applyToWidgetIds) && f.applyToWidgetIds.length > 0) {
@@ -923,7 +946,7 @@ export function AdminDashboardStudio({
               v = v[0];
             }
             if (rawOpUpper === "MONTH") {
-              v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
+              v = expandMonthFilterValueWithYear(allFilterDefsForExpansion, filtersForDataLoad, {
                 field: f.field,
                 operator: f.operator,
                 value: v,
@@ -971,7 +994,7 @@ export function AdminDashboardStudio({
             v = v[0];
           }
           if (rawOpFwUpper === "MONTH") {
-            v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
+            v = expandMonthFilterValueWithYear(allFilterDefsForExpansion, filtersForDataLoad, {
               field: fc.field,
               operator: fc.operator,
               value: v,

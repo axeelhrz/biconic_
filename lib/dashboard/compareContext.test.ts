@@ -26,6 +26,19 @@ describe("extractTemporalAnchor", () => {
     ]);
     expect(anchor?.kind).toBe("month_only");
   });
+
+  it("detecta = con valor año", () => {
+    const anchor = extractTemporalAnchor([{ field: "fecha", operator: "=", value: "2026" }]);
+    expect(anchor).toEqual({ kind: "year", field: "fecha", years: [2026] });
+  });
+
+  it("detecta YEAR + QUARTER en el mismo campo", () => {
+    const anchor = extractTemporalAnchor([
+      { field: "fecha", operator: "YEAR", value: 2026 },
+      { field: "fecha", operator: "QUARTER", value: 1 },
+    ]);
+    expect(anchor).toEqual({ kind: "quarter", field: "fecha", quarters: [1], years: [2026] });
+  });
 });
 
 describe("shiftFiltersForCompare", () => {
@@ -66,6 +79,18 @@ describe("shiftFiltersForCompare", () => {
     const month = shifted.find((f) => String(f.operator).toUpperCase() === "MONTH");
     expect(year?.value).toBe(2025);
     expect(month?.value).toBe(4);
+  });
+
+  it("= 2026 → = 2025 para YoY", () => {
+    const filters = [{ field: "fecha", operator: "=", value: "2026" }];
+    const spec = {
+      kind: "temporal" as const,
+      mode: "same_period_prior_year" as const,
+      timeColumn: "fecha",
+      granularity: "month" as const,
+    };
+    const shifted = shiftFiltersForCompare(filters, spec);
+    expect(shifted[0]?.value).toBe(2025);
   });
 });
 

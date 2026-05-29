@@ -26,6 +26,8 @@ export type TemporalAnchor =
   | { kind: "year_month"; field: string; yearMonths: string[] }
   | { kind: "year"; field: string; years: number[] }
   | { kind: "month_only"; field: string; months: number[]; yearField?: string; years?: number[] }
+  | { kind: "quarter"; field: string; quarters: number[]; years?: number[] }
+  | { kind: "semester"; field: string; semesters: number[]; years?: number[] }
   | { kind: "between"; field: string; from: string; to: string };
 
 export type DashboardCompareContexts = {
@@ -37,10 +39,24 @@ export type DashboardCompareContexts = {
   usesDualQuery: boolean;
 };
 
-const FY_FIELD_RE = /^(fy|fiscal_?year|ano_?fiscal|ejercicio)$/i;
+const FY_FIELD_RE = /^(fy|fiscal_?year|ano_?fiscal|año_?fiscal|ejercicio)$/i;
 
 function normFieldKey(field: string | undefined): string {
   return String(field ?? "").trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function fieldsMatch(a: string | undefined, b: string | undefined): boolean {
+  return normFieldKey(a) === normFieldKey(b);
+}
+
+/** Año calendario 1900–2100 (misma regla que aggregate-data). */
+export function isYearLikeValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.length > 0 && value.every(isYearLikeValue);
+  const s = String(value).trim();
+  if (!/^\d{4}$/.test(s)) return false;
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 1900 && n <= 2100;
 }
 
 function isFyField(field: string): boolean {
@@ -110,12 +126,14 @@ function modeNeedsPrevBucket(mode: CompareTemporalMode): boolean {
   );
 }
 
-/** Detecta ancla temporal en filtros activos (FY, YEAR, MONTH, BETWEEN). */
+/** Detecta ancla temporal en filtros activos (FY, YEAR, MONTH, YEAR_MONTH, QUARTER, SEMESTER, BETWEEN, = año). */
 export function extractTemporalAnchor(filters: readonly CompareContextFilter[]): TemporalAnchor | null {
   let fyAnchor: TemporalAnchor | null = null;
   let yearMonthAnchor: { field: string; yearMonths: string[] } | null = null;
   let yearAnchor: { field: string; years: number[] } | null = null;
   let monthOnlyAnchor: { field: string; months: number[] } | null = null;
+  let quarterAnchor: { field: string; quarters: number[] } | null = null;
+  let semesterAnchor: { field: string; semesters: number[] } | null = null;
   let betweenAnchor: TemporalAnchor | null = null;
 
   for (const f of filters) {
@@ -143,6 +161,28 @@ export function extractTemporalAnchor(filters: readonly CompareContextFilter[]):
     if (op === "YEAR") {
       const years = collectNumbers(f.value).filter((y) => y >= 1900 && y <= 2100);
       if (years.length > 0) yearAnchor = { field, years };
+    }
+
+    if ((op === "=" || op === "EQ") && isYearLikeValue(f.value)) {
+      const y = Number(String(f.value).trim());
+      if (!yearAnchor || fieldsMatch(yearAnchor.field, field)) {
+        yearAnchor = { field, years: [y] };
+      }
+    }
+
+    if (op === "IN" && isYearLikeValue(f.value)) {
+      const years = collectNumbers(f.value).filter((y) => y >= 1900 && y <= 2100);
+      if (years.length > 0) yearAnchor = { field, years };
+    }
+
+    if (op === "QUARTER") {
+      const quarters = collectNumbers(f.value).filter((q) => q >= 1 && q <= 4);
+      if (quarters.length > 0) quarterAnchor = { field, quarters };
+    }
+
+    if (op === "SEMESTER") {
+      const semesters = collectNumbers(f.value).filter((s) => s === 1 || s === 2);
+      if (semesters.length > 0) semesterAnchor = { field, semesters };
     }
 
     if (op === "BETWEEN") {
@@ -173,7 +213,25 @@ export function extractTemporalAnchor(filters: readonly CompareContextFilter[]):
       years: yearAnchor.years,
     };
   }
+  if (yearAnchor && quarterAnchor && fieldsMatch(yearAnchor.field, quarterAnchor.field)) {
+    return {
+      kind: "quarter",
+      field: quarterAnchor.field,
+      quarters: quarterAnchor.quarters,
+      years: yearAnchor.years,
+    };
+  }
+  if (yearAnchor && semesterAnchor && fieldsMatch(yearAnchor.field, semesterAnchor.field)) {
+    return {
+      kind: "semester",
+      field: semesterAnchor.field,
+      semesters: semesterAnchor.semesters,
+      years: yearAnchor.years,
+    };
+  }
   if (yearAnchor) return { kind: "year", ...yearAnchor };
+  if (quarterAnchor) return { kind: "quarter", ...quarterAnchor };
+  if (semesterAnchor) return { kind: "semester", ...semesterAnchor };
   if (monthOnlyAnchor) return { kind: "month_only", field: monthOnlyAnchor.field, months: monthOnlyAnchor.months };
   if (betweenAnchor) return betweenAnchor;
   return null;
@@ -236,6 +294,22 @@ function shiftFilterValue(
     if (years.length === 0) return { ...filter };
     const shifted = [...new Set(years.map((y) => y - 1))].sort((a, b) => a - b);
     return { ...filter, value: shifted.length === 1 ? shifted[0] : shifted };
+  }
+
+  if ((op === "=" || op === "EQ") && isYearLikeValue(filter.value) && modeNeedsPriorYear(mode)) {
+    const y = Number(String(filter.value).trim());
+    return { ...filter, value: y - 1 };
+  }
+
+  if (op === "IN" && isYearLikeValue(filter.value) && modeNeedsPriorYear(mode)) {
+    const years = collectNumbers(filter.value).filter((y) => y >= 1900 && y <= 2100);
+    if (years.length === 0) return { ...filter };
+    const shifted = [...new Set(years.map((y) => y - 1))].sort((a, b) => a - b);
+    return { ...filter, value: shifted };
+  }
+
+  if (op === "QUARTER" || op === "SEMESTER") {
+    return { ...filter };
   }
 
   if (op === "BETWEEN" && modeNeedsPrevBucket(mode)) {

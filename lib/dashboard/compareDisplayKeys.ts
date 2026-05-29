@@ -512,13 +512,7 @@ export function resolveWidgetCompareStatus(params: {
   };
 
   if (compareUnavailable) {
-    return {
-      active: true,
-      badge,
-      line: null,
-      unavailable: true,
-      reason: compareUnavailableReason ?? "Sin período disponible",
-    };
+    return { active: false, badge: null, line: null, unavailable: false };
   }
 
   const line = aggregateCompareLineFromRows(
@@ -530,11 +524,14 @@ export function resolveWidgetCompareStatus(params: {
     kpiUserTimeScope
   );
 
+  if (!line) {
+    return { active: false, badge: null, line: null, unavailable: false };
+  }
+
   return {
     active: true,
     badge,
     line,
-    unavailable: !line,
-    reason: !line ? "Sin datos comparativos todavía" : undefined,
+    unavailable: false,
   };
 }

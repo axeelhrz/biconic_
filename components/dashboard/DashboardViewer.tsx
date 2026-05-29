@@ -944,6 +944,23 @@ export function DashboardViewer({
             value: filtersForDataLoad[w.id],
           }));
 
+        const filterWidgetsOnPage = stateRef.current.widgets.filter(
+          (w) => w.type === "filter" && pageOf(w) === targetPage && (w as Widget).filterConfig?.field
+        );
+        const allFilterDefsForExpansion = [
+          ...globalFilters,
+          ...filterWidgetsOnPage.map((fw) => {
+            const fc = (fw as Widget).filterConfig!;
+            return {
+              id: fw.id,
+              field: fc.field,
+              operator: fc.operator,
+              inputType: fc.inputType,
+              value: filtersForDataLoad[fw.id],
+            };
+          }),
+        ];
+
         const mappedGlobalFilters: AggregationFilter[] = [];
         if (!(widget as Widget & { excludeGlobalFilters?: boolean }).excludeGlobalFilters) {
           for (const f of globalFilters) {
@@ -980,7 +997,7 @@ export function DashboardViewer({
               }
             }
             if (rawOpUpper === "MONTH") {
-              v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
+              v = expandMonthFilterValueWithYear(allFilterDefsForExpansion, filtersForDataLoad, {
                 field: f.field,
                 operator: f.operator,
                 value: v,
@@ -1009,9 +1026,6 @@ export function DashboardViewer({
           }
         }
 
-        const filterWidgetsOnPage = stateRef.current.widgets.filter(
-          (w) => w.type === "filter" && pageOf(w) === targetPage && (w as Widget).filterConfig?.field
-        );
         for (const fw of filterWidgetsOnPage) {
           const fc = (fw as Widget).filterConfig!;
           let v = filtersForDataLoad[fw.id];
@@ -1041,7 +1055,7 @@ export function DashboardViewer({
             }
           }
           if (rawOpFwUpper === "MONTH") {
-            v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
+            v = expandMonthFilterValueWithYear(allFilterDefsForExpansion, filtersForDataLoad, {
               field: fc.field,
               operator: fc.operator,
               value: v,
