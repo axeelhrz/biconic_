@@ -2015,6 +2015,9 @@ export function DashboardWidgetRenderer({
                     mapDefaultCountry={
                       (widget.aggregationConfig as MapAggregationConfig | undefined)?.mapDefaultCountry
                     }
+                    chartStyle={
+                      (widget.chartMetricStyles?.[0] ?? widget.chartStyle) as ChartStyleConfig | undefined
+                    }
                     height={Math.max(220, (effectiveMinHeight ?? 240) - 52)}
                   />
                 )}

@@ -3,7 +3,12 @@
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
+  MAP_CHOROPLETH_PALETTES,
   MAP_VISUAL_DEFAULTS,
+  mapColorStopsToCssGradient,
+  resolveMapVisualStyle,
+  type MapChoroplethPaletteId,
+  type MapChoroplethScaleMode,
   type MapDisplayMode,
   type MapValueEncoding,
   type MapVisualConfigInput,
@@ -19,6 +24,20 @@ export type MapChartAppearanceFieldsProps = {
   /** `platform`: tokens --platform-* (formulario ETL). */
   theme?: "studio" | "platform";
 };
+
+const PALETTE_OPTIONS: { value: MapChoroplethPaletteId; label: string }[] = [
+  { value: "ocean", label: "Azul océano" },
+  { value: "emerald", label: "Verde esmeralda" },
+  { value: "sunset", label: "Atardecer" },
+  { value: "violet", label: "Violeta" },
+  { value: "custom", label: "Personalizado" },
+];
+
+const SCALE_OPTIONS: { value: MapChoroplethScaleMode; label: string }[] = [
+  { value: "log", label: "Logarítmica (recomendada para montos)" },
+  { value: "linear", label: "Lineal" },
+  { value: "sqrt", label: "Raíz cuadrada" },
+];
 
 const ENCODING_OPTIONS: { value: MapValueEncoding; label: string; hint: string }[] = [
   { value: "both", label: "Color y tamaño", hint: "El valor modifica color y radio del punto." },
@@ -54,6 +73,29 @@ export function MapChartAppearanceFields({
   const showLegend = agg.mapChoroplethShowLegend ?? MAP_VISUAL_DEFAULTS.mapChoroplethShowLegend;
   const hideBaseMap = agg.mapChoroplethHideBaseMap ?? MAP_VISUAL_DEFAULTS.mapChoroplethHideBaseMap;
   const showMarkerRadius = displayDefault !== "choropleth";
+
+  const resolvedPalette =
+    (agg.mapChoroplethPalette as MapChoroplethPaletteId | undefined) ?? MAP_VISUAL_DEFAULTS.mapChoroplethPalette;
+  const scaleMode = (agg.mapChoroplethScaleMode as MapChoroplethScaleMode | undefined) ?? MAP_VISUAL_DEFAULTS.mapChoroplethScaleMode;
+  const resolvedStyle = resolveMapVisualStyle(agg);
+  const gradientPreview = mapColorStopsToCssGradient(resolvedStyle.colorStops, "to right");
+  const isCustomPalette = resolvedPalette === "custom";
+  const labelSize = agg.mapChoroplethLabelSize ?? MAP_VISUAL_DEFAULTS.mapChoroplethLabelSize;
+
+  const applyPalette = (id: MapChoroplethPaletteId) => {
+    if (id === "custom") {
+      updateAgg({ mapChoroplethPalette: "custom" });
+      return;
+    }
+    const stops = MAP_CHOROPLETH_PALETTES[id];
+    updateAgg({
+      mapChoroplethPalette: id,
+      mapColorStops: stops,
+      mapColorLow: stops[0],
+      mapColorHigh: stops[stops.length - 1],
+      mapColorMid: stops.length >= 3 ? stops[Math.floor(stops.length / 2)] : undefined,
+    });
+  };
 
   return (
     <div className="space-y-3">
@@ -110,6 +152,113 @@ export function MapChartAppearanceFields({
         </label>
       </div>
 
+      <div className="space-y-2 rounded-lg border p-3" style={{ borderColor: borderVar }}>
+        <Label className={resolvedLabelClass}>Escala de color del mapa</Label>
+        <div>
+          <Label className={`${resolvedLabelClass} mt-1`}>Paleta</Label>
+          <select
+            value={resolvedPalette}
+            onChange={(e) => applyPalette(e.target.value as MapChoroplethPaletteId)}
+            className="mt-1 w-full rounded-lg border px-2 py-2 text-xs"
+            style={{ borderColor: borderVar, background: surfaceVar, color: fgVar }}
+          >
+            {PALETTE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <Label className={`${resolvedLabelClass} mt-1`}>Escala de valores</Label>
+          <select
+            value={scaleMode}
+            onChange={(e) =>
+              updateAgg({ mapChoroplethScaleMode: e.target.value as MapChoroplethScaleMode })
+            }
+            className="mt-1 w-full rounded-lg border px-2 py-2 text-xs"
+            style={{ borderColor: borderVar, background: surfaceVar, color: fgVar }}
+          >
+            {SCALE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div
+          className="mt-1 h-3 w-full rounded-full border"
+          style={{ borderColor: borderVar, background: gradientPreview }}
+          title="Vista previa del gradiente"
+        />
+        {isCustomPalette ? (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div>
+              <Label className={resolvedLabelClass}>Color bajo</Label>
+              <input
+                type="color"
+                value={colorLow}
+                onChange={(e) =>
+                  updateAgg({
+                    mapColorLow: e.target.value,
+                    mapChoroplethPalette: "custom",
+                    mapColorStops: undefined,
+                  })
+                }
+                className="mt-1 h-8 w-full cursor-pointer rounded border"
+                style={{ borderColor: borderVar }}
+              />
+            </div>
+            <div>
+              <Label className={resolvedLabelClass}>Color medio</Label>
+              <input
+                type="color"
+                value={agg.mapColorMid ?? colorLow}
+                onChange={(e) =>
+                  updateAgg({
+                    mapColorMid: e.target.value,
+                    mapChoroplethPalette: "custom",
+                    mapColorStops: undefined,
+                  })
+                }
+                className="mt-1 h-8 w-full cursor-pointer rounded border"
+                style={{ borderColor: borderVar }}
+              />
+            </div>
+            <div>
+              <Label className={resolvedLabelClass}>Color alto</Label>
+              <input
+                type="color"
+                value={colorHigh}
+                onChange={(e) =>
+                  updateAgg({
+                    mapColorHigh: e.target.value,
+                    mapChoroplethPalette: "custom",
+                    mapColorStops: undefined,
+                  })
+                }
+                className="mt-1 h-8 w-full cursor-pointer rounded border"
+                style={{ borderColor: borderVar }}
+              />
+            </div>
+          </div>
+        ) : null}
+        <label className="flex items-center gap-2 text-xs" style={{ color: fgVar }}>
+          <span>Tamaño etiquetas:</span>
+          <select
+            value={labelSize}
+            onChange={(e) =>
+              updateAgg({ mapChoroplethLabelSize: e.target.value as "sm" | "md" })
+            }
+            className="rounded border px-2 py-1 text-xs"
+            style={{ borderColor: borderVar, background: surfaceVar, color: fgVar }}
+          >
+            <option value="sm">Pequeño</option>
+            <option value="md">Mediano</option>
+          </select>
+        </label>
+      </div>
+
       <div>
         <Label className={resolvedLabelClass}>Codificación según valor</Label>
         <select
@@ -140,6 +289,7 @@ export function MapChartAppearanceFields({
         </p>
       </div>
 
+      {showMarkerRadius ? (
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <Label className={resolvedLabelClass}>Color valor bajo</Label>
@@ -188,6 +338,7 @@ export function MapChartAppearanceFields({
           </div>
         </div>
       </div>
+      ) : null}
 
       {showMarkerRadius ? (
         <div className="grid grid-cols-2 gap-2">

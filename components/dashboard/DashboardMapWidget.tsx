@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import L from "leaflet";
-import { CircleMarker, GeoJSON, MapContainer, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
+import { CircleMarker, GeoJSON, MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import {
   AR_BOUNDING_BOX,
@@ -16,7 +16,16 @@ import {
 } from "@/lib/geo/argentinaProvinces";
 import { findArProvinceGadmIdForLatLon } from "@/lib/geo/pointInProvinceGeoJson";
 import type { MapDisplayMode, MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
-import { resolveChoroplethVisual, resolveMapVisualStyle, resolveMarkerVisual } from "@/lib/dashboard/mapVisualScale";
+import {
+  mapColorLuminance,
+  mapColorStopsToCssGradient,
+  resolveChoroplethFillColor,
+  resolveChoroplethVisual,
+  resolveMapVisualStyle,
+  resolveMarkerVisual,
+  type ResolvedMapVisualStyle,
+} from "@/lib/dashboard/mapVisualScale";
+import { getValueFormatter, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import {
   buildDetailCardLineStringsFromRowMap,
   buildMapDetailPopupHtml,
@@ -39,6 +48,7 @@ type DashboardMapWidgetProps = {
   rows: Record<string, unknown>[];
   aggregationConfig?: MapAggregationConfig;
   mapDefaultCountry?: string;
+  chartStyle?: ChartStyleConfig | null;
   height?: number;
 };
 
@@ -193,94 +203,163 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function formatChoroplethLegendValue(value: number | null): string {
+function formatChoroplethLegendValue(
+  value: number | null,
+  formatValue: (v: number) => string
+): string {
   if (value == null || !Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2 }).format(value);
+  return formatValue(value);
 }
 
-function ProvinceLabels({ features, show }: { features: ArProvinceFeature[]; show: boolean }) {
+function createProvinceLabelIcon(name: string, fillColor: string, labelSize: "sm" | "md") {
+  const lum = mapColorLuminance(fillColor);
+  const textColor = lum > 0.55 ? "#0f172a" : "#f8fafc";
+  const halo = lum > 0.55 ? "rgba(255,255,255,0.92)" : "rgba(15,23,42,0.88)";
+  const fontSize = labelSize === "sm" ? 10 : 11;
+  const safeName = escapeHtml(name);
+  return L.divIcon({
+    className: "ar-province-map-label-icon",
+    html: `<span style="display:inline-block;font-size:${fontSize}px;font-weight:600;line-height:1.2;color:${textColor};text-shadow:0 0 4px ${halo},0 0 8px ${halo};white-space:nowrap;pointer-events:none;transform:translate(-50%,-50%);">${safeName}</span>`,
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
+  });
+}
+
+type ProvinceLabelEntry = {
+  id: ArProvinceGadmId;
+  name: string;
+  lat: number;
+  lon: number;
+  fillColor: string;
+};
+
+function ProvinceLabels({
+  entries,
+  show,
+  labelSize,
+}: {
+  entries: ProvinceLabelEntry[];
+  show: boolean;
+  labelSize: "sm" | "md";
+}) {
   if (!show) return null;
   return (
     <>
-      {features.map((feature) => {
-        const id = feature.properties?.id as ArProvinceGadmId | undefined;
-        const name = feature.properties?.name;
-        if (!id || !name) return null;
-        const centroid = getArProvinceCentroid(id);
-        if (!centroid) return null;
-        return (
-          <CircleMarker
-            key={id}
-            center={[centroid.lat, centroid.lon]}
-            radius={0}
-            pathOptions={{ opacity: 0, fillOpacity: 0, stroke: false }}
-            interactive={false}
-          >
-            <Tooltip
-              permanent
-              direction="center"
-              opacity={1}
-              className="ar-province-map-label"
-            >
-              <span
-                style={{
-                  fontSize: "10px",
-                  fontWeight: 600,
-                  color: "#1e293b",
-                  textShadow: "0 0 3px #fff, 0 0 6px #fff",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {name}
-              </span>
-            </Tooltip>
-          </CircleMarker>
-        );
-      })}
+      {entries.map((entry) => (
+        <Marker
+          key={entry.id}
+          position={[entry.lat, entry.lon]}
+          icon={createProvinceLabelIcon(entry.name, entry.fillColor, labelSize)}
+          interactive={false}
+          zIndexOffset={1000}
+        />
+      ))}
     </>
   );
 }
 
-function ChoroplethLegend({
-  colorLow,
-  colorHigh,
+type RankedProvince = {
+  id: ArProvinceGadmId;
+  name: string;
+  value: number;
+  color: string;
+};
+
+function ChoroplethLegendPanel({
+  mapVisual,
   minValue,
   maxValue,
   valueKey,
+  ranked,
+  formatValue,
   show,
 }: {
-  colorLow: string;
-  colorHigh: string;
+  mapVisual: ResolvedMapVisualStyle;
   minValue: number | null;
   maxValue: number | null;
   valueKey: string;
+  ranked: RankedProvince[];
+  formatValue: (v: number) => string;
   show: boolean;
 }) {
   if (!show) return null;
+  const gradient = mapColorStopsToCssGradient(mapVisual.colorStops, "to right");
+  const tickFractions = [0, 0.25, 0.5, 0.75, 1];
+  const tickValues = tickFractions.map((f) => {
+    if (minValue == null || maxValue == null) return null;
+    if (f === 0) return minValue;
+    if (f === 1) return maxValue;
+    if (mapVisual.choroplethScaleMode === "log") {
+      const logMin = Math.log1p(Math.max(0, minValue));
+      const logMax = Math.log1p(Math.max(0, maxValue));
+      return Math.expm1(logMin + f * (logMax - logMin));
+    }
+    if (mapVisual.choroplethScaleMode === "sqrt") {
+      const sqMin = Math.sqrt(Math.max(0, minValue));
+      const sqMax = Math.sqrt(Math.max(0, maxValue));
+      const v = sqMin + f * (sqMax - sqMin);
+      return v * v;
+    }
+    return minValue + f * (maxValue - minValue);
+  });
+
   return (
     <div
-      className="pointer-events-none absolute bottom-3 right-3 z-[1000] flex items-stretch gap-2 rounded-lg border px-2.5 py-2 text-[10px] shadow-sm"
+      className="flex-shrink-0 border-t px-3 py-2.5"
       style={{
         borderColor: "var(--platform-border, #e2e8f0)",
-        background: "rgba(255,255,255,0.95)",
+        background: "rgba(255,255,255,0.97)",
         color: "var(--platform-fg, #0f172a)",
       }}
     >
-      <div className="flex flex-col items-center justify-between py-0.5">
-        <span>{formatChoroplethLegendValue(maxValue)}</span>
-        <span>{formatChoroplethLegendValue(minValue)}</span>
+      <div className="mb-2 flex items-center gap-3">
+        {valueKey ? (
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide opacity-70">
+            {valueKey}
+          </span>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <div
+            className="h-2.5 w-full rounded-full border"
+            style={{
+              borderColor: "#cbd5e1",
+              background: gradient,
+            }}
+          />
+          <div className="mt-1 flex justify-between gap-1 text-[9px] opacity-80">
+            {tickValues.map((v, i) => (
+              <span key={i} className="truncate">
+                {formatChoroplethLegendValue(v, formatValue)}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
-      <div
-        className="w-3 rounded-sm border"
-        style={{
-          borderColor: "#cbd5e1",
-          background: `linear-gradient(to top, ${colorLow}, ${colorHigh})`,
-          minHeight: "72px",
-        }}
-      />
-      {valueKey ? (
-        <div className="flex max-w-[5rem] items-center text-[9px] leading-tight opacity-80">
-          {valueKey}
+      {ranked.length > 0 ? (
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-6">
+          {ranked.map((item) => {
+            const barPct = maxValue && maxValue > 0 ? Math.max(8, (item.value / maxValue) * 100) : 8;
+            return (
+              <div
+                key={item.id}
+                className="rounded-md border px-2 py-1.5"
+                style={{ borderColor: "var(--platform-border, #e2e8f0)", background: "rgba(248,250,252,0.9)" }}
+              >
+                <div className="truncate text-[10px] font-medium" title={item.name}>
+                  {item.name}
+                </div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200/80">
+                  <div
+                    className="h-full rounded-full"
+                    style={{ width: `${barPct}%`, background: item.color }}
+                  />
+                </div>
+                <div className="mt-0.5 truncate text-[9px] font-semibold opacity-90">
+                  {formatValue(item.value)}
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -335,6 +414,7 @@ export function DashboardMapWidget({
   rows,
   aggregationConfig,
   mapDefaultCountry: mapDefaultCountryProp,
+  chartStyle,
   height = 280,
 }: DashboardMapWidgetProps) {
   const mapDefaultCountry = mapDefaultCountryProp ?? aggregationConfig?.mapDefaultCountry;
@@ -543,6 +623,24 @@ export function DashboardMapWidget({
 
   const mapVisual = useMemo(() => resolveMapVisualStyle(aggregationConfig), [aggregationConfig]);
 
+  const formatMetricValue = useMemo(() => {
+    const fmt = getValueFormatter(chartStyle ?? undefined, "value");
+    return (v: number) => {
+      if (!Number.isFinite(v)) return "—";
+      return fmt(v);
+    };
+  }, [chartStyle]);
+
+  const provinceNameById = useMemo(() => {
+    const m = new Map<ArProvinceGadmId, string>();
+    for (const f of arGeo?.features ?? []) {
+      const id = f.properties?.id as ArProvinceGadmId | undefined;
+      const name = f.properties?.name;
+      if (id && name) m.set(id, name);
+    }
+    return m;
+  }, [arGeo]);
+
   const canChoropleth = argentinaMode && arGeo && !arGeoError && provinceSums.size > 0;
   const canShowArgentinaToggle = argentinaMode && arGeo && !arGeoError;
 
@@ -571,6 +669,37 @@ export function DashboardMapWidget({
   const choroplethNumeric = useMemo(() => [...provinceSums.values()].filter((v) => Number.isFinite(v)), [provinceSums]);
   const chMin = choroplethNumeric.length > 0 ? Math.min(...choroplethNumeric) : null;
   const chMax = choroplethNumeric.length > 0 ? Math.max(...choroplethNumeric) : null;
+
+  const rankedProvinces = useMemo((): RankedProvince[] => {
+    return [...provinceSums.entries()]
+      .filter(([, v]) => Number.isFinite(v))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([id, value]) => ({
+        id,
+        name: provinceNameById.get(id) ?? id,
+        value,
+        color: resolveChoroplethFillColor(value, chMin, chMax, mapVisual),
+      }));
+  }, [provinceSums, provinceNameById, chMin, chMax, mapVisual]);
+
+  const provinceLabelEntries = useMemo((): ProvinceLabelEntry[] => {
+    const out: ProvinceLabelEntry[] = [];
+    for (const [id, value] of provinceSums.entries()) {
+      if (!Number.isFinite(value)) continue;
+      const name = provinceNameById.get(id);
+      const centroid = getArProvinceCentroid(id);
+      if (!name || !centroid) continue;
+      out.push({
+        id,
+        name,
+        lat: centroid.lat,
+        lon: centroid.lon,
+        fillColor: resolveChoroplethFillColor(value, chMin, chMax, mapVisual),
+      });
+    }
+    return out;
+  }, [provinceSums, provinceNameById, chMin, chMax, mapVisual]);
 
   const points = markers.map((m) => [m.lat, m.lon] as [number, number]);
 
@@ -632,15 +761,19 @@ export function DashboardMapWidget({
       };
     };
 
+    const legendHeight = mapVisual.choroplethShowLegend ? 118 : 0;
+    const mapAreaHeight = Math.max(160, height - legendHeight);
+
     return (
       <div
-        className="relative rounded overflow-hidden border"
+        className="relative flex flex-col overflow-hidden rounded border"
         style={{
           height: `${height}px`,
           borderColor: "var(--platform-border, #e2e8f0)",
           background: mapVisual.choroplethHideBaseMap ? "#f1f5f9" : undefined,
         }}
       >
+        <div className="relative min-h-0 flex-1">
         {canShowArgentinaToggle ? (
           <MapDisplayModeToggle
             mode={displayMode}
@@ -650,13 +783,13 @@ export function DashboardMapWidget({
         ) : null}
         <style
           dangerouslySetInnerHTML={{
-            __html: `.ar-province-map-label.leaflet-tooltip{background:transparent!important;border:none!important;box-shadow:none!important;padding:0!important}.ar-province-map-label.leaflet-tooltip:before{display:none!important}`,
+            __html: `.ar-province-map-label-icon{background:transparent!important;border:none!important}`,
           }}
         />
         <MapContainer
           center={AR_DEFAULT_CENTER}
           zoom={AR_DEFAULT_ZOOM}
-          style={{ height: "100%", width: "100%", background: mapVisual.choroplethHideBaseMap ? "#f1f5f9" : undefined }}
+          style={{ height: `${mapAreaHeight}px`, width: "100%", background: mapVisual.choroplethHideBaseMap ? "#f1f5f9" : undefined }}
           scrollWheelZoom={true}
           maxBounds={AR_MAX_BOUNDS}
           maxBoundsViscosity={0.82}
@@ -673,7 +806,8 @@ export function DashboardMapWidget({
               const id = props?.id as ArProvinceGadmId | undefined;
               const name = props?.name ?? id ?? "Provincia";
               const v = id ? provinceSums.get(id) : undefined;
-              const valueStr = v != null && Number.isFinite(v) ? String(v) : "Sin dato";
+              const valueStr =
+                v != null && Number.isFinite(v) ? formatMetricValue(v) : "Sin dato";
               const bag = id ? provinceMetricBags.get(id) : undefined;
               const detailRow = bag && Object.keys(bag).length > 0 ? { ...bag } : null;
               const custom =
@@ -706,18 +840,12 @@ export function DashboardMapWidget({
               });
             }}
           />
-          {arGeo?.features?.length ? (
-            <ProvinceLabels features={arGeo.features} show={mapVisual.choroplethShowLabels} />
-          ) : null}
+          <ProvinceLabels
+            entries={provinceLabelEntries}
+            show={mapVisual.choroplethShowLabels}
+            labelSize={mapVisual.choroplethLabelSize}
+          />
         </MapContainer>
-        <ChoroplethLegend
-          colorLow={mapVisual.colorLow}
-          colorHigh={mapVisual.colorHigh}
-          minValue={chMin}
-          maxValue={chMax}
-          valueKey={valueKey}
-          show={mapVisual.choroplethShowLegend}
-        />
         {provinceMatchRows < rows.length ? (
           <div
             className="pointer-events-none absolute bottom-2 left-2 rounded px-2 py-1 text-[11px]"
@@ -729,6 +857,16 @@ export function DashboardMapWidget({
             {rows.length - provinceMatchRows} filas sin provincia reconocida
           </div>
         ) : null}
+        </div>
+        <ChoroplethLegendPanel
+          mapVisual={mapVisual}
+          minValue={chMin}
+          maxValue={chMax}
+          valueKey={valueKey}
+          ranked={rankedProvinces}
+          formatValue={formatMetricValue}
+          show={mapVisual.choroplethShowLegend}
+        />
       </div>
     );
   }

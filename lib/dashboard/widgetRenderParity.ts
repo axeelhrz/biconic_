@@ -461,7 +461,11 @@ export const DASHBOARD_GEO_OVERRIDE_KEYS = new Set([
   "mapDisplayModeDefault",
   "mapValueEncoding",
   "mapColorLow",
+  "mapColorMid",
   "mapColorHigh",
+  "mapColorStops",
+  "mapChoroplethPalette",
+  "mapChoroplethScaleMode",
   "mapRadiusMin",
   "mapRadiusMax",
   "mapFillOpacityMin",
@@ -471,6 +475,7 @@ export const DASHBOARD_GEO_OVERRIDE_KEYS = new Set([
   "mapChoroplethShowLabels",
   "mapChoroplethShowLegend",
   "mapChoroplethHideBaseMap",
+  "mapChoroplethLabelSize",
 ]);
 
 /** Todas las claves de override del widget del dashboard (visuales + geo). */

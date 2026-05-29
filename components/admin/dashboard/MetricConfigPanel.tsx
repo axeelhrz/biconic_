@@ -179,7 +179,11 @@ export type AggregationConfigEdit = {
   /** Mapa: codificación visual por valor. */
   mapValueEncoding?: "both" | "color" | "size";
   mapColorLow?: string;
+  mapColorMid?: string;
   mapColorHigh?: string;
+  mapColorStops?: string[];
+  mapChoroplethPalette?: "ocean" | "emerald" | "sunset" | "violet" | "custom";
+  mapChoroplethScaleMode?: "linear" | "log" | "sqrt";
   mapRadiusMin?: number;
   mapRadiusMax?: number;
   mapFillOpacityMin?: number;
@@ -189,6 +193,7 @@ export type AggregationConfigEdit = {
   mapChoroplethShowLabels?: boolean;
   mapChoroplethShowLegend?: boolean;
   mapChoroplethHideBaseMap?: boolean;
+  mapChoroplethLabelSize?: "sm" | "md";
   geoComponentOverrides?: GeoComponentOverrides;
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   /** Tabla: clave de columna → texto del encabezado. */
