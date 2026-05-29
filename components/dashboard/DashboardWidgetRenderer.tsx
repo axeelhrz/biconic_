@@ -80,6 +80,7 @@ import {
   resolveImageElementStyle,
 } from "@/lib/dashboard/imageLayout";
 import type { MapAggregationConfig } from "./DashboardMapWidget";
+import { DashboardTextWidget } from "./DashboardTextWidget";
 
 const DashboardMapWidget = dynamic(
   () => import("./DashboardMapWidget").then((m) => m.DashboardMapWidget),
