@@ -114,6 +114,10 @@ export type BuildAggregateRequestPayloadParams = {
   derivedColumns?: Array<{ name: string; expression: string; defaultAggregation?: string }>;
   /** Paridad ETL fetchPreview: siempre true en vista previa de análisis. */
   forceUnlimited?: boolean;
+  /** Filtros ya fusionados (evita re-merge global+widget). */
+  filtersOverride?: Array<{ field?: string; operator?: string; value?: unknown }>;
+  /** Dual query dashboard: no expandir filtros para traer buckets de referencia. */
+  skipTemporalFilterExpand?: boolean;
 };
 
 /**
@@ -132,6 +136,8 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
     metricsOverride,
     derivedColumns,
     forceUnlimited = true,
+    filtersOverride,
+    skipTemporalFilterExpand = false,
   } = params;
 
   const effectiveDims = resolveAnalysisDimensionsFromConfig(agg as Record<string, unknown>);
@@ -198,14 +204,15 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
       value: f.value ?? null,
     });
   const seenFilterKeys = new Set<string>();
-  const mergedFiltersRaw = [...globalFiltersMapped, ...aggFiltersMapped];
+  const mergedFiltersRaw =
+    filtersOverride != null ? [...filtersOverride] : [...globalFiltersMapped, ...aggFiltersMapped];
   let mergedFilters = mergedFiltersRaw.filter((f) => {
     const k = filterKey(f as Parameters<typeof filterKey>[0]);
     if (seenFilterKeys.has(k)) return false;
     seenFilterKeys.add(k);
     return true;
   });
-  if (compareNeedsTimeGroupedRows(compareSpec) && compareFieldForExpand) {
+  if (!skipTemporalFilterExpand && compareNeedsTimeGroupedRows(compareSpec) && compareFieldForExpand) {
     mergedFilters = expandAggregationFiltersForTemporalCompare(mergedFilters, {
       compareField: compareFieldForExpand,
       compareSpec,
@@ -261,6 +268,7 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
     compareFixedValue: typeof agg.compareFixedValue === "number" ? agg.compareFixedValue : undefined,
     transformCompare: agg.transformCompare,
     transformCompareFixedValue: agg.transformCompareFixedValue,
+    ...(agg.comparePeriodSource ? { comparePeriodSource: agg.comparePeriodSource } : {}),
     dateDimension: mapField(agg.dateDimension, sourceId, datasetDimensions),
     ...(dg.hasDateGroupByEffective && dg.dateGroupByField && dg.dateGroupByGranularity
       ? {

@@ -540,6 +540,24 @@ export function widgetAggregationWithStoredVisualOverrides(widget: {
   return { ...agg, ...extractDashboardWidgetOverrides(stored) };
 }
 
+/** Fusiona `dashboardVisualOverrides` en `aggregationConfig` al cargar layout (studio + viewer). */
+export function normalizeLoadedDashboardWidget<
+  T extends {
+    aggregationConfig?: Record<string, unknown> | null;
+    dashboardVisualOverrides?: Record<string, unknown> | null;
+  },
+>(w: T): T {
+  const stored = w.dashboardVisualOverrides;
+  if (!stored || typeof stored !== "object" || Object.keys(stored).length === 0) {
+    return w;
+  }
+  const mergedAgg = {
+    ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
+    ...extractDashboardWidgetOverrides(stored),
+  };
+  return { ...w, aggregationConfig: mergedAgg };
+}
+
 export type ResolveSeriesColorKeysParams = {
   chartType: string;
   agg: Record<string, unknown>;

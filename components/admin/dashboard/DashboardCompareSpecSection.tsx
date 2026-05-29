@@ -19,6 +19,8 @@ import {
   type KpiUserTimeScopeOptions,
 } from "@/lib/dashboard/kpiFilterScope";
 import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import { resolveEffectiveCompareSpec } from "@/lib/dashboard/compareContext";
+import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { formatValue } from "@/lib/dashboard/chartOptions";
 import { CompareSpecFields } from "@/components/admin/dashboard/CompareSpecFields";
 
@@ -43,6 +45,7 @@ export type DashboardCompareAggSlice = {
   enabled: boolean;
   metrics: Array<{ id: string; field: string; func: string; alias: string }>;
   compare?: CompareSpec;
+  compareInheritDashboard?: boolean;
   comparePeriod?: "previous_year" | "previous_month";
   compareFixedValue?: number;
   transformCompare?: string;
@@ -111,6 +114,7 @@ type DashboardCompareSpecSectionProps = {
   previewRows?: Record<string, unknown>[];
   widgetType?: string;
   kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
+  dashboardCompareDefaults?: DashboardCompareDefaults;
 };
 
 function previewCompareLineText(
@@ -150,8 +154,12 @@ export function DashboardCompareSpecSection({
   previewRows,
   widgetType,
   kpiUserTimeScope,
+  dashboardCompareDefaults,
 }: DashboardCompareSpecSectionProps) {
-  const compare = effectiveCompare(agg);
+  const inheritDashboard = agg.compareInheritDashboard !== false;
+  const compare = inheritDashboard
+    ? resolveEffectiveCompareSpec(dashboardCompareDefaults, agg)
+    : effectiveCompare(agg);
   const ui = defaultCompareUi(agg.dashboardCompareUi);
   const dims = dimensionsListFromAgg(agg);
   const timeColumnDefault = pickDateGroupBySourceField(agg) || agg.dateDimension?.trim() || dims[0] || "";
@@ -248,7 +256,22 @@ export function DashboardCompareSpecSection({
         valor principal del KPI no cambia al activar comparación (solo al cambiar filtros).
       </p>
 
-      {savedWithCompare.length > 0 && (
+      <label className="flex items-center gap-2 text-xs text-[var(--studio-fg)]">
+        <Checkbox
+          checked={inheritDashboard}
+          onCheckedChange={(c) => updateAgg({ compareInheritDashboard: c === true })}
+        />
+        Heredar comparación del dashboard
+      </label>
+      {inheritDashboard && dashboardCompareDefaults?.enabled && compare.kind !== "none" && (
+        <p className="text-[10px] rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/60 px-2 py-1.5 text-[var(--studio-fg-muted)]">
+          Usando preset del dashboard
+          {compareBadge ? `: ${compareBadge}` : ""}
+          {dashboardCompareDefaults.label ? ` · ${dashboardCompareDefaults.label}` : ""}
+        </p>
+      )}
+
+      {!inheritDashboard && savedWithCompare.length > 0 && (
         <div>
           <Label className="text-[11px] text-[var(--studio-fg-muted)]">Copiar de métrica guardada con comparación</Label>
           <select
@@ -271,6 +294,7 @@ export function DashboardCompareSpecSection({
         </div>
       )}
 
+      {!inheritDashboard && (
       <div className="space-y-3">
         <Label className="text-[11px] font-medium text-[var(--studio-fg-muted)]">1. Tipo y parámetros</Label>
         <CompareSpecFields
@@ -288,6 +312,7 @@ export function DashboardCompareSpecSection({
           showKpiTotalVsPeriodHint={showKpiTotalVsPeriodHint}
         />
       </div>
+      )}
 
       {hasPreview && compare.kind !== "none" && (
         <div className="rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/60 px-2.5 py-2 space-y-1">

@@ -71,9 +71,9 @@ import {
   type KpiUserTimeScopeOptions,
 } from "@/lib/dashboard/kpiFilterScope";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
-import { mergeChartVisualStyle, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
+import { mergeChartVisualStyle, widgetAggregationWithStoredVisualOverrides, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { useDevicePixelRatio } from "@/hooks/useDevicePixelRatio";
-import { DashboardTextWidget } from "./DashboardTextWidget";
+import { CompareUnavailableHint } from "@/components/dashboard/CompareUnavailableHint";
 import {
   contentIconSizeClass,
   resolveImageContainerAlignment,
@@ -195,6 +195,9 @@ export interface DashboardWidgetRendererWidget {
   };
   /** Alcance temporal del usuario para el total del KPI (pre-expansión de comparación). */
   kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
+  compareUnavailable?: boolean;
+  compareUnavailableReason?: string;
+  compareLabel?: string;
   [key: string]: unknown;
 }
 
@@ -605,8 +608,13 @@ export function DashboardWidgetRenderer({
     const extra = compareTableExtraKeys.filter((k) => !tableColumnOrder.includes(k));
     return [...tableColumnOrder, ...extra];
   }, [tableColumnOrder, compareTableExtraKeys]);
-  const tableHeaderLabels = (widget.aggregationConfig as { tableColumnLabelOverrides?: Record<string, string> } | undefined)
-    ?.tableColumnLabelOverrides;
+  const tableHeaderLabels = (
+    widgetAggregationWithStoredVisualOverrides({
+      aggregationConfig: widget.aggregationConfig as Record<string, unknown> | null | undefined,
+      dashboardVisualOverrides: (widget as { dashboardVisualOverrides?: Record<string, unknown> | null })
+        .dashboardVisualOverrides,
+    }) as { tableColumnLabelOverrides?: Record<string, string> }
+  ).tableColumnLabelOverrides;
   const effectiveTableHeaderLabels = useMemo(() => {
     const base = tableHeaderLabels ?? {};
     const ui = getEffectiveDashboardCompareUi(
@@ -1884,6 +1892,12 @@ export function DashboardWidgetRenderer({
                     <span className="tabular-nums">{kpiCompareDisplay.text}</span>
                   </div>
                 )}
+                {widget.compareUnavailable && !kpiCompareDisplay ? (
+                  <CompareUnavailableHint
+                    className="mt-1"
+                    reason={widget.compareUnavailableReason ?? "Sin período disponible"}
+                  />
+                ) : null}
               </div>
             )}
             {chartType === "table" && Array.isArray(tableRows) && tableRows.length > 0 && (

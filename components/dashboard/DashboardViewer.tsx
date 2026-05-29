@@ -16,7 +16,7 @@ import {
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./DashboardWidgetRenderer";
 import { DashboardLogoOverlay } from "./DashboardLogoOverlay";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import type { DashboardCompareDefaults } from "@/types/dashboard";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
 import {
   expandAnalysisMetricsForFetch,
@@ -29,6 +29,7 @@ import {
   resolveWidgetAnalysisMergePatch,
   mergeAnalysisAggregationWithDashboardOverrides,
   widgetAggregationWithStoredVisualOverrides,
+  normalizeLoadedDashboardWidget,
   resolveWidgetLabelDisplayMode,
   type SavedAnalysisForMerge,
   type SavedMetricForAnalysisMerge,
@@ -536,6 +537,9 @@ export function DashboardViewer({
     pagesMeta?: { id: string; name: string }[];
   } | null>(null);
   const [cardLayoutMode, setCardLayoutMode] = useState<DashboardCardLayoutMode>("auto");
+  const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults | undefined>(
+    undefined
+  );
   const stateRef = useRef({ widgets, setWidgets });
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
@@ -597,7 +601,7 @@ export function DashboardViewer({
   useEffect(() => {
     if (initialWidgets?.length) {
       setPageLayout(null);
-      setWidgets(initialWidgets);
+      setWidgets(initialWidgets.map((w) => normalizeLoadedDashboardWidget(w)));
       if (initialTitle) setTitle(initialTitle);
       if (initialGlobalFilters) {
         setGlobalFilters(initialGlobalFilters);
@@ -650,8 +654,12 @@ export function DashboardViewer({
       pages?: { id: string; name?: string }[];
       activePageId?: string;
       cardLayoutMode?: DashboardCardLayoutMode;
+      dashboardCompareDefaults?: DashboardCompareDefaults;
     } | undefined;
     setCardLayoutMode(normalizeCardLayoutMode(layout?.cardLayoutMode));
+    if (layout?.dashboardCompareDefaults) {
+      setDashboardCompareDefaults(layout.dashboardCompareDefaults);
+    }
     const pages =
       Array.isArray(layout?.pages) && layout!.pages!.length > 0
         ? layout!.pages!
@@ -677,11 +685,11 @@ export function DashboardViewer({
     const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
     const loadedWidgets = rawWidgets.map((w, i) => {
       const base = w as Widget;
-      return {
+      return normalizeLoadedDashboardWidget({
         ...base,
         gridOrder: base.gridOrder ?? i,
         pageId: normalizeWidgetPageId(base.pageId),
-      };
+      });
     });
     const loadedTheme = layout?.theme && typeof layout.theme === "object" ? layout.theme : {};
     setWidgets(loadedWidgets);
@@ -1157,6 +1165,7 @@ export function DashboardViewer({
             datasetDimensions,
             savedMetrics: savedMetricsPool.length > 0 ? savedMetricsPool : layoutSavedMetrics,
             globalFilters: [...mappedGlobalFilters, ...dimensionDefaultFiltersMapped],
+            dashboardCompareDefaults,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -1191,6 +1200,9 @@ export function DashboardViewer({
                       config: loaded.chartConfig ?? { labels: [], datasets: [] },
                       rows: loaded.processedRows,
                       kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                      compareUnavailable: loaded.compareUnavailable ?? false,
+                      compareUnavailableReason: loaded.compareUnavailableReason,
+                      compareLabel: loaded.compareLabel,
                       columns: columnsDetected,
                       isLoading: false,
                     }
@@ -1224,6 +1236,7 @@ export function DashboardViewer({
             sourceId: widgetSourceId,
             datasetDimensions,
             globalFilters: mergedForRaw,
+            dashboardCompareDefaults,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -1259,6 +1272,9 @@ export function DashboardViewer({
                       config: loaded.chartConfig ?? { labels: [], datasets: [] },
                       rows: loaded.processedRows,
                       kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                      compareUnavailable: loaded.compareUnavailable ?? false,
+                      compareUnavailableReason: loaded.compareUnavailableReason,
+                      compareLabel: loaded.compareLabel,
                       columns: columnsDetected,
                       isLoading: false,
                     }
@@ -1287,6 +1303,7 @@ export function DashboardViewer({
       pageLayout,
       savedAnalyses,
       savedMetricsFromEtl,
+      dashboardCompareDefaults,
     ]
   );
 

@@ -4,12 +4,19 @@ import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartTy
 import { buildAggregateRequestPayload } from "@/lib/dashboard/buildAggregateRequestPayload";
 import { resolveWidgetAggregationForDisplay } from "@/lib/dashboard/widgetRenderParity";
 import { legacyCompareInputFromWidgetAgg, compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
-import { normalizeAggregationCompare, type ComparePeriodSource } from "@/lib/dashboard/compareSpec";
+import { type ComparePeriodSource } from "@/lib/dashboard/compareSpec";
 import { resolveEffectiveDateGroupByForFetch, type AggForCompareDateGroupBy } from "@/lib/dashboard/aggregateCompareRequest";
-import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
-import type { CompareSpec } from "@/lib/dashboard/compareSpec";
+import type { CompareSpec, ComparePeriodSource } from "@/lib/dashboard/compareSpec";
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
+import {
+  buildDashboardCompareContexts,
+  compareSpecUsesDualQuery,
+  resolveEffectiveCompareSpec,
+  type DashboardCompareDefaults,
+} from "@/lib/dashboard/compareContext";
+import { mergeCompareQueryResults } from "@/lib/dashboard/mergeCompareQueryResults";
+import { resolveAnalysisDimensionsFromConfig } from "@/lib/dashboard/widgetRenderParity";
 
 type AggregationMetric = {
   id?: string;
@@ -70,6 +77,7 @@ type AggregationConfigLike = {
   transformCompareFixedValue?: string;
   /** Origen del período para comparaciones temporales (si no va dentro de `compare`). */
   comparePeriodSource?: ComparePeriodSource;
+  compareInheritDashboard?: boolean;
   dashboardCompareUi?: { enabled?: boolean };
 };
 
@@ -103,6 +111,8 @@ export type LoadPreviewWidgetDataParams = {
   derivedColumns?: Array<{ name: string; expression: string; defaultAggregation?: string }>;
   aggregateExtraPayload?: Record<string, unknown>;
   rawExtraPayload?: Record<string, unknown>;
+  /** Preset de comparación a nivel dashboard (herencia por widget). */
+  dashboardCompareDefaults?: DashboardCompareDefaults;
 };
 
 export type LoadedPreviewWidgetData = {
@@ -112,6 +122,10 @@ export type LoadedPreviewWidgetData = {
   hasData: boolean;
   /** Filtros pre-expansión para acotar el total del KPI (no la línea de comparación). */
   kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
+  /** Comparación no disponible (sin período temporal equivalente). */
+  compareUnavailable?: boolean;
+  compareUnavailableReason?: string;
+  compareLabel?: string;
 };
 
 function buildKpiUserTimeScopeOptions(
@@ -186,6 +200,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     derivedColumns,
     aggregateExtraPayload,
     rawExtraPayload,
+    dashboardCompareDefaults,
   } = params;
 
   const agg = widget.aggregationConfig;
@@ -195,8 +210,12 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
 
   let rows: Record<string, unknown>[] = [];
   let kpiUserTimeScope: KpiUserTimeScopeOptions | null = null;
+  let compareUnavailable = false;
+  let compareUnavailableReason: string | undefined;
+  let compareLabel: string | undefined;
+
   if (hasAgg) {
-    const compareSpec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg));
+    const compareSpec = resolveEffectiveCompareSpec(dashboardCompareDefaults, agg ?? {});
     const dg = resolveEffectiveDateGroupByForFetch({
       effectiveChartType: type,
       agg: agg as AggForCompareDateGroupBy,
@@ -214,31 +233,98 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     const userFiltersBeforeExpand = [...globalFiltersMapped, ...aggFiltersMapped];
     kpiUserTimeScope = buildKpiUserTimeScopeOptions(type, agg, compareSpec, dg, userFiltersBeforeExpand);
 
-    const payload = {
-      ...buildAggregateRequestPayload({
-        tableName,
-        etlId,
-        chartType: type,
-        agg: agg as Parameters<typeof buildAggregateRequestPayload>[0]["agg"],
-        sourceId,
-        datasetDimensions,
-        globalFilters,
-        savedMetrics,
-        metricsOverride,
-        derivedColumns,
-        forceUnlimited: true,
-      }),
-      ...(aggregateExtraPayload ?? {}),
+    const compareContexts = buildDashboardCompareContexts({
+      filters: userFiltersBeforeExpand,
+      compareSpec,
+    });
+    compareLabel = compareContexts.compareLabel;
+
+    const useDualQuery =
+      compareSpec.kind !== "none" &&
+      compareSpecUsesDualQuery(compareSpec) &&
+      compareContexts.usesDualQuery;
+
+    if (useDualQuery && !compareContexts.comparable) {
+      compareUnavailable = true;
+      compareUnavailableReason = compareContexts.unavailableReason;
+    }
+
+    const aggForPayload = {
+      ...(agg as Parameters<typeof buildAggregateRequestPayload>[0]["agg"]),
+      comparePeriodSource: "dashboard" as const,
+      ...(useDualQuery ? { compare: { kind: "none" as const } } : {}),
     };
 
-    const response = await fetchWithTimeout(aggregateEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const result = await safeJsonResponse<{ rows?: Record<string, unknown>[] }>(response);
-    if (!response.ok) throw new Error(result.error ?? "Error agregando datos");
-    rows = extractRowsFromApiResult(result);
+    const basePayloadParams = {
+      tableName,
+      etlId,
+      chartType: type,
+      agg: aggForPayload,
+      sourceId,
+      datasetDimensions,
+      globalFilters: [] as typeof globalFilters,
+      savedMetrics,
+      metricsOverride,
+      derivedColumns,
+      forceUnlimited: true,
+      skipTemporalFilterExpand: useDualQuery && compareContexts.comparable,
+    };
+
+    const fetchAggregate = async (filtersOverride: typeof userFiltersBeforeExpand) => {
+      const payload = {
+        ...buildAggregateRequestPayload({
+          ...basePayloadParams,
+          filtersOverride,
+        }),
+        ...(aggregateExtraPayload ?? {}),
+      };
+      const response = await fetchWithTimeout(aggregateEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await safeJsonResponse<{ rows?: Record<string, unknown>[] }>(response);
+      if (!response.ok) throw new Error(result.error ?? "Error agregando datos");
+      return extractRowsFromApiResult(result);
+    };
+
+    if (useDualQuery && compareContexts.comparable) {
+      const [currentRows, comparativeRows] = await Promise.all([
+        fetchAggregate(compareContexts.currentFilters),
+        fetchAggregate(compareContexts.comparativeFilters),
+      ]);
+      const metricAliases = (metricsOverride ?? agg?.metrics ?? [])
+        .map((m) => String(m.alias ?? "").trim())
+        .filter(Boolean);
+      const dims = resolveAnalysisDimensionsFromConfig(agg as Record<string, unknown>);
+      const dimensionColumns = [
+        ...dims.dimensions,
+        dims.dimension,
+        dims.dimension2,
+        dg.dateGroupByField,
+      ].filter((d): d is string => !!String(d ?? "").trim());
+      const timeColumn =
+        dg.dateGroupByField ??
+        (compareSpec.kind === "temporal" || compareSpec.kind === "cumulative"
+          ? compareSpec.timeColumn
+          : undefined);
+      const scalarKpi = type === "kpi" && !dg.hasDateGroupByEffective;
+      rows = mergeCompareQueryResults({
+        currentRows,
+        comparativeRows,
+        metricAliases,
+        compareSpec,
+        dimensionColumns,
+        timeColumn,
+        granularity: (compareSpec.kind === "temporal" || compareSpec.kind === "cumulative"
+          ? compareSpec.granularity
+          : dg.dateGroupByGranularity) as DateGranularity | undefined,
+        parseOpts: agg?.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
+        scalarKpi,
+      });
+    } else {
+      rows = await fetchAggregate(userFiltersBeforeExpand);
+    }
   } else {
     const payload = {
       tableName,
@@ -257,7 +343,15 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
   }
 
   if (rows.length === 0) {
-    return { rows: [], processedRows: [], hasData: false, kpiUserTimeScope: null };
+    return {
+      rows: [],
+      processedRows: [],
+      hasData: false,
+      kpiUserTimeScope: null,
+      compareUnavailable,
+      compareUnavailableReason,
+      compareLabel,
+    };
   }
 
   const displayWidget = resolveWidgetAggregationForDisplay(
@@ -286,5 +380,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     processedRows,
     hasData: hasChartData,
     kpiUserTimeScope: hasAgg ? kpiUserTimeScope : null,
+    compareUnavailable,
+    compareUnavailableReason,
+    compareLabel,
   };
 }

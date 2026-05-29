@@ -326,6 +326,7 @@ type MetricConfigPanelProps = {
   /** Métricas guardadas para reutilizar */
   savedMetrics?: SavedMetricPanel[];
   onSaveMetricAsTemplate?: (name: string, metric: AggregationMetricEdit) => void;
+  dashboardCompareDefaults?: import("@/types/dashboard").DashboardCompareDefaults;
 };
 
 const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "stackedColumn", "line", "area", "pie", "doughnut", "combo", "scatter"];
@@ -370,6 +371,7 @@ export function MetricConfigPanel({
   onClose,
   savedMetrics = [],
   onSaveMetricAsTemplate,
+  dashboardCompareDefaults,
 }: MetricConfigPanelProps) {
   const [saveTemplateForIndex, setSaveTemplateForIndex] = useState<number | null>(null);
   const [saveTemplateName, setSaveTemplateName] = useState("");
@@ -604,12 +606,34 @@ export function MetricConfigPanel({
     () => Object.entries(agg.tableColumnLabelOverrides ?? {}),
     [agg.tableColumnLabelOverrides]
   );
+  const tableMetricAliasByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    (agg.metrics ?? []).forEach((m, i) => {
+      const alias = String(m.alias ?? "").trim();
+      if (!alias) return;
+      map.set(alias, alias);
+      map.set(`metric_${i}`, alias);
+    });
+    const yAxes = (agg.chartYAxes ?? []).map((k) => String(k ?? "").trim()).filter(Boolean);
+    yAxes.forEach((key, i) => {
+      const alias = String((agg.metrics ?? [])[i]?.alias ?? "").trim();
+      if (alias) map.set(key, alias);
+    });
+    return map;
+  }, [agg.metrics, agg.chartYAxes]);
   const setTableColHeader = (dataKey: string, header: string) => {
     const next = { ...(agg.tableColumnLabelOverrides ?? {}) };
-    if (!Object.prototype.hasOwnProperty.call(next, dataKey)) return;
     next[dataKey] = header;
     updateAgg({ tableColumnLabelOverrides: Object.keys(next).length ? next : undefined });
   };
+  const fillTableColumnLabelOverridesFromPreview = useCallback(() => {
+    const next = { ...(agg.tableColumnLabelOverrides ?? {}) };
+    for (const col of percentFieldColumnOptions) {
+      if (Object.prototype.hasOwnProperty.call(next, col)) continue;
+      next[col] = tableMetricAliasByKey.get(col) ?? col;
+    }
+    updateAgg({ tableColumnLabelOverrides: Object.keys(next).length ? next : undefined });
+  }, [agg.tableColumnLabelOverrides, percentFieldColumnOptions, tableMetricAliasByKey]);
   const commitTableColKeyDraft = (oldKey: string, header: string) => {
     const draft = tableColKeyDrafts[oldKey];
     if (typeof draft !== "string") return;
@@ -1162,8 +1186,25 @@ export function MetricConfigPanel({
               <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
                 <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Encabezados de tabla</Label>
                 <p className="text-[11px] text-[var(--studio-fg-muted)]">
-                  Mapeá el nombre de columna en los datos al texto del encabezado (ej. <code className="text-[10px]">SUM(ventas)</code> → Ventas).
+                  Mapeá el nombre de columna en los datos al texto del encabezado (ej. <code className="text-[10px]">Calc_MargenBruto</code> → Margen bruto).
                 </p>
+                {previewRows.length > 0 && tableColEntries.length === 0 ? (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Cargá datos con «Actualizar» y usá «Rellenar desde vista previa» para listar las columnas automáticamente.
+                  </p>
+                ) : null}
+                {previewRows.length > 0 ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={percentFieldColumnOptions.length === 0}
+                    onClick={fillTableColumnLabelOverridesFromPreview}
+                  >
+                    Rellenar desde vista previa
+                  </Button>
+                ) : null}
                 <div className="space-y-2">
                   {tableColEntries.map(([dataKey, headerText], idx) => (
                     <div key={`tcol-${idx}-${dataKey}`} className="flex items-center gap-2">
@@ -2905,6 +2946,7 @@ export function MetricConfigPanel({
                         previewRows={previewRows}
                         kpiUserTimeScope={kpiUserTimeScope}
                         widgetType={widget.type}
+                        dashboardCompareDefaults={dashboardCompareDefaults}
                       />
                       <div>
                         <div className="flex items-center justify-between mb-2">

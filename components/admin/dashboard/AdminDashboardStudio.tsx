@@ -47,6 +47,8 @@ import {
 } from "@/lib/dashboard/buildChartConfig";
 import type { ChartLabelDisplayMode, ChartPercentBasis, ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import { DashboardCompareDefaultsSection } from "@/components/admin/dashboard/DashboardCompareDefaultsSection";
+import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { DashboardDatasetDiagnostics } from "./DashboardDatasetDiagnostics";
 import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
 import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
@@ -87,6 +89,7 @@ import {
   mergeAnalysisAggregationWithDashboardOverrides,
   extractDashboardWidgetOverrides,
   widgetAggregationWithStoredVisualOverrides,
+  normalizeLoadedDashboardWidget,
   resolveAnalysisDimensionsFromConfig,
   resolveWidgetAnalysisMergePatch,
   resolveDarkChartTheme,
@@ -381,21 +384,8 @@ function studioWidgetAggForVisualMerge(
   return widgetAggregationWithStoredVisualOverrides(w);
 }
 
-function normalizeLoadedStudioWidget(w: StudioWidget, cardLayoutMode: "auto" | "manual"): StudioWidget {
-  let next = w;
-  const stored = w.dashboardVisualOverrides;
-  if (stored && typeof stored === "object" && Object.keys(stored).length > 0) {
-    const mergedAgg = {
-      ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
-      ...extractDashboardWidgetOverrides(stored),
-    } as AggregationConfig;
-    next = { ...w, aggregationConfig: mergedAgg };
-  }
-  if (cardLayoutMode === "auto" && next.fixedGrid) {
-    const { fixedGrid: _fg, ...without } = next;
-    next = without as StudioWidget;
-  }
-  return next;
+function normalizeLoadedStudioWidget(w: StudioWidget): StudioWidget {
+  return normalizeLoadedDashboardWidget(w) as StudioWidget;
 }
 
 /** Regenera config del canvas con la aggregationConfig/color actuales del widget (estilos del panel). */
@@ -469,6 +459,9 @@ export function AdminDashboardStudio({
 }: AdminDashboardStudioProps) {
   const [widgets, setWidgets] = useState<StudioWidget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<GlobalFilter[]>([]);
+  const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults | undefined>(
+    undefined
+  );
   /** Valores en vivo de filtros globales (por id) y widgets tipo filter en el lienzo. */
   const [studioFilterValues, setStudioFilterValues] = useState<Record<string, unknown>>({});
   const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>({ ...DEFAULT_DASHBOARD_THEME });
@@ -585,6 +578,7 @@ export function AdminDashboardStudio({
             pages?: StudioPage[];
             activePageId?: string;
             cardLayoutMode?: DashboardCardLayoutMode;
+            dashboardCompareDefaults?: DashboardCompareDefaults;
           };
         }).layout;
         const loadedGlobalFilters = (data as unknown as { global_filters_config?: GlobalFilter[] }).global_filters_config || [];
@@ -601,6 +595,7 @@ export function AdminDashboardStudio({
             cardLayoutMode?: DashboardCardLayoutMode;
             savedMetrics?: SavedMetric[];
             datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] };
+            dashboardCompareDefaults?: DashboardCompareDefaults;
           };
           if (Array.isArray(layout.pages) && layout.pages.length > 0) {
             loadedPages = layout.pages;
@@ -616,8 +611,7 @@ export function AdminDashboardStudio({
                   gridOrder: (w as StudioWidget).gridOrder ?? i,
                   gridSpan: (w as StudioWidget).gridSpan ?? 2,
                   pageId: (w as StudioWidget).pageId ?? firstPageId,
-                } as StudioWidget,
-                loadedCardLayoutMode
+                } as StudioWidget
               )
             );
           }
@@ -632,9 +626,16 @@ export function AdminDashboardStudio({
           setDashboardTheme(loadedTheme);
           setPages(loadedPages);
           setActivePageId(loadedActivePageId);
-          const layout = rawLayout as { savedMetrics?: SavedMetric[]; datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] } } | undefined;
+          const layout = rawLayout as {
+            savedMetrics?: SavedMetric[];
+            datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] };
+            dashboardCompareDefaults?: DashboardCompareDefaults;
+          } | undefined;
           setSavedMetrics(Array.isArray(layout?.savedMetrics) ? layout.savedMetrics : []);
           setDerivedColumnsFromLayout(Array.isArray(layout?.datasetConfig?.derivedColumns) ? layout.datasetConfig.derivedColumns : []);
+          if (layout?.dashboardCompareDefaults) {
+            setDashboardCompareDefaults(layout.dashboardCompareDefaults);
+          }
           setLayoutLoaded(true);
         }
       } catch (e) {
@@ -729,6 +730,7 @@ export function AdminDashboardStudio({
         activePageId,
         cardLayoutMode,
         savedMetrics,
+        ...(dashboardCompareDefaults ? { dashboardCompareDefaults } : {}),
         ...(datasetConfig && { datasetConfig }),
         ...((etlData as { dashboardDataset?: import("@/lib/dashboard/dashboardDataset").DashboardDataset })?.dashboardDataset && {
           dashboardDataset: (etlData as { dashboardDataset: import("@/lib/dashboard/dashboardDataset").DashboardDataset }).dashboardDataset,
@@ -758,7 +760,7 @@ export function AdminDashboardStudio({
     } finally {
       setIsSaving(false);
     }
-  }, [globalFilters, dashboardTheme, dashboardId, pages, activePageId, cardLayoutMode, savedMetrics, etlData?.etl?.id, etlData?.dataSources]);
+  }, [globalFilters, dashboardTheme, dashboardId, pages, activePageId, cardLayoutMode, savedMetrics, dashboardCompareDefaults, etlData?.etl?.id, etlData?.dataSources]);
 
   useEffect(() => {
     widgetsRef.current = widgets;
@@ -1218,6 +1220,7 @@ export function AdminDashboardStudio({
             globalFilters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters],
             metricsOverride: metricsPayload as Parameters<typeof loadPreviewWidgetData>[0]["metricsOverride"],
             derivedColumns: derivedColumnsFromLayout.length > 0 ? derivedColumnsFromLayout : undefined,
+            dashboardCompareDefaults,
             aggregateEndpoint: "/api/dashboard/aggregate-data",
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -1247,6 +1250,9 @@ export function AdminDashboardStudio({
                   config: nextConfig,
                   rows,
                   kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                  compareUnavailable: loaded.compareUnavailable ?? false,
+                  compareUnavailableReason: loaded.compareUnavailableReason,
+                  compareLabel: loaded.compareLabel,
                   isLoading: false,
                 };
               })
@@ -1276,6 +1282,7 @@ export function AdminDashboardStudio({
             sourceId,
             datasetDimensions: etlData.datasetDimensions,
             globalFilters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters],
+            dashboardCompareDefaults,
             aggregateEndpoint: "/api/dashboard/aggregate-data",
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -1306,6 +1313,9 @@ export function AdminDashboardStudio({
                   config: nextConfig,
                   rows,
                   kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                  compareUnavailable: loaded.compareUnavailable ?? false,
+                  compareUnavailableReason: loaded.compareUnavailableReason,
+                  compareLabel: loaded.compareLabel,
                   isLoading: false,
                 };
               })
@@ -1319,7 +1329,7 @@ export function AdminDashboardStudio({
         }
       }
     },
-    [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, savedAnalyses, activePageId]
+    [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, savedAnalyses, activePageId, dashboardCompareDefaults]
   );
 
   useEffect(() => {
@@ -1474,8 +1484,9 @@ export function AdminDashboardStudio({
   const studioFiltersFingerprint = useMemo(() => JSON.stringify(studioFilterValues), [studioFilterValues]);
 
   const filtersDataFingerprint = useMemo(
-    () => `${globalFiltersFingerprint}\x1e${studioFiltersFingerprint}`,
-    [globalFiltersFingerprint, studioFiltersFingerprint]
+    () =>
+      `${globalFiltersFingerprint}\x1e${studioFiltersFingerprint}\x1e${JSON.stringify(dashboardCompareDefaults ?? null)}`,
+    [globalFiltersFingerprint, studioFiltersFingerprint, dashboardCompareDefaults]
   );
 
   useEffect(() => {
@@ -1855,10 +1866,30 @@ export function AdminDashboardStudio({
     saveDashboard();
   }, [saveDashboard]);
 
+  const snapshotPageFixedGrids = useCallback(
+    (pageWidgets: StudioWidget[], pageId: string): StudioWidget[] => {
+      const pageWs = pageWidgets
+        .filter((x) => (x.pageId ?? "page-1") === pageId)
+        .sort((a, b) => (a.gridOrder ?? 999) - (b.gridOrder ?? 999));
+      const placements = computeDashboardGridPlacementsPacked(pageWs, packCols, undefined, packRowGapPx);
+      const fgMap = placementsToFixedGridMap(placements);
+      return pageWidgets.map((w) => {
+        if ((w.pageId ?? "page-1") !== pageId) return w;
+        const fg = fgMap.get(w.id);
+        return fg ? { ...w, fixedGrid: fg } : w;
+      });
+    },
+    [packCols, packRowGapPx]
+  );
+
   const handleBeforePreview = useCallback(async () => {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    if (isDirty) await saveDashboard({ silent: true });
-  }, [isDirty, saveDashboard]);
+    const pageId = activePageId ?? "page-1";
+    const snapshotted = snapshotPageFixedGrids(widgetsRef.current, pageId);
+    setWidgets(snapshotted);
+    widgetsRef.current = snapshotted;
+    await saveDashboard({ widgets: snapshotted, silent: true });
+  }, [activePageId, snapshotPageFixedGrids, saveDashboard]);
 
   const updateTheme = useCallback((patch: Partial<DashboardTheme>) => {
     setDashboardTheme((prev) => ({ ...prev, ...patch }));
@@ -1889,10 +1920,10 @@ export function AdminDashboardStudio({
 
   const updateWidgetSize = useCallback(
     (widgetId: string, patch: { gridSpan?: number; minHeight?: number }) => {
+      const pageId = activePageId ?? "page-1";
       setWidgets((prev) => {
-        const pageId = activePageId ?? "page-1";
         const pageWs = prev.filter((x) => (x.pageId ?? "page-1") === pageId);
-        return prev.map((w) => {
+        const updated = prev.map((w) => {
           if (w.id !== widgetId) return w;
           let next: StudioWidget = { ...w, ...patch };
           if (cardLayoutMode === "manual") {
@@ -1900,16 +1931,14 @@ export function AdminDashboardStudio({
             if (fg) next.fixedGrid = fg;
             if (patch.gridSpan != null) next.gridSpan = patch.gridSpan;
             if (patch.minHeight != null) next.minHeight = patch.minHeight;
-          } else if (next.fixedGrid) {
-            const { fixedGrid: _fg, ...without } = next;
-            next = without as StudioWidget;
           }
           return next;
         });
+        return snapshotPageFixedGrids(updated, pageId);
       });
       setIsDirty(true);
     },
-    [activePageId, cardLayoutMode, packCols, packRowGapPx, reconcileManualFixedGrid]
+    [activePageId, cardLayoutMode, packCols, packRowGapPx, reconcileManualFixedGrid, snapshotPageFixedGrids]
   );
 
   const [resizingWidgetId, setResizingWidgetId] = useState<string | null>(null);
@@ -2156,16 +2185,13 @@ export function AdminDashboardStudio({
       setWidgets((prev) => {
         const pageId = activePageId ?? "page-1";
         const pageWs = prev.filter((x) => (x.pageId ?? "page-1") === pageId);
-        return prev.map((w) => {
+        const mapped = prev.map((w) => {
           if (w.id !== selectedId) return w;
           let next: StudioWidget = { ...w, ...restPatch };
           if (layoutSizePatch) {
             if (cardLayoutMode === "manual") {
               const fg = reconcileManualFixedGrid(next, layoutSizePatch, packCols, packRowGapPx, pageWs);
               if (fg) next.fixedGrid = fg;
-            } else if (next.fixedGrid) {
-              const { fixedGrid: _fg, ...without } = next;
-              next = without as StudioWidget;
             }
           }
           const percentLayoutPatch =
@@ -2200,6 +2226,7 @@ export function AdminDashboardStudio({
           }
           return next;
         });
+        return layoutSizePatch ? snapshotPageFixedGrids(mapped, pageId) : mapped;
       });
       setIsDirty(true);
 
@@ -2219,6 +2246,7 @@ export function AdminDashboardStudio({
       packCols,
       packRowGapPx,
       reconcileManualFixedGrid,
+      snapshotPageFixedGrids,
     ]
   );
 
@@ -2401,6 +2429,20 @@ export function AdminDashboardStudio({
           >
             {showDiagnostics ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
           </button>
+        </div>
+      )}
+      {!embeddedPreview && etlData && mode === "disenar" && (
+        <div className="px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-bg)]">
+          <DashboardCompareDefaultsSection
+            defaults={dashboardCompareDefaults}
+            onChange={(next) => {
+              setDashboardCompareDefaults(next);
+              setIsDirty(true);
+            }}
+            globalFilters={globalFilters}
+            filterValues={studioFilterValues}
+            dateFields={etlData?.dataSources?.[0]?.fields?.date ?? []}
+          />
         </div>
       )}
       {showDiagnostics && etlData?.dashboardDataset && etlData.dataSources && etlData.dataSources.length > 1 && (
@@ -2940,6 +2982,9 @@ export function AdminDashboardStudio({
                         config: w.config ?? undefined,
                         rows: w.rows,
                         kpiUserTimeScope: (w as { kpiUserTimeScope?: KpiUserTimeScopeOptions | null }).kpiUserTimeScope ?? null,
+                        compareUnavailable: (w as { compareUnavailable?: boolean }).compareUnavailable,
+                        compareUnavailableReason: (w as { compareUnavailableReason?: string }).compareUnavailableReason,
+                        compareLabel: (w as { compareLabel?: string }).compareLabel,
                         aggregationConfig: w.aggregationConfig,
                         color: w.color,
                         kpiSecondaryLabel: w.kpiSecondaryLabel,
@@ -3050,6 +3095,7 @@ export function AdminDashboardStudio({
             {selectedWidgetForPanel && selectedWidgetForPanel.type !== "filter" && (
               <MetricConfigPanel
                 dashboardTheme={dashboardTheme}
+                dashboardCompareDefaults={dashboardCompareDefaults}
                 previewChartDatasetLabels={
                   selectedWidgetForPanel.config?.datasets
                     ?.map((d) => String((d as { label?: string }).label ?? "").trim())

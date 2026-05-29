@@ -53,6 +53,16 @@ export function normalizeCardLayoutMode(raw: unknown): DashboardCardLayoutMode {
 }
 
 import type { DashboardDataset } from "@/lib/dashboard/dashboardDataset";
+import type { CompareSpec } from "@/lib/dashboard/compareSpec";
+
+/** Preset de comparación a nivel dashboard (heredado por widgets). */
+export type DashboardCompareDefaults = {
+  enabled: boolean;
+  compare: CompareSpec;
+  label?: string;
+  showDelta?: boolean;
+  showDeltaPct?: boolean;
+};
 
 /** semantic_name -> data_source_id -> physical_column_name (vista legacy) */
 export type DatasetDimensionsMap = Record<string, Record<string, string>>;
@@ -72,6 +82,8 @@ export type DashboardPersistedLayout = {
   /** Huellas de columnas por fuente para detectar cambios de esquema */
   sourceFingerprints?: Record<string, string>;
   cardLayoutMode?: DashboardCardLayoutMode;
+  /** Comparación por defecto del dashboard (widgets heredan salvo override). */
+  dashboardCompareDefaults?: DashboardCompareDefaults;
 };
 
 export const DEFAULT_DASHBOARD_THEME: DashboardTheme = {

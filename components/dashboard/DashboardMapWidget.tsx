@@ -572,6 +572,12 @@ export function DashboardMapWidget({
       for (const k of valueKeysForAgg) {
         const n = Number(r[k]);
         if (Number.isFinite(n)) bag[k] = (bag[k] ?? 0) + n;
+        const prevKey = `${k}_prev`;
+        const prevN = Number(r[prevKey]);
+        if (Number.isFinite(prevN)) bag[prevKey] = (bag[prevKey] ?? 0) + prevN;
+        const deltaKey = `${k}_delta_pct`;
+        const deltaN = Number(r[deltaKey]);
+        if (Number.isFinite(deltaN) && bag[deltaKey] == null) bag[deltaKey] = deltaN;
       }
       if (valueKeyRes) {
         const n = Number(r[valueKeyRes]);
@@ -900,8 +906,18 @@ export function DashboardMapWidget({
                 const safeName = escapeHtml(name);
                 const safeKey = escapeHtml(valueKey);
                 const safeVal = escapeHtml(valueStr);
+                const prevVal = valueKey && bag ? bag[`${valueKey}_prev`] : undefined;
+                const deltaPct = valueKey && bag ? bag[`${valueKey}_delta_pct`] : undefined;
+                const compareLine =
+                  prevVal != null && Number.isFinite(Number(prevVal))
+                    ? `<div class="text-[10px] opacity-80">vs ${escapeHtml(formatMetricValue(Number(prevVal)))}${
+                        deltaPct != null && Number.isFinite(Number(deltaPct))
+                          ? ` (${Number(deltaPct) >= 0 ? "+" : ""}${Number(deltaPct).toFixed(1)}%)`
+                          : ""
+                      }</div>`
+                    : "";
                 layer.bindPopup(
-                  `<div class="text-xs space-y-1"><strong>${safeName}</strong>${valueKey ? `<div>${safeKey}: ${safeVal}</div>` : `<div>${safeVal}</div>`}</div>`
+                  `<div class="text-xs space-y-1"><strong>${safeName}</strong>${valueKey ? `<div>${safeKey}: ${safeVal}</div>` : `<div>${safeVal}</div>`}${compareLine}</div>`
                 );
               }
               const pathLayer = layer as L.Path;

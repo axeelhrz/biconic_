@@ -51,6 +51,8 @@ export type AggregationConfigEdit = {
   transformShowDelta?: boolean;
   transformShowDeltaPct?: boolean;
   transformShowAccum?: boolean;
+  /** Si true (default), hereda comparación del dashboard. */
+  compareInheritDashboard?: boolean;
   dashboardCompareUi?: DashboardCompareUi;
   chartType?: string;
   chartXAxis?: string;
