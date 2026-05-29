@@ -49,6 +49,7 @@ type DashboardMapWidgetProps = {
   aggregationConfig?: MapAggregationConfig;
   mapDefaultCountry?: string;
   chartStyle?: ChartStyleConfig | null;
+  darkChartTheme?: boolean;
   height?: number;
 };
 
@@ -273,6 +274,7 @@ function ChoroplethLegendPanel({
   ranked,
   formatValue,
   show,
+  darkChartTheme = false,
 }: {
   mapVisual: ResolvedMapVisualStyle;
   minValue: number | null;
@@ -281,8 +283,26 @@ function ChoroplethLegendPanel({
   ranked: RankedProvince[];
   formatValue: (v: number) => string;
   show: boolean;
+  darkChartTheme?: boolean;
 }) {
   if (!show) return null;
+  const legendTheme = darkChartTheme
+    ? {
+        bg: "var(--studio-bg-elevated, #141419)",
+        fg: "var(--studio-fg, #f4f4f5)",
+        fgMuted: "var(--studio-fg-muted, #a1a1aa)",
+        border: "var(--studio-border, #3f3f46)",
+        cardBg: "var(--studio-surface, #1a1a22)",
+        barTrack: "var(--studio-border, #3f3f46)",
+      }
+    : {
+        bg: "var(--platform-surface, #f8fafc)",
+        fg: "#0f172a",
+        fgMuted: "#64748b",
+        border: "var(--platform-border, #e2e8f0)",
+        cardBg: "#ffffff",
+        barTrack: "#e2e8f0",
+      };
   const gradient = mapColorStopsToCssGradient(mapVisual.colorStops, "to right");
   const tickFractions = [0, 0.25, 0.5, 0.75, 1];
   const tickValues = tickFractions.map((f) => {
@@ -307,14 +327,17 @@ function ChoroplethLegendPanel({
     <div
       className="flex-shrink-0 border-t px-3 py-2.5"
       style={{
-        borderColor: "var(--platform-border, #e2e8f0)",
-        background: "rgba(255,255,255,0.97)",
-        color: "var(--platform-fg, #0f172a)",
+        borderColor: legendTheme.border,
+        background: legendTheme.bg,
+        color: legendTheme.fg,
       }}
     >
       <div className="mb-2 flex items-center gap-3">
         {valueKey ? (
-          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide opacity-70">
+          <span
+            className="shrink-0 text-[10px] font-semibold uppercase tracking-wide"
+            style={{ color: legendTheme.fgMuted }}
+          >
             {valueKey}
           </span>
         ) : null}
@@ -322,11 +345,14 @@ function ChoroplethLegendPanel({
           <div
             className="h-2.5 w-full rounded-full border"
             style={{
-              borderColor: "#cbd5e1",
+              borderColor: legendTheme.border,
               background: gradient,
             }}
           />
-          <div className="mt-1 flex justify-between gap-1 text-[9px] opacity-80">
+          <div
+            className="mt-1 flex justify-between gap-1 text-[9px]"
+            style={{ color: legendTheme.fgMuted }}
+          >
             {tickValues.map((v, i) => (
               <span key={i} className="truncate">
                 {formatChoroplethLegendValue(v, formatValue)}
@@ -343,18 +369,28 @@ function ChoroplethLegendPanel({
               <div
                 key={item.id}
                 className="rounded-md border px-2 py-1.5"
-                style={{ borderColor: "var(--platform-border, #e2e8f0)", background: "rgba(248,250,252,0.9)" }}
+                style={{ borderColor: legendTheme.border, background: legendTheme.cardBg }}
               >
-                <div className="truncate text-[10px] font-medium" title={item.name}>
+                <div
+                  className="truncate text-[10px] font-medium"
+                  style={{ color: legendTheme.fg }}
+                  title={item.name}
+                >
                   {item.name}
                 </div>
-                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200/80">
+                <div
+                  className="mt-1 h-1.5 overflow-hidden rounded-full"
+                  style={{ background: legendTheme.barTrack }}
+                >
                   <div
                     className="h-full rounded-full"
                     style={{ width: `${barPct}%`, background: item.color }}
                   />
                 </div>
-                <div className="mt-0.5 truncate text-[9px] font-semibold opacity-90">
+                <div
+                  className="mt-0.5 truncate text-[9px] font-semibold"
+                  style={{ color: legendTheme.fg }}
+                >
                   {formatValue(item.value)}
                 </div>
               </div>
@@ -415,6 +451,7 @@ export function DashboardMapWidget({
   aggregationConfig,
   mapDefaultCountry: mapDefaultCountryProp,
   chartStyle,
+  darkChartTheme = false,
   height = 280,
 }: DashboardMapWidgetProps) {
   const mapDefaultCountry = mapDefaultCountryProp ?? aggregationConfig?.mapDefaultCountry;
@@ -866,6 +903,7 @@ export function DashboardMapWidget({
           ranked={rankedProvinces}
           formatValue={formatMetricValue}
           show={mapVisual.choroplethShowLegend}
+          darkChartTheme={darkChartTheme}
         />
       </div>
     );
