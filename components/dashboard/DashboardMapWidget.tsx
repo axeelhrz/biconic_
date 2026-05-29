@@ -673,11 +673,13 @@ export function DashboardMapWidget({
                   `<div class="text-xs space-y-1"><strong>${safeName}</strong>${valueKey ? `<div>${safeKey}: ${safeVal}</div>` : `<div>${safeVal}</div>`}</div>`
                 );
               }
-              layer.on("mouseover", function () {
-                (this as L.Path).setStyle({ weight: strokeBase + 1.2 });
+              const pathLayer = layer as L.Path;
+              const baseStyle = styleFeature(feature as ArProvinceFeature);
+              layer.on("mouseover", () => {
+                pathLayer.setStyle({ weight: strokeBase + 1.2 });
               });
-              layer.on("mouseout", function () {
-                (this as L.Path).setStyle(styleFeature(feature as ArProvinceFeature));
+              layer.on("mouseout", () => {
+                pathLayer.setStyle(baseStyle);
               });
             }}
           />
