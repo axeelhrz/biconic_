@@ -56,6 +56,7 @@ import {
   buildCompareTooltipLineFromAgg,
   compareTrendTone,
   kpiCompareRowsFingerprint,
+  resolveWidgetCompareStatus,
 } from "@/lib/dashboard/compareDisplayKeys";
 import {
   getEffectiveDashboardCompareUi,
@@ -73,12 +74,7 @@ import {
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, widgetAggregationWithStoredVisualOverrides, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { CompareStatusStrip } from "@/components/dashboard/CompareStatusStrip";
-import {
-  legacyCompareInputFromWidgetAgg,
-  resolveWidgetCompareStatus,
-} from "@/lib/dashboard/compareDisplayKeys";
 import { resolveEffectiveCompareSpec } from "@/lib/dashboard/compareContext";
-import { getEffectiveDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { useDevicePixelRatio } from "@/hooks/useDevicePixelRatio";
 import { CompareUnavailableHint } from "@/components/dashboard/CompareUnavailableHint";
