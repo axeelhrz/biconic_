@@ -335,6 +335,15 @@ export function DashboardCompareSpecSection({
             />
             Mostrar comparación en el dashboard
           </label>
+          <label className="flex items-center gap-2 text-xs text-[var(--studio-fg)]">
+            <Checkbox
+              checked={ui.showCardHeaderStrip !== false}
+              onCheckedChange={(c) =>
+                updateAgg({ dashboardCompareUi: { ...ui, showCardHeaderStrip: c === true } })
+              }
+            />
+            Mostrar resumen en encabezado de tarjeta (badge y total)
+          </label>
           <div>
             <Label className="text-[11px] text-[var(--studio-fg-muted)]">Texto visible (ej. vs mes anterior)</Label>
             <Input

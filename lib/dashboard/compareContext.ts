@@ -19,6 +19,7 @@ export type DashboardCompareDefaults = {
   label?: string;
   showDelta?: boolean;
   showDeltaPct?: boolean;
+  showCardHeaderStrip?: boolean;
 };
 
 export type TemporalAnchor =
@@ -392,6 +393,7 @@ export function resolveWidgetCompareUi(
       label: dashboardDefaults.label,
       showDelta: dashboardDefaults.showDelta,
       showDeltaPct: dashboardDefaults.showDeltaPct,
+      showCardHeaderStrip: dashboardDefaults.showCardHeaderStrip,
       ...widgetAgg.dashboardCompareUi,
     };
   }

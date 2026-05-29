@@ -95,6 +95,16 @@ export function DashboardCompareDefaultsSection({
               onChange={(e) => onChange({ ...d, label: e.target.value })}
             />
           </div>
+          <label className="flex items-center gap-2 text-xs text-[var(--studio-fg)]">
+            <Checkbox
+              id="dash-compare-header-strip"
+              checked={d.showCardHeaderStrip !== false}
+              onCheckedChange={(c) => onChange({ ...d, showCardHeaderStrip: c === true })}
+            />
+            <Label htmlFor="dash-compare-header-strip" className="text-[11px] font-normal text-[var(--studio-fg-muted)]">
+              Mostrar resumen en encabezado de tarjeta (badge y total)
+            </Label>
+          </label>
           {contextPreview ? (
             <p className={`text-[10px] ${contextPreview.comparable ? "text-[var(--studio-fg-muted)]" : "text-amber-600 dark:text-amber-400"}`}>
               {contextPreview.comparable

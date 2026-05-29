@@ -62,6 +62,8 @@ export type DashboardCompareDefaults = {
   label?: string;
   showDelta?: boolean;
   showDeltaPct?: boolean;
+  /** Badge + línea de total bajo el título (widgets que heredan). Por defecto true. */
+  showCardHeaderStrip?: boolean;
 };
 
 export const EMPTY_DASHBOARD_COMPARE_DEFAULTS: DashboardCompareDefaults = {
@@ -70,6 +72,7 @@ export const EMPTY_DASHBOARD_COMPARE_DEFAULTS: DashboardCompareDefaults = {
   label: "",
   showDelta: true,
   showDeltaPct: true,
+  showCardHeaderStrip: true,
 };
 
 /** semantic_name -> data_source_id -> physical_column_name (vista legacy) */

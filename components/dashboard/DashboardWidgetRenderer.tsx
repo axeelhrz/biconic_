@@ -57,6 +57,7 @@ import {
   compareTrendTone,
   kpiCompareRowsFingerprint,
   resolveWidgetCompareStatus,
+  resolveShowCardHeaderStrip,
 } from "@/lib/dashboard/compareDisplayKeys";
 import {
   getEffectiveDashboardCompareUi,
@@ -74,7 +75,7 @@ import {
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
 import { mergeChartVisualStyle, widgetAggregationWithStoredVisualOverrides, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { CompareStatusStrip } from "@/components/dashboard/CompareStatusStrip";
-import { resolveEffectiveCompareSpec } from "@/lib/dashboard/compareContext";
+import { resolveEffectiveCompareSpec, resolveWidgetCompareUi } from "@/lib/dashboard/compareContext";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { useDevicePixelRatio } from "@/hooks/useDevicePixelRatio";
 import { CompareUnavailableHint } from "@/components/dashboard/CompareUnavailableHint";
@@ -1655,10 +1656,15 @@ export function DashboardWidgetRenderer({
       dashboardCompareDefaults,
       legacyCompareInputFromWidgetAgg(agg)
     );
-    const compareUi = getEffectiveDashboardCompareUi(agg, {
-      widgetType: widget.type,
-      chartType,
-    });
+    const compareUi =
+      resolveWidgetCompareUi(
+        dashboardCompareDefaults,
+        agg as { compareInheritDashboard?: boolean; dashboardCompareUi?: import("@/lib/dashboard/compareDisplayKeys").DashboardCompareUi }
+      ) ??
+      getEffectiveDashboardCompareUi(agg, {
+        widgetType: widget.type,
+        chartType,
+      });
     const metrics = (agg.metrics as { alias?: string }[] | undefined) ?? [];
     const metricAlias = metrics.map((m) => String(m.alias ?? "").trim()).filter(Boolean)[0] ?? "";
     return resolveWidgetCompareStatus({
@@ -1671,6 +1677,11 @@ export function DashboardWidgetRenderer({
       metricAlias,
       kpiUserTimeScope: widget.kpiUserTimeScope ?? null,
       chartStyle: widget.chartStyle as ChartStyleConfig | undefined,
+      showCardHeaderStrip: resolveShowCardHeaderStrip({
+        compareUi,
+        dashboardDefaults: dashboardCompareDefaults,
+        compareInheritDashboard: (agg as { compareInheritDashboard?: boolean }).compareInheritDashboard,
+      }),
     });
   }, [chartType, widget, dashboardCompareDefaults]);
 

@@ -32,6 +32,8 @@ export type DashboardCompareUi = {
   showDeltaPct?: boolean;
   placement?: DashboardComparePlacement | DashboardComparePlacement[];
   indicator?: DashboardCompareIndicator;
+  /** Badge + línea de total bajo el título de la tarjeta. Por defecto true. */
+  showCardHeaderStrip?: boolean;
 };
 
 export function normalizeComparePlacements(raw: DashboardCompareUi["placement"]): DashboardComparePlacement[] {
@@ -45,6 +47,20 @@ export function placementEnabled(
 ): boolean {
   if (!ui?.enabled) return false;
   return normalizeComparePlacements(ui.placement).includes(p);
+}
+
+/** Si el resumen de comparación debe mostrarse bajo el título de la tarjeta. */
+export function resolveShowCardHeaderStrip(params: {
+  compareUi?: DashboardCompareUi;
+  dashboardDefaults?: { showCardHeaderStrip?: boolean };
+  compareInheritDashboard?: boolean;
+}): boolean {
+  const { compareUi, dashboardDefaults, compareInheritDashboard } = params;
+  if (compareUi?.showCardHeaderStrip === false) return false;
+  if (compareUi?.showCardHeaderStrip === true) return true;
+  const inherit = compareInheritDashboard !== false;
+  if (inherit && dashboardDefaults?.showCardHeaderStrip === false) return false;
+  return true;
 }
 
 /** Claves reales en la fila API (post applyCompareSpecToRows) para leer comparación de una métrica. */
@@ -487,19 +503,20 @@ export function resolveWidgetCompareStatus(params: {
   metricAlias?: string;
   kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
   chartStyle?: ChartStyleConfig;
+  showCardHeaderStrip?: boolean;
 }): WidgetCompareStatus {
   const {
     compareSpec,
     compareUi,
     compareUnavailable,
-    compareUnavailableReason,
     rows,
     metricAlias,
     kpiUserTimeScope,
     chartStyle,
+    showCardHeaderStrip = true,
   } = params;
 
-  if (compareSpec.kind === "none" || compareUi?.enabled === false) {
+  if (compareSpec.kind === "none" || compareUi?.enabled === false || !showCardHeaderStrip) {
     return { active: false, badge: null, line: null, unavailable: false };
   }
 

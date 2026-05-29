@@ -17,8 +17,9 @@ import { CompareStatusStrip } from "@/components/dashboard/CompareStatusStrip";
 import {
   legacyCompareInputFromWidgetAgg,
   resolveWidgetCompareStatus,
+  resolveShowCardHeaderStrip,
 } from "@/lib/dashboard/compareDisplayKeys";
-import { resolveEffectiveCompareSpec } from "@/lib/dashboard/compareContext";
+import { resolveEffectiveCompareSpec, resolveWidgetCompareUi } from "@/lib/dashboard/compareContext";
 import { getEffectiveDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
@@ -171,10 +172,12 @@ export function MetricBlock({
       dashboardCompareDefaults,
       legacyCompareInputFromWidgetAgg(agg)
     );
-    const compareUi = getEffectiveDashboardCompareUi(agg, {
-      widgetType: w.type,
-      chartType: String(agg.chartType ?? w.type),
-    });
+    const compareUi =
+      resolveWidgetCompareUi(dashboardCompareDefaults, agg as { compareInheritDashboard?: boolean; dashboardCompareUi?: import("@/lib/dashboard/compareDisplayKeys").DashboardCompareUi }) ??
+      getEffectiveDashboardCompareUi(agg, {
+        widgetType: w.type,
+        chartType: String(agg.chartType ?? w.type),
+      });
     const metrics = (agg.metrics as { alias?: string }[] | undefined) ?? [];
     const metricAlias = metrics.map((m) => String(m.alias ?? "").trim()).filter(Boolean)[0] ?? "";
     return resolveWidgetCompareStatus({
@@ -187,6 +190,11 @@ export function MetricBlock({
       metricAlias,
       kpiUserTimeScope: w.kpiUserTimeScope ?? null,
       chartStyle: w.chartStyle as ChartStyleConfig | undefined,
+      showCardHeaderStrip: resolveShowCardHeaderStrip({
+        compareUi,
+        dashboardDefaults: dashboardCompareDefaults,
+        compareInheritDashboard: (agg as { compareInheritDashboard?: boolean }).compareInheritDashboard,
+      }),
     });
   }, [widgetForRenderer, dashboardCompareDefaults]);
 
