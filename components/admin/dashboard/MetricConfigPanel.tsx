@@ -2759,8 +2759,6 @@ export function MetricConfigPanel({
           </div>
         )}
 
-          )}
-
             </TabsContent>
             <TabsContent value="data" className="mt-0 space-y-5 focus-visible:outline-none">
             <div>
