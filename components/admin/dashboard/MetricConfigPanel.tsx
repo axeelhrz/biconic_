@@ -2160,6 +2160,7 @@ export function MetricConfigPanel({
                   </div>
                 )}
               </div>
+              </div>
             </div>
           )}
 
