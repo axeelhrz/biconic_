@@ -79,6 +79,7 @@ import {
   resolveImageContainerAlignment,
   resolveImageElementStyle,
 } from "@/lib/dashboard/imageLayout";
+import type { MapAggregationConfig } from "./DashboardMapWidget";
 
 const DashboardMapWidget = dynamic(
   () => import("./DashboardMapWidget").then((m) => m.DashboardMapWidget),
@@ -2010,17 +2011,9 @@ export function DashboardWidgetRenderer({
                 ) : (
                   <DashboardMapWidget
                     rows={tableRows as Record<string, unknown>[]}
-                    aggregationConfig={
-                      widget.aggregationConfig as {
-                        chartXAxis?: string;
-                        chartYAxes?: string[];
-                        dimension?: string;
-                        dimensions?: string[];
-                        mapDefaultCountry?: string;
-                      } | undefined
-                    }
+                    aggregationConfig={widget.aggregationConfig as MapAggregationConfig | undefined}
                     mapDefaultCountry={
-                      (widget.aggregationConfig as { mapDefaultCountry?: string } | undefined)?.mapDefaultCountry
+                      (widget.aggregationConfig as MapAggregationConfig | undefined)?.mapDefaultCountry
                     }
                     height={Math.max(220, (effectiveMinHeight ?? 240) - 52)}
                   />

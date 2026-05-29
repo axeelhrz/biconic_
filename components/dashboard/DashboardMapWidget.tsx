@@ -7,6 +7,7 @@ import "leaflet/dist/leaflet.css";
 import {
   AR_BOUNDING_BOX,
   AR_GEOJSON_PATH,
+  AR_GEOJSON_API_PATH,
   getArProvinceCentroid,
   isArgentinaDefaultCountry,
   isPointInArgentinaBBox,
@@ -69,6 +70,32 @@ type ArFeatureCollection = {
   type: "FeatureCollection";
   features: ArProvinceFeature[];
 };
+
+function isArFeatureCollection(value: unknown): value is ArFeatureCollection {
+  if (!value || typeof value !== "object") return false;
+  const v = value as ArFeatureCollection;
+  return v.type === "FeatureCollection" && Array.isArray(v.features);
+}
+
+async function fetchArProvinceGeoJson(): Promise<ArFeatureCollection> {
+  const sources = [AR_GEOJSON_PATH, AR_GEOJSON_API_PATH];
+  let lastStatus: number | undefined;
+  for (const url of sources) {
+    try {
+      const response = await fetch(url);
+      lastStatus = response.status;
+      if (!response.ok) continue;
+      const json: unknown = await response.json();
+      if (isArFeatureCollection(json)) return json;
+    } catch {
+      // try next source
+    }
+  }
+  if (process.env.NODE_ENV === "development") {
+    console.warn("[DashboardMapWidget] No se pudo cargar GeoJSON de provincias", { lastStatus, sources });
+  }
+  throw new Error("ar-geo-load-failed");
+}
 
 function FitBounds({ points }: { points: [number, number][] }) {
   const map = useMap();
@@ -319,14 +346,10 @@ export function DashboardMapWidget({
   useEffect(() => {
     if (!argentinaMode) return;
     let cancelled = false;
-    fetch(AR_GEOJSON_PATH)
-      .then((r) => {
-        if (!r.ok) throw new Error("geo");
-        return r.json();
-      })
-      .then((j: unknown) => {
-        const fc = j as ArFeatureCollection;
-        if (!cancelled && fc?.type === "FeatureCollection" && Array.isArray(fc.features)) setArGeo(fc);
+    setArGeoError(false);
+    fetchArProvinceGeoJson()
+      .then((fc) => {
+        if (!cancelled) setArGeo(fc);
       })
       .catch(() => {
         if (!cancelled) setArGeoError(true);

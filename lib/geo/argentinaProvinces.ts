@@ -35,6 +35,9 @@ export type ArProvinceGadmId = (typeof AR_PROVINCE_GADM_IDS)[number];
 
 export const AR_GEOJSON_PATH = "/geo/ar-provincias.geojson";
 
+/** Fallback vía API cuando el middleware bloquea el asset estático. */
+export const AR_GEOJSON_API_PATH = "/api/geo/ar-provincias";
+
 /** Alineado con el encuadre del mapa en DashboardMapWidget (lat/lng). */
 export const AR_BOUNDING_BOX = {
   minLat: -55.2,
