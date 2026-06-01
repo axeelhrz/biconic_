@@ -366,6 +366,17 @@
   overflow: hidden;
 }
 
+/* Tarjeta con tabla: respetar la altura fija del Card (no estirar con el contenido)
+   para que el scroll interno se active igual que en el editor del dashboard. */
+.admin-view-page [data-theme="client"] .client-view-widget > div:has(.dashboard-widget-table-scroll) {
+  flex: 0 0 auto;
+  max-height: 100%;
+}
+
+.admin-view-page [data-theme="client"] .client-view-widget:has(.dashboard-widget-table-scroll) {
+  overflow: hidden;
+}
+
 [data-theme="client"] .client-view-widget > div header {
   border-color: var(--client-border) !important;
   color: var(--client-text) !important;
