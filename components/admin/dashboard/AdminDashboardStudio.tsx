@@ -2221,9 +2221,20 @@ export function AdminDashboardStudio({
             "chartPercentDenominatorScope" in patch ||
             "chartPercentDenominatorGrandTotal" in patch;
           if (aggDelta != null) {
+            const mergedAggPatch =
+              aggPatch?.dashboardCompareUi != null && typeof aggPatch.dashboardCompareUi === "object"
+                ? {
+                    ...aggPatch,
+                    dashboardCompareUi: {
+                      ...((w.aggregationConfig as { dashboardCompareUi?: Record<string, unknown> } | undefined)
+                        ?.dashboardCompareUi ?? {}),
+                      ...(aggPatch.dashboardCompareUi as Record<string, unknown>),
+                    },
+                  }
+                : aggPatch;
             next.aggregationConfig = {
               ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
-              ...aggDelta,
+              ...(mergedAggPatch ?? aggDelta),
             } as AggregationConfig;
             const visuals = extractDashboardWidgetOverrides(next.aggregationConfig as Record<string, unknown>);
             next.dashboardVisualOverrides =

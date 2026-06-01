@@ -337,6 +337,11 @@
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
+/* En preview admin, forzar contención para que el scroll de tabla quede dentro de la tarjeta. */
+.admin-view-page [data-theme="client"] .client-view-widget {
+  overflow: hidden;
+}
+
 [data-theme="client"] .client-view-widget.client-view-kpi-widget {
   align-self: start;
 }
@@ -354,6 +359,11 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.admin-view-page [data-theme="client"] .client-view-widget > div {
+  min-width: 0;
+  overflow: hidden;
 }
 
 [data-theme="client"] .client-view-widget > div header {
@@ -375,6 +385,14 @@
   overflow: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.admin-view-page [data-theme="client"] .dashboard-widget-table-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 [data-theme="client"] .client-view-widget-header {

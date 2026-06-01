@@ -65,6 +65,7 @@ export function ensureDashboardCompareUi(
     showDeltaPct: prev?.showDeltaPct !== undefined ? prev.showDeltaPct : showDeltaPct,
     placement,
     indicator: prev?.indicator ?? "both",
+    showCardHeaderStrip: prev?.showCardHeaderStrip,
   };
 }
 

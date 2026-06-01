@@ -1999,6 +1999,8 @@ export function DashboardViewer({
                     display: "flex",
                     flexDirection: "column",
                     minHeight: 0,
+                    minWidth: 0,
+                    overflow: useClientTheme ? "hidden" : undefined,
                     position: "relative",
                     zIndex: typeof (widget as Widget).zIndex === "number" ? (widget as Widget).zIndex : 0,
                     ...cellThemeVars,

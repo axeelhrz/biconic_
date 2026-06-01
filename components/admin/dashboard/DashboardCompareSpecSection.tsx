@@ -14,6 +14,7 @@ import {
   readComparePresentation,
   pickDashboardKpiCompareRow,
   compareKindBadgeLabel,
+  resolveShowCardHeaderStrip,
 } from "@/lib/dashboard/compareDisplayKeys";
 import {
   resolveDashboardKpiMainValueForScope,
@@ -76,6 +77,7 @@ function defaultCompareUi(prev?: DashboardCompareUi): DashboardCompareUi {
     showDeltaPct: prev?.showDeltaPct !== false,
     placement: prev?.placement ?? ["kpi_below"],
     indicator: prev?.indicator ?? "both",
+    showCardHeaderStrip: prev?.showCardHeaderStrip,
   };
 }
 
@@ -162,6 +164,11 @@ export function DashboardCompareSpecSection({
     widgetType === "kpi" && compareNeedsTimeGroupedRows(compare) && compare.kind !== "none";
 
   const compareBadge = compareKindBadgeLabel(compare);
+  const cardHeaderStripVisible = resolveShowCardHeaderStrip({
+    compareUi: agg.dashboardCompareUi,
+    dashboardDefaults: dashboardCompareDefaults,
+    compareInheritDashboard: inheritDashboard,
+  });
   const previewMainTotal =
     widgetType === "kpi" ? previewMainKpiTotal(previewRows, primaryMetricAlias, kpiUserTimeScope) : null;
   const previewCompareLine = previewCompareLineText(previewRows, compare, primaryMetricAlias);
@@ -337,9 +344,15 @@ export function DashboardCompareSpecSection({
           </label>
           <label className="flex items-center gap-2 text-xs text-[var(--studio-fg)]">
             <Checkbox
-              checked={ui.showCardHeaderStrip !== false}
+              checked={cardHeaderStripVisible}
               onCheckedChange={(c) =>
-                updateAgg({ dashboardCompareUi: { ...ui, showCardHeaderStrip: c === true } })
+                updateAgg({
+                  dashboardCompareUi: {
+                    ...ui,
+                    showCardHeaderStrip: c === true,
+                    enabled: ui.enabled !== false,
+                  },
+                })
               }
             />
             Mostrar resumen en encabezado de tarjeta (badge y total)
