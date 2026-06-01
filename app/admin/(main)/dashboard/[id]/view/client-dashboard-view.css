@@ -337,6 +337,11 @@
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
+/* En preview admin, contener el contenido para forzar scroll interno en tablas. */
+.admin-view-page [data-theme="client"] .client-view-widget {
+  overflow: hidden;
+}
+
 [data-theme="client"] .client-view-widget.client-view-kpi-widget {
   align-self: start;
 }
@@ -356,6 +361,11 @@
   flex-direction: column;
 }
 
+.admin-view-page [data-theme="client"] .client-view-widget > div {
+  min-width: 0;
+  overflow: hidden;
+}
+
 [data-theme="client"] .client-view-widget > div header {
   border-color: var(--client-border) !important;
   color: var(--client-text) !important;
@@ -372,9 +382,12 @@
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 [data-theme="client"] .client-view-widget-header {
