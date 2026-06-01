@@ -40,6 +40,25 @@ export function pickDateGroupBySourceField(agg: AggLikeForDateGroupByField | nul
   const dateDim = String(agg.dateDimension ?? "").trim();
   const chartX = String(agg.chartXAxis ?? "").trim();
   if (dateDim && dims.includes(dateDim)) return dateDim;
+  // Sin esta validación, charts no temporales (p. ej. horizontalBar con X=producto) heredarían
+  // `dateGroupByGranularity` residual y truncarían la dimensión categórica por mes, colapsando
+  // todas las filas en un único bucket. Solo aceptamos chartXAxis/primary como columna de fecha
+  // cuando no hay un `dateDimension` distinto definido (caso clásico de gráfico temporal sin
+  // dateDimension explícito).
+  if (dateDim) return undefined;
   if (chartX && dims.includes(chartX)) return chartX;
   return primary;
+}
+
+/**
+ * Eje físico para mapear filtros globales de fecha (MONTH/YEAR/…) cuando no hay dimensiones visibles
+ * (p. ej. KPI): `pickDateGroupBySourceField` no usa `dateDimension` si no está en `dimensions`.
+ */
+export function pickSemanticDateAxisForGlobalFilters(agg: AggLikeForDateGroupByField | null | undefined): string | undefined {
+  if (!agg) return undefined;
+  if (!String(agg.dateGroupByGranularity ?? "").trim()) return undefined;
+  const dims = dimensionsListFromAgg(agg);
+  const dateDim = String(agg.dateDimension ?? "").trim();
+  if (dims.length === 0 && dateDim) return dateDim;
+  return pickDateGroupBySourceField(agg);
 }

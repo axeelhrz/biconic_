@@ -4,16 +4,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import { useDashboardEtlData } from "@/hooks/useDashboardEtlData";
 import {
+  type DashboardCardLayoutMode,
   type DashboardTheme,
   DEFAULT_DASHBOARD_THEME,
   mergeCardTheme,
   mergeTheme,
+  normalizeCardLayoutMode,
   themeToCssVars,
   themeToWrapperBackground,
 } from "@/types/dashboard";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "./DashboardWidgetRenderer";
+import { DashboardLogoOverlay } from "./DashboardLogoOverlay";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import type { DashboardCompareDefaults } from "@/types/dashboard";
+import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
 import {
   expandAnalysisMetricsForFetch,
@@ -23,13 +27,29 @@ import {
   buildChartMetricStyles,
   buildResolvedChartStyle,
   resolveDarkChartTheme,
+  resolveWidgetAnalysisMergePatch,
+  mergeAnalysisAggregationWithDashboardOverrides,
+  widgetAggregationWithStoredVisualOverrides,
+  normalizeLoadedDashboardWidget,
+  resolveWidgetLabelDisplayMode,
+  type SavedAnalysisForMerge,
+  type SavedMetricForAnalysisMerge,
 } from "@/lib/dashboard/widgetRenderParity";
+import {
+  loadPreviewWidgetData,
+  type LoadPreviewWidgetDataParams,
+} from "@/lib/dashboard/previewWidgetDataLoader";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
 import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2 } from "lucide-react";
 import {
+  buildFilterSummaryFromGlobals,
+  collectExportWidgetTargets,
   exportDashboardExcel,
-  exportDashboardPdfFromElement,
-  exportDashboardSummaryPpt,
+  exportDashboardPdfPerWidget,
+  exportDashboardPptPerWidget,
+  prepareForExport,
+  type ExportReportMeta,
 } from "@/lib/dashboard/dashboardExport";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -44,11 +64,14 @@ import {
   expandMonthFilterValueWithYear,
 } from "@/lib/dashboard/expandMonthFilterWithYear";
 import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
-
-/** Meses 1–12 para filtro global MONTH (sin año en la UI). */
-const GLOBAL_MONTH_FILTER_VALUES = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
-] as const;
+import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
+import { fetchGlobalFilterDistinctValues } from "@/lib/dashboard/fetchGlobalFilterDistinctValues";
+import { GLOBAL_MONTH_FILTER_VALUES } from "@/lib/dashboard/globalMonthFilterValues";
+import {
+  mapDimensionDefaultFiltersToAggregationFilters,
+  dimensionDefaultDistinctCacheKey,
+  type DimensionDefaultFilterEdit,
+} from "@/lib/dashboard/dimensionDefaultFilters";
 const MONTH_LABELS_ES = [
   "Enero",
   "Febrero",
@@ -340,6 +363,8 @@ type AggregationConfig = {
   comparePeriod?: string;
   dateDimension?: string;
   chartType?: string;
+  chartCategoryColorMode?: "varied" | "uniform";
+  chartPrimaryColor?: string;
   chartSeriesColors?: Record<string, string>;
   chartXAxis?: string;
   chartYAxes?: string[];
@@ -390,6 +415,9 @@ type AggregationConfig = {
   mapDefaultCountry?: string;
   geoComponentOverrides?: GeoComponentOverrides;
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
+  dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
+  chartRankingPinnedXValues?: string[];
+  chartDetailCard?: ChartDetailCardConfig;
 };
 
 export type Widget = DashboardWidgetRendererWidget & {
@@ -411,9 +439,32 @@ export type Widget = DashboardWidgetRendererWidget & {
   cardTheme?: Partial<DashboardTheme>;
   /** Celda fija en la rejilla (1-based); si existe, no se empaqueta automáticamente. */
   fixedGrid?: DashboardFixedGrid;
+  /** Overrides visuales/geo del panel persistidos en layout. */
+  dashboardVisualOverrides?: Record<string, unknown>;
   /** Apilamiento respecto a otras tarjetas (solapamiento con fixedGrid). */
   zIndex?: number;
 };
+
+function seedDimensionDefaultFilterValuesFromWidgets(
+  widgetList: Widget[]
+): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const w of widgetList) {
+    const list = w.aggregationConfig?.dimensionDefaultFilters;
+    if (!Array.isArray(list) || list.length === 0) continue;
+    const per: Record<string, unknown> = {};
+    for (const ddf of list) {
+      const id = String((ddf as DimensionDefaultFilterEdit).id ?? "").trim();
+      if (!id) continue;
+      const dv = (ddf as DimensionDefaultFilterEdit).defaultValue;
+      if (dv !== undefined && dv !== "" && !(Array.isArray(dv) && dv.length === 0)) {
+        per[id] = dv;
+      }
+    }
+    if (Object.keys(per).length > 0) out[w.id] = per;
+  }
+  return out;
+}
 
 /** Coincide con la página activa; corrige legado "page-1" vs id real de la primera página. */
 function widgetMatchesActivePage(
@@ -476,7 +527,13 @@ export function DashboardViewer({
   const [filterDraft, setFilterDraft] = useState<Record<string, unknown>>({});
   const [filterApplied, setFilterApplied] = useState<Record<string, unknown>>({});
   const [globalFilterDistinctValues, setGlobalFilterDistinctValues] = useState<Record<string, unknown[]>>({});
+  /** Por widget → id de dimensionDefaultFilter → valor elegido en UI */
+  const [dimensionDefaultFilterValues, setDimensionDefaultFilterValues] = useState<
+    Record<string, Record<string, unknown>>
+  >({});
+  const [dimensionDefaultDistinctValues, setDimensionDefaultDistinctValues] = useState<Record<string, unknown[]>>({});
   const canvasExportRef = useRef<HTMLDivElement>(null);
+  const exportRootRef = useRef<HTMLDivElement>(null);
   const [exportBusy, setExportBusy] = useState(false);
   /** Si viene del layout guardado: misma página activa que AdminDashboardStudio (vista previa = lienzo). */
   const [pageLayout, setPageLayout] = useState<{
@@ -484,9 +541,16 @@ export function DashboardViewer({
     activePageId: string;
     pagesMeta?: { id: string; name: string }[];
   } | null>(null);
+  const [cardLayoutMode, setCardLayoutMode] = useState<DashboardCardLayoutMode>("auto");
+  const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults>(
+    () => ({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS })
+  );
   const stateRef = useRef({ widgets, setWidgets });
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
+  const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalysisForMerge[]>([]);
+  const [savedMetricsFromEtl, setSavedMetricsFromEtl] = useState<SavedMetricForAnalysisMerge[]>([]);
+  const etlMetricsFetchedRef = useRef(false);
 
   const { data: etlData, error: etlDataError } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
   const etlDataRef = useRef(etlData);
@@ -542,7 +606,7 @@ export function DashboardViewer({
   useEffect(() => {
     if (initialWidgets?.length) {
       setPageLayout(null);
-      setWidgets(initialWidgets);
+      setWidgets(initialWidgets.map((w) => normalizeLoadedDashboardWidget(w)));
       if (initialTitle) setTitle(initialTitle);
       if (initialGlobalFilters) {
         setGlobalFilters(initialGlobalFilters);
@@ -572,6 +636,8 @@ export function DashboardViewer({
       } else {
         setFilterValues({});
       }
+      setDimensionDefaultFilterValues(seedDimensionDefaultFilterValuesFromWidgets(initialWidgets));
+      setDimensionDefaultDistinctValues({});
       return;
     }
     const dashboard = (etlDataRef.current as { dashboard?: Record<string, unknown> } | null)?.dashboard as
@@ -592,7 +658,18 @@ export function DashboardViewer({
       theme?: Partial<DashboardTheme>;
       pages?: { id: string; name?: string }[];
       activePageId?: string;
+      cardLayoutMode?: DashboardCardLayoutMode;
+      dashboardCompareDefaults?: DashboardCompareDefaults;
     } | undefined;
+    setCardLayoutMode(normalizeCardLayoutMode(layout?.cardLayoutMode));
+    if (layout?.dashboardCompareDefaults) {
+      setDashboardCompareDefaults({
+        ...EMPTY_DASHBOARD_COMPARE_DEFAULTS,
+        ...layout.dashboardCompareDefaults,
+      });
+    } else {
+      setDashboardCompareDefaults({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS });
+    }
     const pages =
       Array.isArray(layout?.pages) && layout!.pages!.length > 0
         ? layout!.pages!
@@ -618,14 +695,16 @@ export function DashboardViewer({
     const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
     const loadedWidgets = rawWidgets.map((w, i) => {
       const base = w as Widget;
-      return {
+      return normalizeLoadedDashboardWidget({
         ...base,
         gridOrder: base.gridOrder ?? i,
         pageId: normalizeWidgetPageId(base.pageId),
-      };
+      });
     });
     const loadedTheme = layout?.theme && typeof layout.theme === "object" ? layout.theme : {};
     setWidgets(loadedWidgets);
+    setDimensionDefaultFilterValues(seedDimensionDefaultFilterValuesFromWidgets(loadedWidgets));
+    setDimensionDefaultDistinctValues({});
     setTitle((dashboard.title as string) || "Dashboard");
     setDashboardTheme((prev) => ({ ...DEFAULT_DASHBOARD_THEME, ...prev, ...loadedTheme }));
     const gfs = Array.isArray(dashboard.global_filters_config)
@@ -654,90 +733,87 @@ export function DashboardViewer({
     }
   }, [layoutFingerprint, initialWidgets, initialTitle, initialGlobalFilters, filterCommitMode]);
 
-  // Cargar distinct values para cada filtro global; si el campo es dimensión semántica, usar tabla y columna física de la fuente primaria
+  // Distinct values para filtros globales (multi-fuente cuando hay dataset semántico)
   useEffect(() => {
-    const dataSources = (etlData as any)?.dataSources as { id: string; schema?: string; tableName?: string; fields?: { date?: string[] } }[] | undefined;
-    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>>; primarySourceId?: string })?.datasetDimensions;
+    const dataSources = (etlData as { dataSources?: { id: string; schema?: string; tableName?: string; fields?: { date?: string[] } }[] })?.dataSources;
+    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
     const primarySourceId = (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
     let primaryTableName: string | undefined;
     if (dataSources?.[0]?.tableName) {
       primaryTableName = `${dataSources[0].schema ?? "etl_output"}.${dataSources[0].tableName}`;
     } else {
-      const name = (etlData as any)?.etlData?.name;
+      const name = (etlData as { etlData?: { name?: string } })?.etlData?.name;
       primaryTableName = name && String(name).includes(".") ? name : name ? `etl_output.${name}` : undefined;
     }
     if (!primaryTableName || !globalFilters.length) return;
     const distinctUrl = apiEndpoints?.distinctValues ?? "/api/dashboard/distinct-values";
-    const selectFilters = globalFilters.filter(
-      (gf) =>
-        gf.field &&
-        ((gf as any).inputType === "select" ||
-          (gf as any).inputType === "multi" ||
-          (gf as any).filterType === "single" ||
-          (gf as any).filterType === "multi")
-    );
-    let cancelled = false;
     const primaryDateFields = dataSources?.[0]?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
-    const dateDistinctTransforms = new Set(["YEAR", "MONTH", "DAY", "QUARTER", "SEMESTER"]);
+    let cancelled = false;
     (async () => {
-      for (const gf of selectFilters) {
-        if (cancelled) break;
-        try {
-          const filterOp = String((gf as { operator?: string }).operator ?? "").toUpperCase();
-
-          const physicalField =
-            datasetDimensions?.[gf.field!]?.[primarySourceId!] ?? gf.field!;
-          const isDateField =
-            physicalField &&
-            primaryDateFields.some((d: string) => (d || "").toLowerCase() === (physicalField || "").toLowerCase());
-          /** Solo mes calendario (1–12), sin año en la UI ni distinct YYYY-MM. */
-          if (filterOp === "MONTH" && isDateField) {
-            if (!cancelled) {
-              setGlobalFilterDistinctValues((prev) => ({
-                ...prev,
-                [gf.id]: [...GLOBAL_MONTH_FILTER_VALUES],
-              }));
-            }
-            continue;
-          }
-          if (filterOp === "DAY" && isDateField) {
-            continue;
-          }
-          const body: { tableName: string; field: string; limit: number; transform?: string } = {
-            tableName: primaryTableName,
-            field: physicalField,
-            limit: 200,
-          };
-          if (isDateField) {
-            const t =
-              filterOp === "YEAR_MONTH"
-                ? "MONTH"
-                : dateDistinctTransforms.has(filterOp)
-                  ? filterOp
-                  : "YEAR";
-            body.transform = t;
-          }
-          const res = await fetch(distinctUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-          if (!res.ok) continue;
-          const data = await safeJsonResponse(res);
-          if (cancelled) break;
-          const values = Array.isArray(data) ? data : (data as { values?: unknown[] })?.values;
-          if (Array.isArray(values)) {
-            setGlobalFilterDistinctValues((prev) => ({ ...prev, [gf.id]: values }));
-          }
-        } catch {
-          // ignore per-field errors
-        }
+      const values = await fetchGlobalFilterDistinctValues({
+        globalFilters: globalFilters as { id: string; field: string; operator?: string; inputType?: string; filterType?: string }[],
+        dataSources: (dataSources ?? []).filter(
+          (ds): ds is { id: string; schema?: string; tableName: string; fields?: { date?: string[] } } =>
+            !!ds.tableName
+        ),
+        primarySourceId,
+        primaryTableName,
+        primaryDateFields,
+        datasetDimensions,
+        distinctUrl,
+        safeJsonResponse,
+      });
+      if (!cancelled) {
+        setGlobalFilterDistinctValues((prev) => ({ ...prev, ...values }));
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [etlData, globalFilters, apiEndpoints?.distinctValues]);
+
+  useEffect(() => {
+    if (!etlData || etlMetricsFetchedRef.current) return;
+    const etlIds = new Set<string>();
+    if ((etlData as { etl?: { id?: string } }).etl?.id) etlIds.add((etlData as { etl: { id: string } }).etl.id);
+    (etlData as { dataSources?: { etlId: string }[] }).dataSources?.forEach((s) => etlIds.add(s.etlId));
+    if (etlIds.size === 0) return;
+    etlMetricsFetchedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      const allMetrics: SavedMetricForAnalysisMerge[] = [];
+      const allAnalyses: SavedAnalysisForMerge[] = [];
+      for (const etlId of etlIds) {
+        try {
+          const res = await fetch(`/api/etl/${etlId}/metrics`);
+          const json = await safeJsonResponse<{
+            ok?: boolean;
+            data?: { savedMetrics?: unknown[]; savedAnalyses?: unknown[] };
+          }>(res);
+          if (json.ok && Array.isArray(json.data?.savedMetrics)) {
+            allMetrics.push(...(json.data.savedMetrics as SavedMetricForAnalysisMerge[]));
+          }
+          if (json.ok && Array.isArray(json.data?.savedAnalyses)) {
+            allAnalyses.push(...(json.data.savedAnalyses as SavedAnalysisForMerge[]));
+          }
+        } catch {
+          // ignore per-ETL errors
+        }
+      }
+      if (cancelled) return;
+      if (allMetrics.length > 0) setSavedMetricsFromEtl(allMetrics);
+      if (allAnalyses.length > 0) setSavedAnalyses(allAnalyses);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [etlData]);
+
+  useEffect(() => {
+    etlMetricsFetchedRef.current = false;
+    setSavedAnalyses([]);
+    setSavedMetricsFromEtl([]);
+  }, [dashboardId]);
 
   const getTableNameForWidget = useCallback(
     (widget: Widget): string | null => {
@@ -813,7 +889,30 @@ export function DashboardViewer({
       }, 30000);
 
       try {
-        const aggConfig = widget.aggregationConfig;
+        const analysisPatch =
+          savedAnalyses.length > 0
+            ? resolveWidgetAnalysisMergePatch(
+                widget as Record<string, unknown>,
+                savedAnalyses,
+                savedMetricsFromEtl
+              )
+            : null;
+        const dataAgg = (
+          analysisPatch
+            ? (analysisPatch.aggregationConfig as Record<string, unknown>)
+            : ((widget.aggregationConfig ?? {}) as Record<string, unknown>)
+        );
+        const widgetAgg = widgetAggregationWithStoredVisualOverrides({
+          aggregationConfig: widget.aggregationConfig as Record<string, unknown>,
+          dashboardVisualOverrides: (widget as Widget).dashboardVisualOverrides,
+        });
+        const aggConfig = mergeAnalysisAggregationWithDashboardOverrides(
+          dataAgg,
+          widgetAgg
+        ) as AggregationConfig | undefined;
+        const effectiveWidgetType = analysisPatch?.type ?? widget.type;
+        const effectiveLabelDisplayMode =
+          analysisPatch?.labelDisplayMode ?? (widget as Widget).labelDisplayMode;
         const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
         const dataSourcesList = (etlData as { dataSources?: { id: string; etlId?: string }[]; primarySourceId?: string })?.dataSources;
         const widgetSourceId = widget.dataSourceId ?? (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSourcesList?.[0]?.id;
@@ -844,6 +943,23 @@ export function DashboardViewer({
             operator: String((w as Widget).filterConfig!.operator ?? "="),
             value: filtersForDataLoad[w.id],
           }));
+
+        const filterWidgetsOnPage = stateRef.current.widgets.filter(
+          (w) => w.type === "filter" && pageOf(w) === targetPage && (w as Widget).filterConfig?.field
+        );
+        const allFilterDefsForExpansion = [
+          ...globalFilters,
+          ...filterWidgetsOnPage.map((fw) => {
+            const fc = (fw as Widget).filterConfig!;
+            return {
+              id: fw.id,
+              field: fc.field,
+              operator: fc.operator,
+              inputType: fc.inputType,
+              value: filtersForDataLoad[fw.id],
+            };
+          }),
+        ];
 
         const mappedGlobalFilters: AggregationFilter[] = [];
         if (!(widget as Widget & { excludeGlobalFilters?: boolean }).excludeGlobalFilters) {
@@ -881,7 +997,7 @@ export function DashboardViewer({
               }
             }
             if (rawOpUpper === "MONTH") {
-              v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
+              v = expandMonthFilterValueWithYear(allFilterDefsForExpansion, filtersForDataLoad, {
                 field: f.field,
                 operator: f.operator,
                 value: v,
@@ -889,13 +1005,13 @@ export function DashboardViewer({
               if (v === "" || v == null) continue;
               if (Array.isArray(v) && v.length === 0) continue;
             }
-            const physicalField = resolveAggregationFilterPhysicalField({
-              filterSemanticOrPhysicalField: f.field,
+            const physicalField = resolveGlobalFilterPhysicalField({
+              filterField: f.field,
               operatorUpper: rawOpUpper,
               datasetDimensions,
+              dataset: (etlData as { dashboardDataset?: import("@/lib/dashboard/dashboardDataset").DashboardDataset })?.dashboardDataset,
               sourceId: widgetSourceId,
               agg: aggConfig ?? null,
-              mapDatasetField,
             });
             if (physicalField == null) continue;
             const useIn =
@@ -910,9 +1026,6 @@ export function DashboardViewer({
           }
         }
 
-        const filterWidgetsOnPage = stateRef.current.widgets.filter(
-          (w) => w.type === "filter" && pageOf(w) === targetPage && (w as Widget).filterConfig?.field
-        );
         for (const fw of filterWidgetsOnPage) {
           const fc = (fw as Widget).filterConfig!;
           let v = filtersForDataLoad[fw.id];
@@ -942,7 +1055,7 @@ export function DashboardViewer({
             }
           }
           if (rawOpFwUpper === "MONTH") {
-            v = expandMonthFilterValueWithYear(globalFilters, filtersForDataLoad, {
+            v = expandMonthFilterValueWithYear(allFilterDefsForExpansion, filtersForDataLoad, {
               field: fc.field,
               operator: fc.operator,
               value: v,
@@ -989,12 +1102,12 @@ export function DashboardViewer({
 
         const dashLayoutSaved = (etlData as { dashboard?: { layout?: { savedMetrics?: unknown[] } } })?.dashboard?.layout?.savedMetrics;
         const layoutSavedMetrics = (Array.isArray(dashLayoutSaved) ? dashLayoutSaved : []) as NonNullable<
-          Parameters<typeof loadPreviewWidgetData>[0]["savedMetrics"]
+          LoadPreviewWidgetDataParams["savedMetrics"]
         >;
         const dsSavedRaw = (dataSourcesList?.find((s) => s.id === widgetSourceId) as { savedMetrics?: unknown[] } | undefined)
           ?.savedMetrics;
         const dsSavedMetrics = (Array.isArray(dsSavedRaw) ? dsSavedRaw : []) as NonNullable<
-          Parameters<typeof loadPreviewWidgetData>[0]["savedMetrics"]
+          LoadPreviewWidgetDataParams["savedMetrics"]
         >;
         const savedMetricsPoolMap = new Map<string, (typeof layoutSavedMetrics)[0] & { id?: string }>();
         for (const m of [...layoutSavedMetrics, ...dsSavedMetrics]) {
@@ -1025,8 +1138,8 @@ export function DashboardViewer({
         if (aggConfig?.enabled && aggConfig.metrics?.length > 0) {
           const expandedEdits = expandAnalysisMetricsForFetch(
             {
-              analysisId: (widget as Widget).analysisId,
-              metricIds: (widget as Widget).metricIds,
+              analysisId: analysisPatch?.analysisId ?? (widget as Widget).analysisId,
+              metricIds: analysisPatch?.metricIds ?? (widget as Widget).metricIds,
             },
             savedMetricsPool as SavedMetricForExpand[]
           );
@@ -1050,21 +1163,33 @@ export function DashboardViewer({
               Array.isArray(f.value) && String(f.operator ?? "").toUpperCase() !== "IN" ? "IN" : f.operator,
           }));
           const normalizedAgg = { ...aggConfigForLoad, filters: mappedWidgetFilters };
+          const dimensionDefaultFiltersMapped = mapDimensionDefaultFiltersToAggregationFilters(
+            normalizedAgg.dimensionDefaultFilters as DimensionDefaultFilterEdit[] | undefined,
+            dimensionDefaultFilterValues[widgetId] ?? {},
+            {
+              datasetDimensions,
+              sourceId: widgetSourceId,
+              agg: normalizedAgg,
+              mapDatasetField,
+            }
+          );
           const widgetForBuild = {
-            type: widget.type,
+            type: effectiveWidgetType,
             aggregationConfig: normalizedAgg,
             source: widget.source,
             color: (widget as { color?: string }).color,
+            labelDisplayMode: effectiveLabelDisplayMode,
           };
 
           const loaded = await loadPreviewWidgetData({
-            widget: widgetForBuild as Parameters<typeof loadPreviewWidgetData>[0]["widget"],
+            widget: widgetForBuild as LoadPreviewWidgetDataParams["widget"],
             tableName: fullTableName,
             etlId: widgetEtlId,
             sourceId: widgetSourceId,
             datasetDimensions,
             savedMetrics: savedMetricsPool.length > 0 ? savedMetricsPool : layoutSavedMetrics,
-            globalFilters: mappedGlobalFilters,
+            globalFilters: [...mappedGlobalFilters, ...dimensionDefaultFiltersMapped],
+            dashboardCompareDefaults,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -1098,6 +1223,10 @@ export function DashboardViewer({
                       ...w,
                       config: loaded.chartConfig ?? { labels: [], datasets: [] },
                       rows: loaded.processedRows,
+                      kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                      compareUnavailable: loaded.compareUnavailable ?? false,
+                      compareUnavailableReason: loaded.compareUnavailableReason,
+                      compareLabel: loaded.compareLabel,
                       columns: columnsDetected,
                       isLoading: false,
                     }
@@ -1106,19 +1235,32 @@ export function DashboardViewer({
             );
           }
         } else {
+          const ddForRaw = mapDimensionDefaultFiltersToAggregationFilters(
+            aggConfig?.dimensionDefaultFilters as DimensionDefaultFilterEdit[] | undefined,
+            dimensionDefaultFilterValues[widgetId] ?? {},
+            {
+              datasetDimensions,
+              sourceId: widgetSourceId,
+              agg: aggConfig ?? null,
+              mapDatasetField,
+            }
+          );
+          const mergedForRaw = [...mappedGlobalFilters, ...ddForRaw];
           const widgetForBuild = {
-            type: widget.type,
+            type: effectiveWidgetType,
             aggregationConfig: aggConfig,
             source: widget.source,
             color: (widget as { color?: string }).color,
+            labelDisplayMode: effectiveLabelDisplayMode,
           };
-          const rawPayload = { tableName: fullTableName, filters: mappedGlobalFilters, limit: 500 };
+          const rawPayload = { tableName: fullTableName, filters: mergedForRaw, limit: 500 };
           const loaded = await loadPreviewWidgetData({
-            widget: widgetForBuild as Parameters<typeof loadPreviewWidgetData>[0]["widget"],
+            widget: widgetForBuild as LoadPreviewWidgetDataParams["widget"],
             tableName: fullTableName,
             sourceId: widgetSourceId,
             datasetDimensions,
-            globalFilters: mappedGlobalFilters,
+            globalFilters: mergedForRaw,
+            dashboardCompareDefaults,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -1153,6 +1295,10 @@ export function DashboardViewer({
                       ...w,
                       config: loaded.chartConfig ?? { labels: [], datasets: [] },
                       rows: loaded.processedRows,
+                      kpiUserTimeScope: loaded.kpiUserTimeScope ?? null,
+                      compareUnavailable: loaded.compareUnavailable ?? false,
+                      compareUnavailableReason: loaded.compareUnavailableReason,
+                      compareLabel: loaded.compareLabel,
                       columns: columnsDetected,
                       isLoading: false,
                     }
@@ -1169,8 +1315,33 @@ export function DashboardViewer({
         clearTimeout(safetyTimeout);
       }
     },
-    [etlData, globalFilters, filtersForDataLoad, apiEndpoints, getTableNameForWidget, isPublic, accentColor, pageLayout]
+    [
+      etlData,
+      globalFilters,
+      filtersForDataLoad,
+      dimensionDefaultFilterValues,
+      apiEndpoints,
+      getTableNameForWidget,
+      isPublic,
+      accentColor,
+      pageLayout,
+      savedAnalyses,
+      savedMetricsFromEtl,
+      dashboardCompareDefaults,
+    ]
   );
+
+  useEffect(() => {
+    if (!etlData || savedAnalyses.length === 0 || widgets.length === 0) return;
+    const timer = window.setTimeout(() => {
+      stateRef.current.widgets.forEach((w) => {
+        if (w.type === "filter" || w.type === "text" || w.type === "image") return;
+        if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
+        loadDataForWidget(w.id);
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [savedAnalyses, savedMetricsFromEtl, etlData, pageLayout, loadDataForWidget, widgets.length]);
 
   const reloadAll = useCallback(() => {
     stateRef.current.widgets.forEach((w) => {
@@ -1190,7 +1361,60 @@ export function DashboardViewer({
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [filtersForDataLoad, loadDataForWidget, etlData, pageLayout]);
+  }, [filtersForDataLoad, dimensionDefaultFilterValues, loadDataForWidget, etlData, pageLayout]);
+
+  useEffect(() => {
+    const dataSources = (etlData as { dataSources?: { id: string; schema?: string; tableName?: string }[] } | undefined)
+      ?.dataSources;
+    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
+    const distinctUrl = apiEndpoints?.distinctValues ?? "/api/dashboard/distinct-values";
+    let cancelled = false;
+
+    const run = async () => {
+      setDimensionDefaultDistinctValues({});
+      for (const w of widgets) {
+        if (w.type === "filter" || w.type === "text" || w.type === "image") continue;
+        const ddfs = w.aggregationConfig?.dimensionDefaultFilters;
+        if (!Array.isArray(ddfs) || ddfs.length === 0) continue;
+        const sourceId = w.dataSourceId ?? (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
+        const src = dataSources?.find((s) => s.id === sourceId) ?? dataSources?.[0];
+        const tableName = src ? `${src.schema ?? "etl_output"}.${src.tableName}` : null;
+        if (!tableName) continue;
+
+        for (const ddf of ddfs) {
+          const it = (ddf as DimensionDefaultFilterEdit).inputType ?? "select";
+          if (it !== "select" && it !== "multi") continue;
+          const field = String((ddf as DimensionDefaultFilterEdit).field ?? "").trim();
+          if (!field) continue;
+          const physicalField =
+            datasetDimensions?.[field]?.[sourceId ?? ""] ?? field;
+          const cacheKey = dimensionDefaultDistinctCacheKey(w.id, String((ddf as DimensionDefaultFilterEdit).id));
+          try {
+            const res = await fetch(distinctUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tableName, field: physicalField, limit: 200 }),
+            });
+            if (!res.ok) continue;
+            const data = await safeJsonResponse(res);
+            if (cancelled) break;
+            const values = Array.isArray(data) ? data : (data as { values?: unknown[] })?.values;
+            if (Array.isArray(values)) {
+              setDimensionDefaultDistinctValues((prev) => ({ ...prev, [cacheKey]: values }));
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+    };
+
+    if (!etlData || widgets.length === 0) return;
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [etlData, widgets, apiEndpoints?.distinctValues]);
 
   const initialLoadedRef = useRef(false);
   useEffect(() => {
@@ -1204,11 +1428,20 @@ export function DashboardViewer({
     initialLoadedRef.current = false;
     setPageLayout(null);
     widgetLoadGenRef.current = {};
+    setDimensionDefaultFilterValues({});
+    setDimensionDefaultDistinctValues({});
   }, [dashboardId]);
 
   const handleFilterChange = useCallback((widgetId: string, value: unknown) => {
     setUiFilterValues((prev) => ({ ...prev, [widgetId]: value }));
   }, [setUiFilterValues]);
+
+  const handleDimensionDefaultFilterChange = useCallback((widgetId: string, ddfId: string, value: unknown) => {
+    setDimensionDefaultFilterValues((prev) => ({
+      ...prev,
+      [widgetId]: { ...(prev[widgetId] ?? {}), [ddfId]: value },
+    }));
+  }, []);
 
   const orderedWidgets = useMemo(() => {
     let list = widgets;
@@ -1221,10 +1454,20 @@ export function DashboardViewer({
         list = widgets;
       }
     }
+    if (cardLayoutMode === "manual") {
+      return [...list].sort((a, b) => {
+        const fa = a.fixedGrid;
+        const fb = b.fixedGrid;
+        const ra = fa?.row ?? 9999;
+        const rb = fb?.row ?? 9999;
+        if (ra !== rb) return ra - rb;
+        return (fa?.col ?? 9999) - (fb?.col ?? 9999);
+      });
+    }
     const hasOrder = list.some((w) => typeof w.gridOrder === "number");
     if (hasOrder) return [...list].sort((a, b) => (a.gridOrder ?? 0) - (b.gridOrder ?? 0));
     return list;
-  }, [widgets, pageLayout]);
+  }, [widgets, pageLayout, cardLayoutMode]);
 
   const exportableWidgets = useMemo(
     () =>
@@ -1233,6 +1476,28 @@ export function DashboardViewer({
       ),
     [orderedWidgets]
   );
+
+  const exportableWidgetIds = useMemo(
+    () => new Set(exportableWidgets.map((w) => w.id)),
+    [exportableWidgets]
+  );
+
+  const exportWidgetsLoading = useMemo(
+    () => exportableWidgets.some((w) => w.isLoading === true),
+    [exportableWidgets]
+  );
+
+  const buildExportMeta = useCallback((): ExportReportMeta => {
+    const pageName =
+      pageLayout?.pagesMeta?.find((p) => p.id === pageLayout.activePageId)?.name ??
+      pageLayout?.pagesMeta?.[0]?.name;
+    return {
+      dashboardTitle: title,
+      pageName: pageName || undefined,
+      exportedAt: new Date(),
+      filterSummary: buildFilterSummaryFromGlobals(globalFilters, filtersForDataLoad),
+    };
+  }, [title, pageLayout, globalFilters, filtersForDataLoad]);
 
   const { packCols, packRowGapPx } = useDashboardPackLayout("client");
 
@@ -1268,28 +1533,33 @@ export function DashboardViewer({
     }
   }, [dashboardId, exportableWidgets]);
 
-  const runExportPdf = useCallback(async () => {
-    const el = canvasExportRef.current;
-    if (!el) return;
-    setExportBusy(true);
-    try {
-      await exportDashboardPdfFromElement(el, `dashboard-${dashboardId}`);
-    } finally {
-      setExportBusy(false);
-    }
-  }, [dashboardId]);
+  const runVisualExport = useCallback(
+    async (format: "pdf" | "ppt") => {
+      const root = canvasExportRef.current;
+      const exportRoot = exportRootRef.current;
+      if (!root) return;
+      setExportBusy(true);
+      if (exportRoot) exportRoot.classList.add("dashboard-exporting");
+      try {
+        await prepareForExport();
+        const targets = collectExportWidgetTargets(exportableWidgets, root);
+        const meta = buildExportMeta();
+        const fileBase = `dashboard-${dashboardId}`;
+        if (format === "pdf") {
+          await exportDashboardPdfPerWidget(targets, meta, fileBase);
+        } else {
+          await exportDashboardPptPerWidget(targets, meta, fileBase);
+        }
+      } finally {
+        if (exportRoot) exportRoot.classList.remove("dashboard-exporting");
+        setExportBusy(false);
+      }
+    },
+    [dashboardId, exportableWidgets, buildExportMeta]
+  );
 
-  const runExportPpt = useCallback(async () => {
-    setExportBusy(true);
-    try {
-      await exportDashboardSummaryPpt(
-        `dashboard-${dashboardId}`,
-        exportableWidgets.map((w) => ({ title: w.title, rows: w.rows }))
-      );
-    } finally {
-      setExportBusy(false);
-    }
-  }, [dashboardId, exportableWidgets]);
+  const runExportPdf = useCallback(() => runVisualExport("pdf"), [runVisualExport]);
+  const runExportPpt = useCallback(() => runVisualExport("ppt"), [runVisualExport]);
 
   // Filtros dinámicos: por cada widget, etiquetas de filtros globales que tienen valor pero no aplican a este gráfico (no contiene esa columna)
   const nonApplicableFilterLabelsByWidget = useMemo(() => {
@@ -1349,8 +1619,11 @@ export function DashboardViewer({
     return themeToWrapperBackground(themeMerged);
   }, [useClientTheme, themeMerged]);
 
+  const exportVisualDisabled = exportBusy || exportWidgetsLoading;
+
   return (
     <div
+      ref={exportRootRef}
       className={`flex flex-col h-full w-full ${rootClassName}${useClientTheme ? " client-view-root" : ""}`}
       data-theme={useClientTheme ? "client" : undefined}
       style={{ ...themeVars, ...wrapperBackground }}
@@ -1397,10 +1670,11 @@ export function DashboardViewer({
                   size="sm"
                   className="h-8 gap-1 text-xs rounded-lg"
                   style={{ borderColor: "var(--platform-border)" }}
-                  disabled={exportBusy}
+                  disabled={exportVisualDisabled}
+                  title={exportWidgetsLoading ? "Espere a que terminen de cargar los gráficos" : undefined}
                   onClick={() => void runExportPdf()}
                 >
-                  <FileDown className="h-3.5 w-3.5" />
+                  {exportBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
                   PDF
                 </Button>
                 <Button
@@ -1409,10 +1683,11 @@ export function DashboardViewer({
                   size="sm"
                   className="h-8 gap-1 text-xs rounded-lg"
                   style={{ borderColor: "var(--platform-border)" }}
-                  disabled={exportBusy}
+                  disabled={exportVisualDisabled}
+                  title={exportWidgetsLoading ? "Espere a que terminen de cargar los gráficos" : undefined}
                   onClick={() => void runExportPpt()}
                 >
-                  <FileDown className="h-3.5 w-3.5" />
+                  {exportBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
                   PPT
                 </Button>
               </div>
@@ -1421,7 +1696,10 @@ export function DashboardViewer({
         </header>
       )}
 
-      <div className={useClientTheme ? "client-view-body flex flex-1 flex-col min-h-0" : "flex flex-1 flex-col min-h-0"}>
+      <div className={useClientTheme ? "client-view-body flex flex-1 flex-col min-h-0" : "flex flex-1 flex-col min-h-0 relative"}>
+      {useClientTheme && themeMerged.logoUrl?.trim() ? (
+        <DashboardLogoOverlay theme={themeMerged} />
+      ) : null}
       {pageLayout?.pagesMeta && pageLayout.pagesMeta.length > 1 && (
         <div
           role="tablist"
@@ -1691,6 +1969,16 @@ export function DashboardViewer({
                 nonApplicableLabels.length > 0
                   ? `El filtro${nonApplicableLabels.length === 1 ? "" : "s"} "${nonApplicableLabels.join('", "')}" no afecta a este gráfico porque no utiliza ese campo.`
                   : undefined;
+              const ddfsList = widget.aggregationConfig?.dimensionDefaultFilters;
+              const dimensionDefaultDistinctSlice: Record<string, unknown[]> = {};
+              if (Array.isArray(ddfsList)) {
+                for (const ddf of ddfsList) {
+                  const did = String((ddf as DimensionDefaultFilterEdit).id ?? "").trim();
+                  if (!did) continue;
+                  const vals = dimensionDefaultDistinctValues[dimensionDefaultDistinctCacheKey(widget.id, did)];
+                  if (vals) dimensionDefaultDistinctSlice[did] = vals;
+                }
+              }
               const effectiveTheme = mergeCardTheme(themeMerged, widget.cardTheme);
               const cellThemeVars = useClientTheme
                 ? (themeToCssVars(effectiveTheme) as React.CSSProperties)
@@ -1699,9 +1987,11 @@ export function DashboardViewer({
               // `background: var(--client-card)` en `.client-view-widget`. El Card interno es
               // transparente en tema cliente; sin esto, al quitar el overlay de carga se veía
               // el fondo del lienzo en lugar del color de tarjeta del editor.
+              const isExportableWidget = exportableWidgetIds.has(widget.id);
               return (
                 <div
                   key={widget.id}
+                  {...(isExportableWidget ? { "data-export-widget": widget.id } : {})}
                   className={useClientTheme ? "client-view-widget" : undefined}
                   style={{
                     gridColumn,
@@ -1709,6 +1999,8 @@ export function DashboardViewer({
                     display: "flex",
                     flexDirection: "column",
                     minHeight: 0,
+                    minWidth: 0,
+                    overflow: useClientTheme ? "hidden" : undefined,
                     position: "relative",
                     zIndex: typeof (widget as Widget).zIndex === "number" ? (widget as Widget).zIndex : 0,
                     ...cellThemeVars,
@@ -1716,6 +2008,7 @@ export function DashboardViewer({
                 >
                   {filterWarningTooltip && (
                     <div
+                      data-export-chrome
                       className="absolute right-2 top-2 z-10 flex shrink-0"
                       title={filterWarningTooltip}
                       style={{ color: "var(--platform-fg-muted)" }}
@@ -1723,6 +2016,9 @@ export function DashboardViewer({
                       <AlertTriangle className="h-4 w-4" aria-hidden />
                     </div>
                   )}
+                  {widget.cardTheme?.logoUrl?.trim() ? (
+                    <DashboardLogoOverlay theme={effectiveTheme} />
+                  ) : null}
                   <DashboardWidgetRenderer
                     widget={{
                       ...widget,
@@ -1732,12 +2028,22 @@ export function DashboardViewer({
                         effectiveTheme.fontFamily
                       ),
                       chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
+                      labelDisplayMode: resolveWidgetLabelDisplayMode(
+                        widget as { labelDisplayMode?: import("@/lib/dashboard/chartOptions").ChartLabelDisplayMode; analysisId?: unknown },
+                        String(widget.type ?? "")
+                      ),
                     } as DashboardWidgetRendererWidget}
                     isLoading={widget.isLoading === true}
                     filterValue={uiFilterValues[widget.id]}
                     onFilterChange={handleFilterChange}
+                    dimensionDefaultValuesByDdfId={dimensionDefaultFilterValues[widget.id] ?? {}}
+                    dimensionDefaultDistinctByDdfId={dimensionDefaultDistinctSlice}
+                    onDimensionDefaultFilterChange={(ddfId, v) =>
+                      handleDimensionDefaultFilterChange(widget.id, ddfId, v)
+                    }
                     minHeight={widget.minHeight ?? 280}
                     darkChartTheme={resolveDarkChartTheme(effectiveTheme, true)}
+                    dashboardCompareDefaults={dashboardCompareDefaults}
                   />
                 </div>
               );

@@ -1,27 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
-
-const FREQUENCY_MS: Record<string, number> = {
-  "15m": 15 * 60 * 1000,
-  "1h": 60 * 60 * 1000,
-  "6h": 6 * 60 * 60 * 1000,
-  "12h": 12 * 60 * 60 * 1000,
-  "24h": 24 * 60 * 60 * 1000,
-  "1w": 7 * 24 * 60 * 60 * 1000,
-  "1M": 30 * 24 * 60 * 60 * 1000,
-};
-
-function getIntervalMs(frequency: string): number | null {
-  const f = (frequency || "").trim();
-  return FREQUENCY_MS[f] ?? null;
-}
-
-function isDue(lastRunAt: string | null | undefined, intervalMs: number): boolean {
-  if (!lastRunAt) return true;
-  const last = new Date(lastRunAt).getTime();
-  if (Number.isNaN(last)) return true;
-  return Date.now() - last >= intervalMs;
-}
+import {
+  ACTIVE_RUN_GUARD_MINUTES,
+  getIntervalMs,
+  isDue,
+  type EtlSchedule,
+} from "@/lib/etl/schedule";
 
 function getSecret(req: NextRequest): string | null {
   return (
@@ -36,8 +20,23 @@ function isAuthorized(secret: string | null): boolean {
   return !!expected && secret === expected;
 }
 
-async function runScheduled() {
+async function etlHasActiveRun(supabase: ReturnType<typeof createServiceRoleClient>, etlId: string): Promise<boolean> {
+  const threshold = new Date(Date.now() - ACTIVE_RUN_GUARD_MINUTES * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from("etl_runs_log")
+    .select("id")
+    .eq("etl_id", etlId)
+    .in("status", ["started", "running"])
+    .gte("started_at", threshold)
+    .limit(1);
+  if (error) {
+    console.warn(`[run-scheduled] Active run check failed for ${etlId}:`, error.message);
+    return false;
+  }
+  return (data?.length ?? 0) > 0;
+}
 
+async function runScheduled() {
   const supabase = createServiceRoleClient();
   const { data: rows, error } = await supabase.from("etl").select("id, layout");
 
@@ -46,13 +45,12 @@ async function runScheduled() {
     throw new Error(error.message);
   }
 
-  const now = new Date().toISOString();
   const due: { id: string; layout: Record<string, unknown>; guidedConfig: Record<string, unknown> }[] = [];
 
   for (const row of rows || []) {
     const layout = (row as { layout?: Record<string, unknown> }).layout as Record<string, unknown> | undefined;
     const guidedConfig = layout?.guided_config as Record<string, unknown> | undefined;
-    const schedule = guidedConfig?.schedule as { frequency?: string; lastRunAt?: string } | undefined;
+    const schedule = guidedConfig?.schedule as EtlSchedule | undefined;
     const frequency = schedule?.frequency?.trim();
     if (!frequency) continue;
 
@@ -68,15 +66,20 @@ async function runScheduled() {
     });
   }
 
-  const baseUrl =
-    process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const baseUrl = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   const runUrl = `${baseUrl}/api/etl/run`;
   const cronSecret = process.env.ETL_SCHEDULER_SECRET || process.env.CRON_SECRET;
   let triggered = 0;
+  let skippedActive = 0;
 
-  for (const { id, layout, guidedConfig } of due) {
+  for (const { id, guidedConfig } of due) {
+    if (await etlHasActiveRun(supabase, id)) {
+      skippedActive++;
+      continue;
+    }
+
     let sanitizedJoin = guidedConfig.join as Record<string, unknown> | undefined;
     if (sanitizedJoin && typeof sanitizedJoin === "object" && Array.isArray(sanitizedJoin.joins)) {
       const validJoins = (sanitizedJoin.joins as Record<string, unknown>[]).filter(
@@ -115,29 +118,18 @@ async function runScheduled() {
         continue;
       }
       triggered++;
-
-      const schedule = (guidedConfig.schedule as Record<string, unknown>) ?? {};
-      const updatedLayout = {
-        ...layout,
-        guided_config: {
-          ...guidedConfig,
-          schedule: { ...schedule, lastRunAt: now },
-        },
-      };
-
-      await supabase.from("etl").update({ layout: updatedLayout }).eq("id", id);
     } catch (err) {
-      console.error(`[run-scheduled] ETL ${id} fetch/update error:`, err);
+      console.error(`[run-scheduled] ETL ${id} fetch error:`, err);
     }
   }
 
-  return { ok: true, due: due.length, triggered };
+  return { ok: true, due: due.length, triggered, skippedActive };
 }
 
 /**
  * POST /api/etl/run-scheduled
  * Ejecuta los ETL que tienen programación y están "due" según su frecuencia.
- * Requiere header x-cron-secret, Authorization: Bearer <secret>, o query secret=ETL_SCHEDULER_SECRET.
+ * Requiere header x-cron-secret, Authorization: Bearer <secret>, o query secret=.
  */
 export async function POST(req: NextRequest) {
   const secret = getSecret(req);

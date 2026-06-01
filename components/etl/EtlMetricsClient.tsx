@@ -24,6 +24,7 @@ import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector"
 import { DashboardWidgetRenderer } from "@/components/dashboard/DashboardWidgetRenderer";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import EtlScheduleSettings from "@/components/etl/EtlScheduleSettings";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import {
@@ -34,7 +35,20 @@ import {
   resolveMonthYearFromAmbiguousSlash,
   type DateGranularity,
 } from "@/lib/dashboard/dateFormatting";
+import type {
+  CompareSpec,
+  CompareTemporalMode,
+  ComparePeriodSource,
+  LegacyCompareInput,
+} from "@/lib/dashboard/compareSpec";
+import { normalizeAggregationCompare, deriveLegacyTransformCompare } from "@/lib/dashboard/compareSpec";
+import { compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
+import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import { CompareSpecFields } from "@/components/admin/dashboard/CompareSpecFields";
+import { resolveEffectiveDateGroupByForFetch } from "@/lib/dashboard/aggregateCompareRequest";
+import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
+import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
 import {
   coerceGeoComponentOverrides,
@@ -46,6 +60,12 @@ import {
 } from "@/lib/geo/geo-enrichment";
 import { MapChartAppearanceFields } from "@/components/admin/dashboard/MapChartAppearanceFields";
 import { pickMapVisualFromCfg, type MapVisualConfigInput } from "@/lib/dashboard/mapVisualScale";
+import {
+  findSavedAnalysisForWidget,
+  mergeSavedAnalysisIntoWidget,
+  resolveAnalysisDimensionsFromConfig,
+  type SavedAnalysisForMerge,
+} from "@/lib/dashboard/widgetRenderParity";
 
 // Reserved for future UI (e.g. aggregate function selector)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -87,6 +107,31 @@ const DATE_LEVEL_OPTIONS = [
   { value: "semester", label: "Semestre", operator: "SEMESTER" as const },
   { value: "year", label: "Año", operator: "YEAR" as const },
 ];
+
+const DIMENSION_DEFAULT_INPUT_TYPE_OPTIONS: Array<{ value: NonNullable<DimensionDefaultFilterEdit["inputType"]>; label: string }> = [
+  { value: "select", label: "select" },
+  { value: "multi", label: "multi" },
+  { value: "text", label: "text" },
+  { value: "number", label: "number" },
+  { value: "date", label: "date" },
+];
+
+function formatDimensionDefaultValueForInput(v: unknown): string {
+  if (v == null) return "";
+  if (Array.isArray(v)) return v.join(", ");
+  return String(v);
+}
+
+function parseDimensionDefaultValueFromInput(raw: string, inputType: DimensionDefaultFilterEdit["inputType"]): unknown {
+  const t = raw.trim();
+  if (t === "") return "";
+  if (inputType === "multi") return raw.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
+  if (inputType === "number") {
+    const n = Number(String(raw).replace(",", "."));
+    return Number.isFinite(n) ? n : raw;
+  }
+  return raw;
+}
 
 /**
  * Clave de columna en filas de `/api/dashboard/aggregate-data` tras el mapeo `metric_i` → alias.
@@ -216,16 +261,16 @@ const EXCEL_FORMULAS_REFERENCIA: { categoria: string; funciones: { nombre: strin
   {
     categoria: "Lógica",
     funciones: [
-      { nombre: "IF", sintaxis: "IF(condición; valor_si_verdadero; valor_si_falso)", descripcion: "Condicional" },
+      { nombre: "IF", sintaxis: "IF(condición; valor_si_verdadero; valor_si_falso)", descripcion: "Condicional. Compará con = (ej. col='texto'). Varias condiciones: IF(AND(col1='a'; col2='b'); x; y)." },
       { nombre: "IFERROR", sintaxis: "IFERROR(valor; valor_si_error)", descripcion: "Devuelve valor si hay error" },
       { nombre: "IFNA", sintaxis: "IFNA(valor; valor_si_NA)", descripcion: "Devuelve valor si es #N/A" },
-      { nombre: "AND", sintaxis: "AND(cond1; cond2; ...)", descripcion: "Y lógico" },
+      { nombre: "AND", sintaxis: "AND(cond1; cond2; ...)", descripcion: "Y lógico. Ej.: AND(fy='FY24'; pais_medio='Argentina'). No uses ; entre comparando y valor: usá = dentro de cada condición." },
       { nombre: "OR", sintaxis: "OR(cond1; cond2; ...)", descripcion: "O lógico" },
       { nombre: "NOT", sintaxis: "NOT(condición)", descripcion: "Negación" },
       { nombre: "TRUE", sintaxis: "TRUE()", descripcion: "Verdadero" },
       { nombre: "FALSE", sintaxis: "FALSE()", descripcion: "Falso" },
       { nombre: "XOR", sintaxis: "XOR(cond1; cond2; ...)", descripcion: "O exclusivo" },
-      { nombre: "IFS", sintaxis: "IFS(cond1; valor1; cond2; valor2; ...)", descripcion: "Múltiples condiciones" },
+      { nombre: "IFS", sintaxis: "IFS(cond1; valor1; cond2; valor2; ...; default)", descripcion: "Pares condición-valor en una sola función; condición compuesta = AND(...). Decimales con punto (0.065), no coma." },
       { nombre: "SWITCH", sintaxis: "SWITCH(expr; val1; res1; ...; default)", descripcion: "Selección por valor" },
     ],
   },
@@ -317,6 +362,64 @@ const EXCEL_FORMULAS_REFERENCIA: { categoria: string; funciones: { nombre: strin
     ],
   },
 ];
+
+/** Coeficientes ejemplo FY24/FY25 × país (medio) para copiar en medidas con expresión. */
+const FY_PAIS_COEFICIENT_ROWS: readonly { fy: string; pais: string; coef: number }[] = [
+  { fy: "FY24", pais: "Argentina", coef: 0.065 },
+  { fy: "FY24", pais: "Brasil", coef: 0.069 },
+  { fy: "FY24", pais: "Chile", coef: 0.1 },
+  { fy: "FY24", pais: "México", coef: 0.16 },
+  { fy: "FY24", pais: "Perú", coef: 0.125 },
+  { fy: "FY24", pais: "Colombia", coef: 0.155 },
+  { fy: "FY24", pais: "Costa Rica", coef: 0.125 },
+  { fy: "FY24", pais: "Ecuador", coef: 0.145 },
+  { fy: "FY24", pais: "Panamá", coef: 0.145 },
+  { fy: "FY24", pais: "Puerto Rico", coef: 0.15 },
+  { fy: "FY24", pais: "Rep, Dominicana", coef: 0.155 },
+  { fy: "FY24", pais: "Uruguay", coef: 0.15 },
+  { fy: "FY25", pais: "Argentina", coef: 0.07 },
+  { fy: "FY25", pais: "Brasil", coef: 0.065 },
+  { fy: "FY25", pais: "Chile", coef: 0.075 },
+  { fy: "FY25", pais: "México", coef: 0.165 },
+  { fy: "FY25", pais: "Perú", coef: 0.09 },
+  { fy: "FY25", pais: "Colombia", coef: 0.141 },
+  { fy: "FY25", pais: "Costa Rica", coef: 0.151 },
+  { fy: "FY25", pais: "Ecuador", coef: 0.136 },
+  { fy: "FY25", pais: "Panamá", coef: 0.165 },
+  { fy: "FY25", pais: "Puerto Rico", coef: 0.165 },
+  { fy: "FY25", pais: "Rep, Dominicana", coef: 0.164 },
+  { fy: "FY25", pais: "Uruguay", coef: 0.16 },
+];
+
+function escapeSingleQuotedForFormula(s: string): string {
+  return s.replace(/'/g, "''");
+}
+
+function buildFyPaisCoefficientIFS(
+  rows: readonly { fy: string; pais: string; coef: number }[],
+  paisColumn = "pais_medio"
+): string {
+  const pairs = rows.map(
+    (r) =>
+      `AND(fy='${escapeSingleQuotedForFormula(r.fy)}';${paisColumn}='${escapeSingleQuotedForFormula(r.pais)}');${r.coef}`
+  );
+  return `IFS(${pairs.join(";")};0)`;
+}
+
+function buildFyPaisCoefficientIfNested(
+  rows: readonly { fy: string; pais: string; coef: number }[],
+  paisColumn = "pais_medio"
+): string {
+  let acc = "0";
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!;
+    acc = `IF(AND(fy='${escapeSingleQuotedForFormula(r.fy)}';${paisColumn}='${escapeSingleQuotedForFormula(r.pais)}');${r.coef};${acc})`;
+  }
+  return acc;
+}
+
+const FY_PAIS_COEFICIENTE_IFS_FORMULA = buildFyPaisCoefficientIFS(FY_PAIS_COEFICIENT_ROWS);
+const FY_PAIS_COEFICIENTE_IF_FORMULA = buildFyPaisCoefficientIfNested(FY_PAIS_COEFICIENT_ROWS);
 
 type ColumnRole = "key" | "time" | "dimension" | "measure" | "geo";
 type GeoType = "country" | "province" | "city" | "address" | "lat_lon";
@@ -453,6 +556,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" },
   ]);
   const [formFilters, setFormFilters] = useState<AggregationFilterEdit[]>([]);
+  const [dimensionDefaultFiltersForm, setDimensionDefaultFiltersForm] = useState<DimensionDefaultFilterEdit[]>([]);
   const [formOrderBy, setFormOrderBy] = useState<{ field: string; direction: "ASC" | "DESC" } | null>(null);
   const [formLimit, setFormLimit] = useState<number | undefined>(100);
   const [, setFormMetric] = useState<AggregationMetricEdit>({
@@ -503,7 +607,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [datasetsListLoading, setDatasetsListLoading] = useState(false);
   /** Tras guardar métrica o columna en B, mostrar acciones «Crear otra» / «Ir a Análisis». */
   const [afterSaveInB, setAfterSaveInB] = useState<null | "metric" | "column">(null);
-  const [transformCompare, setTransformCompare] = useState<"none" | "mom" | "yoy" | "fixed">("none");
+  const [analysisCompare, setAnalysisCompare] = useState<CompareSpec>({ kind: "none" });
   const [transformCompareFixedValue, setTransformCompareFixedValue] = useState("");
   const [transformShowDelta, setTransformShowDelta] = useState(true);
   const [transformShowDeltaPct, setTransformShowDeltaPct] = useState(true);
@@ -511,6 +615,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [showDataLabels, setShowDataLabels] = useState(true);
   const [labelVisibilityMode, setLabelVisibilityMode] = useState<"all" | "auto" | "min_max">("auto");
   const [chartColorScheme, setChartColorScheme] = useState("auto");
+  const [chartCategoryColorMode, setChartCategoryColorMode] = useState<"varied" | "uniform">("varied");
+  const [chartPrimaryColor, setChartPrimaryColor] = useState("#0ea5e9");
   const [chartValueType, setChartValueType] = useState<"number" | "currency" | "percent">("number");
   const [chartValueScale, setChartValueScale] = useState<"none" | "K" | "M" | "BI">("none");
   const [chartCurrencySymbol, setChartCurrencySymbol] = useState("$");
@@ -528,6 +634,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartRankingTop, setChartRankingTop] = useState(5);
   const [chartRankingMetric, setChartRankingMetric] = useState("");
   const [chartRankingDirection, setChartRankingDirection] = useState<"asc" | "desc">("desc");
+  const [chartRankingPinnedXValues, setChartRankingPinnedXValues] = useState<string[]>([]);
+  const [chartRankingShowRankInLabel, setChartRankingShowRankInLabel] = useState(true);
   const [chartSortByMetric, setChartSortByMetric] = useState("");
   const [previewDateOrder, setPreviewDateOrder] = useState<"asc" | "desc">("asc");
   const [chartPinnedDimensions, setChartPinnedDimensions] = useState<string[]>([]);
@@ -672,9 +780,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartRankingEnabled(false);
     setChartRankingTop(5);
     setChartRankingMetric("");
+    setChartRankingPinnedXValues([]);
+    setChartRankingShowRankInLabel(true);
     setChartMetricFormats({});
     setChartSeriesColors({});
     setChartPinnedDimensions([]);
+    setDimensionDefaultFiltersForm([]);
     setChartSortDirection("none");
     setChartSortBy("series");
     setChartSortByMetric("");
@@ -686,6 +797,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartAxisStep("");
     setChartScalePerMetric({});
     setChartColorScheme("auto");
+    setChartCategoryColorMode("varied");
+    setChartPrimaryColor("#0ea5e9");
     setChartComboSyncAxes(false);
     setChartGridXDisplay(true);
     setChartGridYDisplay(true);
@@ -712,6 +825,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setAnalysisSelectedMetricIds([]);
     setFormDimensions([]);
     setFormFilters([]);
+    setDimensionDefaultFiltersForm([]);
+    setChartRankingPinnedXValues([]);
+    setChartRankingShowRankInLabel(true);
     setFormOrderBy(null);
     setFormLimit(100);
     setTimeColumn("");
@@ -720,7 +836,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setAnalysisDateFrom("");
     setAnalysisDateTo("");
     setAnalysisDateFormat("short");
-    setTransformCompare("none");
+    setAnalysisCompare({ kind: "none" });
     setTransformCompareFixedValue("");
     setTransformShowDelta(true);
     setTransformShowDeltaPct(true);
@@ -1249,13 +1365,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       else if (c === ")") { depth--; if (depth < 0) return "Paréntesis de cierre ) sin apertura."; }
     }
     if (depth !== 0) return "Faltan paréntesis de cierre.";
+    const expressionWithoutStrings = expr.replace(/'([^'\\]|\\.)*'|"([^"\\]|\\.)*"/g, " ");
     const allowedChars = /^[a-zA-Z0-9_*+\-/().,\s'"%;^=<>!]+$/;
-    if (!allowedChars.test(expr)) return "La fórmula contiene caracteres no permitidos. Usá columnas, números, operadores ( * - + / ^ ) y comparaciones (=, <, >, <>, !=).";
+    if (!allowedChars.test(expressionWithoutStrings)) return "La fórmula contiene caracteres no permitidos. Usá columnas, números, operadores ( * - + / ^ ) y comparaciones (=, <, >, <>, !=).";
     const columnsSet = new Set([...fields, ...derivedColumns.map((d) => d.name)].map((x) => x.toLowerCase()));
     const savedMetricNamesSet = new Set((data?.savedMetrics ?? []).map((s: { name?: string }) => (s.name ?? "").toLowerCase()));
-    const protectedStr = expr.replace(/'([^']*)'|"([^"]*)"/g, " __STR__ ");
-    const prefixedCols = protectedStr.match(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
-    const restStr = protectedStr.replace(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g, " ");
+    const prefixedCols = expressionWithoutStrings.match(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
+    const restStr = expressionWithoutStrings.replace(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*)\b/g, " ");
     const simpleWords = restStr.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g) ?? [];
     const words = [...prefixedCols, ...simpleWords];
     for (const w of words) {
@@ -1426,6 +1542,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setFormDimensions([]);
     setFormMetrics([{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado", expression: "" } as AggregationMetricEdit]);
     setFormFilters([]);
+    setDimensionDefaultFiltersForm([]);
+    setChartRankingPinnedXValues([]);
+    setChartRankingShowRankInLabel(true);
     setFormOrderBy(null);
     setFormLimit(100);
     setFormMetric({ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado" });
@@ -1435,7 +1554,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setFormulaFromReuseExpr("metric_0 / NULLIF(metric_1, 0)");
     setMetricNameToSave("");
     setAnalysisNameToSave("");
-    setTransformCompare("none");
+    setAnalysisCompare({ kind: "none" });
     setTransformCompareFixedValue("");
     setTransformShowDelta(true);
     setTransformShowDeltaPct(true);
@@ -1470,6 +1589,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setFormDimensions(dims.length > 0 ? dims : []);
       setFormMetrics((cfg.metrics ?? [saved.metric]).map((m) => ({ ...m, id: m.id || `m-${Date.now()}-${Math.random().toString(36).slice(2)}` })));
       setFormFilters((cfg.filters ?? []).map((f) => ({ ...f, id: f.id || `f-${Date.now()}-${Math.random().toString(36).slice(2)}` })));
+      setDimensionDefaultFiltersForm(
+        Array.isArray(cfg.dimensionDefaultFilters)
+          ? cfg.dimensionDefaultFilters.map((d, i) => ({
+              ...d,
+              id: typeof d.id === "string" && d.id ? d.id : `ddf-${Date.now()}-${i}-${Math.random().toString(36).slice(2)}`,
+            }))
+          : []
+      );
+      setChartRankingPinnedXValues(Array.isArray(cfg.chartRankingPinnedXValues) ? cfg.chartRankingPinnedXValues : []);
+      setChartRankingShowRankInLabel(cfg.chartRankingShowRankInLabel !== false);
       setFormOrderBy(cfg.orderBy ?? null);
       setFormLimit(cfg.limit ?? 100);
       setChartXAxis(cfg.chartXAxis ?? "");
@@ -1532,6 +1661,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       );
       setChartPinnedDimensions(Array.isArray(cfg.chartPinnedDimensions) ? cfg.chartPinnedDimensions : []);
       setChartColorScheme(cfg.chartColorScheme ?? "auto");
+      setChartCategoryColorMode(
+        cfg.chartCategoryColorMode === "uniform" || cfg.chartCategoryColorMode === "varied"
+          ? cfg.chartCategoryColorMode
+          : "varied"
+      );
+      {
+        const rawPc = typeof cfg.chartPrimaryColor === "string" ? cfg.chartPrimaryColor.trim() : "";
+        setChartPrimaryColor(
+          rawPc !== "" ? (rawPc.startsWith("#") ? rawPc : `#${rawPc}`) : "#0ea5e9"
+        );
+      }
       setChartSeriesColors(cfg.chartSeriesColors && typeof cfg.chartSeriesColors === "object" ? cfg.chartSeriesColors : {});
       setChartLabelOverrides(cfg.chartLabelOverrides && typeof cfg.chartLabelOverrides === "object" ? cfg.chartLabelOverrides : {});
       setChartDatasetLabelOverrides(
@@ -1553,22 +1693,40 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           ? cfg.labelVisibilityMode
           : "auto"
       );
-      const compareFromConfig =
-        cfg.transformCompare && ["none", "mom", "yoy", "fixed"].includes(cfg.transformCompare)
-          ? cfg.transformCompare
-          : cfg.comparePeriod === "previous_month"
-            ? "mom"
-            : cfg.comparePeriod === "previous_year"
-              ? "yoy"
-              : "none";
-      setTransformCompare(compareFromConfig as "none" | "mom" | "yoy" | "fixed");
-      const fixedFromConfig =
-        typeof cfg.transformCompareFixedValue === "string" && cfg.transformCompareFixedValue.trim()
-          ? cfg.transformCompareFixedValue
-          : typeof (cfg as { compareFixedValue?: unknown }).compareFixedValue === "number"
-            ? String((cfg as { compareFixedValue?: number }).compareFixedValue)
-            : "";
-      setTransformCompareFixedValue(fixedFromConfig);
+      const dateColOpen = (cfg as { dateDimension?: string; timeColumn?: string }).dateDimension ?? (cfg as { timeColumn?: string }).timeColumn;
+      const granOpen = (cfg as { dateGroupByGranularity?: string }).dateGroupByGranularity;
+      const compareResolved = normalizeAggregationCompare({
+        compare: (cfg as { compare?: unknown }).compare,
+        comparePeriod: cfg.comparePeriod,
+        compareFixedValue: typeof (cfg as { compareFixedValue?: unknown }).compareFixedValue === "number" ? (cfg as { compareFixedValue: number }).compareFixedValue : undefined,
+        transformCompare: cfg.transformCompare,
+        transformCompareFixedValue: cfg.transformCompareFixedValue,
+        dateGroupBy:
+          typeof dateColOpen === "string" && dateColOpen && granOpen && ["day", "week", "month", "quarter", "semester", "year"].includes(granOpen)
+            ? { field: dateColOpen, granularity: granOpen }
+            : undefined,
+        dateDimension: typeof dateColOpen === "string" ? dateColOpen : undefined,
+      });
+      const cpsTop = (cfg as { comparePeriodSource?: ComparePeriodSource }).comparePeriodSource;
+      let mergedCompare: CompareSpec = compareResolved;
+      if (
+        (mergedCompare.kind === "temporal" || mergedCompare.kind === "cumulative") &&
+        cpsTop &&
+        !mergedCompare.periodSource &&
+        (cpsTop === "dashboard" || cpsTop === "widget" || cpsTop === "fixed" || cpsTop === "data_max")
+      ) {
+        mergedCompare = { ...mergedCompare, periodSource: cpsTop };
+      }
+      setAnalysisCompare(mergedCompare);
+      const fixedStr =
+        mergedCompare.kind === "fixed"
+          ? String(mergedCompare.value)
+          : typeof cfg.transformCompareFixedValue === "string" && cfg.transformCompareFixedValue.trim()
+            ? cfg.transformCompareFixedValue
+            : typeof (cfg as { compareFixedValue?: unknown }).compareFixedValue === "number"
+              ? String((cfg as { compareFixedValue: number }).compareFixedValue)
+              : "";
+      setTransformCompareFixedValue(fixedStr);
       setTransformShowDelta(cfg.transformShowDelta !== false);
       setTransformShowDeltaPct(cfg.transformShowDeltaPct !== false);
       if (typeof cfg.transformShowAccum === "boolean") {
@@ -1619,6 +1777,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setFormDimensions([]);
       setFormMetrics([{ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` }]);
       setFormFilters([]);
+      setDimensionDefaultFiltersForm([]);
+      setChartRankingPinnedXValues([]);
+      setChartRankingShowRankInLabel(true);
       setFormOrderBy(null);
       setFormLimit(100);
       setChartXAxis("");
@@ -1639,6 +1800,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartSortByMetric("");
       setChartPinnedDimensions([]);
       setChartColorScheme("auto");
+      setChartCategoryColorMode("varied");
+      setChartPrimaryColor("#0ea5e9");
       setChartSeriesColors({});
       setChartLabelOverrides({});
       setChartDatasetLabelOverrides({});
@@ -1647,7 +1810,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartAxisYVisible(true);
       setShowDataLabels(true);
       setLabelVisibilityMode("auto");
-      setTransformCompare("none");
+      setAnalysisCompare({ kind: "none" });
       setTransformCompareFixedValue("");
       setTransformShowDelta(true);
       setTransformShowDeltaPct(true);
@@ -1717,6 +1880,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     }
     return formMetrics;
   }, [wizard, analysisSelectedMetricIds, savedMetrics, formMetrics, formulaFromSavedMetricIds, formulaFromReuseExpr, formName]);
+
+  const compareColumnCandidates = useMemo(() => {
+    const keys: string[] = [];
+    for (let i = 0; i < effectiveFormMetrics.length; i++) {
+      keys.push(aggregationResultColumnKey(effectiveFormMetrics[i], i));
+    }
+    for (const d of formDimensions) {
+      const t = String(d || "").trim();
+      if (t) keys.push(t);
+    }
+    return [...new Set(keys.map((k) => String(k).trim()).filter(Boolean))];
+  }, [effectiveFormMetrics, formDimensions]);
 
   /** Al reabrir una métrica guardada, ratioReuseMode en config fuerza el mismo modo visual que al guardar. */
   const editingSavedAggregationConfig = useMemo(() => {
@@ -1884,21 +2059,101 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           ...(effectiveExpr ? { expression: effectiveExpr } : {}),
         };
       });
+      const formFiltersPayload = formFilters.map((f) => ({
+        field: f.field,
+        operator: Array.isArray(f.value) ? "IN" : f.operator,
+        value: f.value,
+      }));
+      const ddPreviewFilters = dimensionDefaultFiltersForm
+        .filter(
+          (d) =>
+            d.defaultValue !== "" &&
+            d.defaultValue != null &&
+            !(Array.isArray(d.defaultValue) && d.defaultValue.length === 0)
+        )
+        .map((d) => ({
+          field: d.field,
+          operator: Array.isArray(d.defaultValue) ? "IN" : d.operator,
+          value: d.defaultValue,
+        }));
+      const mergedPreviewFilters = [...formFiltersPayload, ...ddPreviewFilters];
+      const includePeriodInResult = formDimensions.some((d) => d && String(d).trim() === timeColumn);
+      const useAnalysisConfig = wizard === "C" || wizard === "D";
+
+      const compareLegacyInput: LegacyCompareInput = useAnalysisConfig
+        ? {
+            compare: analysisCompare.kind !== "none" ? analysisCompare : undefined,
+            dateGroupBy:
+              includePeriodInResult && timeColumn && analysisGranularity
+                ? { field: timeColumn, granularity: analysisGranularity }
+                : undefined,
+            dateDimension: timeColumn || undefined,
+          }
+        : {};
+      const compareSpecResolved = useAnalysisConfig
+        ? normalizeAggregationCompare(compareLegacyInput)
+        : ({ kind: "none" } as CompareSpec);
+
+      const dg = useAnalysisConfig
+        ? resolveEffectiveDateGroupByForFetch({
+            effectiveChartType: formChartType,
+            agg: {
+              dimensions: formDimensions.filter(Boolean),
+              dimension: formDimensions.find(Boolean),
+              chartXAxis: chartXAxis ? String(chartXAxis).trim() : undefined,
+              dateDimension: timeColumn || undefined,
+              dateGroupByGranularity: analysisGranularity || undefined,
+              orderBy: formOrderBy?.field ? formOrderBy : undefined,
+            },
+            compareSpec: compareSpecResolved,
+            mapPhysicalField: (f) => (f == null || f === "" ? undefined : f),
+            inferInternalSeriesWithoutVisibleTimeDimension: true,
+          })
+        : null;
+
+      let filtersForRequest = mergedPreviewFilters;
+      if (useAnalysisConfig && compareNeedsTimeGroupedRows(compareSpecResolved) && dg) {
+        const cf =
+          dg.dateGroupByField ??
+          (compareSpecResolved.kind === "temporal" ? compareSpecResolved.timeColumn : undefined) ??
+          (compareSpecResolved.kind === "cumulative" ? compareSpecResolved.timeColumn : undefined);
+        if (cf) {
+          filtersForRequest = expandAggregationFiltersForTemporalCompare(mergedPreviewFilters, {
+            compareField: cf,
+            compareSpec: compareSpecResolved,
+          }) as typeof mergedPreviewFilters;
+        }
+      }
+
+      const effectiveDims = resolveAnalysisDimensionsFromConfig({
+        dimensions: formDimensions,
+        dimension: formDimensions[0],
+        dimension2: formDimensions[1],
+        chartXAxis,
+      });
       const body: Record<string, unknown> = {
         tableName,
         etlId,
-        dimensions: formDimensions.length > 0 ? formDimensions.filter(Boolean) : undefined,
+        dimensions: effectiveDims.dimensions.length > 0 ? effectiveDims.dimensions : undefined,
+        dimension: effectiveDims.dimension,
+        dimension2: effectiveDims.dimension2,
         metrics: metricsPayload,
-        filters: formFilters.length ? formFilters.map((f) => ({ field: f.field, operator: Array.isArray(f.value) ? "IN" : f.operator, value: f.value })) : undefined,
-        orderBy: formOrderBy?.field ? formOrderBy : undefined,
+        filters: filtersForRequest.length > 0 ? filtersForRequest : undefined,
+        orderBy: formOrderBy?.field
+          ? formOrderBy
+          : useAnalysisConfig && dg?.defaultTemporalOrderBy
+            ? dg.defaultTemporalOrderBy
+            : undefined,
         unlimited: true,
         ...(formLimit != null && formLimit > 0 ? { limit: formLimit } : {}),
       };
       if (derivedToSend.length > 0) {
-        body.derivedColumns = derivedToSend.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" }));
+        body.derivedColumns = derivedToSend.map((d) => ({
+          name: d.name,
+          expression: d.expression,
+          defaultAggregation: d.defaultAggregation || "SUM",
+        }));
       }
-      const includePeriodInResult = formDimensions.some((d) => d && String(d).trim() === timeColumn);
-      const useAnalysisConfig = wizard === "C" || wizard === "D";
       if (useAnalysisConfig && timeColumn) {
         if (analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo) {
           body.dateRangeFilter = { field: timeColumn, from: analysisDateFrom, to: analysisDateTo };
@@ -1909,24 +2164,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             body.dateRangeFilter = { field: timeColumn, last: rangeNum, unit };
           }
         }
-        // Si no se elige rango (valor "0" o vacío), no se envía dateRangeFilter: se traen todos los datos.
-        if (analysisGranularity && includePeriodInResult) {
-          body.dateGroupBy = { field: timeColumn, granularity: analysisGranularity };
-        }
       }
-      if (useAnalysisConfig && transformCompare !== "none") {
-        if (transformCompare === "mom") {
-          body.comparePeriod = "previous_month";
-          body.dateDimension = timeColumn || undefined;
-        }
-        if (transformCompare === "yoy") {
-          body.comparePeriod = "previous_year";
-          body.dateDimension = timeColumn || undefined;
-        }
-        if (transformCompare === "fixed") {
-          const fixed = parseFloat(transformCompareFixedValue);
-          if (Number.isFinite(fixed)) body.compareFixedValue = fixed;
-        }
+      if (useAnalysisConfig && dg?.hasDateGroupByEffective && dg.dateGroupByField && dg.dateGroupByGranularity) {
+        body.dateGroupBy = {
+          field: dg.dateGroupByField,
+          granularity: dg.dateGroupByGranularity,
+        };
+      }
+      if (useAnalysisConfig && analysisCompare.kind !== "none") {
+        body.compare = analysisCompare as unknown as Record<string, unknown>;
       }
       if (useAnalysisConfig && transformShowAccum) {
         body.cumulative = "running_sum";
@@ -1983,7 +2229,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     analysisTimeRange,
     analysisDateFrom,
     analysisDateTo,
-    transformCompare,
+    analysisCompare,
     transformCompareFixedValue,
     savedMetrics,
     formChartType,
@@ -1994,6 +2240,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     geoComponentOverrides,
     geoOverridesByXLabel,
     data?.columnDisplay,
+    dimensionDefaultFiltersForm,
   ]);
 
   const fetchPreviewRef = useRef(fetchPreview);
@@ -2048,7 +2295,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     const firstDim = formDimensions[0] ?? "";
     const firstDimIsDate = !!firstDim && dateFields.includes(firstDim);
     const isTimeSeriesStrict = hasTimeConfig && (!hasDim || firstDim === timeColumn || firstDimIsDate);
-    const hasTransformCompare = transformCompare === "mom" || transformCompare === "yoy";
+    const hasTransformCompare =
+      analysisCompare.kind === "temporal" ||
+      analysisCompare.kind === "column" ||
+      analysisCompare.kind === "cumulative";
     const previewRows = previewData?.length ?? 0;
     const geoKeywords = /lat|lng|lon|geo|country|pais|ciudad|city|region|provincia|estado|state|zip|postal|coord/i;
     const hasGeoDim = formDimensions.some((d) => geoKeywords.test(d));
@@ -2064,7 +2314,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     if (isTimeSeriesStrict && metricCount > 1) return { recommendationText: "Serie temporal con varias métricas: recomendamos **Combo** (barras + línea) para comparar escalas.", suggestedChartType: "combo" };
     if (hasDim && metricCount === 1) return { recommendationText: "Una dimensión y un valor: recomendamos **Barras** para comparar categorías.", suggestedChartType: "bar" };
     return { recommendationText: "Seleccioná el tipo de gráfico que mejor represente tu análisis.", suggestedChartType: "bar" };
-  }, [formDimensions, effectiveFormMetrics, timeColumn, analysisGranularity, transformCompare, previewData, dateFields]);
+  }, [formDimensions, effectiveFormMetrics, timeColumn, analysisGranularity, analysisCompare, previewData, dateFields]);
 
   /** Restricciones por datos: sin rol Geo no permitir Mapa. */
   const chartTypeRestrictions = useMemo(() => {
@@ -2103,12 +2353,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         ? analysisGranularity
         : undefined
     ) as DateGranularity | undefined;
+    const previewDims = resolveAnalysisDimensionsFromConfig({
+      dimensions: formDimensions,
+      dimension: formDimensions[0],
+      dimension2: formDimensions[1],
+      chartXAxis,
+    });
     return {
       type: formChartType,
+      color: chartPrimaryColor,
       aggregationConfig: {
         enabled: true,
-        dimension: chartXAxis || formDimensions[0],
-        dimensions: formDimensions,
+        dimension: previewDims.dimension,
+        dimension2: previewDims.dimension2,
+        dimensions: previewDims.dimensions,
         geoHints,
         ratioReuseMode: ratioReuseDisplayMode || undefined,
         metrics,
@@ -2118,6 +2376,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartSeriesField,
         dateDimension: timeColumn || undefined,
         dateGroupByGranularity: normalizedGranularity,
+        chartCategoryColorMode,
+        chartPrimaryColor,
         chartSeriesColors,
         chartLabelOverrides,
         chartDatasetLabelOverrides:
@@ -2126,6 +2386,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartRankingTop,
         chartRankingMetric,
         chartRankingDirection,
+        chartRankingPinnedXValues:
+          chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+        chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
         chartSortDirection,
         chartSortBy,
         chartSortByMetric,
@@ -2144,6 +2407,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartSeriesField,
     timeColumn,
     data?.columnDisplay,
+    chartCategoryColorMode,
+    chartPrimaryColor,
     chartSeriesColors,
     chartLabelOverrides,
     chartDatasetLabelOverrides,
@@ -2151,6 +2416,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartRankingTop,
     chartRankingMetric,
     chartRankingDirection,
+    chartRankingPinnedXValues,
+    chartRankingShowRankInLabel,
     chartSortDirection,
     chartSortBy,
     chartSortByMetric,
@@ -2204,7 +2471,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     const chartCfg = buildChartConfig(
       previewData as Record<string, unknown>[],
       previewPipelineWidget,
-      "#0ea5e9"
+      chartPrimaryColor
     );
     return chartCfg ?? null;
   }, [
@@ -2289,6 +2556,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartRankingTop,
         chartRankingMetric,
         chartRankingDirection,
+        chartRankingPinnedXValues:
+          chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+        chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
         chartSortDirection,
         chartSortBy,
         chartSortByMetric,
@@ -2306,6 +2576,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         showDataLabels,
         labelVisibilityMode,
         chartComboSyncAxes,
+        ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
+        ...(formChartType === "map" && compactGeoComponentOverridesForRequest(geoComponentOverrides)
+          ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(geoComponentOverrides) }
+          : {}),
+        ...(formChartType === "map" && compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel)
+          ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
+          : {}),
+        ...(formChartType === "map" ? { ...mapVisualFields } : {}),
       },
       chartStyle: toChartStyleConfig({
         valueType: chartValueType,
@@ -2316,7 +2594,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       }),
       chartMetricStyles: metricFormats,
       labelDisplayMode: "percent" as const,
-      chartPercentBasis: "grand_total" as const,
+      chartPercentBasis: "chart_visible_total" as const,
       minHeight: 320,
     };
   }, [
@@ -2340,6 +2618,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartRankingTop,
     chartRankingMetric,
     chartRankingDirection,
+    chartRankingPinnedXValues,
+    chartRankingShowRankInLabel,
     chartSortDirection,
     chartSortBy,
     chartSortByMetric,
@@ -2357,6 +2637,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     showDataLabels,
     labelVisibilityMode,
     chartComboSyncAxes,
+    mapDefaultCountry,
+    mapVisualFields,
+    geoComponentOverrides,
+    geoOverridesByXLabel,
     timeColumn,
     analysisGranularity,
   ]);
@@ -2422,22 +2706,45 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       seenMetricCol.add(alias);
       if (rowKeysSet.has(alias)) requested.push(alias);
     }
-    if (transformCompare === "mom" || transformCompare === "yoy") {
+    if (analysisCompare.kind === "temporal" || analysisCompare.kind === "column") {
       for (const alias of metricAliases) {
         if (transformShowDeltaPct && rowKeysSet.has(`${alias}_delta_pct`)) requested.push(`${alias}_delta_pct`);
+        if (transformShowDeltaPct && rowKeysSet.has(`${alias}_delta_pct_col`)) requested.push(`${alias}_delta_pct_col`);
         if (transformShowDelta && rowKeysSet.has(`${alias}_delta`)) requested.push(`${alias}_delta`);
         if (transformShowAccum && rowKeysSet.has(`${alias}_acumulado`)) requested.push(`${alias}_acumulado`);
         if (rowKeysSet.has(`${alias}_prev`)) requested.push(`${alias}_prev`);
+        if (transformShowDelta && rowKeysSet.has(`${alias}_vs_col`)) requested.push(`${alias}_vs_col`);
       }
     }
-    if (transformCompare === "fixed") {
+    if (analysisCompare.kind === "fixed") {
       for (const alias of metricAliases) {
         if (rowKeysSet.has(`${alias}_vs_fijo`)) requested.push(`${alias}_vs_fijo`);
         if (rowKeysSet.has(`${alias}_var_pct_fijo`)) requested.push(`${alias}_var_pct_fijo`);
       }
     }
+    if (analysisCompare.kind === "average") {
+      for (const alias of metricAliases) {
+        if (rowKeysSet.has(`${alias}_vs_prom`)) requested.push(`${alias}_vs_prom`);
+        if (rowKeysSet.has(`${alias}_delta_pct_prom`)) requested.push(`${alias}_delta_pct_prom`);
+      }
+    }
+    if (analysisCompare.kind === "total_share") {
+      for (const alias of metricAliases) {
+        if (rowKeysSet.has(`${alias}_pct_total`)) requested.push(`${alias}_pct_total`);
+        if (rowKeysSet.has(`${alias}_total_ref`)) requested.push(`${alias}_total_ref`);
+      }
+    }
+    if (analysisCompare.kind === "cumulative") {
+      for (const alias of metricAliases) {
+        if (rowKeysSet.has(`${alias}_ytd`)) requested.push(`${alias}_ytd`);
+        if (rowKeysSet.has(`${alias}_pct_mes_en_ytd`)) requested.push(`${alias}_pct_mes_en_ytd`);
+        if (rowKeysSet.has(`${alias}_vs_ytd_ly`)) requested.push(`${alias}_vs_ytd_ly`);
+        if (rowKeysSet.has(`${alias}_delta_pct_ytd_yoy`)) requested.push(`${alias}_delta_pct_ytd_yoy`);
+        if (rowKeysSet.has(`${alias}_ytd_run`)) requested.push(`${alias}_ytd_run`);
+      }
+    }
     return requested;
-  }, [previewData, formDimensions, wizard, analysisDisplayMetricAliases, effectiveFormMetrics, transformCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum, ratioReuseDisplayMode, ratioReuseResultMetricAlias, ratioReuseResultMetricIndex]);
+  }, [previewData, formDimensions, wizard, analysisDisplayMetricAliases, effectiveFormMetrics, analysisCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum, ratioReuseDisplayMode, ratioReuseResultMetricAlias, ratioReuseResultMetricIndex]);
 
   const chartAvailableColumns = useMemo(() => {
     if (!previewData?.[0]) return [];
@@ -2455,7 +2762,26 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
   const chartDimensionColumns = useMemo(() => chartAvailableColumns.filter((c) => {
     if (/^metric_\d+/.test(c.key)) return false;
-    if (c.key.endsWith("_prev") || c.key.endsWith("_delta") || c.key.endsWith("_delta_pct") || c.key.endsWith("_acumulado") || c.key.endsWith("_vs_fijo") || c.key.endsWith("_var_pct_fijo")) return false;
+    if (
+      c.key.endsWith("_prev") ||
+      c.key.endsWith("_delta") ||
+      c.key.endsWith("_delta_pct") ||
+      c.key.endsWith("_delta_pct_col") ||
+      c.key.endsWith("_acumulado") ||
+      c.key.endsWith("_vs_fijo") ||
+      c.key.endsWith("_var_pct_fijo") ||
+      c.key.endsWith("_vs_col") ||
+      c.key.endsWith("_vs_prom") ||
+      c.key.endsWith("_delta_pct_prom") ||
+      c.key.endsWith("_pct_total") ||
+      c.key.endsWith("_total_ref") ||
+      c.key.endsWith("_ytd") ||
+      c.key.endsWith("_pct_mes_en_ytd") ||
+      c.key.endsWith("_vs_ytd_ly") ||
+      c.key.endsWith("_delta_pct_ytd_yoy") ||
+      c.key.endsWith("_ytd_run")
+    )
+      return false;
     const norm = (s: string) => (s || "").trim().toLowerCase();
     if (formDimensions.some((d) => norm(d) === norm(c.key))) return true;
     if (timeColumn && norm(timeColumn) === norm(c.key)) return true;
@@ -2665,6 +2991,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartSeriesField?: string;
         analysisNameToSave?: string;
         chartDatasetLabelOverrides?: Record<string, string>;
+        chartCategoryColorMode?: "varied" | "uniform";
+        chartPrimaryColor?: string;
       };
       if (Array.isArray(parsed.analysisSelectedMetricIds)) setAnalysisSelectedMetricIds(parsed.analysisSelectedMetricIds);
       if (Array.isArray(parsed.formDimensions)) setFormDimensions(parsed.formDimensions);
@@ -2680,6 +3008,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (typeof parsed.analysisNameToSave === "string") setAnalysisNameToSave(parsed.analysisNameToSave);
       if (parsed.chartDatasetLabelOverrides && typeof parsed.chartDatasetLabelOverrides === "object") {
         setChartDatasetLabelOverrides(parsed.chartDatasetLabelOverrides);
+      }
+      if (parsed.chartCategoryColorMode === "uniform" || parsed.chartCategoryColorMode === "varied") {
+        setChartCategoryColorMode(parsed.chartCategoryColorMode);
+      }
+      if (typeof parsed.chartPrimaryColor === "string" && parsed.chartPrimaryColor.trim() !== "") {
+        const p = parsed.chartPrimaryColor.trim();
+        setChartPrimaryColor(p.startsWith("#") ? p : `#${p}`);
       }
     } catch {
       // ignore invalid draft
@@ -2706,6 +3041,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartSeriesField,
       analysisNameToSave,
       chartDatasetLabelOverrides,
+      chartCategoryColorMode,
+      chartPrimaryColor,
     };
     window.localStorage.setItem(analysisDraftStorageKey, JSON.stringify(draft));
   }, [
@@ -2727,6 +3064,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartSeriesField,
     analysisNameToSave,
     chartDatasetLabelOverrides,
+    chartCategoryColorMode,
+    chartPrimaryColor,
   ]);
 
   const saveDashboardFiltersOnly = useCallback(async () => {
@@ -2777,7 +3116,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return newDashboardId;
   }, [linkedDashboardId, etlTitle, etlId, etlClientId]);
 
-  const upsertMetricWidgetOnDashboard = useCallback(async (dashboardId: string, metricItem: SavedMetricForm) => {
+  const upsertMetricWidgetOnDashboard = useCallback(async (
+    dashboardId: string,
+    metricItem: SavedMetricForm,
+    publishAnalysis?: Record<string, unknown> | null
+  ) => {
     const getRes = await fetch(`/api/dashboard/${dashboardId}/layout`);
     const getJson = await safeJsonResponse(getRes);
     if (!getRes.ok || !getJson?.ok || !getJson?.data) {
@@ -2812,9 +3155,63 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     const nextGridOrder =
       samePageWidgets.reduce((max, w) => Math.max(max, Number(w.gridOrder ?? 0)), -1) + 1;
 
+    let dataSourceId: string | null = null;
+    try {
+      const etlDataRes = await fetch(`/api/dashboard/${dashboardId}/etl-data`);
+      const etlDataJson = await safeJsonResponse<{
+        ok?: boolean;
+        data?: { dataSources?: { id: string; etlId: string }[] };
+      }>(etlDataRes);
+      if (etlDataRes.ok && etlDataJson?.ok && Array.isArray(etlDataJson.data?.dataSources)) {
+        const match = etlDataJson.data.dataSources.find((s) => s.etlId === etlId);
+        if (match) dataSourceId = match.id;
+      }
+    } catch {
+      // fallback: widget usará fuente primaria
+    }
+
+    const analysisForMerge =
+      publishAnalysis ??
+      (data?.savedAnalyses ?? []).find((a) =>
+        (a.metricIds ?? []).some((mid) => String(mid).trim() === String(metricItem.id).trim())
+      ) ??
+      null;
+
+    let mergedChartType = chartType;
+    let mergedAggConfig: Record<string, unknown> = {
+      enabled: true,
+      ...(metricItem.aggregationConfig ?? {}),
+      metrics:
+        Array.isArray(metricItem.aggregationConfig?.metrics) && metricItem.aggregationConfig.metrics.length > 0
+          ? metricItem.aggregationConfig.metrics
+          : [metricItem.metric],
+      chartType,
+    };
+    let mergedAnalysisId: string | undefined;
+    let mergedMetricIds: string[] | undefined;
+    let mergedLabelDisplayMode: "percent" | "value" | "both" | undefined;
+    let mergedMinHeight: number | undefined;
+
+    if (analysisForMerge) {
+      const patch = mergeSavedAnalysisIntoWidget(
+        { metricId: metricItem.id, title: metricItem.name },
+        analysisForMerge as SavedAnalysisForMerge,
+        savedMetrics
+      );
+      if (patch) {
+        mergedChartType = patch.type;
+        mergedAggConfig = patch.aggregationConfig;
+        mergedAnalysisId = patch.analysisId;
+        mergedMetricIds = patch.metricIds;
+        mergedLabelDisplayMode = patch.labelDisplayMode;
+        mergedMinHeight = patch.minHeight;
+      }
+    }
+
+    const isHorizontalBar = mergedChartType === "horizontalBar";
     const nextWidget: Record<string, unknown> = {
       id: `w-${Date.now()}`,
-      type: chartType,
+      type: mergedChartType,
       title: metricItem.name,
       metricId: metricItem.id,
       x: 0,
@@ -2822,18 +3219,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       w: 2,
       h: 2,
       gridSpan: 2,
-      minHeight: 320,
+      minHeight: mergedMinHeight ?? (isHorizontalBar ? 360 : 320),
       gridOrder: nextGridOrder,
+      ...(mergedAnalysisId ? { analysisId: mergedAnalysisId } : {}),
+      ...(mergedMetricIds?.length ? { metricIds: mergedMetricIds } : {}),
+      ...(mergedLabelDisplayMode
+        ? { labelDisplayMode: mergedLabelDisplayMode }
+        : isHorizontalBar
+          ? { labelDisplayMode: "percent" as const }
+          : {}),
       ...(activePageId ? { pageId: activePageId } : {}),
-      aggregationConfig: {
-        enabled: true,
-        ...(metricItem.aggregationConfig ?? {}),
-        metrics:
-          Array.isArray(metricItem.aggregationConfig?.metrics) && metricItem.aggregationConfig.metrics.length > 0
-            ? metricItem.aggregationConfig.metrics
-            : [metricItem.metric],
-        chartType,
-      },
+      ...(dataSourceId ? { dataSourceId } : {}),
+      aggregationConfig: mergedAggConfig,
     };
 
     const existingIndex = currentWidgets.findIndex(
@@ -2845,8 +3242,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             idx === existingIndex
               ? {
                   ...w,
-                  type: chartType,
+                  type: mergedChartType,
                   title: metricItem.name,
+                  minHeight: isHorizontalBar ? Math.max(Number(w.minHeight ?? 0), 360) : w.minHeight,
+                  ...(mergedAnalysisId ? { analysisId: mergedAnalysisId } : {}),
+                  ...(mergedMetricIds?.length ? { metricIds: mergedMetricIds } : {}),
+                  ...(mergedLabelDisplayMode
+                    ? { labelDisplayMode: mergedLabelDisplayMode }
+                    : isHorizontalBar
+                      ? { labelDisplayMode: "percent" as const }
+                      : {}),
                   aggregationConfig: nextWidget.aggregationConfig,
                 }
               : w
@@ -2875,7 +3280,92 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     if (!putRes.ok || !putJson?.ok) {
       throw new Error(putJson?.error ?? "No se pudo subir la métrica al dashboard");
     }
-  }, []);
+  }, [etlId, savedMetrics, data?.savedAnalyses]);
+
+  /** Actualiza widgets del dashboard vinculado con la config completa del análisis (formato, ranking, dimensiones). */
+  const syncLinkedDashboardWidgetsForAnalysis = useCallback(
+    async (analysis: Record<string, unknown>): Promise<number> => {
+      const dashboardId = linkedDashboardId;
+      const analysisId = String(analysis.id ?? "").trim();
+      if (!dashboardId || !analysisId) return 0;
+
+      const getRes = await fetch(`/api/dashboard/${dashboardId}/layout`);
+      const getJson = await safeJsonResponse(getRes);
+      if (!getRes.ok || !getJson?.ok || !getJson?.data) return 0;
+
+      const dashboardData = getJson.data as {
+        title?: string;
+        global_filters_config?: unknown;
+        layout?: { widgets?: Array<Record<string, unknown>>; savedMetrics?: SavedMetricForm[]; [key: string]: unknown };
+      };
+      const layout = dashboardData.layout && typeof dashboardData.layout === "object" ? dashboardData.layout : {};
+      const currentWidgets = Array.isArray(layout.widgets) ? layout.widgets : [];
+      const analysisForMerge = analysis as SavedAnalysisForMerge;
+      let updatedCount = 0;
+
+      const widgetsUpdated = currentWidgets.map((w) => {
+        const matches =
+          String(w.analysisId ?? "").trim() === analysisId ||
+          findSavedAnalysisForWidget(w, [analysisForMerge]) != null;
+        if (!matches) return w;
+        const patch = mergeSavedAnalysisIntoWidget(
+          { ...w, title: w.title ?? analysis.name },
+          analysisForMerge,
+          savedMetrics
+        );
+        if (!patch) return w;
+        updatedCount += 1;
+        const isHorizontalBar = patch.type === "horizontalBar";
+        return {
+          ...w,
+          analysisId: patch.analysisId,
+          type: patch.type,
+          title: patch.title ?? w.title,
+          metricIds: patch.metricIds ?? w.metricIds,
+          labelDisplayMode:
+            patch.labelDisplayMode ??
+            (isHorizontalBar ? ("percent" as const) : w.labelDisplayMode),
+          minHeight:
+            patch.minHeight != null
+              ? Math.max(Number(w.minHeight ?? 0), patch.minHeight)
+              : w.minHeight,
+          aggregationConfig: patch.aggregationConfig,
+          config: undefined,
+          rows: undefined,
+        };
+      });
+
+      if (updatedCount === 0) {
+        const firstMetricId = Array.isArray(analysis.metricIds)
+          ? String((analysis.metricIds as string[])[0] ?? "").trim()
+          : "";
+        const metricItem = firstMetricId
+          ? savedMetrics.find((m) => String(m.id).trim() === firstMetricId)
+          : undefined;
+        if (metricItem) {
+          await upsertMetricWidgetOnDashboard(dashboardId, metricItem, analysis);
+          return 1;
+        }
+        return 0;
+      }
+
+      const putRes = await fetch(`/api/dashboard/${dashboardId}/layout`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: dashboardData.title,
+          global_filters_config: dashboardData.global_filters_config,
+          layout: { ...layout, widgets: widgetsUpdated },
+        }),
+      });
+      const putJson = await safeJsonResponse(putRes);
+      if (!putRes.ok || !putJson?.ok) {
+        throw new Error(putJson?.error ?? "No se pudo actualizar el dashboard");
+      }
+      return updatedCount;
+    },
+    [linkedDashboardId, savedMetrics, upsertMetricWidgetOnDashboard]
+  );
 
   const saveMetric = async (options?: { publishToDashboard?: boolean; redirectToDashboard?: boolean }) => {
     const name = formName.trim();
@@ -2889,16 +3379,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       return;
     }
     const metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
+    const legacyTc = deriveLegacyTransformCompare(analysisCompare);
     const comparePeriodToSave: "previous_month" | "previous_year" | undefined =
-      transformCompare === "mom"
-        ? "previous_month"
-        : transformCompare === "yoy"
-          ? "previous_year"
-          : undefined;
-    const compareFixedValueToSave =
-      transformCompare === "fixed"
-        ? Number.parseFloat(transformCompareFixedValue)
-        : Number.NaN;
+      legacyTc === "mom" ? "previous_month" : legacyTc === "yoy" ? "previous_year" : undefined;
+    const compareFixedValueToSave = analysisCompare.kind === "fixed" ? analysisCompare.value : Number.NaN;
     const cumulativeToSave: "none" | "running_sum" = transformShowAccum ? "running_sum" : "none";
     const aggregationConfig = {
       dimension: formDimensions[0] || undefined,
@@ -2907,13 +3391,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       geoHints,
       metrics: effectiveFormMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` })),
       filters: formFilters.length ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator })) : undefined,
+      dimensionDefaultFilters: dimensionDefaultFiltersForm.length > 0 ? dimensionDefaultFiltersForm : undefined,
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
       cumulative: cumulativeToSave,
+      compare: analysisCompare.kind === "none" ? undefined : analysisCompare,
+      comparePeriodSource:
+        analysisCompare.kind === "temporal" || analysisCompare.kind === "cumulative"
+          ? analysisCompare.periodSource
+          : undefined,
       comparePeriod: comparePeriodToSave,
       compareFixedValue: Number.isFinite(compareFixedValueToSave) ? compareFixedValueToSave : undefined,
-      transformCompare,
-      transformCompareFixedValue: transformCompare === "fixed" ? transformCompareFixedValue : undefined,
+      transformCompare: legacyTc,
+      transformCompareFixedValue: analysisCompare.kind === "fixed" ? transformCompareFixedValue : undefined,
       transformShowDelta,
       transformShowDeltaPct,
       transformShowAccum,
@@ -2940,8 +3430,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
       chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
+      chartRankingPinnedXValues:
+        chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+      chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
+      ...(chartCategoryColorMode === "uniform" ? ({ chartCategoryColorMode: "uniform" as const } as const) : {}),
+      chartPrimaryColor: chartPrimaryColor.trim() ? chartPrimaryColor.trim() : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
       chartDatasetLabelOverrides:
@@ -3005,6 +3500,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
         : {}),
       ...(formChartType === "map" ? { ...mapVisualFields } : {}),
+      dashboardCompareUi: ensureDashboardCompareUi(
+        {
+          compare: analysisCompare.kind === "none" ? undefined : analysisCompare,
+          comparePeriod: comparePeriodToSave,
+          transformShowDelta,
+          transformShowDeltaPct,
+        },
+        { widgetType: formChartType || "bar", chartType: formChartType || undefined }
+      ),
     };
     let expr = (firstMetric as { expression?: string }).expression;
     const alias = (firstMetric.alias || "").trim();
@@ -3061,7 +3565,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setData((prev) => (prev ? { ...prev, savedMetrics: next, datasetConfig: datasetConfigToSave } : null));
       if (createDerivedColumn) setDerivedColumns(nextDerivedColumns);
       if (options?.publishToDashboard && targetDashboardId) {
-        await upsertMetricWidgetOnDashboard(targetDashboardId, item);
+        const publishAnalysis =
+          editingSavedAnalysisId && analysisSelectedMetricIds.length > 0
+            ? buildAnalysisPayload(analysisNameToSave.trim() || name, editingSavedAnalysisId)
+            : null;
+        await upsertMetricWidgetOnDashboard(targetDashboardId, item, publishAnalysis);
         toast.success("Métrica subida al dashboard");
       }
       closeForm();
@@ -3171,16 +3679,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       metricToSave = { ...firstMetric, id: firstMetric.id || `m-${Date.now()}` };
       metricsToStore = formMetrics.map((m) => ({ ...m, id: m.id || `m-${Date.now()}` }));
     }
+    const legacyTcB = deriveLegacyTransformCompare(analysisCompare);
     const comparePeriodToSave: "previous_month" | "previous_year" | undefined =
-      transformCompare === "mom"
-        ? "previous_month"
-        : transformCompare === "yoy"
-          ? "previous_year"
-          : undefined;
-    const compareFixedValueToSave =
-      transformCompare === "fixed"
-        ? Number.parseFloat(transformCompareFixedValue)
-        : Number.NaN;
+      legacyTcB === "mom" ? "previous_month" : legacyTcB === "yoy" ? "previous_year" : undefined;
+    const compareFixedValueToSave = analysisCompare.kind === "fixed" ? analysisCompare.value : Number.NaN;
     const cumulativeToSave: "none" | "running_sum" = transformShowAccum ? "running_sum" : "none";
     const aggregationConfig = {
       dimension: formDimensions[0] || undefined,
@@ -3192,10 +3694,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       orderBy: formOrderBy ?? undefined,
       limit: formLimit ?? 100,
       cumulative: cumulativeToSave,
+      compare: analysisCompare.kind === "none" ? undefined : analysisCompare,
+      comparePeriodSource:
+        analysisCompare.kind === "temporal" || analysisCompare.kind === "cumulative"
+          ? analysisCompare.periodSource
+          : undefined,
       comparePeriod: comparePeriodToSave,
       compareFixedValue: Number.isFinite(compareFixedValueToSave) ? compareFixedValueToSave : undefined,
-      transformCompare,
-      transformCompareFixedValue: transformCompare === "fixed" ? transformCompareFixedValue : undefined,
+      transformCompare: legacyTcB,
+      transformCompareFixedValue: analysisCompare.kind === "fixed" ? transformCompareFixedValue : undefined,
       transformShowDelta,
       transformShowDeltaPct,
       transformShowAccum,
@@ -3222,8 +3729,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
       chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
+      chartRankingPinnedXValues:
+        chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+      chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
       chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
+      ...(chartCategoryColorMode === "uniform" ? ({ chartCategoryColorMode: "uniform" as const } as const) : {}),
+      chartPrimaryColor: chartPrimaryColor.trim() ? chartPrimaryColor.trim() : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
       chartDatasetLabelOverrides:
@@ -3287,6 +3799,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
         : {}),
       ...(formChartType === "map" ? { ...mapVisualFields } : {}),
+      dashboardCompareUi: ensureDashboardCompareUi(
+        {
+          compare: analysisCompare.kind === "none" ? undefined : analysisCompare,
+          comparePeriod: comparePeriodToSave,
+          transformShowDelta,
+          transformShowDeltaPct,
+        },
+        { widgetType: formChartType || "bar", chartType: formChartType || undefined }
+      ),
     };
     const item: SavedMetricForm = {
       id: `sm-${Date.now()}`,
@@ -3342,13 +3863,36 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   };
 
   const buildAnalysisPayload = useCallback((name: string, existingAnalysisId?: string | null) => {
+    const effectiveDims = resolveAnalysisDimensionsFromConfig({
+      dimensions: formDimensions,
+      dimension: formDimensions[0],
+      dimension2: formDimensions[1],
+      chartXAxis,
+    });
+    const chartMetricFormatsPayload =
+      chartYAxes.length > 0
+        ? Object.fromEntries(
+            chartYAxes.map((key) => [
+              key,
+              chartMetricFormats[key] ?? {
+                valueType: chartValueType,
+                valueScale: chartValueScale,
+                currencySymbol: chartCurrencySymbol,
+                decimals: chartDecimals,
+                thousandSep: chartThousandSep,
+              },
+            ])
+          )
+        : Object.keys(chartMetricFormats).length > 0
+          ? chartMetricFormats
+          : undefined;
     return {
       id: existingAnalysisId && String(existingAnalysisId).trim() !== "" ? String(existingAnalysisId) : `sa-${Date.now()}`,
       name,
       metricIds: [...analysisSelectedMetricIds],
-      dimensions: formDimensions.length > 0 ? formDimensions : undefined,
-      dimension: formDimensions[0] || undefined,
-      dimension2: formDimensions[1] || undefined,
+      dimensions: effectiveDims.dimensions.length > 0 ? effectiveDims.dimensions : undefined,
+      dimension: effectiveDims.dimension,
+      dimension2: effectiveDims.dimension2,
       chartType: formChartType || undefined,
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
@@ -3360,22 +3904,38 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
       chartValueType: chartValueType !== "number" ? chartValueType : undefined,
       chartValueScale: chartValueScale !== "none" ? chartValueScale : undefined,
+      chartNumberFormat: chartValueScale !== "none" ? chartValueScale : chartValueType !== "number" ? chartValueType : undefined,
       chartCurrencySymbol: chartValueType === "currency" ? chartCurrencySymbol : undefined,
       chartThousandSep,
       chartDecimals,
+      chartMetricFormats: chartMetricFormatsPayload,
+      chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
+      chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
+      chartSortByMetric: chartSortByMetric || undefined,
+      chartAxisOrder: chartAxisOrder !== "alpha" ? chartAxisOrder : undefined,
+      chartScaleMode: chartScaleMode !== "auto" ? chartScaleMode : undefined,
+      chartScaleMin: chartScaleMode === "custom" && chartScaleMin !== "" ? chartScaleMin : undefined,
+      chartScaleMax: chartScaleMode === "custom" && chartScaleMax !== "" ? chartScaleMax : undefined,
+      chartAxisStep: chartAxisStep !== "" ? chartAxisStep : undefined,
+      ...(chartCategoryColorMode === "uniform" ? ({ chartCategoryColorMode: "uniform" as const } as const) : {}),
+      chartPrimaryColor: chartPrimaryColor.trim() ? chartPrimaryColor.trim() : undefined,
       chartSeriesColors: Object.keys(chartSeriesColors).length > 0 ? chartSeriesColors : undefined,
+      chartColorScheme: chartColorScheme !== "auto" ? chartColorScheme : undefined,
       chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
       chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
       chartGridColor: chartGridColor.trim() || undefined,
       chartAxisXVisible: chartAxisXVisible === false ? false : undefined,
       chartAxisYVisible: chartAxisYVisible === false ? false : undefined,
-      chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
-      chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
-      chartSortByMetric: chartSortByMetric || undefined,
+      chartPinnedDimensions: chartPinnedDimensions.length > 0 ? chartPinnedDimensions : undefined,
       chartRankingEnabled: chartRankingEnabled || undefined,
       chartRankingTop: chartRankingEnabled ? chartRankingTop : undefined,
       chartRankingMetric: chartRankingEnabled && chartRankingMetric ? chartRankingMetric : undefined,
       chartRankingDirection: chartRankingEnabled ? chartRankingDirection : undefined,
+      chartRankingPinnedXValues:
+        chartRankingEnabled && chartRankingPinnedXValues.length > 0 ? chartRankingPinnedXValues : undefined,
+      chartRankingShowRankInLabel: chartRankingEnabled ? chartRankingShowRankInLabel : undefined,
+      ...(formChartType === "horizontalBar" ? { labelDisplayMode: "percent" as const } : {}),
+      dimensionDefaultFilters: dimensionDefaultFiltersForm.length > 0 ? dimensionDefaultFiltersForm : undefined,
       filters: formFilters.length
         ? formFilters.map((f) => ({ ...f, operator: Array.isArray(f.value) ? "IN" : f.operator }))
         : undefined,
@@ -3405,9 +3965,35 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(geoOverridesByXLabel) }
         : {}),
       ...(formChartType === "map" ? { ...mapVisualFields } : {}),
+      ...(analysisCompare.kind !== "none"
+        ? {
+            compare: analysisCompare,
+            comparePeriod:
+              deriveLegacyTransformCompare(analysisCompare) === "mom"
+                ? ("previous_month" as const)
+                : deriveLegacyTransformCompare(analysisCompare) === "yoy"
+                  ? ("previous_year" as const)
+                  : undefined,
+            transformShowDelta,
+            transformShowDeltaPct,
+            transformShowAccum,
+            dashboardCompareUi: ensureDashboardCompareUi(
+              {
+                compare: analysisCompare,
+                transformShowDelta,
+                transformShowDeltaPct,
+              },
+              { widgetType: formChartType || "bar", chartType: formChartType || undefined }
+            ),
+          }
+        : {}),
     };
   }, [
     analysisDateFormat,
+    analysisCompare,
+    transformShowDelta,
+    transformShowDeltaPct,
+    transformShowAccum,
     mapDefaultCountry,
     mapVisualFields,
     geoComponentOverrides,
@@ -3427,6 +4013,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartCurrencySymbol,
     chartThousandSep,
     chartDecimals,
+    chartCategoryColorMode,
+    chartPrimaryColor,
     chartSeriesColors,
     chartGridXDisplay,
     chartGridYDisplay,
@@ -3436,10 +4024,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartSortDirection,
     chartSortBy,
     chartSortByMetric,
+    chartAxisOrder,
+    chartScaleMode,
+    chartScaleMin,
+    chartScaleMax,
+    chartAxisStep,
+    chartPinnedDimensions,
+    chartColorScheme,
+    chartMetricFormats,
     chartRankingEnabled,
     chartRankingTop,
     chartRankingMetric,
     chartRankingDirection,
+    chartRankingPinnedXValues,
+    chartRankingShowRankInLabel,
+    dimensionDefaultFiltersForm,
     formFilters,
     formOrderBy,
     formLimit,
@@ -3451,7 +4050,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   ]);
 
   const saveAnalysisToEtl = async () => {
-    const name = analysisNameToSave.trim();
+    const existingName = editingSavedAnalysisId
+      ? String(
+          (
+            (data?.savedAnalyses ?? []).find(
+              (x) => String((x as { id?: string }).id) === String(editingSavedAnalysisId)
+            ) as { name?: string } | undefined
+          )?.name ?? ""
+        ).trim()
+      : "";
+    const name = analysisNameToSave.trim() || existingName;
     if (!name) {
       toast.error("Escribí un nombre para el análisis.");
       return;
@@ -3478,11 +4086,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         return;
       }
       setData((prev) => (prev ? { ...prev, savedAnalyses: nextAnalyses } : null));
+      let dashboardSyncCount = 0;
+      try {
+        dashboardSyncCount = await syncLinkedDashboardWidgetsForAnalysis(newAnalysis);
+      } catch {
+        toast.warning("Análisis guardado, pero no se pudo actualizar el dashboard vinculado.", { duration: 5000 });
+      }
       toast.success(
         editingSavedAnalysisId
           ? `Análisis «${name}» actualizado.`
           : `Análisis «${name}» guardado. Aparecerá al añadir al dashboard.`
       );
+      if (dashboardSyncCount > 0) {
+        toast.success(
+          `Dashboard actualizado (${dashboardSyncCount} widget${dashboardSyncCount !== 1 ? "s" : ""}). Recargá la vista previa del dashboard.`,
+          { duration: 5000 }
+        );
+      }
       setAnalysisNameToSave("");
       setEditingSavedAnalysisId(null);
       clearAnalysisDraft();
@@ -3572,6 +4192,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartSeriesColors(
         a.chartSeriesColors && typeof a.chartSeriesColors === "object" ? (a.chartSeriesColors as Record<string, string>) : {}
       );
+      setChartCategoryColorMode(a.chartCategoryColorMode === "uniform" ? "uniform" : "varied");
+      {
+        const rawPc = typeof a.chartPrimaryColor === "string" ? a.chartPrimaryColor.trim() : "";
+        setChartPrimaryColor(rawPc !== "" ? (rawPc.startsWith("#") ? rawPc : `#${rawPc}`) : "#0ea5e9");
+      }
       setChartGridXDisplay(a.chartGridXDisplay !== false);
       setChartGridYDisplay(a.chartGridYDisplay !== false);
       setChartGridColor(typeof a.chartGridColor === "string" ? a.chartGridColor : "");
@@ -3592,6 +4217,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           ? a.chartRankingDirection
           : "desc"
       );
+      setChartRankingPinnedXValues(Array.isArray(a.chartRankingPinnedXValues) ? (a.chartRankingPinnedXValues as string[]) : []);
+      setChartRankingShowRankInLabel(a.chartRankingShowRankInLabel !== false);
       if (Array.isArray(a.filters)) {
         setFormFilters(
           (a.filters as AggregationFilterEdit[]).map((f, i) => ({
@@ -3601,6 +4228,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         );
       } else {
         setFormFilters([]);
+      }
+      if (Array.isArray(a.dimensionDefaultFilters)) {
+        setDimensionDefaultFiltersForm(
+          (a.dimensionDefaultFilters as DimensionDefaultFilterEdit[]).map((d, i) => ({
+            ...d,
+            id: typeof d.id === "string" && d.id ? d.id : `ddf-${Date.now()}-${i}`,
+          }))
+        );
+      } else {
+        setDimensionDefaultFiltersForm([]);
       }
       if (a.orderBy && typeof a.orderBy === "object" && (a.orderBy as { field?: string }).field) {
         setFormOrderBy(a.orderBy as { field: string; direction: "ASC" | "DESC" });
@@ -3831,6 +4468,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           )}
         </div>
       </header>
+
+      {!datasetOnly && (
+        <EtlScheduleSettings etlId={etlId} showEditFlowLink />
+      )}
 
       {hideDatasetTab && hasData && (
         <div
@@ -5518,6 +6159,154 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                   ) : (
                     <p className="text-sm mb-4 rounded-lg border p-3" style={{ color: "var(--platform-fg-muted)", borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>Ningún filtro. Tocá «Agregar filtro» para restringir el análisis por campo, condición y valor.</p>
                   )}
+                  <div className="rounded-xl border p-4 space-y-3 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Valores por defecto en vista</Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="rounded-lg h-8 text-xs"
+                        style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                        onClick={() =>
+                          setDimensionDefaultFiltersForm((prev) => [
+                            ...prev,
+                            {
+                              id: `ddf-${Date.now()}`,
+                              field: fields[0] ?? allColumnsForRoles[0] ?? "",
+                              operator: "=",
+                              defaultValue: "",
+                              label: "",
+                              inputType: "select",
+                            },
+                          ])
+                        }
+                      >
+                        + Añadir
+                      </Button>
+                    </div>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                      Preselección al abrir el dashboard; el usuario puede cambiarla en la tarjeta. No reemplaza los filtros fijos de arriba. Para «multi», separá valores con coma.
+                    </p>
+                    {dimensionDefaultFiltersForm.length > 0 ? (
+                      <div className="space-y-2">
+                        {dimensionDefaultFiltersForm.map((d, i) => (
+                          <div
+                            key={d.id}
+                            className="flex flex-wrap gap-2 items-start rounded-lg border p-2"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}
+                          >
+                            <div className="flex flex-col gap-1 min-w-[100px] flex-1">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Etiqueta</Label>
+                              <Input
+                                value={d.label ?? ""}
+                                onChange={(e) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) => (ii === i ? { ...row, label: e.target.value } : row))
+                                  )
+                                }
+                                placeholder="Ej. País"
+                                className="h-8 text-xs !bg-[var(--platform-bg)]"
+                                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[120px] flex-1">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Campo</Label>
+                              <Select
+                                value={d.field}
+                                onChange={(val: string) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) => (ii === i ? { ...row, field: val } : row))
+                                  )
+                                }
+                                options={allColumnsForRoles.map((name) => ({
+                                  value: name,
+                                  label: derivedColumnsByName[name] ? `${name} (calculada)` : getSampleDisplayLabel(name),
+                                }))}
+                                placeholder="Campo"
+                                className="min-w-[120px]"
+                                buttonClassName="h-8 text-xs"
+                                disablePortal
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[100px]">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Condición</Label>
+                              <Select
+                                value={d.operator}
+                                onChange={(val: string) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) => (ii === i ? { ...row, operator: val } : row))
+                                  )
+                                }
+                                options={FILTER_OPERATOR_OPTIONS}
+                                placeholder="Op"
+                                className="min-w-[100px]"
+                                buttonClassName="h-8 text-xs"
+                                disablePortal
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[90px]">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Entrada</Label>
+                              <Select
+                                value={d.inputType ?? "select"}
+                                onChange={(val: string) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) =>
+                                      ii === i
+                                        ? {
+                                            ...row,
+                                            inputType: val as NonNullable<DimensionDefaultFilterEdit["inputType"]>,
+                                          }
+                                        : row
+                                    )
+                                  )
+                                }
+                                options={DIMENSION_DEFAULT_INPUT_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                                placeholder="Tipo"
+                                className="min-w-[90px]"
+                                buttonClassName="h-8 text-xs"
+                                disablePortal
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[120px] flex-1">
+                              <Label className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>Valor por defecto</Label>
+                              <Input
+                                value={formatDimensionDefaultValueForInput(d.defaultValue)}
+                                onChange={(e) =>
+                                  setDimensionDefaultFiltersForm((prev) =>
+                                    prev.map((row, ii) =>
+                                      ii === i
+                                        ? {
+                                            ...row,
+                                            defaultValue: parseDimensionDefaultValueFromInput(
+                                              e.target.value,
+                                              row.inputType ?? "select"
+                                            ),
+                                          }
+                                        : row
+                                    )
+                                  )
+                                }
+                                placeholder={d.inputType === "multi" ? "Uno, otro" : "Valor"}
+                                className="h-8 text-xs !bg-[var(--platform-bg)]"
+                                style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-red-500 shrink-0 mt-5"
+                              title="Quitar"
+                              onClick={() => setDimensionDefaultFiltersForm((prev) => prev.filter((_, ii) => ii !== i))}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Ver valores de una columna</Label>
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Cargá los valores posibles de una columna para elegir mejor al definir filtros.</p>
@@ -5555,44 +6344,65 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     </ul>
                   </div>
                   <p className="text-sm font-medium mb-3" style={{ color: "var(--platform-fg)" }}>Comparaciones disponibles</p>
-                  <div className="space-y-4 mb-4">
-                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Comparar contra período anterior</Label>
-                      <select value={transformCompare === "mom" || transformCompare === "yoy" ? transformCompare : "none"} onChange={(e) => setTransformCompare(e.target.value === "none" ? "none" : e.target.value as "mom" | "yoy")} className="w-full h-9 rounded-lg border px-3 text-sm" style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}>
-                        <option value="none">Ninguno</option>
-                        <option value="mom">Mes anterior (MoM)</option>
-                        <option value="yoy">Año anterior (YoY)</option>
-                      </select>
-                      <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Agrega columnas con el valor del período anterior, diferencia, variación % y acumulado.</p>
-                      {(transformCompare === "mom" || transformCompare === "yoy") && (
-                        <div className="mt-3 space-y-2">
-                          <p className="text-xs font-medium" style={{ color: "var(--platform-fg)" }}>Columnas a visualizar:</p>
-                          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
-                            <input type="checkbox" checked={transformShowDelta} onChange={(e) => setTransformShowDelta(e.target.checked)} className="rounded" />
-                            Delta <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>(diferencia con período anterior)</span>
-                          </label>
-                          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
-                            <input type="checkbox" checked={transformShowDeltaPct} onChange={(e) => setTransformShowDeltaPct(e.target.checked)} className="rounded" />
-                            Delta % <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>(variación porcentual)</span>
-                          </label>
-                          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
-                            <input type="checkbox" checked={transformShowAccum} onChange={(e) => setTransformShowAccum(e.target.checked)} className="rounded" />
-                            Acumulado <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>(suma acumulada)</span>
-                          </label>
-                        </div>
-                      )}
+                  <CompareSpecFields
+                    variant="etl"
+                    compare={analysisCompare}
+                    setCompare={setAnalysisCompare}
+                    timeColumnDefault={(timeColumn || dateFields[0] || "").trim()}
+                    timeColumnOptions={dateFields.length > 0 ? dateFields : timeColumn ? [timeColumn] : []}
+                    formatTimeColumnLabel={getSampleDisplayLabel}
+                    granularity={(analysisGranularity || "month") as DateGranularity}
+                    onGranularityChange={(g) => setAnalysisGranularity(g)}
+                    dims={formDimensions.filter(Boolean)}
+                    compareColumnCandidates={compareColumnCandidates}
+                    fixedValue={transformCompareFixedValue}
+                    onFixedValueChange={setTransformCompareFixedValue}
+                    onMissingTimeColumn={() =>
+                      toast.error(
+                        "No hay columna de fecha: definí el eje temporal en el paso anterior o agregá una columna fecha al dataset."
+                      )
+                    }
+                    onMissingColumnCandidate={() =>
+                      toast.error("No hay columnas candidatas (agregá métricas o dimensiones).")
+                    }
+                  />
+                  {analysisCompare.kind !== "none" && (
+                    <div
+                      className="rounded-lg border p-3 space-y-2"
+                      style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
+                    >
+                      <p className="text-xs font-medium" style={{ color: "var(--platform-fg)" }}>
+                        Columnas a visualizar en la tabla de preview:
+                      </p>
+                      <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        <input
+                          type="checkbox"
+                          checked={transformShowDelta}
+                          onChange={(e) => setTransformShowDelta(e.target.checked)}
+                          className="rounded"
+                        />
+                        Delta
+                      </label>
+                      <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        <input
+                          type="checkbox"
+                          checked={transformShowDeltaPct}
+                          onChange={(e) => setTransformShowDeltaPct(e.target.checked)}
+                          className="rounded"
+                        />
+                        Delta %
+                      </label>
+                      <label className="flex items-center gap-2 text-sm" style={{ color: "var(--platform-fg)" }}>
+                        <input
+                          type="checkbox"
+                          checked={transformShowAccum}
+                          onChange={(e) => setTransformShowAccum(e.target.checked)}
+                          className="rounded"
+                        />
+                        Acumulado (suma en ventana SQL)
+                      </label>
                     </div>
-                    <div className="rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg-muted)" }}>Comparar contra valor fijo</Label>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Input type="number" step="any" placeholder="Ej. 1000" value={transformCompare === "fixed" ? transformCompareFixedValue : ""} onChange={(e) => { setTransformCompareFixedValue(e.target.value); if (e.target.value.trim() !== "") setTransformCompare("fixed"); }} className="h-9 rounded-lg text-sm max-w-[140px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
-                        {(transformCompare === "fixed" && transformCompareFixedValue.trim() !== "") && (
-                          <Button type="button" variant="ghost" size="sm" className="text-xs h-8" style={{ color: "var(--platform-fg-muted)" }} onClick={() => { setTransformCompareFixedValue(""); setTransformCompare("none"); }}>Quitar</Button>
-                        )}
-                      </div>
-                      <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>Ingresá un número; se agregan columnas con la diferencia y la variación % respecto a ese valor.</p>
-                    </div>
-                  </div>
+                  )}
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
                     <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Preview</Button>
@@ -5603,17 +6413,55 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
               {/* Wizard C5: Vista previa (tabla) */}
               {wizard === "C" && wizardStep === 5 && (() => {
                 const hasValidMetrics = effectiveFormMetrics.some((m) => m.field || (m as { expression?: string }).expression || m.formula);
-                const transformLabel = transformCompare === "mom" ? "Período anterior (MoM)" : transformCompare === "yoy" ? "Año anterior (YoY)" : transformCompare === "fixed" ? `Valor fijo (${transformCompareFixedValue})` : null;
+                const transformLabel =
+                  analysisCompare.kind === "none"
+                    ? null
+                    : analysisCompare.kind === "fixed"
+                      ? `Valor fijo (${transformCompareFixedValue})`
+                      : analysisCompare.kind === "column"
+                        ? `Columna: ${analysisCompare.refColumn}`
+                        : analysisCompare.kind === "average"
+                          ? analysisCompare.scope === "global"
+                            ? "Promedio general"
+                            : `Promedio por: ${analysisCompare.partitionDimensions.join(", ") || "—"}`
+                          : analysisCompare.kind === "total_share"
+                            ? `Participación (${analysisCompare.partitionDimensions.length ? analysisCompare.partitionDimensions.join(", ") : "total global"})`
+                            : analysisCompare.kind === "cumulative"
+                              ? `Acumulado: ${analysisCompare.mode}`
+                              : analysisCompare.kind === "temporal"
+                                ? ((({
+                                      prev_bucket: "Período anterior (serie)",
+                                      same_period_prior_year: "Mismo período año anterior",
+                                      calendar_prev_day: "Día calendario anterior",
+                                      calendar_prev_week: "Semana calendario anterior",
+                                      calendar_prev_month: "Mes calendario anterior",
+                                      calendar_prev_year: "Año calendario anterior",
+                                    } as const)[analysisCompare.mode]) ?? analysisCompare.mode)
+                                : null;
                 const formatCell = (k: string, v: unknown): string => {
                   if (v == null) return "—";
                   const dateDisplay = formatPreviewDateValue(v, k);
                   if (dateDisplay != null) return dateDisplay;
                   if (typeof v !== "number") return String(v);
-                  if (k.endsWith("_delta_pct") || k.endsWith("_var_pct_fijo")) {
+                  if (
+                    k.endsWith("_delta_pct") ||
+                    k.endsWith("_var_pct_fijo") ||
+                    k.endsWith("_delta_pct_col") ||
+                    k.endsWith("_delta_pct_prom") ||
+                    k.endsWith("_pct_total") ||
+                    k.endsWith("_pct_mes_en_ytd") ||
+                    k.endsWith("_delta_pct_ytd_yoy")
+                  ) {
                     const sign = v > 0 ? "+" : "";
                     return `${sign}${formatNumber(v)}%`;
                   }
-                  if (k.endsWith("_delta") || k.endsWith("_vs_fijo")) {
+                  if (
+                    k.endsWith("_delta") ||
+                    k.endsWith("_vs_fijo") ||
+                    k.endsWith("_vs_col") ||
+                    k.endsWith("_vs_prom") ||
+                    k.endsWith("_vs_ytd_ly")
+                  ) {
                     const sign = v > 0 ? "+" : "";
                     return `${sign}${formatNumber(v)}`;
                   }
@@ -5621,7 +6469,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                 };
                 const deltaColor = (k: string, v: unknown): string | undefined => {
                   if (v == null || typeof v !== "number") return undefined;
-                  if (k.endsWith("_delta") || k.endsWith("_delta_pct") || k.endsWith("_vs_fijo") || k.endsWith("_var_pct_fijo")) {
+                  if (
+                    k.endsWith("_delta") ||
+                    k.endsWith("_delta_pct") ||
+                    k.endsWith("_vs_fijo") ||
+                    k.endsWith("_var_pct_fijo") ||
+                    k.endsWith("_vs_col") ||
+                    k.endsWith("_delta_pct_col") ||
+                    k.endsWith("_vs_prom") ||
+                    k.endsWith("_delta_pct_prom") ||
+                    k.endsWith("_vs_ytd_ly") ||
+                    k.endsWith("_delta_pct_ytd_yoy")
+                  ) {
                     if (v > 0) return "#10b981";
                     if (v < 0) return "#ef4444";
                   }
@@ -5680,7 +6539,24 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                           <thead className="sticky top-0 z-10" style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
                             <tr>{previewDisplayHeaders.map((h, i) => {
                               const k = previewVisibleKeys[i] ?? "";
-                              const isTx = k.endsWith("_prev") || k.endsWith("_delta") || k.endsWith("_delta_pct") || k.endsWith("_acumulado") || k.endsWith("_vs_fijo") || k.endsWith("_var_pct_fijo");
+                              const isTx =
+                                k.endsWith("_prev") ||
+                                k.endsWith("_delta") ||
+                                k.endsWith("_delta_pct") ||
+                                k.endsWith("_delta_pct_col") ||
+                                k.endsWith("_acumulado") ||
+                                k.endsWith("_vs_fijo") ||
+                                k.endsWith("_var_pct_fijo") ||
+                                k.endsWith("_vs_col") ||
+                                k.endsWith("_vs_prom") ||
+                                k.endsWith("_delta_pct_prom") ||
+                                k.endsWith("_pct_total") ||
+                                k.endsWith("_total_ref") ||
+                                k.endsWith("_ytd") ||
+                                k.endsWith("_pct_mes_en_ytd") ||
+                                k.endsWith("_vs_ytd_ly") ||
+                                k.endsWith("_delta_pct_ytd_yoy") ||
+                                k.endsWith("_ytd_run");
                               return (<th key={i} className="text-left px-4 py-2 font-medium whitespace-nowrap text-xs" style={{ color: isTx ? "var(--platform-accent)" : undefined }}>{h}</th>);
                             })}</tr>
                           </thead>
@@ -6438,6 +7314,39 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                               <option value="asc">Ascendente (menor primero)</option>
                             </select>
                           </div>
+                          <div className="w-full space-y-1">
+                            <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
+                              Categorías del eje X siempre visibles (además del Top N)
+                            </Label>
+                            <p className="text-[10px]" style={{ color: "var(--platform-fg-muted)" }}>
+                              Valores tal como vienen en los datos (separados por coma). Puede haber más de N barras.
+                            </p>
+                            <Input
+                              value={chartRankingPinnedXValues.join(", ")}
+                              onChange={(e) => {
+                                const tokens = e.target.value
+                                  .split(/[,;\n]+/)
+                                  .map((s) => s.trim())
+                                  .filter(Boolean);
+                                setChartRankingPinnedXValues(tokens);
+                              }}
+                              placeholder="Ej. Argentina, Chile"
+                              className="h-8 text-xs !bg-[var(--platform-bg)]"
+                              style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                            />
+                          </div>
+                          <label
+                            className="flex items-center gap-2 text-xs cursor-pointer w-full"
+                            style={{ color: "var(--platform-fg)" }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={chartRankingShowRankInLabel}
+                              onChange={(e) => setChartRankingShowRankInLabel(e.target.checked)}
+                              className="rounded"
+                            />
+                            Mostrar posición del ranking junto a cada categoría (#1, #2, #N)
+                          </label>
                           <p className="text-xs w-full" style={{ color: "var(--platform-fg-muted)" }}>
                             Ej: Top {chartRankingTop} {formDimensions[0] ? formDimensions[0] : "categorías"} que{" "}
                             {chartRankingDirection === "asc" ? "menos" : "más"}{" "}
@@ -6483,6 +7392,52 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         return (
                           <>
                       <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Según el tipo <strong>{CHART_TYPES.find((t) => t.value === formChartType)?.label ?? formChartType}</strong>: {colorLabelsDesc}</p>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {(
+                          [
+                            ["varied", "Varios colores"],
+                            ["uniform", "Un solo color"],
+                          ] as const
+                        ).map(([mode, lbl]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setChartCategoryColorMode(mode)}
+                            className="rounded-lg px-3 py-1.5 text-xs font-medium border transition-all"
+                            style={{
+                              background: chartCategoryColorMode === mode ? "var(--platform-accent)" : "var(--platform-surface-hover)",
+                              color: chartCategoryColorMode === mode ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                              borderColor: chartCategoryColorMode === mode ? "transparent" : "var(--platform-border)",
+                            }}
+                          >
+                            {lbl}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 mb-2">
+                        <span className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>
+                          Color base
+                        </span>
+                        <input
+                          type="color"
+                          value={/^#[0-9A-Fa-f]{6}$/.test(chartPrimaryColor.trim()) ? chartPrimaryColor.trim() : "#0ea5e9"}
+                          onChange={(e) => setChartPrimaryColor(e.target.value)}
+                          className="h-8 w-10 shrink-0 cursor-pointer rounded border-0 p-0"
+                          style={{ background: "transparent" }}
+                          aria-label="Color base del gráfico"
+                        />
+                        <Input
+                          value={chartPrimaryColor}
+                          onChange={(e) => setChartPrimaryColor((e.target.value || "").trim() || "#0ea5e9")}
+                          className="h-8 max-w-[7.5rem] font-mono text-xs !bg-[var(--platform-bg)]"
+                          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                        />
+                      </div>
+                      {chartCategoryColorMode === "uniform" ? (
+                        <p className="text-[10px] mb-3" style={{ color: "var(--platform-fg-muted)" }}>
+                          Todas las categorías o series usan el color base. Con <strong>Personalizado</strong>, solo las que definas abajo con otro hex son excepciones.
+                        </p>
+                      ) : null}
                       {(() => {
                         const defaultPaletteColors = ["#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16"];
                         const presetPalettes: { name: string; colors: string[] }[] = [
@@ -6653,7 +7608,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                         {previewWidgetForRenderer && formChartType !== "kpi" && formChartType !== "table" && (
                           <div className="h-[320px] w-full">
                             <DashboardWidgetRenderer
-                              key={`pv-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
+                              key={`pv-${chartCategoryColorMode}-${chartPrimaryColor}-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartRankingPinnedXValues.join("\x1e")}-${chartRankingShowRankInLabel}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
                               widget={previewWidgetForRenderer}
                               isLoading={false}
                               hideHeader
@@ -6700,6 +7655,52 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     return (
                       <div className="mt-4 rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Colores</Label>
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {(
+                            [
+                              ["varied", "Varios colores"],
+                              ["uniform", "Un solo color"],
+                            ] as const
+                          ).map(([mode, lbl]) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => setChartCategoryColorMode(mode)}
+                              className="rounded-lg px-3 py-1.5 text-xs font-medium border transition-all"
+                              style={{
+                                background: chartCategoryColorMode === mode ? "var(--platform-accent)" : "var(--platform-surface-hover)",
+                                color: chartCategoryColorMode === mode ? "var(--platform-bg)" : "var(--platform-fg-muted)",
+                                borderColor: chartCategoryColorMode === mode ? "transparent" : "var(--platform-border)",
+                              }}
+                            >
+                              {lbl}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 mb-2">
+                          <span className="text-xs shrink-0" style={{ color: "var(--platform-fg-muted)" }}>
+                            Color base
+                          </span>
+                          <input
+                            type="color"
+                            value={/^#[0-9A-Fa-f]{6}$/.test(chartPrimaryColor.trim()) ? chartPrimaryColor.trim() : "#0ea5e9"}
+                            onChange={(e) => setChartPrimaryColor(e.target.value)}
+                            className="h-8 w-10 shrink-0 cursor-pointer rounded border-0 p-0"
+                            style={{ background: "transparent" }}
+                            aria-label="Color base del gráfico"
+                          />
+                          <Input
+                            value={chartPrimaryColor}
+                            onChange={(e) => setChartPrimaryColor((e.target.value || "").trim() || "#0ea5e9")}
+                            className="h-8 max-w-[7.5rem] font-mono text-xs !bg-[var(--platform-bg)]"
+                            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+                          />
+                        </div>
+                        {chartCategoryColorMode === "uniform" ? (
+                          <p className="text-[10px] mb-3" style={{ color: "var(--platform-fg-muted)" }}>
+                            Todas las categorías o series usan el color base. Con <strong>Personalizado</strong>, solo las que definas abajo con otro hex son excepciones.
+                          </p>
+                        ) : null}
                         <div className="flex flex-wrap gap-2 mb-3">
                           {presetPalettes.map((p) => (
                             <button key={p.name} type="button" onClick={() => {
@@ -7149,6 +8150,91 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto pr-2 -mr-2 space-y-6">
+            <div
+              className="rounded-xl border p-4 space-y-4"
+              style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+            >
+              <div>
+                <h4 className="text-sm font-semibold mb-1" style={{ color: "var(--platform-accent)" }}>
+                  Ejemplo: coeficiente por FY y país (IFS / IF)
+                </h4>
+                <p className="text-xs leading-relaxed" style={{ color: "var(--platform-fg-muted)" }}>
+                  Compará con <span className="font-mono">=</span> (no con <span className="font-mono">;</span>). Varias columnas en{" "}
+                  <span className="font-mono">AND(fy=&apos;FY24&apos;; pais_medio=&apos;Argentina&apos;)</span>. Una sola{" "}
+                  <span className="font-mono">IFS</span> con pares condición;valor y valor final. Decimales con{" "}
+                  <span className="font-mono">.</span> (ej. <span className="font-mono">0.065</span>). Ajustá el nombre{" "}
+                  <span className="font-mono">pais_medio</span> si tu columna tiene otro alias.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold" style={{ color: "var(--platform-fg)" }}>
+                    IFS (recomendado)
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs rounded-lg"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(FY_PAIS_COEFICIENTE_IFS_FORMULA);
+                        toast.success("Fórmula IFS copiada al portapapeles");
+                      } catch {
+                        toast.error("No se pudo copiar");
+                      }
+                    }}
+                  >
+                    Copiar IFS
+                  </Button>
+                </div>
+                <pre
+                  className="text-xs font-mono p-3 rounded-lg border max-h-44 overflow-auto whitespace-pre-wrap break-all"
+                  style={{
+                    borderColor: "var(--platform-border)",
+                    background: "var(--platform-bg-elevated)",
+                    color: "var(--platform-fg-muted)",
+                  }}
+                >
+                  {FY_PAIS_COEFICIENTE_IFS_FORMULA}
+                </pre>
+              </div>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold" style={{ color: "var(--platform-fg)" }}>
+                    IF anidado (equivalente)
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs rounded-lg"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(FY_PAIS_COEFICIENTE_IF_FORMULA);
+                        toast.success("Fórmula IF copiada al portapapeles");
+                      } catch {
+                        toast.error("No se pudo copiar");
+                      }
+                    }}
+                  >
+                    Copiar IF
+                  </Button>
+                </div>
+                <pre
+                  className="text-xs font-mono p-3 rounded-lg border max-h-44 overflow-auto whitespace-pre-wrap break-all"
+                  style={{
+                    borderColor: "var(--platform-border)",
+                    background: "var(--platform-bg-elevated)",
+                    color: "var(--platform-fg-muted)",
+                  }}
+                >
+                  {FY_PAIS_COEFICIENTE_IF_FORMULA}
+                </pre>
+              </div>
+            </div>
             {EXCEL_FORMULAS_REFERENCIA.map((grupo) => (
               <div key={grupo.categoria}>
                 <h4 className="text-sm font-semibold mb-2 sticky top-0 py-1 z-10" style={{ color: "var(--platform-accent)", background: "var(--platform-bg-elevated)" }}>{grupo.categoria}</h4>

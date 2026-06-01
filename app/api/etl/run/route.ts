@@ -25,6 +25,7 @@ import {
   CastTargetType
 } from "@/lib/etl/transformations";
 import { ETL_MAX_ROWS_CEILING, ETL_JOIN_CHUNK_SIZE_DEFAULT } from "@/lib/etl/limits";
+import { updateEtlScheduleLastRunAt } from "@/lib/etl/schedule";
 
 // ===================================================================
 // TIPOS Y DEFINICIONES
@@ -163,6 +164,8 @@ type RunBody = {
   _resumeStartOffset?: number;
   /** Control interno de reintentos de reanudación. */
   _resumeAttempt?: number;
+  /** Programación automática (frecuencia + última ejecución programada). */
+  schedule?: { frequency?: string; lastRunAt?: string };
 };
 
 function createHttpError(message: string, status: number): Error & { status: number } {
@@ -2185,6 +2188,13 @@ async function executeEtlPipeline(
       try {
         await supabaseAdmin.from("etl").update({ output_table: newTableName } as any).eq("id", body.etlId);
       } catch (_) {}
+      if (body.schedule?.frequency?.trim()) {
+        try {
+          await updateEtlScheduleLastRunAt(supabaseAdmin, body.etlId);
+        } catch (schedErr) {
+          console.warn(`[Background Run ${runId}] No se pudo actualizar lastRunAt:`, schedErr);
+        }
+      }
     }
 
     console.log(`[Background Run ${runId}] Completed successfully. Rows: ${rowsProcessed}`);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { ChevronDown, ChevronUp, Loader2, Play, Trash2, MoreHorizontal } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Loader2, Play, Settings, Trash2, MoreHorizontal } from "lucide-react";
 import { DashboardWidgetRenderer, type DashboardWidgetRendererWidget } from "@/components/dashboard/DashboardWidgetRenderer";
 import {
   DropdownMenu,
@@ -13,11 +13,23 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { toChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import { CompareStatusStrip } from "@/components/dashboard/CompareStatusStrip";
+import {
+  legacyCompareInputFromWidgetAgg,
+  resolveWidgetCompareStatus,
+  resolveShowCardHeaderStrip,
+} from "@/lib/dashboard/compareDisplayKeys";
+import { resolveEffectiveCompareSpec, resolveWidgetCompareUi } from "@/lib/dashboard/compareContext";
+import { getEffectiveDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import type { DashboardCompareDefaults } from "@/types/dashboard";
+import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 
 export type MetricBlockState = "estable" | "alerta" | "cambio";
 
 export type ChartConfig = {
   labels: string[];
+  /** Valores crudos del eje categoría (misma longitud que labels), para colores por serie / Top N. */
+  xRawCategoryKeys?: string[];
   datasets: Array<{
     label: string;
     data: number[];
@@ -62,7 +74,7 @@ type MetricBlockProps = {
   chartType?: "bar" | "horizontalBar" | "stackedColumn" | "line" | "area" | "pie" | "doughnut" | "kpi" | "table" | "combo" | "scatter" | "map" | "image";
   isLoading?: boolean;
   isSelected?: boolean;
-  onSelect?: () => void;
+  onConfigure?: () => void;
   onRun?: () => void;
   onDelete?: () => void;
   kpiValue?: string | number;
@@ -83,10 +95,18 @@ type MetricBlockProps = {
   darkChartTheme?: boolean;
   /** Vista previa admin: sin menú, sin selección, mismo aspecto del lienzo */
   readOnly?: boolean;
+  /** Solo widgets filter: valor actual en el lienzo del studio */
+  filterValue?: unknown;
+  onFilterChange?: (widgetId: string, value: unknown) => void;
   /** Cambiar orden en el lienzo (persiste gridOrder al guardar dashboard). */
   onMoveOrder?: (direction: -1 | 1) => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
+  /** Modo manual: asa para arrastrar la tarjeta en el lienzo. */
+  showDragHandle?: boolean;
+  onDragHandleStart?: (e: React.PointerEvent) => void;
+  isDragging?: boolean;
+  dashboardCompareDefaults?: DashboardCompareDefaults;
 };
 
 const STATE_LABELS: Record<MetricBlockState, string> = {
@@ -105,7 +125,7 @@ export function MetricBlock({
   chartType = "bar",
   isLoading,
   isSelected,
-  onSelect,
+  onConfigure,
   onRun,
   onDelete,
   kpiValue,
@@ -122,9 +142,15 @@ export function MetricBlock({
   showTechnicalPreview = false,
   darkChartTheme = false,
   readOnly = false,
+  filterValue,
+  onFilterChange,
   onMoveOrder,
   canMoveUp = false,
   canMoveDown = false,
+  showDragHandle = false,
+  onDragHandleStart,
+  isDragging = false,
+  dashboardCompareDefaults,
 }: MetricBlockProps) {
   const hasViz = useMemo(() => {
     if (chartType === "image") {
@@ -137,6 +163,40 @@ export function MetricBlock({
     if (chartType === "table") return Array.isArray(tableRows) && tableRows.length > 0;
     return chartConfig?.labels?.length && (chartConfig.datasets?.length ?? 0) > 0;
   }, [chartType, chartConfig, kpiValue, tableRows, widgetForRenderer?.rows, widgetForRenderer?.imageUrl]);
+
+  const compareStatus = useMemo(() => {
+    const w = widgetForRenderer;
+    if (!w || w.type === "filter" || w.type === "text" || w.type === "image") return null;
+    const agg = (w.aggregationConfig ?? {}) as Record<string, unknown>;
+    const compareSpec = resolveEffectiveCompareSpec(
+      dashboardCompareDefaults,
+      legacyCompareInputFromWidgetAgg(agg)
+    );
+    const compareUi =
+      resolveWidgetCompareUi(dashboardCompareDefaults, agg as { compareInheritDashboard?: boolean; dashboardCompareUi?: import("@/lib/dashboard/compareDisplayKeys").DashboardCompareUi }) ??
+      getEffectiveDashboardCompareUi(agg, {
+        widgetType: w.type,
+        chartType: String(agg.chartType ?? w.type),
+      });
+    const metrics = (agg.metrics as { alias?: string }[] | undefined) ?? [];
+    const metricAlias = metrics.map((m) => String(m.alias ?? "").trim()).filter(Boolean)[0] ?? "";
+    return resolveWidgetCompareStatus({
+      compareSpec,
+      compareUi,
+      compareLabel: w.compareLabel ?? dashboardCompareDefaults?.label,
+      compareUnavailable: w.compareUnavailable,
+      compareUnavailableReason: w.compareUnavailableReason,
+      rows: w.rows,
+      metricAlias,
+      kpiUserTimeScope: w.kpiUserTimeScope ?? null,
+      chartStyle: w.chartStyle as ChartStyleConfig | undefined,
+      showCardHeaderStrip: resolveShowCardHeaderStrip({
+        compareUi,
+        dashboardDefaults: dashboardCompareDefaults,
+        compareInheritDashboard: (agg as { compareInheritDashboard?: boolean }).compareInheritDashboard,
+      }),
+    });
+  }, [widgetForRenderer, dashboardCompareDefaults]);
 
   const fallbackWidget = useMemo<DashboardWidgetRendererWidget>(() => {
     const kpiAsNumber = typeof kpiValue === "number" ? kpiValue : Number(kpiValue);
@@ -167,21 +227,28 @@ export function MetricBlock({
 
   return (
     <article
-      role={readOnly ? undefined : "button"}
-      tabIndex={readOnly ? undefined : 0}
       data-selected={isSelected ? "true" : undefined}
-      className={`metric-block group relative flex flex-col transition-all ${readOnly ? "cursor-default" : "cursor-pointer"}`}
+      className={`metric-block group relative flex flex-col transition-all cursor-default ${isDragging ? "metric-block--dragging" : ""}`}
       style={{ minHeight }}
-      onClick={readOnly ? undefined : onSelect}
-      onKeyDown={
-        readOnly
-          ? undefined
-          : (e) => (e.key === "Enter" || e.key === " ") && onSelect?.()
-      }
     >
       <header className="metric-block-header flex flex-shrink-0 items-start justify-between gap-3">
+        {showDragHandle && onDragHandleStart ? (
+          <button
+            type="button"
+            className="metric-block-drag-handle flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-lg text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)] hover:text-[var(--studio-accent)] active:cursor-grabbing"
+            aria-label="Arrastrar tarjeta"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onDragHandleStart(e);
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        ) : null}
         <div className="min-w-0 flex-1">
           <h3 className="metric-block-title truncate">{title}</h3>
+          {compareStatus ? <CompareStatusStrip status={compareStatus} className="mt-1" /> : null}
           {purpose && (
             <p className="mt-0.5 truncate text-[var(--studio-text-small)] text-[var(--studio-fg-muted)]">{purpose}</p>
           )}
@@ -193,6 +260,21 @@ export function MetricBlock({
           >
             {STATE_LABELS[state]}
           </span>
+          {!readOnly && onConfigure ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="metric-block-configure-trigger h-9 w-9 rounded-lg text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)] hover:text-[var(--studio-fg)] focus-visible:ring-2 focus-visible:ring-[var(--studio-accent)]"
+              aria-label="Configurar gráfico"
+              onClick={(e) => {
+                e.stopPropagation();
+                onConfigure();
+              }}
+            >
+              <Settings className="h-5 w-5" />
+            </Button>
+          ) : null}
           {!readOnly && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
@@ -349,6 +431,8 @@ export function MetricBlock({
               darkChartTheme={darkChartTheme}
               minHeight={minHeight}
               className="!border-0 !p-0 !shadow-none h-full"
+              filterValue={filterValue}
+              onFilterChange={onFilterChange}
             />
           </div>
         )}

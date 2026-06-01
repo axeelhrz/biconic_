@@ -9,243 +9,37 @@ import { Checkbox } from "@/components/ui/checkbox";
 import AdminFieldSelector from "./AdminFieldSelector";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
-import type { ChartLabelDisplayMode, ChartPercentBasis } from "@/lib/dashboard/chartOptions";
+import {
+  normalizeChartPercentBasis,
+  type ChartLabelDisplayMode,
+  type ChartPercentBasis,
+} from "@/lib/dashboard/chartOptions";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import {
   ChartLabelOverridesSection,
   ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS,
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
+import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
+import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
+export type {
+  DimensionDefaultFilterEdit,
+  MetricConditionEdit,
+  AggregationMetricEdit,
+  AggregationFilterEdit,
+  AggregationConfigEdit,
+  AddMetricFormConfig,
+  SavedMetricAggregationConfig,
+  SavedMetricForm,
+} from "@/lib/dashboard/metricConfigTypes";
 
-export type MetricConditionEdit = {
-  field: string;
-  operator: string;
-  value: unknown;
-};
-
-export type AggregationMetricEdit = {
-  id: string;
-  field: string;
-  func: string;
-  alias: string;
-  condition?: MetricConditionEdit;
-  formula?: string;
-  /** Expresión sobre columnas (ej. CANTIDAD * PRECIO_UNITARIO). Se agrega con func (SUM, AVG…). */
-  expression?: string;
-};
-
-export type AggregationFilterEdit = {
-  id: string;
-  field: string;
-  operator: string;
-  value: unknown;
-};
-
-export type AggregationConfigEdit = {
-  enabled: boolean;
-  dimension?: string;
-  dimension2?: string;
-  dimensions?: string[];
-  metrics: AggregationMetricEdit[];
-  filters?: AggregationFilterEdit[];
-  orderBy?: { field: string; direction: "ASC" | "DESC" };
-  limit?: number;
-  cumulative?: "none" | "running_sum" | "ytd";
-  comparePeriod?: "previous_year" | "previous_month";
-  dateDimension?: string;
-  chartType?: string;
-  chartXAxis?: string;
-  chartYAxes?: string[];
-  chartSeriesField?: string;
-  chartNumberFormat?: string;
-  chartValueType?: string;
-  chartValueScale?: string;
-  chartCurrencySymbol?: string;
-  chartThousandSep?: boolean;
-  chartDecimals?: number;
-  chartSortDirection?: string;
-  chartSortBy?: string;
-  chartSortByMetric?: string;
-  chartAxisOrder?: string;
-  chartScaleMode?: string;
-  chartScaleMin?: string | number;
-  chartScaleMax?: string | number;
-  chartAxisStep?: string | number;
-  chartRankingEnabled?: boolean;
-  chartRankingTop?: number;
-  chartRankingMetric?: string;
-  chartRankingDirection?: "asc" | "desc";
-  chartPinnedDimensions?: string[];
-  chartColorScheme?: string;
-  chartSeriesColors?: Record<string, string>;
-  showDataLabels?: boolean;
-  labelVisibilityMode?: "all" | "auto" | "min_max";
-  /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
-  chartLabelOverrides?: Record<string, string>;
-  /** Texto en leyenda por clave de métrica (chartYAxes). */
-  chartDatasetLabelOverrides?: Record<string, string>;
-  /** Formato por métrica (clave = chartYAxes key). Si existe, se usa en lugar del formato global para esa serie. */
-  chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
-  /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
-  chartComboSyncAxes?: boolean;
-  chartGridXDisplay?: boolean;
-  chartGridYDisplay?: boolean;
-  chartGridColor?: string;
-  chartAxisXVisible?: boolean;
-  chartAxisYVisible?: boolean;
-  chartDataLabelFontSize?: number;
-  chartDataLabelColor?: string;
-  chartAxisFontSize?: number;
-  chartLayoutPadding?: number;
-  chartBarThickness?: number;
-  chartLineBorderWidth?: number;
-  chartGridLineWidth?: number;
-  chartAxisTickColor?: string;
-  chartCategoryTickMaxRotation?: number;
-  chartCategoryTickMinRotation?: number;
-  chartCategoryMaxTicks?: number;
-  chartFontFamily?: string;
-  labelVisibilityMaxCount?: number;
-  chartLegendPosition?: "top" | "bottom" | "left" | "right" | "chartArea";
-  chartLegendVisible?: boolean;
-  pieLegendVisible?: boolean;
-  pieLegendResponsive?: boolean;
-  pieLegendMode?: "side" | "integrated";
-  pieIntegratedNameOrder?: "above" | "below";
-  pieSliceBorderWidth?: number;
-  /** Para barras/combo: una barra por X dividida por la segunda dimensión. */
-  chartStackBySeries?: boolean;
-  /** Si la dimensión es una columna fecha, agrupar por este nivel. */
-  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
-  analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
-  /** Texto con `/` ambiguo: DMY = día/mes (AR/EU); MDY = mes/día (US). */
-  dateSlashOrder?: "DMY" | "MDY";
-  mapDefaultCountry?: string;
-  geoHints?: {
-    countryField?: string;
-    provinceField?: string;
-    cityField?: string;
-    addressField?: string;
-    latField?: string;
-    lonField?: string;
-  };
-  geoComponentOverrides?: GeoComponentOverrides;
-  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
-  tableColumnLabelOverrides?: Record<string, string>;
-};
-
-export type AddMetricFormConfig = {
-  title: string;
-  type: string;
-  gridSpan?: number;
-  color?: string;
-  labelDisplayMode?: ChartLabelDisplayMode;
-  chartPercentBasis?: ChartPercentBasis;
-  kpiSecondaryLabel?: string;
-  kpiSecondaryValue?: string;
-  kpiCaption?: string;
-  aggregationConfig: AggregationConfigEdit;
-  excludeGlobalFilters?: boolean;
-  /** ID de la fuente de datos cuando el dashboard tiene múltiples ETLs */
-  dataSourceId?: string | null;
-};
-
-/** Configuración de agregación guardada en una métrica reutilizable */
-export type SavedMetricAggregationConfig = {
-  dimension?: string;
-  dimension2?: string;
-  /** Múltiples dimensiones (GROUP BY); si está presente tiene prioridad sobre dimension/dimension2 */
-  dimensions?: string[];
-  metrics: AggregationMetricEdit[];
-  filters?: AggregationFilterEdit[];
-  orderBy?: { field: string; direction: "ASC" | "DESC" };
-  limit?: number;
-  cumulative?: "none" | "running_sum" | "ytd";
-  comparePeriod?: "previous_year" | "previous_month";
-  dateDimension?: string;
-  compareFixedValue?: number;
-  transformCompare?: "none" | "mom" | "yoy" | "fixed";
-  transformCompareFixedValue?: string;
-  transformShowDelta?: boolean;
-  transformShowDeltaPct?: boolean;
-  transformShowAccum?: boolean;
-  // Opciones de gráfico (persistidas al guardar métrica)
-  chartType?: string;
-  chartXAxis?: string;
-  chartYAxes?: string[];
-  chartSeriesField?: string;
-  chartNumberFormat?: string;
-  chartValueType?: string;
-  chartValueScale?: string;
-  chartCurrencySymbol?: string;
-  chartThousandSep?: boolean;
-  chartDecimals?: number;
-  chartSortDirection?: string;
-  chartSortBy?: string;
-  chartSortByMetric?: string;
-  chartAxisOrder?: string;
-  chartScaleMode?: string;
-  chartScaleMin?: string | number;
-  chartScaleMax?: string | number;
-  chartAxisStep?: string | number;
-  chartRankingEnabled?: boolean;
-  chartRankingTop?: number;
-  chartRankingMetric?: string;
-  chartRankingDirection?: "asc" | "desc";
-  chartPinnedDimensions?: string[];
-  chartColorScheme?: string;
-  chartSeriesColors?: Record<string, string>;
-  showDataLabels?: boolean;
-  labelVisibilityMode?: "all" | "auto" | "min_max";
-  chartLabelOverrides?: Record<string, string>;
-  chartDatasetLabelOverrides?: Record<string, string>;
-  chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
-  chartComboSyncAxes?: boolean;
-  chartGridXDisplay?: boolean;
-  chartGridYDisplay?: boolean;
-  chartGridColor?: string;
-  chartAxisXVisible?: boolean;
-  chartAxisYVisible?: boolean;
-  chartStackBySeries?: boolean;
-  chartBarThickness?: number;
-  chartLineBorderWidth?: number;
-  chartGridLineWidth?: number;
-  chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
-  dateGroupByGranularity?: "day" | "week" | "month" | "quarter" | "semester" | "year";
-  analysisDateDisplayFormat?: "short" | "monthYear" | "year" | "datetime";
-  /** Texto con `/` ambiguo: DMY = día/mes (AR/EU); MDY = mes/día (US). */
-  dateSlashOrder?: "DMY" | "MDY";
-  mapDefaultCountry?: string;
-  geoHints?: {
-    countryField?: string;
-    provinceField?: string;
-    cityField?: string;
-    addressField?: string;
-    latField?: string;
-    lonField?: string;
-  };
-  geoComponentOverrides?: GeoComponentOverrides;
-  geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
-  dateRangeFilter?: { field: string; last?: number; unit?: string; from?: string; to?: string };
-  interCrossFilter?: boolean;
-  interCrossFilterFields?: string[];
-  interDrilldown?: boolean;
-  interDrilldownHierarchy?: string[];
-  interDrillThrough?: boolean;
-  interDrillThroughTarget?: string;
-  interTooltipFields?: string[];
-  interHighlight?: boolean;
-};
-
-/** Métrica guardada para reutilizar (mismo formato que en AdminDashboardStudio) */
-export type SavedMetricForm = {
-  id: string;
-  name: string;
-  metric: AggregationMetricEdit;
-  /** Tipo de gráfico recomendado */
-  chartType?: string;
-  /** Configuración completa de agregación (persistida al guardar) */
-  aggregationConfig?: SavedMetricAggregationConfig;
-};
+import type {
+  AggregationConfigEdit,
+  AggregationMetricEdit,
+  AggregationFilterEdit,
+  AddMetricFormConfig,
+  SavedMetricForm,
+  SavedMetricAggregationConfig,
+} from "@/lib/dashboard/metricConfigTypes";
 
 const CHART_TYPES: { value: string; label: string }[] = [
   { value: "bar", label: "Barras verticales" },
@@ -271,6 +65,13 @@ const AGG_FUNCS = [
 ];
 
 const OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE", "IN", "BETWEEN", "MONTH", "YEAR", "DAY", "QUARTER", "SEMESTER", "IS", "IS NOT"];
+const DIMENSION_DEFAULT_INPUT_TYPES: Array<NonNullable<DimensionDefaultFilterEdit["inputType"]>> = [
+  "select",
+  "multi",
+  "text",
+  "number",
+  "date",
+];
 const LABEL_VISIBILITY_OPTIONS: Array<{ value: "all" | "auto" | "min_max"; label: string }> = [
   { value: "all", label: "Todas" },
   { value: "auto", label: "Algunas (automático)" },
@@ -290,6 +91,7 @@ type AddMetricConfigFormProps = {
   previewRows?: Record<string, unknown>[];
 };
 
+/** @deprecated Usar `MetricConfigPanel` en Admin Dashboard Studio. Se mantiene por compatibilidad de imports. */
 export function AddMetricConfigForm({
   initialValues,
   etlData,
@@ -304,6 +106,7 @@ export function AddMetricConfigForm({
   const agg = form.aggregationConfig;
   const metrics = agg.metrics || [];
   const filters = agg.filters || [];
+  const dimensionDefaults = agg.dimensionDefaultFilters ?? [];
   const sources = etlData?.dataSources;
   const selectedSource = sources?.find((s) => s.id === (form.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id));
   const fields = selectedSource?.fields?.all ?? etlData?.fields?.all ?? [];
@@ -338,6 +141,10 @@ export function AddMetricConfigForm({
       const cfg = saved.aggregationConfig;
       const newMetrics = (cfg.metrics ?? [saved.metric]).map((m, i) => ({ ...m, id: `m-${Date.now()}-${i}` }));
       const newFilters = (cfg.filters ?? []).map((f, i) => ({ ...f, id: f.id || `f-${Date.now()}-${i}` }));
+      const newDimDefaults = (cfg.dimensionDefaultFilters ?? []).map((d, i) => ({
+        ...d,
+        id: d.id || `ddf-${Date.now()}-${i}`,
+      }));
       if (cfg.chartType) {
         updateForm({ type: cfg.chartType });
       }
@@ -347,6 +154,7 @@ export function AddMetricConfigForm({
         dimensions: cfg.dimensions ?? undefined,
         metrics: newMetrics,
         filters: newFilters.length ? newFilters : agg.filters,
+        dimensionDefaultFilters: newDimDefaults.length ? newDimDefaults : agg.dimensionDefaultFilters,
         orderBy: cfg.orderBy ?? agg.orderBy,
         limit: cfg.limit ?? agg.limit,
         cumulative: cfg.cumulative,
@@ -374,14 +182,19 @@ export function AddMetricConfigForm({
         chartRankingTop: cfg.chartRankingTop,
         chartRankingMetric: cfg.chartRankingMetric,
         chartRankingDirection: cfg.chartRankingDirection,
+        chartRankingPinnedXValues: cfg.chartRankingPinnedXValues,
+        chartRankingShowRankInLabel: cfg.chartRankingShowRankInLabel,
         chartPinnedDimensions: cfg.chartPinnedDimensions,
         chartColorScheme: cfg.chartColorScheme,
+        chartCategoryColorMode: cfg.chartCategoryColorMode,
+        chartPrimaryColor: cfg.chartPrimaryColor,
         chartSeriesColors: cfg.chartSeriesColors,
         showDataLabels: cfg.showDataLabels,
         labelVisibilityMode: cfg.labelVisibilityMode,
         chartLabelOverrides: cfg.chartLabelOverrides,
         chartDatasetLabelOverrides: (cfg as { chartDatasetLabelOverrides?: Record<string, string> }).chartDatasetLabelOverrides,
         chartMetricFormats: cfg.chartMetricFormats,
+        chartDetailCard: (cfg as { chartDetailCard?: ChartDetailCardConfig }).chartDetailCard,
         chartComboSyncAxes: (cfg as { chartComboSyncAxes?: boolean }).chartComboSyncAxes,
         chartStackBySeries: (cfg as { chartStackBySeries?: boolean }).chartStackBySeries,
         chartAxisXVisible: (cfg as { chartAxisXVisible?: boolean }).chartAxisXVisible,
@@ -429,6 +242,33 @@ export function AddMetricConfigForm({
 
   const removeFilter = (index: number) => {
     updateAgg({ filters: filters.filter((_, i) => i !== index) });
+  };
+
+  const updateDimensionDefault = (index: number, patch: Partial<DimensionDefaultFilterEdit>) => {
+    const next = [...dimensionDefaults];
+    if (!next[index]) return;
+    next[index] = { ...next[index], ...patch };
+    updateAgg({ dimensionDefaultFilters: next });
+  };
+
+  const addDimensionDefault = () => {
+    updateAgg({
+      dimensionDefaultFilters: [
+        ...dimensionDefaults,
+        {
+          id: `ddf-${Date.now()}`,
+          field: fields[0] || "",
+          operator: "=",
+          defaultValue: "",
+          label: "",
+          inputType: "select",
+        },
+      ],
+    });
+  };
+
+  const removeDimensionDefault = (index: number) => {
+    updateAgg({ dimensionDefaultFilters: dimensionDefaults.filter((_, i) => i !== index) });
   };
 
   const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "stackedColumn", "line", "area", "pie", "doughnut", "combo", "scatter"];
@@ -499,6 +339,19 @@ export function AddMetricConfigForm({
     }
     return [...uniq].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [previewRows, form.type, form.color, agg, showLabelOverrides]);
+
+  const yAxisKeysForAddMetricUi = useMemo(() => {
+    const raw = (agg.chartYAxes ?? []).map((k) => String(k ?? "").trim()).filter(Boolean);
+    if (raw.length > 0) return raw;
+    return metrics.map((_, i) => `metric_${i}`);
+  }, [agg.chartYAxes, metrics]);
+
+  const percentFieldColumnOptionsAdd = useMemo(() => {
+    if (!previewRows?.length) return [] as string[];
+    return Object.keys((previewRows[0] as Record<string, unknown>) ?? {}).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+  }, [previewRows]);
 
   const fillChartLabelOverridesFromPreview = useCallback(() => {
     const next = { ...(agg.chartLabelOverrides ?? {}) };
@@ -646,17 +499,95 @@ export function AddMetricConfigForm({
               </select>
             </div>
             {(form.labelDisplayMode === "percent" || form.labelDisplayMode === "both" || !form.labelDisplayMode) && (
-              <div>
+              <div className="space-y-2">
                 <Label className="add-metric-label">Base del porcentaje</Label>
                 <select
-                  value={form.chartPercentBasis ?? "grand_total"}
+                  value={normalizeChartPercentBasis(form.chartPercentBasis)}
                   onChange={(e) => updateForm({ chartPercentBasis: e.target.value as ChartPercentBasis })}
                   className="add-metric-select mt-1"
                 >
-                  <option value="grand_total">Total general (toda la torta)</option>
-                  <option value="per_category">Por categoría</option>
+                  <option value="chart_visible_total">Total visible en el gráfico</option>
+                  <option value="analysis_total">Total general del análisis (sin Top N)</option>
+                  <option value="per_category_axis">Por categoría del eje</option>
                   <option value="per_series">Por serie</option>
+                  <option value="per_dimension_group">Por dimensión / grupo</option>
+                  <option value="per_denominator_metric">Sobre otra métrica / columna</option>
                 </select>
+                {normalizeChartPercentBasis(form.chartPercentBasis) === "per_dimension_group" && (
+                  <div>
+                    <Label className="add-metric-label">Dimensión de agrupación</Label>
+                    <select
+                      value={form.chartPercentGroupField ?? ""}
+                      onChange={(e) =>
+                        updateForm({ chartPercentGroupField: e.target.value ? e.target.value : undefined })
+                      }
+                      className="add-metric-select mt-1"
+                    >
+                      <option value="">Elegir columna…</option>
+                      {percentFieldColumnOptionsAdd.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {normalizeChartPercentBasis(form.chartPercentBasis) === "per_denominator_metric" && (
+                  <div className="space-y-2">
+                    <div>
+                      <Label className="add-metric-label">Columna denominador</Label>
+                      <select
+                        value={form.chartPercentDenominatorMetric ?? ""}
+                        onChange={(e) =>
+                          updateForm({
+                            chartPercentDenominatorMetric: e.target.value ? e.target.value : undefined,
+                          })
+                        }
+                        className="add-metric-select mt-1"
+                      >
+                        <option value="">Elegir…</option>
+                        {yAxisKeysForAddMetricUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                        {percentFieldColumnOptionsAdd
+                          .filter((k) => !yAxisKeysForAddMetricUi.includes(k))
+                          .map((k) => (
+                            <option key={`c-${k}`} value={k}>
+                              {k}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="add-metric-label">Ámbito denominador</Label>
+                      <select
+                        value={form.chartPercentDenominatorScope ?? "analysis"}
+                        onChange={(e) =>
+                          updateForm({
+                            chartPercentDenominatorScope: e.target.value as "analysis" | "visible",
+                          })
+                        }
+                        className="add-metric-select mt-1"
+                      >
+                        <option value="analysis">Todo el análisis</option>
+                        <option value="visible">Solo visible</option>
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                      <input
+                        type="checkbox"
+                        checked={form.chartPercentDenominatorGrandTotal === true}
+                        onChange={(e) =>
+                          updateForm({ chartPercentDenominatorGrandTotal: e.target.checked ? true : undefined })
+                        }
+                        className="rounded"
+                      />
+                      Un solo total en el ámbito
+                    </label>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -680,17 +611,95 @@ export function AddMetricConfigForm({
               </select>
             </div>
             {(form.labelDisplayMode === "percent" || form.labelDisplayMode === "both") && (
-              <div>
+              <div className="space-y-2">
                 <Label className="add-metric-label">Base del porcentaje</Label>
                 <select
-                  value={form.chartPercentBasis ?? "grand_total"}
+                  value={normalizeChartPercentBasis(form.chartPercentBasis)}
                   onChange={(e) => updateForm({ chartPercentBasis: e.target.value as ChartPercentBasis })}
                   className="add-metric-select mt-1"
                 >
-                  <option value="grand_total">Total general</option>
-                  <option value="per_category">Por categoría (eje categoría)</option>
-                  <option value="per_series">Por serie (leyenda)</option>
+                  <option value="chart_visible_total">Total visible en el gráfico</option>
+                  <option value="analysis_total">Total general del análisis</option>
+                  <option value="per_category_axis">Por categoría del eje</option>
+                  <option value="per_series">Por serie</option>
+                  <option value="per_dimension_group">Por dimensión / grupo</option>
+                  <option value="per_denominator_metric">Sobre otra métrica / columna</option>
                 </select>
+                {normalizeChartPercentBasis(form.chartPercentBasis) === "per_dimension_group" && (
+                  <div>
+                    <Label className="add-metric-label">Dimensión de agrupación</Label>
+                    <select
+                      value={form.chartPercentGroupField ?? ""}
+                      onChange={(e) =>
+                        updateForm({ chartPercentGroupField: e.target.value ? e.target.value : undefined })
+                      }
+                      className="add-metric-select mt-1"
+                    >
+                      <option value="">Elegir columna…</option>
+                      {percentFieldColumnOptionsAdd.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {normalizeChartPercentBasis(form.chartPercentBasis) === "per_denominator_metric" && (
+                  <div className="space-y-2">
+                    <div>
+                      <Label className="add-metric-label">Columna denominador</Label>
+                      <select
+                        value={form.chartPercentDenominatorMetric ?? ""}
+                        onChange={(e) =>
+                          updateForm({
+                            chartPercentDenominatorMetric: e.target.value ? e.target.value : undefined,
+                          })
+                        }
+                        className="add-metric-select mt-1"
+                      >
+                        <option value="">Elegir…</option>
+                        {yAxisKeysForAddMetricUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                        {percentFieldColumnOptionsAdd
+                          .filter((k) => !yAxisKeysForAddMetricUi.includes(k))
+                          .map((k) => (
+                            <option key={`c2-${k}`} value={k}>
+                              {k}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="add-metric-label">Ámbito denominador</Label>
+                      <select
+                        value={form.chartPercentDenominatorScope ?? "analysis"}
+                        onChange={(e) =>
+                          updateForm({
+                            chartPercentDenominatorScope: e.target.value as "analysis" | "visible",
+                          })
+                        }
+                        className="add-metric-select mt-1"
+                      >
+                        <option value="analysis">Todo el análisis</option>
+                        <option value="visible">Solo visible</option>
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                      <input
+                        type="checkbox"
+                        checked={form.chartPercentDenominatorGrandTotal === true}
+                        onChange={(e) =>
+                          updateForm({ chartPercentDenominatorGrandTotal: e.target.checked ? true : undefined })
+                        }
+                        className="rounded"
+                      />
+                      Un solo total en el ámbito
+                    </label>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1158,15 +1167,9 @@ export function AddMetricConfigForm({
                     <option value="ytd">YTD (año hasta la fecha)</option>
                   </select>
                 </div>
-                <div>
-                  <Label className="add-metric-label text-[11px]">Comparar con período anterior</Label>
-                  <select value={agg.comparePeriod ?? ""} onChange={(e) => updateAgg({ comparePeriod: (e.target.value || undefined) as "previous_year" | "previous_month" | undefined })} className="add-metric-select mt-0.5 h-8 text-xs w-full">
-                    <option value="">Ninguno</option>
-                    <option value="previous_month">Mes anterior</option>
-                    <option value="previous_year">Año anterior</option>
-                  </select>
-                </div>
-                {(agg.cumulative === "ytd" || agg.comparePeriod) && (
+                {(agg.cumulative === "ytd" ||
+                  agg.comparePeriod ||
+                  (agg.compare && typeof agg.compare === "object" && "kind" in agg.compare && agg.compare.kind !== "none")) && (
                   <AdminFieldSelector label="Columna de fecha (YTD / comparación)" value={agg.dateDimension || ""} onChange={(v) => updateAgg({ dateDimension: v || undefined })} etlData={etlData} dataSourceId={form.dataSourceId} fieldType="all" placeholder="Campo fecha..." />
                 )}
                 <div>
@@ -1329,6 +1332,99 @@ export function AddMetricConfigForm({
                           <Input value={f.value != null ? String(f.value) : ""} onChange={(e) => updateFilter(i, { value: e.target.value || null })} placeholder="Valor" className="h-7 text-[11px]" />
                         </div>
                         <Button type="button" variant="ghost" size="icon" className="col-span-1 h-7 w-7 text-red-500" onClick={() => removeFilter(i)}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="add-metric-label">Valores por defecto en vista</Label>
+                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addDimensionDefault}>
+                      + Añadir
+                    </Button>
+                  </div>
+                  <p className="text-[10px] text-[var(--studio-fg-muted)] mb-2">
+                    Preselección al abrir el dashboard; el usuario puede cambiarla. No reemplaza los filtros fijos de arriba.
+                  </p>
+                  <div className="space-y-2">
+                    {dimensionDefaults.map((d, i) => (
+                      <div
+                        key={d.id || i}
+                        className="grid grid-cols-12 gap-1 items-start rounded border border-[var(--studio-border)] p-2 bg-[var(--studio-bg-elevated)]"
+                      >
+                        <div className="col-span-12 sm:col-span-3">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Etiqueta</Label>
+                          <Input
+                            value={d.label ?? ""}
+                            onChange={(e) => updateDimensionDefault(i, { label: e.target.value })}
+                            placeholder="Ej. País"
+                            className="h-7 text-[11px] mt-0.5"
+                          />
+                        </div>
+                        <div className="col-span-6 sm:col-span-3">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Campo</Label>
+                          <select
+                            value={d.field}
+                            onChange={(e) => updateDimensionDefault(i, { field: e.target.value })}
+                            className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] text-[var(--studio-fg)] mt-0.5"
+                          >
+                            {fields.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="col-span-6 sm:col-span-2">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Operador</Label>
+                          <select
+                            value={d.operator}
+                            onChange={(e) => updateDimensionDefault(i, { operator: e.target.value })}
+                            className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                          >
+                            {OPERATORS.map((op) => (
+                              <option key={op} value={op}>
+                                {op}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="col-span-6 sm:col-span-2">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Entrada</Label>
+                          <select
+                            value={d.inputType ?? "select"}
+                            onChange={(e) =>
+                              updateDimensionDefault(i, {
+                                inputType: e.target.value as DimensionDefaultFilterEdit["inputType"],
+                              })
+                            }
+                            className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                          >
+                            {DIMENSION_DEFAULT_INPUT_TYPES.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="col-span-5 sm:col-span-1">
+                          <Label className="text-[10px] text-[var(--studio-fg-muted)]">Valor</Label>
+                          <Input
+                            value={d.defaultValue != null ? String(d.defaultValue) : ""}
+                            onChange={(e) => updateDimensionDefault(i, { defaultValue: e.target.value || null })}
+                            placeholder="Default"
+                            className="h-7 text-[11px] mt-0.5"
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="col-span-1 h-7 w-7 text-red-500 mt-5 sm:mt-5"
+                          onClick={() => removeDimensionDefault(i)}
+                        >
                           <Trash2 className="h-3 w-3" />
                         </Button>
                       </div>

@@ -1,6 +1,7 @@
 {
   "functions": {
     "app/api/**/*.ts": { "maxDuration": 30 },
+    "app/api/process-excel/route.ts": { "maxDuration": 800 },
     "app/api/etl/run/route.ts": { "maxDuration": 800 },
     "app/api/etl/run-preview/route.ts": { "maxDuration": 60 },
     "app/api/etl/[etl-id]/metrics-data/route.ts": { "maxDuration": 30 },
@@ -10,6 +11,10 @@
     {
       "path": "/api/etl/mark-stale-runs-failed",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/etl/run-scheduled",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

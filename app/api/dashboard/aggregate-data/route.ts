@@ -23,6 +23,27 @@ import {
   type GeoComponentOverrides,
   type GeoHints,
 } from "@/lib/geo/geo-enrichment";
+import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
+import { applyCompareSpecToRows } from "@/lib/dashboard/compareMetricRows";
+import { compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
+import {
+  expandAggregationFiltersForTemporalCompare,
+  type AggregationFilterLike,
+} from "@/lib/dashboard/expandAggregationFiltersForCompare";
+import {
+  coerceArithmeticOperandsToNumeric,
+  findMatchingCloseParen,
+  safeNumericCast,
+} from "@/lib/dashboard/coerceNumericSqlExpr";
+import {
+  expressionToSql,
+  splitArgs,
+  quotedColumn,
+  coerceAggFuncForTextOnlyIFS,
+  resolveFieldToSql,
+  type DerivedColumnRef,
+} from "@/lib/dashboard/metricExpressionToSql";
+import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
 
 // --- Interfaces ---
 interface MetricCondition {
@@ -58,13 +79,6 @@ interface OrderBy {
   direction: "ASC" | "DESC";
 }
 
-/** Columna calculada (nombre + expresión sobre columnas + agregación por defecto). */
-interface DerivedColumnRef {
-  name: string;
-  expression: string;
-  defaultAggregation: string;
-}
-
 interface AggregationRequest {
   tableName: string;
   dimension?: string;
@@ -82,8 +96,13 @@ interface AggregationRequest {
   unlimited?: boolean;
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
+  /** Comparación avanzada (prioridad sobre comparePeriod / transformCompare legacy). */
+  compare?: Record<string, unknown>;
   /** Comparación contra un valor fijo: agrega columnas alias_vs_fijo y alias_var_pct_fijo. */
   compareFixedValue?: number;
+  /** Legacy wizard ETL (mom | yoy | fixed). */
+  transformCompare?: string;
+  transformCompareFixedValue?: string;
   dateDimension?: string;
   /** Agrupación temporal: aplica DATE_TRUNC(granularity, campo) como primera dimensión (semester vía expresión). */
   dateGroupBy?: { field: string; granularity: "day" | "week" | "month" | "quarter" | "semester" | "year" };
@@ -162,14 +181,6 @@ async function fetchTableColumnNames(schemaName: string, tableName: string): Pro
   }
 }
 
-function toSqlLiteral(v: any): string {
-  if (v === null || typeof v === "undefined") return "NULL";
-  if (typeof v === "number" && Number.isFinite(v)) return String(v);
-  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-  const s = String(v).replace(/'/g, "''");
-  return `'${s}'`;
-}
-
 /** True si el valor es un año (4 dígitos, 1900–2100). Para arrays, true solo si todos los elementos son año. */
 function isYearLike(value: any): boolean {
   if (value == null) return false;
@@ -189,33 +200,6 @@ function isInvalidIdentifier(value: unknown): boolean {
   return normalized === "" || normalized === "undefined" || normalized === "null";
 }
 
-/** Convierte nombre de columna del front (primary.COL, join_N.COL) al nombre físico en la tabla ETL (primary_col, join_n_col). */
-function displayColumnToPhysical(name: string): string {
-  let n = (name || "").trim();
-  if (n.length >= 2 && n.startsWith('"') && n.endsWith('"'))
-    n = n.slice(1, -1).replace(/""/g, '"');
-  if (/^primary\.[a-zA-Z_][a-zA-Z0-9_]*$/i.test(n))
-    return "primary_" + n.slice(8).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-  const joinMatch = n.match(/^join_(\d+)\.[a-zA-Z_][a-zA-Z0-9_]*$/i);
-  if (joinMatch)
-    return `join_${joinMatch[1]}_` + n.slice(joinMatch[0].indexOf(".") + 1).replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-  return n.replace(/"/g, '""').toLowerCase();
-}
-
-/** En Postgres los identificadores sin comillas se guardan en minúsculas; normalizar para que "ID" coincida con "id". */
-function quotedColumn(name: string): string {
-  const physical = displayColumnToPhysical(name);
-  const s = physical.replace(/"/g, '""').toLowerCase();
-  return s ? `"${s}"` : '""';
-}
-
-/** Cast a numérico que devuelve NULL si el valor no es un número válido (evita "invalid input syntax for type numeric"). */
-function safeNumericCast(expr: string): string {
-  const e = expr.trim();
-  const pattern = "'^[[:space:]]*[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?[[:space:]]*$'";
-  return `(CASE WHEN (${e})::text ~ ${pattern} THEN ((${e})::text)::numeric ELSE NULL END)`;
-}
-
 /** Parseo robusto de columnas texto/date/timestamp. Barras: DD/MM o MM/DD según `slashOrder`. */
 function safeDateCast(expr: string, slashOrder: "DMY" | "MDY"): string {
   const e = expr.trim();
@@ -232,18 +216,6 @@ function safeDateCast(expr: string, slashOrder: "DMY" | "MDY"): string {
     END
   )`;
 }
-
-const SQL_KNOWN_FUNCTIONS = new Set([
-  "SUM", "AVG", "AVERAGE", "COUNT", "MIN", "MAX", "COUNTA", "UNIQUE", "COUNTIF", "SUMIF", "AVERAGEIF", "COUNTIFS", "SUMIFS",
-  "NULLIF", "COALESCE", "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN", "CEIL", "CEILING", "FLOOR", "TRUNC", "GREATEST", "LEAST",
-  "MOD", "POWER", "SQRT", "SIGN", "EXP", "LN", "LOG", "LOG10", "PI",
-  "SIN", "COS", "TAN", "FLOOR", "INT",
-  "CASE", "WHEN", "THEN", "ELSE", "END",
-  "IF", "IFS", "IFERROR", "IFNA", "AND", "OR", "NOT", "TRUE", "FALSE",
-  "UPPER", "LOWER", "TRIM", "LENGTH", "LEN", "LEFT", "RIGHT", "SUBSTRING", "MID", "CONCAT", "CONCATENATE", "REPLACE", "SUBSTITUTE",
-  "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "EOMONTH", "DATEDIF", "DATEVALUE", "TIMEVALUE",
-  "VALUE", "TEXT", "REPT", "FIND", "SEARCH", "PROPER",
-]);
 
 /** Verifica paréntesis balanceados (ignora los que están dentro de comillas). Devuelve mensaje de error o null si está bien. */
 function checkBalancedParens(expr: string): string | null {
@@ -267,221 +239,6 @@ function checkBalancedParens(expr: string): string | null {
   }
   if (depth !== 0) return "Faltan paréntesis de cierre.";
   return null;
-}
-
-/** Convierte IF(cond, thenVal, elseVal) en CASE WHEN cond THEN thenVal ELSE elseVal END (soporta anidamiento por profundidad de paréntesis). */
-function expandIfToCaseWhen(expr: string): string {
-  const trimmed = expr.trim();
-  const ifStart = trimmed.search(/\bIF\s*\(/i);
-  if (ifStart === -1) return expr;
-  const start = trimmed.indexOf("(", ifStart);
-  if (start === -1) return expr;
-  let depth = 1;
-  let firstComma = -1;
-  let secondComma = -1;
-  let i = start + 1;
-  for (; i < trimmed.length; i++) {
-    const c = trimmed[i];
-    if (c === "(") depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0) break;
-    } else if ((c === "," || c === ";") && depth === 1) {
-      if (firstComma === -1) firstComma = i;
-      else {
-        secondComma = i;
-        break;
-      }
-    }
-  }
-  if (firstComma === -1 || secondComma === -1) return expr;
-  const cond = trimmed.slice(start + 1, firstComma).trim();
-  const thenVal = trimmed.slice(firstComma + 1, secondComma).trim();
-  const elseVal = trimmed.slice(secondComma + 1, i).trim();
-  const caseExpr = `(CASE WHEN ${expandIfToCaseWhen(cond)} THEN ${expandIfToCaseWhen(thenVal)} ELSE ${expandIfToCaseWhen(elseVal)} END)`;
-  return trimmed.slice(0, ifStart) + caseExpr + trimmed.slice(i + 1);
-}
-
-/** Extrae el contenido entre paréntesis balanceados a partir de start (el índice del "("). Devuelve { inner, endIndex }. */
-function extractParenContent(s: string, start: number): { inner: string; endIndex: number } | null {
-  if (s[start] !== "(") return null;
-  let depth = 1;
-  let i = start + 1;
-  for (; i < s.length; i++) {
-    const c = s[i];
-    if (c === "(") depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0) return { inner: s.slice(start + 1, i).trim(), endIndex: i };
-    }
-  }
-  return null;
-}
-
-/** Convierte IFS(cond1, val1, cond2, val2, ..., [default]) en CASE WHEN ... END. */
-function expandIfsToCaseWhen(expr: string): string {
-  const trimmed = expr.trim();
-  const ifsStart = trimmed.search(/\bIFS\s*\(/i);
-  if (ifsStart === -1) return expr;
-  const start = trimmed.indexOf("(", ifsStart);
-  const extracted = extractParenContent(trimmed, start);
-  if (!extracted) return expr;
-  const args = splitArgs(extracted.inner);
-  if (args.length < 2) return expr;
-  const pairs: { cond: string; val: string }[] = [];
-  let i = 0;
-  while (i + 1 < args.length) {
-    pairs.push({ cond: args[i]!, val: args[i + 1]! });
-    i += 2;
-  }
-  const defaultVal = i < args.length ? args[i] : "NULL";
-  const whenParts = pairs.map((p) => `WHEN ${expandIfsToCaseWhen(p.cond)} THEN ${expandIfsToCaseWhen(p.val)}`).join(" ");
-  const caseExpr = `(CASE ${whenParts} ELSE ${expandIfsToCaseWhen(defaultVal)} END)`;
-  return trimmed.slice(0, ifsStart) + caseExpr + trimmed.slice(extracted.endIndex + 1);
-}
-
-/** Convierte AND(a, b, ...) en (a AND b AND ...). */
-function expandAndOr(expr: string, fn: "AND" | "OR"): string {
-  const regex = new RegExp(`\\b${fn}\\s*\\(`, "gi");
-  const match = expr.match(regex);
-  if (!match) return expr;
-  const first = expr.search(regex);
-  const start = expr.indexOf("(", first);
-  const extracted = extractParenContent(expr, start);
-  if (!extracted) return expr;
-  const args = splitArgs(extracted.inner);
-  const op = fn === "AND" ? " AND " : " OR ";
-  const joined = args.map((a) => (fn === "AND" ? expandAndOr(a, "AND") : expandAndOr(a, "OR"))).join(op);
-  const repl = `(${joined})`;
-  return expr.slice(0, first) + repl + expr.slice(extracted.endIndex + 1);
-}
-
-/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO", IF(ESTADO='PAGADO',1,0)) en SQL seguro.
- *  - Literales numéricos y cadenas entre comillas se preservan.
- *  - ; se normaliza a , (estilo Excel).
- *  - AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(.
- *  - IF(cond, then, else) se convierte en CASE WHEN ... THEN ... ELSE ... END.
- *  - Funciones SQL conocidas se preservan.
- *  - Nombres de columnas calculadas (derivedLookup) se expanden a su expresión.
- *  - Demás identificadores se pasan a quotedColumn.
- */
-function expressionToSql(expression: string, derivedLookup?: Record<string, DerivedColumnRef>, _depth = 0): string | null {
-  if (!expression || typeof expression !== "string") return null;
-  let s = expression.replace(/\s+/g, " ").trim();
-  if (!s) return null;
-  // Normalizar comillas tipográficas/Unicode a comillas rectas (evita fallos con IF(primary.X="FB";...))
-  s = s.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"').replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'");
-  // Permitir literales: números, cadenas con ' o ", ^ para potencia, = <> ! para comparaciones (IF, COUNTIF, etc.)
-  const allowed = /^[a-zA-Z0-9_*+\-/().,\s'"%;^=<>!]+$/;
-  if (!allowed.test(s)) return null;
-
-  // 0) Normalizar ; a , (Excel usa ; como separador de argumentos)
-  s = s.replace(/;/g, ",");
-
-  // 1) Proteger cadenas entre comillas (simple o doble) para no tocar su contenido
-  const stringLiterals: string[] = [];
-  s = s.replace(/'([^']*)'|"([^"]*)"/g, (_, single, double) => {
-    const content = single !== undefined ? single : double;
-    const idx = stringLiterals.length;
-    stringLiterals.push(content.replace(/'/g, "''"));
-    return `__STR${idx}__`;
-  });
-
-  // 1b) Alias Excel -> SQL: AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(, CONCATENATE( -> CONCAT(
-  s = s.replace(/\bAVERAGE\s*\(/gi, "AVG(");
-  s = s.replace(/\bLEN\s*\(/gi, "LENGTH(");
-  s = s.replace(/\bMID\s*\(/gi, "SUBSTRING(");
-  s = s.replace(/\bCONCATENATE\s*\(/gi, "CONCAT(");
-
-  // 1c) Potencia: token ^ token -> POWER(token, token)
-  s = s.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*|\d+\.?\d*|__STR\d+__)\s+\^\s+([a-zA-Z_][a-zA-Z0-9_]*|\d+\.?\d*|__STR\d+__)\b/g, (_, a, b) => `POWER(${a},${b})`);
-
-  // 2) Expandir IF(cond, then, else) a CASE WHEN
-  while (/IF\s*\(/i.test(s) && !/IFS\s*\(/i.test(s)) {
-    const next = expandIfToCaseWhen(s);
-    if (next === s) break;
-    s = next;
-  }
-  while (/\bIFS\s*\(/i.test(s)) {
-    const next = expandIfsToCaseWhen(s);
-    if (next === s) break;
-    s = next;
-  }
-  while (/\bAND\s*\(/i.test(s)) {
-    const next = expandAndOr(s, "AND");
-    if (next === s) break;
-    s = next;
-  }
-  while (/\bOR\s*\(/i.test(s)) {
-    const next = expandAndOr(s, "OR");
-    if (next === s) break;
-    s = next;
-  }
-
-  // 2b) COUNTA(UNIQUE(expr)) -> COUNT(DISTINCT expr) (caso Rumipal)
-  while (/COUNTA\s*\(\s*UNIQUE\s*\(/i.test(s)) {
-    const match = s.match(/COUNTA\s*\(\s*UNIQUE\s*\(/i);
-    if (!match) break;
-    const start = s.indexOf(match[0]!);
-    const openParen = s.indexOf("(", s.indexOf("UNIQUE", start));
-    const extracted = extractParenContent(s, openParen);
-    if (!extracted) break;
-    const inner = extracted.inner;
-    const countDistinctEnd = s.indexOf(")", extracted.endIndex + 1);
-    if (countDistinctEnd === -1) break;
-    const innerSql = expressionToSql(inner, derivedLookup, _depth + 1);
-    if (!innerSql) break;
-    const repl = `COUNT(DISTINCT ${innerSql})`;
-    s = s.slice(0, start) + repl + s.slice(countDistinctEnd + 1);
-  }
-  // 2c) COUNTA(expr) -> COUNT(expr) (contar no vacíos = COUNT en SQL)
-  s = s.replace(/\bCOUNTA\s*\(/gi, "COUNT(");
-
-  // 3) Reemplazar identificadores (columnas/funciones). Primero prefijos join (primary.X, join_N.X) como un solo identificador para no interpretar "primary" como tabla.
-  const out = s.replace(/\b(primary\.[a-zA-Z_][a-zA-Z0-9_]*|join_\d+\.[a-zA-Z_][a-zA-Z0-9_]*|[a-zA-Z_][a-zA-Z0-9_]*)\b/g, (id: string) => {
-    if (/^__STR\d+__$/.test(id)) return id;
-    if (/^\d+\.?\d*$/.test(id)) return id; // literal numérico
-    if (SQL_KNOWN_FUNCTIONS.has(id.toUpperCase())) return id.toUpperCase();
-    if (derivedLookup && _depth < 5 && !/\./.test(id)) {
-      const ref = derivedLookup[id.toLowerCase()];
-      if (ref?.expression) {
-        const inner = expressionToSql(ref.expression, derivedLookup, _depth + 1);
-        if (inner) return `(${inner})`;
-      }
-    }
-    return quotedColumn(id);
-  });
-
-  // 4) Restaurar cadenas como literales SQL (siempre comilla simple)
-  const withStrings = out.replace(/__STR(\d+)__/g, (_, i) => {
-    const content = stringLiterals[Number(i)] ?? "";
-    return `'${content}'`;
-  });
-
-  return withStrings || null;
-}
-
-/** Devuelve el índice de la ")" que cierra la "(" en openParenIndex, respetando paréntesis anidados y comillas. */
-function findMatchingCloseParen(expr: string, openParenIndex: number): number {
-  let depth = 1;
-  let inQuote: string | null = null;
-  for (let i = openParenIndex + 1; i < expr.length; i++) {
-    const c = expr[i];
-    if (inQuote) {
-      if (c === inQuote && expr[i - 1] !== "\\") inQuote = null;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      inQuote = c;
-      continue;
-    }
-    if (c === "(") depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
 }
 
 /** Encuentra el índice del operador "/" de división a nivel top (depth 0), respetando paréntesis y comillas. Devuelve -1 si no hay ninguno. */
@@ -532,33 +289,6 @@ function unwrapAggExpression(expr: string): { func: string; inner: string } | nu
   if (func === "AVERAGE") func = "AVG";
   if (func === "COUNTA") func = "COUNT";
   return { func, inner };
-}
-
-/** Divide el contenido de argumentos por comas respetando paréntesis y comillas. */
-function splitArgs(content: string): string[] {
-  const args: string[] = [];
-  let depth = 0;
-  let inQuote: string | null = null;
-  let start = 0;
-  for (let i = 0; i < content.length; i++) {
-    const c = content[i];
-    if (inQuote) {
-      if (c === inQuote && content[i - 1] !== "\\") inQuote = null;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      inQuote = c;
-      continue;
-    }
-    if (c === "(") depth++;
-    else if (c === ")") depth--;
-    else if ((c === "," || c === ";") && depth === 0) {
-      args.push(content.slice(start, i).trim());
-      start = i + 1;
-    }
-  }
-  if (start <= content.length) args.push(content.slice(start).trim());
-  return args.filter(Boolean);
 }
 
 /** Parsea criterio tipo ">10", "=Activo", "<>" y devuelve { op, valueStr }. */
@@ -791,6 +521,40 @@ export async function POST(req: NextRequest) {
       validFilters.push(...(body.filters || []));
     }
 
+    const compareSpecForQuery = normalizeAggregationCompare({
+      compare: body.compare,
+      comparePeriod: body.comparePeriod,
+      compareFixedValue: body.compareFixedValue,
+      transformCompare: body.transformCompare,
+      transformCompareFixedValue: body.transformCompareFixedValue,
+      dateGroupBy: body.dateGroupBy,
+      dateDimension: body.dateDimension,
+    });
+    let filtersForQuery: Filter[] = [...validFilters];
+    const compareFieldForQuery =
+      body.dateGroupBy?.field?.trim() ||
+      (compareSpecForQuery.kind === "temporal" || compareSpecForQuery.kind === "cumulative"
+        ? compareSpecForQuery.timeColumn?.trim()
+        : "") ||
+      String(body.dateDimension ?? "").trim();
+    if (compareNeedsTimeGroupedRows(compareSpecForQuery) && compareFieldForQuery) {
+      const relatedDateFields = [
+        body.dateDimension,
+        compareSpecForQuery.kind === "temporal" || compareSpecForQuery.kind === "cumulative"
+          ? compareSpecForQuery.timeColumn
+          : undefined,
+      ].filter((x): x is string => !!String(x ?? "").trim());
+      filtersForQuery = expandAggregationFiltersForTemporalCompare(
+        filtersForQuery as AggregationFilterLike[],
+        {
+          compareField: compareFieldForQuery,
+          compareSpec: compareSpecForQuery,
+          aggComparePeriodSource: (body as { comparePeriodSource?: string }).comparePeriodSource,
+          relatedDateFields,
+        }
+      ) as Filter[];
+    }
+
     // Helper: condición WHEN para métrica (solo la parte "campo op valor")
     const buildWhenClause = (cond: MetricCondition): string => {
       const op = (cond.operator || "=").toUpperCase().trim();
@@ -799,6 +563,7 @@ export async function POST(req: NextRequest) {
         const list = (Array.isArray(cond.value) ? cond.value : [cond.value])
           .map((x: any) => toSqlLiteral(x))
           .join(", ");
+        if (!list.trim()) return "TRUE";
         return `${f} IN (${list})`;
       }
       if ((op === "IS" || op === "IS NOT") && cond.value == null) return `${f} ${op} NULL`;
@@ -1041,6 +806,8 @@ export async function POST(req: NextRequest) {
         }
         (m as any)._compoundAggregate = isCompoundAggregate;
 
+        func = coerceAggFuncForTextOnlyIFS(func, resolvedExpr);
+
         const fieldExpr = (() => {
           if (resolvedExpr) {
             const countIfSumIfAgg = buildCountIfSumIfAggregate(resolvedExpr, derivedByName);
@@ -1061,8 +828,8 @@ export async function POST(req: NextRequest) {
               const denSql = expressionToSql(ratioParsed.denominator, derivedByName);
               if (numSql && denSql) {
                 (m as any)._ratioAggregate = {
-                  numSql: safeNumericCast(`(${numSql})`),
-                  denSql: safeNumericCast(`(${denSql})`),
+                  numSql: coerceArithmeticOperandsToNumeric(numSql),
+                  denSql: coerceArithmeticOperandsToNumeric(denSql),
                 };
                 return "1";
               }
@@ -1079,7 +846,7 @@ export async function POST(req: NextRequest) {
               }
             }
             const sqlExpr = expressionToSql(resolvedExpr, derivedByName);
-            if (sqlExpr) return safeNumericCast(`(${sqlExpr})`);
+            if (sqlExpr) return coerceArithmeticOperandsToNumeric(sqlExpr);
             console.warn("[aggregate-data] expressionToSql returned null for:", resolvedExpr);
           }
           if (derived) {
@@ -1147,6 +914,36 @@ export async function POST(req: NextRequest) {
       : body.dimension && !isInvalidIdentifier(body.dimension)
         ? [body.dimension]
         : [];
+
+    for (const d of dimList) {
+      const derived = getDerived(d);
+      if (!derived) continue;
+      const exprStr = derived.expression.trim();
+      const parenError = checkBalancedParens(exprStr);
+      if (parenError) {
+        return NextResponse.json(
+          { error: `Dimensión «${d}»: ${parenError}` },
+          { status: 400 }
+        );
+      }
+      if (!expressionToSql(exprStr, derivedByName)) {
+        return NextResponse.json(
+          {
+            error: `Dimensión «${d}»: la expresión de la columna calculada no es válida. Revisá que solo uses columnas del dataset, números, operadores ( * - + / ^ ), comillas para texto, y funciones soportadas (IF, IFS, SUM, AVG, ROUND, UPPER, etc.).`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    const resolveDimensionCoalesce = (dim: string): string => {
+      const sql = resolveFieldToSql(dim, derivedByName);
+      if (!sql) {
+        return `COALESCE(${quotedColumn(dim)}::text, 'Sin Categoría')`;
+      }
+      return `COALESCE((${sql})::text, 'Sin Categoría')`;
+    };
+
     let dimensionSelectClause = "";
     let dimensionGroupByClause = "";
     let dateGroupByExpr = "";
@@ -1183,8 +980,7 @@ export async function POST(req: NextRequest) {
               if (alias === body.dateGroupBy!.field?.trim() || normalizeStr(alias) === normalizeStr(body.dateGroupBy!.field || "")) {
                 return `${dateGroupByDisplayExpr} AS "${alias}"`;
               }
-              const col = quotedColumn(d);
-              return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
+              return `${resolveDimensionCoalesce(d)} AS "${alias}"`;
             })
           : [`${dateGroupByDisplayExpr} AS "${timeField}"`];
       dimensionSelectClause = dateParts.join(", ");
@@ -1193,20 +989,17 @@ export async function POST(req: NextRequest) {
         groupParts.push(
           ...dimList
             .filter((d) => (d || "").trim() !== (body.dateGroupBy!.field || "").trim() && normalizeStr((d || "").trim()) !== normalizeStr(body.dateGroupBy!.field || ""))
-            .map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
+            .map((d) => resolveDimensionCoalesce(d))
         );
       }
       dimensionGroupByClause = groupParts.join(", ");
     } else if (dimList.length > 0) {
       const parts = dimList.map((d) => {
-        const col = quotedColumn(d);
         const alias = (d || "").trim().replace(/"/g, '""');
-        return `COALESCE(${col}::text, 'Sin Categoría') AS "${alias}"`;
+        return `${resolveDimensionCoalesce(d)} AS "${alias}"`;
       });
       dimensionSelectClause = parts.join(", ");
-      dimensionGroupByClause = dimList
-        .map((d) => `COALESCE(${quotedColumn(d)}::text, 'Sin Categoría')`)
-        .join(", ");
+      dimensionGroupByClause = dimList.map((d) => resolveDimensionCoalesce(d)).join(", ");
     }
 
     const selectClause = [dimensionSelectClause, metricClauses]
@@ -1241,8 +1034,8 @@ export async function POST(req: NextRequest) {
       return `${drDateExpr} >= (${maxDateSubquery} - INTERVAL '${n} ${unit}')`;
     })();
 
-    if (validFilters.length > 0) {
-      const whereClauses = validFilters
+    if (filtersForQuery.length > 0) {
+      const whereClauses = filtersForQuery
         .map((f) => {
           const col = quotedColumn(f.field);
           const op = (f.operator || "=").toUpperCase().trim();
@@ -1331,6 +1124,7 @@ export async function POST(req: NextRequest) {
             const list = (Array.isArray(f.value) ? f.value : [])
               .map((x) => toSqlLiteral(x))
               .join(", ");
+            if (!list) return "TRUE";
             return `${fieldExpression} IN (${list})`;
           }
           if (op === "BETWEEN") {
@@ -1510,6 +1304,10 @@ export async function POST(req: NextRequest) {
       const msg = error.message || String(error);
       console.error("[aggregate-data] execute_sql error:", msg, "Query:", query.slice(0, 500), "derivedByName:", JSON.stringify(derivedByName));
       let userMsg = "Error al ejecutar la agregación: " + msg;
+      if (/function\s+(sum|avg)\s*\(\s*text\s*\)\s+does\s+not\s+exist/i.test(msg)) {
+        userMsg +=
+          " Si la métrica usa IFS con comillas (etiquetas de texto), el agregado SUM/AVG se reemplaza por MAX automáticamente; si ves este error, probá elegir MAX o MIN en la métrica, o definí la categoría como columna calculada.";
+      }
       if (/column\s+["']?(\w+)["']?\s+does not exist/i.test(msg)) {
         const colMatch = msg.match(/column\s+["']?(\w+)["']?\s+does not exist/i);
         const colName = colMatch ? colMatch[1] : "";
@@ -1530,85 +1328,6 @@ export async function POST(req: NextRequest) {
 
     let results = data || [];
 
-    // 6b. Comparación temporal: segundo query período anterior y merge
-    if (body.comparePeriod && dimList.length > 0 && body.dateDimension) {
-      const dateColExpr = safeDateCast(quotedColumn(body.dateDimension), dateSlashOrder);
-      const now = new Date();
-      let prevStart: string;
-      let prevEnd: string;
-      if (body.comparePeriod === "previous_year") {
-        const y = now.getFullYear() - 1;
-        prevStart = `${y}-01-01`;
-        prevEnd = `${y}-12-31`;
-      } else {
-        const m = now.getMonth();
-        const y = m === 0 ? now.getFullYear() - 1 : now.getFullYear();
-        const pm = m === 0 ? 12 : m;
-        prevStart = `${y}-${String(pm).padStart(2, "0")}-01`;
-        const lastDay = new Date(y, pm, 0).getDate();
-        prevEnd = `${y}-${String(pm).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-      }
-      const dateFilter = `${dateColExpr} BETWEEN '${prevStart}' AND '${prevEnd}'`;
-      const prevWhere = whereClausesStr ? `${dateFilter} AND (${whereClausesStr})` : dateFilter;
-      const simplePrevQuery = `SELECT ${dimensionSelectClause}, ${metricClauses} FROM "${schema}"."${table}" WHERE ${prevWhere} GROUP BY ${dimensionGroupByClause}`;
-      try {
-        const { data: prevData } = await (supabase as any).rpc("execute_sql", {
-          sql_query: simplePrevQuery,
-        });
-        const prevRows = (prevData || []) as Record<string, any>[];
-        const prevByDim = new Map<string, Record<string, any>>();
-        const dimKey = (r: any) => dimList.map((d) => String(r[d] ?? "")).join("\t");
-        prevRows.forEach((r) => prevByDim.set(dimKey(r), r));
-        results = results.map((row: any) => {
-          const key = dimKey(row);
-          const prev = prevByDim.get(key);
-          const out = { ...row };
-          metricsBase.forEach((m) => {
-            const alias = (m as any).internalAlias;
-            const v = row[alias] != null ? Number(row[alias]) : null;
-            const vPrev = prev?.[alias] != null ? Number(prev[alias]) : null;
-            out[`${alias}_prev`] = vPrev;
-            out[`${alias}_delta`] = (v != null && vPrev != null) ? v - vPrev : null;
-            if (v != null && vPrev != null && vPrev !== 0)
-              out[`${alias}_delta_pct`] = ((v - vPrev) / vPrev) * 100;
-            else if (v != null && vPrev != null)
-              out[`${alias}_delta_pct`] = vPrev === 0 ? (v === 0 ? 0 : 100) : null;
-            else
-              out[`${alias}_delta_pct`] = null;
-          });
-          return out;
-        });
-        const accumulator: Record<string, number> = {};
-        results.forEach((row: any) => {
-          metricsBase.forEach((m) => {
-            const alias = (m as any).internalAlias;
-            const v = row[alias] != null ? Number(row[alias]) : 0;
-            accumulator[alias] = (accumulator[alias] || 0) + v;
-            row[`${alias}_acumulado`] = accumulator[alias];
-          });
-        });
-      } catch (_) {
-        // si falla comparación, devolver solo resultados actuales
-      }
-    }
-
-    // 6c. Comparación contra valor fijo: agrega columnas _vs_fijo y _var_pct_fijo
-    const fixedVal = body.compareFixedValue != null && typeof body.compareFixedValue === "number" && Number.isFinite(body.compareFixedValue) ? body.compareFixedValue : null;
-    if (fixedVal !== null) {
-      results = results.map((row: any) => {
-        const out = { ...row };
-        body.metrics.forEach((m, i) => {
-          const alias = (m as any).internalAlias;
-          const v = row[alias] != null ? Number(row[alias]) : null;
-          if (v != null && Number.isFinite(v)) {
-            out[`${alias}_vs_fijo`] = v - fixedVal;
-            out[`${alias}_var_pct_fijo`] = fixedVal !== 0 ? ((v - fixedVal) / fixedVal) * 100 : (v === 0 ? 0 : null);
-          }
-        });
-        return out;
-      });
-    }
-
     // 7. Mapeo final: metric_X -> alias del usuario
     const mappedResults = results.map((row: any) => {
       const newRow = { ...row };
@@ -1623,24 +1342,6 @@ export async function POST(req: NextRequest) {
         if (cumulative && Object.prototype.hasOwnProperty.call(newRow, `${internalKey}_cumulative`)) {
           newRow[`${externalKey}_acumulado`] = newRow[`${internalKey}_cumulative`];
           delete newRow[`${internalKey}_cumulative`];
-        }
-        if (body.comparePeriod) {
-          for (const suffix of ["_prev", "_delta", "_delta_pct", "_acumulado"]) {
-            if (Object.prototype.hasOwnProperty.call(newRow, `${internalKey}${suffix}`)) {
-              newRow[`${externalKey}${suffix}`] = newRow[`${internalKey}${suffix}`];
-              delete newRow[`${internalKey}${suffix}`];
-            }
-          }
-        }
-        if (fixedVal !== null) {
-          if (Object.prototype.hasOwnProperty.call(newRow, `${internalKey}_vs_fijo`)) {
-            newRow[`${externalKey}_vs_fijo`] = newRow[`${internalKey}_vs_fijo`];
-            delete newRow[`${internalKey}_vs_fijo`];
-          }
-          if (Object.prototype.hasOwnProperty.call(newRow, `${internalKey}_var_pct_fijo`)) {
-            newRow[`${externalKey}_var_pct_fijo`] = newRow[`${internalKey}_var_pct_fijo`];
-            delete newRow[`${internalKey}_var_pct_fijo`];
-          }
         }
       });
 
@@ -1663,6 +1364,45 @@ export async function POST(req: NextRequest) {
 
       return newRow;
     });
+
+    const compareSpec = normalizeAggregationCompare({
+      compare: body.compare,
+      comparePeriod: body.comparePeriod,
+      compareFixedValue: body.compareFixedValue,
+      transformCompare: body.transformCompare,
+      transformCompareFixedValue: body.transformCompareFixedValue,
+      dateGroupBy: body.dateGroupBy,
+      dateDimension: body.dateDimension,
+    });
+
+    const metricExternalKeys = body.metrics.map((m, i) => {
+      const key = (m.alias && String(m.alias).trim()) || `${m.func}(${m.field})`;
+      return key || `metric_${i}`;
+    });
+
+    const dimensionColumnsOrdered: string[] = [];
+    const dgf = body.dateGroupBy?.field?.trim();
+    if (dgf) dimensionColumnsOrdered.push(dgf);
+    for (const d of dimList) {
+      const t = (d || "").trim();
+      if (!t) continue;
+      if (!dimensionColumnsOrdered.some((x) => normalizeStr(x) === normalizeStr(t))) {
+        dimensionColumnsOrdered.push(t);
+      }
+    }
+
+    const comparedResults =
+      compareSpec.kind === "none"
+        ? mappedResults
+        : applyCompareSpecToRows(
+            mappedResults as Record<string, unknown>[],
+            metricExternalKeys,
+            compareSpec,
+            {
+              parseDateOpts: body.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
+              dimensionColumns: dimensionColumnsOrdered,
+            }
+          );
 
     const requestedSortNormalized = normalizeStr(body.orderBy?.field || "");
     const dateFieldNormalized = normalizeStr(body.dateGroupBy?.field || "");
@@ -1688,7 +1428,7 @@ export async function POST(req: NextRequest) {
     // Defensa final: evita orden lexicográfico incorrecto en etiquetas de periodo por configuraciones heredadas.
     const sortedResults =
       body.dateGroupBy?.field && requestedTemporalSort && temporalKey
-        ? [...mappedResults].sort((a, b) => {
+        ? [...comparedResults].sort((a, b) => {
             const va = (a as Record<string, unknown>)[temporalKey];
             const vb = (b as Record<string, unknown>)[temporalKey];
             const ta = parseDateLike(va, dateParseOpts)?.getTime() ?? NaN;
@@ -1696,7 +1436,7 @@ export async function POST(req: NextRequest) {
             if (!Number.isNaN(ta) && !Number.isNaN(tb)) return (ta - tb) * directionMultiplier;
             return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true }) * directionMultiplier;
           })
-        : mappedResults;
+        : comparedResults;
 
     const shouldEnrichGeo =
       requestedChartType === "map" ||

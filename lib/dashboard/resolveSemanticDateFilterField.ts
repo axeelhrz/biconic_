@@ -5,7 +5,7 @@
  * Paridad de operadores con `aggregate-data` (expresión safeDateCast).
  */
 import {
-  pickDateGroupBySourceField,
+  pickSemanticDateAxisForGlobalFilters,
   primaryDimensionForDateGroupBy,
   type AggLikeForDateGroupByField,
 } from "@/lib/dashboard/dateGroupBySourceField";
@@ -51,7 +51,7 @@ export function resolveAggregationFilterPhysicalField(options: {
     return null;
   }
 
-  const dateAxisSource = pickDateGroupBySourceField(agg) ?? primaryDimensionForDateGroupBy(agg);
+  const dateAxisSource = pickSemanticDateAxisForGlobalFilters(agg) ?? primaryDimensionForDateGroupBy(agg);
   if (!dateAxisSource) return null;
   const physical = mapDatasetField(dateAxisSource);
   return physical.trim() ? physical : null;

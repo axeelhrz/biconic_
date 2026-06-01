@@ -1,5 +1,12 @@
 import type { DashboardTheme } from "@/types/dashboard";
-import type { ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
+import type { ChartLabelDisplayMode, ChartStyleConfig, ValueFormatType, ValueScaleType } from "@/lib/dashboard/chartOptions";
+import { expandSavedMetricsWithGlobalRefs } from "@/lib/metrics/expandSavedMetricsForAnalysis";
+import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
+import {
+  getProcessedRowsForChart,
+  resolveWidgetAxisKeys,
+  type BuildChartConfigWidget,
+} from "@/lib/dashboard/buildChartConfig";
 
 type MetricFormatEntry = {
   valueType?: string;
@@ -319,4 +326,570 @@ export function resolveWidgetAggregationForDisplay<
     }
   }
   return { ...widget, aggregationConfig: next as W["aggregationConfig"] };
+}
+
+export type SavedMetricForAnalysisMerge = {
+  id: string;
+  name?: string;
+  chartType?: string;
+  type?: string;
+  metric?: {
+    field?: string;
+    func?: string;
+    alias?: string;
+    expression?: string;
+    condition?: unknown;
+    formula?: string;
+  };
+  aggregationConfig?: Record<string, unknown> & {
+    metrics?: Array<{
+      id?: string;
+      field?: string;
+      func?: string;
+      alias?: string;
+      expression?: string;
+      condition?: unknown;
+      formula?: string;
+    }>;
+  };
+};
+
+export type SavedAnalysisForMerge = Record<string, unknown> & {
+  id: string;
+  name: string;
+  metricIds?: string[];
+  chartType?: string;
+};
+
+export type WidgetAnalysisMergePatch = {
+  aggregationConfig: Record<string, unknown>;
+  type: string;
+  analysisId: string;
+  title?: string;
+  metricIds?: string[];
+  labelDisplayMode?: ChartLabelDisplayMode;
+  minHeight?: number;
+};
+
+/** Dimensiones efectivas para GROUP BY (paridad con previewPipelineWidget del ETL). */
+export function resolveAnalysisDimensionsFromConfig(cfg: Record<string, unknown>): {
+  dimensions: string[];
+  dimension?: string;
+  dimension2?: string;
+} {
+  const chartXAxis = String(cfg.chartXAxis ?? "").trim();
+  const fromArray = Array.isArray(cfg.dimensions)
+    ? (cfg.dimensions as unknown[]).map((d) => String(d ?? "").trim()).filter(Boolean)
+    : [];
+  const legacy = [cfg.dimension, cfg.dimension2]
+    .map((d) => String(d ?? "").trim())
+    .filter(Boolean);
+  const base = fromArray.length > 0 ? fromArray : legacy;
+  const merged =
+    chartXAxis && !base.includes(chartXAxis) ? [chartXAxis, ...base] : base.length > 0 ? base : chartXAxis ? [chartXAxis] : [];
+  return {
+    dimensions: merged,
+    dimension: merged[0],
+    dimension2: merged[1],
+  };
+}
+
+/** Claves editables desde MetricConfigPanel que pertenecen al layout del dashboard, no al análisis ETL. */
+export const DASHBOARD_VISUAL_OVERRIDE_KEYS = new Set([
+  "chartColorScheme",
+  "chartCategoryColorMode",
+  "chartPrimaryColor",
+  "chartSeriesColors",
+  "showDataLabels",
+  "labelVisibilityMode",
+  "labelVisibilityMaxCount",
+  "chartLabelOverrides",
+  "chartDatasetLabelOverrides",
+  "chartMetricFormats",
+  "chartComboSyncAxes",
+  "chartGridXDisplay",
+  "chartGridYDisplay",
+  "chartGridColor",
+  "chartAxisXVisible",
+  "chartAxisYVisible",
+  "chartDataLabelFontSize",
+  "chartDataLabelColor",
+  "chartAxisFontSize",
+  "chartLayoutPadding",
+  "chartBarThickness",
+  "chartLineBorderWidth",
+  "chartGridLineWidth",
+  "chartAxisTickColor",
+  "chartCategoryTickMaxRotation",
+  "chartCategoryTickMinRotation",
+  "chartCategoryMaxTicks",
+  "chartFontFamily",
+  "chartLegendPosition",
+  "chartLegendVisible",
+  "pieLegendVisible",
+  "pieLegendResponsive",
+  "pieLegendMode",
+  "pieIntegratedNameOrder",
+  "pieSliceBorderWidth",
+  "chartStackBySeries",
+  "chartValueType",
+  "chartValueScale",
+  "chartNumberFormat",
+  "chartCurrencySymbol",
+  "chartDecimals",
+  "chartThousandSep",
+  "chartSortDirection",
+  "chartSortBy",
+  "chartSortByMetric",
+  "chartAxisOrder",
+  "chartScaleMode",
+  "chartScaleMin",
+  "chartScaleMax",
+  "chartAxisStep",
+  "chartPinnedDimensions",
+  "tableColumnLabelOverrides",
+  "chartDetailCard",
+  "dashboardCompareUi",
+]);
+
+/** Claves de comparación editables desde el panel del dashboard (no del análisis ETL). */
+export const DASHBOARD_COMPARE_OVERRIDE_KEYS = new Set([
+  "compare",
+  "compareInheritDashboard",
+  "comparePeriodSource",
+  "comparePeriod",
+  "compareFixedValue",
+  "transformCompare",
+  "transformCompareFixedValue",
+  "transformShowDelta",
+  "transformShowDeltaPct",
+]);
+
+/** Claves geo/map editables desde el panel del dashboard (no del análisis ETL). */
+export const DASHBOARD_GEO_OVERRIDE_KEYS = new Set([
+  "mapDefaultCountry",
+  "geoHints",
+  "geoComponentOverrides",
+  "geoOverridesByXLabel",
+  "mapDisplayModeDefault",
+  "mapValueEncoding",
+  "mapColorLow",
+  "mapColorMid",
+  "mapColorHigh",
+  "mapColorStops",
+  "mapChoroplethPalette",
+  "mapChoroplethScaleMode",
+  "mapRadiusMin",
+  "mapRadiusMax",
+  "mapFillOpacityMin",
+  "mapFillOpacityMax",
+  "mapStrokeWidth",
+  "mapChoroplethEmptyColor",
+  "mapChoroplethShowLabels",
+  "mapChoroplethShowLegend",
+  "mapChoroplethHideBaseMap",
+  "mapChoroplethLabelSize",
+]);
+
+/** Todas las claves de override del widget del dashboard (visuales + compare + geo). */
+export const DASHBOARD_WIDGET_OVERRIDE_KEYS = new Set([
+  ...DASHBOARD_VISUAL_OVERRIDE_KEYS,
+  ...DASHBOARD_COMPARE_OVERRIDE_KEYS,
+  ...DASHBOARD_GEO_OVERRIDE_KEYS,
+]);
+
+/** Extrae overrides visuales del layout del dashboard (solo valores definidos). */
+export function extractDashboardVisualOverrides(
+  agg: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  if (!agg || typeof agg !== "object") return {};
+  const out: Record<string, unknown> = {};
+  for (const key of DASHBOARD_VISUAL_OVERRIDE_KEYS) {
+    if (agg[key] !== undefined) out[key] = agg[key];
+  }
+  return out;
+}
+
+/** Extrae overrides geo/map del layout del dashboard. */
+export function extractDashboardGeoOverrides(
+  agg: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  if (!agg || typeof agg !== "object") return {};
+  const out: Record<string, unknown> = {};
+  for (const key of DASHBOARD_GEO_OVERRIDE_KEYS) {
+    if (agg[key] !== undefined) out[key] = agg[key];
+  }
+  return out;
+}
+
+/** Extrae todos los overrides del widget del dashboard (visuales + geo). */
+export function extractDashboardWidgetOverrides(
+  agg: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  if (!agg || typeof agg !== "object") return {};
+  const out: Record<string, unknown> = {};
+  for (const key of DASHBOARD_WIDGET_OVERRIDE_KEYS) {
+    if (agg[key] !== undefined) out[key] = agg[key];
+  }
+  return out;
+}
+
+/** Fusiona config de datos del análisis con overrides visuales del widget del dashboard. */
+export function mergeAnalysisAggregationWithDashboardOverrides(
+  dataAgg: Record<string, unknown> | null | undefined,
+  widgetAgg: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const base = dataAgg && typeof dataAgg === "object" ? { ...dataAgg } : {};
+  return { ...base, ...extractDashboardWidgetOverrides(widgetAgg) };
+}
+
+/** aggregationConfig del widget + overrides persistidos en layout (`dashboardVisualOverrides`). */
+export function widgetAggregationWithStoredVisualOverrides(widget: {
+  aggregationConfig?: Record<string, unknown> | null;
+  dashboardVisualOverrides?: Record<string, unknown> | null;
+}): Record<string, unknown> {
+  const agg = (widget.aggregationConfig ?? {}) as Record<string, unknown>;
+  const stored = widget.dashboardVisualOverrides;
+  if (!stored || typeof stored !== "object") return agg;
+  return { ...agg, ...extractDashboardWidgetOverrides(stored) };
+}
+
+/** Fusiona `dashboardVisualOverrides` en `aggregationConfig` al cargar layout (studio + viewer). */
+export function normalizeLoadedDashboardWidget<
+  T extends {
+    aggregationConfig?: Record<string, unknown> | null;
+    dashboardVisualOverrides?: Record<string, unknown> | null;
+  },
+>(w: T): T {
+  const stored = w.dashboardVisualOverrides;
+  if (!stored || typeof stored !== "object" || Object.keys(stored).length === 0) {
+    return w;
+  }
+  const mergedAgg = {
+    ...(w.aggregationConfig ?? { enabled: false, metrics: [] }),
+    ...extractDashboardWidgetOverrides(stored),
+  };
+  return { ...w, aggregationConfig: mergedAgg };
+}
+
+export type ResolveSeriesColorKeysParams = {
+  chartType: string;
+  agg: Record<string, unknown>;
+  yAxisKeys: string[];
+  /** Labels visibles del chart (`config.labels`). */
+  previewChartLabels?: string[];
+  /** Claves crudas del eje X visibles (`config.xRawCategoryKeys`). */
+  previewChartRawCategoryKeys?: string[];
+  /** Labels de datasets del preview (`config.datasets[].label`). */
+  previewChartDatasetLabels?: string[];
+  previewRows?: Record<string, unknown>[];
+  widgetForBuild?: BuildChartConfigWidget;
+};
+
+/**
+ * Claves para «Color por serie» alineadas con lo que renderiza el chart (paridad EtlMetricsClient colorLabels).
+ * Para barras con una métrica y muchas categorías usa xRawCategoryKeys (Top N / ranking), no todas las filas API.
+ */
+export function resolveSeriesColorKeys(params: ResolveSeriesColorKeysParams): string[] {
+  const {
+    chartType,
+    agg,
+    yAxisKeys,
+    previewChartLabels = [],
+    previewChartRawCategoryKeys = [],
+    previewChartDatasetLabels = [],
+    previewRows = [],
+    widgetForBuild,
+  } = params;
+
+  const ct = String(chartType ?? "").trim().toLowerCase();
+  const chartSeriesField = String(agg.chartSeriesField ?? "").trim();
+  const yKeys = yAxisKeys.map((k) => String(k ?? "").trim()).filter(Boolean);
+
+  const isBarOneMetricManyCategories =
+    (ct === "bar" || ct === "horizontalbar" || ct === "stackedcolumn") &&
+    !chartSeriesField &&
+    yKeys.length === 1;
+
+  if (ct === "pie" || ct === "doughnut") {
+    return previewChartLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
+  }
+
+  if (chartSeriesField && previewChartDatasetLabels.length > 0) {
+    return previewChartDatasetLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
+  }
+
+  if (isBarOneMetricManyCategories) {
+    const fromConfig = previewChartRawCategoryKeys.map((s) => String(s ?? "").trim()).filter(Boolean);
+    if (fromConfig.length > 0) return fromConfig;
+
+    if (widgetForBuild && previewRows.length > 0) {
+      const processed = getProcessedRowsForChart(previewRows, widgetForBuild);
+      const axis = resolveWidgetAxisKeys(processed, widgetForBuild);
+      if (!axis) return [];
+      const uniq = new Set<string>();
+      for (const row of processed) {
+        const v = String((row as Record<string, unknown>)[axis.xKey] ?? "").trim();
+        if (v) uniq.add(v);
+      }
+      return [...uniq];
+    }
+    return [];
+  }
+
+  if (yKeys.length > 0) return yKeys;
+
+  return previewChartDatasetLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
+}
+
+/** Elimina entradas de chartSeriesColors que ya no están visibles en el chart. */
+export function pruneChartSeriesColorsToVisibleKeys(
+  chartSeriesColors: Record<string, string> | undefined,
+  visibleKeys: string[]
+): Record<string, string> | undefined {
+  if (!chartSeriesColors || typeof chartSeriesColors !== "object") return undefined;
+  const allowed = new Set(visibleKeys.map((k) => String(k).trim()).filter(Boolean));
+  const next: Record<string, string> = {};
+  for (const [k, v] of Object.entries(chartSeriesColors)) {
+    const key = String(k).trim();
+    if (allowed.has(key)) next[key] = v;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function normalizeMatchKey(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Encuentra el análisis guardado del ETL vinculado a un widget aunque falte analysisId en el layout.
+ */
+export function findSavedAnalysisForWidget(
+  widget: Record<string, unknown>,
+  savedAnalyses: SavedAnalysisForMerge[]
+): SavedAnalysisForMerge | null {
+  if (!Array.isArray(savedAnalyses) || savedAnalyses.length === 0) return null;
+
+  const widgetAnalysisId = String(widget.analysisId ?? "").trim();
+  if (widgetAnalysisId) {
+    const byId = savedAnalyses.find((a) => String(a.id ?? "").trim() === widgetAnalysisId);
+    if (byId) return byId;
+  }
+
+  const widgetMetricId = String(widget.metricId ?? "").trim();
+  if (widgetMetricId) {
+    const byMetric = savedAnalyses.find((a) =>
+      (a.metricIds ?? []).some((mid) => String(mid).trim() === widgetMetricId)
+    );
+    if (byMetric) return byMetric;
+  }
+
+  const widgetMetricIds = Array.isArray(widget.metricIds)
+    ? (widget.metricIds as unknown[]).map((id) => String(id ?? "").trim()).filter(Boolean)
+    : [];
+  if (widgetMetricIds.length > 0) {
+    const widgetSet = new Set(widgetMetricIds);
+    const byMetricIds = savedAnalyses.find((a) => {
+      const analysisIds = (a.metricIds ?? []).map((id) => String(id).trim()).filter(Boolean);
+      if (analysisIds.length === 0) return false;
+      return analysisIds.every((id) => widgetSet.has(id));
+    });
+    if (byMetricIds) return byMetricIds;
+  }
+
+  const titleKey = normalizeMatchKey(widget.title);
+  if (titleKey) {
+    const byTitle = savedAnalyses.find((a) => normalizeMatchKey(a.name) === titleKey);
+    if (byTitle) return byTitle;
+  }
+
+  return null;
+}
+
+/** Busca análisis y devuelve el patch de merge, o null si no hay coincidencia. */
+export function resolveWidgetAnalysisMergePatch(
+  widget: Record<string, unknown>,
+  savedAnalyses: SavedAnalysisForMerge[],
+  savedMetrics: SavedMetricForAnalysisMerge[]
+): WidgetAnalysisMergePatch | null {
+  const analysis = findSavedAnalysisForWidget(widget, savedAnalyses);
+  if (!analysis) return null;
+  return mergeSavedAnalysisIntoWidget(widget, analysis, savedMetrics);
+}
+
+type AnalysisMetricRow = {
+  id: string;
+  field: string;
+  func: string;
+  alias: string;
+  condition?: unknown;
+  formula?: string;
+  expression?: string;
+};
+
+function toMetricListFromUnknown(
+  input: unknown,
+  fallbackMetric?: SavedMetricForAnalysisMerge["metric"]
+): AnalysisMetricRow[] {
+  const list = Array.isArray(input) ? input : fallbackMetric ? [fallbackMetric] : [];
+  const out = list.map((m, idx) => {
+    const met = (m ?? {}) as Record<string, unknown>;
+    return {
+      id: String(met.id ?? `m-${idx}`),
+      field: String(met.field ?? ""),
+      func: String(met.func ?? "SUM"),
+      alias: String(met.alias ?? ""),
+      condition: met.condition,
+      formula: typeof met.formula === "string" ? met.formula : undefined,
+      expression: typeof met.expression === "string" ? met.expression : undefined,
+    };
+  });
+  if (out.length > 0) return out;
+  return [{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" }];
+}
+
+/**
+ * Fusiona un análisis guardado del ETL en un widget del dashboard (misma lógica que buildWidgetFromSavedAnalysis).
+ */
+export function mergeSavedAnalysisIntoWidget(
+  widget: Record<string, unknown>,
+  analysis: SavedAnalysisForMerge,
+  savedMetrics: SavedMetricForAnalysisMerge[]
+): WidgetAnalysisMergePatch | null {
+  const analysisId = String(analysis.id ?? "").trim();
+  if (!analysisId) return null;
+
+  const linkedSavedMetrics = (analysis.metricIds ?? [])
+    .map((mid) => savedMetrics.find((s) => String(s.id) === String(mid)))
+    .filter((s): s is SavedMetricForAnalysisMerge => s != null);
+  const firstMetricCfgRaw = (linkedSavedMetrics[0]?.aggregationConfig ?? {}) as Record<string, unknown>;
+  const analysisCfg = analysis as Record<string, unknown>;
+  // El análisis es la fuente autoritativa de la configuración del chart. La aggregationConfig del savedMetric
+  // puede traer residuos de cuando se creó (p. ej. `dateGroupByGranularity: "month"` aunque el análisis ya
+  // no agrupe por fecha). Filtramos esas claves del firstMetricCfg para no contaminar el GROUP BY del dashboard.
+  // Mantenemos del savedMetric solo lo que define a la métrica en sí (metrics, derivedColumns, etc.).
+  const CHART_LEVEL_KEYS_FROM_ANALYSIS = new Set([
+    "chartType",
+    "chartXAxis",
+    "chartYAxes",
+    "chartSeriesField",
+    "dimensions",
+    "dimension",
+    "dimension2",
+    "dateDimension",
+    "dateGroupByGranularity",
+    "dateRangeFilter",
+    "chartRankingEnabled",
+    "chartRankingTop",
+    "chartRankingMetric",
+    "chartRankingDirection",
+    "chartRankingPinnedXValues",
+    "chartRankingShowRankInLabel",
+    "chartSortDirection",
+    "chartSortBy",
+    "chartSortByMetric",
+    "cumulative",
+    "comparePeriod",
+    "compare",
+    "labelDisplayMode",
+    "labelVisibilityMode",
+    "filters",
+    "dimensionDefaultFilters",
+    "orderBy",
+    "limit",
+  ]);
+  const firstMetricCfg: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(firstMetricCfgRaw)) {
+    if (!CHART_LEVEL_KEYS_FROM_ANALYSIS.has(k)) firstMetricCfg[k] = v;
+  }
+  const analysisCfgDefined: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(analysisCfg)) {
+    if (v !== undefined) analysisCfgDefined[k] = v;
+  }
+  const mergedCfg = { ...firstMetricCfg, ...analysisCfgDefined };
+  const firstLinked = linkedSavedMetrics[0];
+  const legacyChartType =
+    firstLinked && typeof firstLinked.type === "string" ? String(firstLinked.type) : undefined;
+  const chartType = String(
+    mergedCfg.chartType ?? firstMetricCfg.chartType ?? firstLinked?.chartType ?? legacyChartType ?? widget.type ?? "bar"
+  ).trim();
+  const { dimensions: dims, dimension: primaryDim, dimension2: secondaryDim } =
+    resolveAnalysisDimensionsFromConfig(mergedCfg);
+  const metricIdsOrdered = (analysis.metricIds ?? []).map((id) => String(id));
+  const expandedFromAnalysis =
+    metricIdsOrdered.length > 0 && linkedSavedMetrics.length > 0
+      ? expandSavedMetricsWithGlobalRefs(
+          metricIdsOrdered,
+          linkedSavedMetrics as Parameters<typeof expandSavedMetricsWithGlobalRefs>[1],
+          { setDisplayAliasToSavedName: true }
+        )
+      : [];
+  const sanitizedMetrics =
+    expandedFromAnalysis.length > 0
+      ? expandedFromAnalysis.map((m, idx) => ({
+          id: String(m.id ?? `m-${idx}`),
+          field: String(m.field ?? ""),
+          func: String(m.func ?? "SUM"),
+          alias: String(m.alias ?? ""),
+          condition: m.condition,
+          formula: typeof m.formula === "string" ? m.formula : undefined,
+          expression: typeof m.expression === "string" ? m.expression : undefined,
+        }))
+      : toMetricListFromUnknown(mergedCfg.metrics, firstLinked?.metric);
+
+  const compareUi = ensureDashboardCompareUi(mergedCfg as Parameters<typeof ensureDashboardCompareUi>[0], {
+    widgetType: chartType,
+    chartType,
+  });
+  const aggregationConfig: Record<string, unknown> = {
+    ...mergedCfg,
+    enabled: true,
+    dimension: primaryDim,
+    dimension2: secondaryDim,
+    dimensions: dims.length > 0 ? dims : undefined,
+    metrics: sanitizedMetrics,
+    chartType,
+    ...(compareUi ? { dashboardCompareUi: compareUi } : {}),
+    ...extractDashboardWidgetOverrides(
+      widgetAggregationWithStoredVisualOverrides({
+        aggregationConfig: (widget.aggregationConfig ?? null) as Record<string, unknown> | null,
+        dashboardVisualOverrides: (widget.dashboardVisualOverrides ?? null) as Record<string, unknown> | null,
+      })
+    ),
+  };
+
+  const analysisLabelMode = analysisCfg.labelDisplayMode;
+  const widgetLabelMode = widget.labelDisplayMode;
+  const labelDisplayMode: ChartLabelDisplayMode | undefined =
+    typeof widgetLabelMode === "string" &&
+    (widgetLabelMode === "percent" || widgetLabelMode === "value" || widgetLabelMode === "both")
+      ? (widgetLabelMode as ChartLabelDisplayMode)
+      : chartType === "horizontalBar"
+        ? analysisLabelMode === "percent" || analysisLabelMode === "value" || analysisLabelMode === "both"
+          ? (analysisLabelMode as ChartLabelDisplayMode)
+          : "percent"
+        : undefined;
+
+  return {
+    aggregationConfig,
+    type: chartType,
+    analysisId,
+    title: String(analysis.name ?? widget.title ?? "").trim() || undefined,
+    metricIds: [...(analysis.metricIds ?? [])],
+    labelDisplayMode,
+    minHeight: chartType === "horizontalBar" ? 360 : undefined,
+  };
+}
+
+/** Paridad con preview ETL (step Guardar): barras horizontales muestran % si no hay modo guardado. */
+export function resolveWidgetLabelDisplayMode(
+  widget: { labelDisplayMode?: ChartLabelDisplayMode; analysisId?: unknown },
+  chartType: string
+): ChartLabelDisplayMode | undefined {
+  if (widget.labelDisplayMode) return widget.labelDisplayMode;
+  if (chartType === "horizontalBar") return "percent";
+  return undefined;
 }

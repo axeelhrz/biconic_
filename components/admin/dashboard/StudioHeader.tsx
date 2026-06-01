@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback } from "react";
 import { ChevronLeft, MoreHorizontal, Eye, Play, Save, BarChart2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +31,8 @@ type StudioHeaderProps = {
   isSaving?: boolean;
   onSave?: () => void;
   onRun?: () => void;
+  /** Guarda cambios pendientes antes de abrir la vista previa (/view). */
+  onBeforePreview?: () => void | Promise<void>;
   /** Si true, no se muestra "Ejecutar métricas" (los datos se cargan solos al abrir). */
   hideRunButton?: boolean;
 };
@@ -59,8 +63,15 @@ export function StudioHeader({
   isSaving,
   onSave,
   onRun,
+  onBeforePreview,
   hideRunButton = false,
 }: StudioHeaderProps) {
+  const router = useRouter();
+  const openPreview = useCallback(async () => {
+    if (onBeforePreview) await onBeforePreview();
+    router.push(`/admin/dashboard/${dashboardId}/view`);
+  }, [dashboardId, onBeforePreview, router]);
+
   return (
     <header className="studio-header flex flex-shrink-0 items-center">
       <div className="mx-auto flex h-full w-full max-w-[1400px] items-center justify-between gap-6 px-6">
@@ -162,14 +173,15 @@ export function StudioHeader({
                     </Link>
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem asChild>
-                  <Link
-                    href={`/admin/dashboard/${dashboardId}/view`}
-                    className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-[var(--studio-text-body)] text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
-                  >
-                    <Eye className="h-4 w-4" />
-                    Vista previa
-                  </Link>
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    void openPreview();
+                  }}
+                  className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-[var(--studio-text-body)] text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)] cursor-pointer"
+                >
+                  <Eye className="h-4 w-4" />
+                  Vista previa
                 </DropdownMenuItem>
                 {!hideRunButton && onRun && (
                   <DropdownMenuItem

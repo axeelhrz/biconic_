@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback } from "react";
-import type { DashboardTheme } from "@/types/dashboard";
+import type { DashboardCardLayoutMode, DashboardTheme } from "@/types/dashboard";
 import { mergeCardTheme, mergeTheme } from "@/types/dashboard";
 import { X, Trash2, Play, BookmarkPlus, Plus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,13 +23,29 @@ import {
   DASHBOARD_GRID_COLUMN_COUNT,
 } from "@/lib/dashboard/gridLayout";
 import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
+import type { CompareSpec } from "@/lib/dashboard/compareSpec";
 import { CONTENT_ICON_POSITION_OPTIONS, type ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
-import type { ChartLabelDisplayMode, ChartPercentBasis } from "@/lib/dashboard/chartOptions";
+import { ImageConfigFields } from "@/components/dashboard/ImageConfigFields";
+import { CONTENT_ICON_SIZE_OPTIONS, DEFAULT_IMAGE_CONFIG } from "@/lib/dashboard/imageLayout";
+import {
+  normalizeChartPercentBasis,
+  type ChartLabelDisplayMode,
+  type ChartPercentBasis,
+} from "@/lib/dashboard/chartOptions";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import {
+  pruneChartSeriesColorsToVisibleKeys,
+  resolveSeriesColorKeys,
+} from "@/lib/dashboard/widgetRenderParity";
 import {
   ChartLabelOverridesSection,
   ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS,
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
+import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
+import type { ChartDetailCardConfig, ChartDetailCardLine } from "@/lib/dashboard/chartDetailCard";
+import type { DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
+import { DashboardCompareSpecSection } from "@/components/admin/dashboard/DashboardCompareSpecSection";
+import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
 
 export type MetricConditionEdit = {
   field: string;
@@ -63,12 +79,24 @@ export type AggregationConfigEdit = {
   dimensions?: string[];
   metrics: AggregationMetricEdit[];
   filters?: AggregationFilterEdit[];
+  dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
   cumulative?: "none" | "running_sum" | "ytd";
   comparePeriod?: "previous_year" | "previous_month";
+  compare?: CompareSpec;
+  compareFixedValue?: number;
+  transformCompare?: string;
+  transformCompareFixedValue?: string;
+  transformShowDelta?: boolean;
+  transformShowDeltaPct?: boolean;
+  transformShowAccum?: boolean;
+  /** Visualización de comparación en dashboards (KPI, tabla, gráfico, tooltip). */
+  dashboardCompareUi?: DashboardCompareUi;
   dateDimension?: string;
   chartType?: string;
+  chartCategoryColorMode?: "varied" | "uniform";
+  chartPrimaryColor?: string;
   chartSeriesColors?: Record<string, string>;
   chartXAxis?: string;
   chartYAxes?: string[];
@@ -86,6 +114,8 @@ export type AggregationConfigEdit = {
   chartRankingTop?: number;
   chartRankingMetric?: string;
   chartRankingDirection?: "asc" | "desc";
+  chartRankingPinnedXValues?: string[];
+  chartRankingShowRankInLabel?: boolean;
   chartColorScheme?: string;
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";
@@ -144,20 +174,32 @@ export type AggregationConfigEdit = {
     lonField?: string;
   };
   mapDefaultCountry?: string;
+  /** Mapa: vista inicial (puntos vs provincias coloreadas). */
+  mapDisplayModeDefault?: "markers" | "choropleth";
   /** Mapa: codificación visual por valor. */
   mapValueEncoding?: "both" | "color" | "size";
   mapColorLow?: string;
+  mapColorMid?: string;
   mapColorHigh?: string;
+  mapColorStops?: string[];
+  mapChoroplethPalette?: "ocean" | "emerald" | "sunset" | "violet" | "custom";
+  mapChoroplethScaleMode?: "linear" | "log" | "sqrt";
   mapRadiusMin?: number;
   mapRadiusMax?: number;
   mapFillOpacityMin?: number;
   mapFillOpacityMax?: number;
   mapStrokeWidth?: number;
   mapChoroplethEmptyColor?: string;
+  mapChoroplethShowLabels?: boolean;
+  mapChoroplethShowLegend?: boolean;
+  mapChoroplethHideBaseMap?: boolean;
+  mapChoroplethLabelSize?: "sm" | "md";
   geoComponentOverrides?: GeoComponentOverrides;
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   /** Tabla: clave de columna → texto del encabezado. */
   tableColumnLabelOverrides?: Record<string, string>;
+  /** Tooltip / tarjeta de detalle (gráfico y mapa). */
+  chartDetailCard?: ChartDetailCardConfig;
 };
 
 export type MetricConfigWidget = {
@@ -169,6 +211,10 @@ export type MetricConfigWidget = {
   aggregationConfig?: AggregationConfigEdit;
   labelDisplayMode?: ChartLabelDisplayMode;
   chartPercentBasis?: ChartPercentBasis;
+  chartPercentGroupField?: string;
+  chartPercentDenominatorMetric?: string;
+  chartPercentDenominatorScope?: "analysis" | "visible";
+  chartPercentDenominatorGrandTotal?: boolean;
   color?: string;
   kpiSecondaryLabel?: string;
   kpiSecondaryValue?: string;
@@ -180,12 +226,8 @@ export type MetricConfigWidget = {
   /** Tema visual solo para esta tarjeta (opcional). */
   cardTheme?: Partial<DashboardTheme>;
   imageUrl?: string;
-  imageConfig?: {
-    width?: number;
-    height?: number;
-    objectFit?: "contain" | "cover" | "fill" | "none" | "scale-down";
-    opacity?: number;
-  };
+  imageConfig?: import("@/lib/dashboard/imageLayout").DashboardImageConfig;
+  contentIconSize?: import("@/lib/dashboard/imageLayout").ContentIconSize;
   content?: string;
   fixedGrid?: DashboardFixedGrid;
   zIndex?: number;
@@ -196,7 +238,19 @@ export type MetricConfigWidget = {
   hideWidgetHeader?: boolean;
 };
 
-export type SavedMetricPanel = { id: string; name: string; metric: AggregationMetricEdit };
+/** Patch parcial del widget; `aggregationConfig` admite deltas (el parent hace merge). */
+export type MetricConfigWidgetPatch = Omit<Partial<MetricConfigWidget>, "aggregationConfig"> & {
+  aggregationConfig?: Partial<AggregationConfigEdit> & Record<string, unknown>;
+};
+
+export type MetricConfigWidgetUpdateFn = (patch: MetricConfigWidgetPatch) => void;
+
+export type SavedMetricPanel = {
+  id: string;
+  name: string;
+  metric: AggregationMetricEdit;
+  aggregationConfig?: Partial<AggregationConfigEdit> & Record<string, unknown>;
+};
 
 const CHART_TYPES: { value: string; label: string }[] = [
   { value: "bar", label: "Barras verticales" },
@@ -232,6 +286,14 @@ const AGG_FUNCS: { value: string; label: string }[] = [
   { value: "FORMULA", label: "Fórmula / ratio" },
 ];
 
+const DIMENSION_DEFAULT_INPUT_TYPES: Array<NonNullable<DimensionDefaultFilterEdit["inputType"]>> = [
+  "select",
+  "multi",
+  "text",
+  "number",
+  "date",
+];
+
 const OPERATORS = [
   "=", "!=", ">", ">=", "<", "<=",
   "LIKE", "ILIKE", "IN", "BETWEEN",
@@ -240,22 +302,31 @@ const OPERATORS = [
 
 type MetricConfigPanelProps = {
   widget: MetricConfigWidget;
+  cardLayoutMode?: DashboardCardLayoutMode;
+  onCardLayoutModeChange?: (mode: DashboardCardLayoutMode) => void;
+  onReorganizeAuto?: () => void;
   /** Tema global del dashboard (barra de apariencia); base para fusionar con `cardTheme`. */
   dashboardTheme?: DashboardTheme;
   /** Etiquetas de datasets del preview (colores por serie además de chartYAxes). */
   previewChartDatasetLabels?: string[];
+  /** Labels visibles del chart (`config.labels`, con ranking aplicado). */
+  previewChartLabels?: string[];
+  /** Claves crudas del eje X visibles (`config.xRawCategoryKeys`). */
+  previewChartRawCategoryKeys?: string[];
   /** Filas del preview del widget (p. ej. inferencia de geocodificación en mapas). */
   previewRows?: Record<string, unknown>[];
+  kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
   etlData: ETLDataResponse | null;
   etlLoading: boolean;
   /** Carga de datos de esta métrica (aggregate/raw) en el estudio */
   metricDataLoading?: boolean;
-  onUpdate: (patch: Partial<MetricConfigWidget>) => void;
+  onUpdate: MetricConfigWidgetUpdateFn;
   onLoadData: () => void;
   onClose: () => void;
   /** Métricas guardadas para reutilizar */
   savedMetrics?: SavedMetricPanel[];
   onSaveMetricAsTemplate?: (name: string, metric: AggregationMetricEdit) => void;
+  dashboardCompareDefaults?: import("@/types/dashboard").DashboardCompareDefaults;
 };
 
 const CHART_TYPES_FOR_LABELS = ["bar", "horizontalBar", "stackedColumn", "line", "area", "pie", "doughnut", "combo", "scatter"];
@@ -283,9 +354,15 @@ const LEGEND_POSITION_OPTIONS: Array<{ value: "top" | "bottom" | "left" | "right
 
 export function MetricConfigPanel({
   widget,
+  cardLayoutMode = "auto",
+  onCardLayoutModeChange,
+  onReorganizeAuto,
   dashboardTheme,
   previewChartDatasetLabels = [],
+  previewChartLabels = [],
+  previewChartRawCategoryKeys = [],
   previewRows = [],
+  kpiUserTimeScope = null,
   etlData,
   etlLoading,
   metricDataLoading = false,
@@ -294,6 +371,7 @@ export function MetricConfigPanel({
   onClose,
   savedMetrics = [],
   onSaveMetricAsTemplate,
+  dashboardCompareDefaults,
 }: MetricConfigPanelProps) {
   const [saveTemplateForIndex, setSaveTemplateForIndex] = useState<number | null>(null);
   const [saveTemplateName, setSaveTemplateName] = useState("");
@@ -311,16 +389,13 @@ export function MetricConfigPanel({
   const [labelOverrideRawDrafts, setLabelOverrideRawDrafts] = useState<Record<string, string>>({});
   const [tableColKeyDrafts, setTableColKeyDrafts] = useState<Record<string, string>>({});
   const filters = agg.filters || [];
+  const dimensionDefaults = agg.dimensionDefaultFilters ?? [];
   const metrics = agg.metrics || [];
   const yAxisKeysForUi = useMemo(() => {
     const raw = (agg.chartYAxes ?? []).map((k) => String(k ?? "").trim()).filter(Boolean);
     if (raw.length > 0) return raw;
     return metrics.map((_, i) => `metric_${i}`);
   }, [agg.chartYAxes, metrics]);
-  const seriesColorKeys = useMemo(() => {
-    const fromPreview = previewChartDatasetLabels.map((s) => String(s ?? "").trim()).filter(Boolean);
-    return Array.from(new Set([...yAxisKeysForUi, ...fromPreview]));
-  }, [yAxisKeysForUi, previewChartDatasetLabels]);
   const sources = etlData?.dataSources;
   const selectedSource = sources?.find(
     (s) => s.id === (widget.dataSourceId ?? etlData?.primarySourceId ?? sources[0]?.id)
@@ -351,6 +426,47 @@ export function MetricConfigPanel({
     }
     return [...uniq].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [previewRows, widget.type, widget.color, chartType, agg, showLabelOverrides]);
+  const percentFieldColumnOptions = useMemo(() => {
+    if (!previewRows?.length) return [] as string[];
+    return Object.keys((previewRows[0] as Record<string, unknown>) ?? {}).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+  }, [previewRows]);
+  const widgetForSeriesColorKeys = useMemo(
+    (): BuildChartConfigWidget => ({
+      type: widget.type,
+      aggregationConfig: {
+        ...agg,
+        chartType: (agg.chartType as string) || widget.type,
+        enabled: true,
+      },
+      color: widget.color,
+    }),
+    [widget.type, widget.color, agg]
+  );
+  const seriesColorKeys = useMemo(
+    () =>
+      resolveSeriesColorKeys({
+        chartType,
+        agg: agg as Record<string, unknown>,
+        yAxisKeys: yAxisKeysForUi,
+        previewChartLabels,
+        previewChartRawCategoryKeys,
+        previewChartDatasetLabels,
+        previewRows,
+        widgetForBuild: widgetForSeriesColorKeys,
+      }),
+    [
+      chartType,
+      agg,
+      yAxisKeysForUi,
+      previewChartLabels,
+      previewChartRawCategoryKeys,
+      previewChartDatasetLabels,
+      previewRows,
+      widgetForSeriesColorKeys,
+    ]
+  );
   const fillChartLabelOverridesFromPreview = useCallback(() => {
     const next = { ...(agg.chartLabelOverrides ?? {}) };
     for (const raw of previewAxisRawValues) {
@@ -358,7 +474,6 @@ export function MetricConfigPanel({
     }
     onUpdate({
       aggregationConfig: {
-        ...agg,
         chartLabelOverrides: Object.keys(next).length ? next : undefined,
       },
     });
@@ -366,9 +481,20 @@ export function MetricConfigPanel({
 
   const updateAgg = (patch: Partial<AggregationConfigEdit>) => {
     onUpdate({
-      aggregationConfig: { ...agg, ...patch },
+      aggregationConfig: patch,
     });
   };
+
+  const applyChartSeriesColors = useCallback(
+    (next: Record<string, string>) => {
+      onUpdate({
+        aggregationConfig: {
+          chartSeriesColors: pruneChartSeriesColorsToVisibleKeys(next, seriesColorKeys),
+        },
+      });
+    },
+    [onUpdate, seriesColorKeys]
+  );
 
   const updateMetric = (index: number, patch: Partial<AggregationMetricEdit>) => {
     const next = [...metrics];
@@ -409,6 +535,33 @@ export function MetricConfigPanel({
 
   const removeFilter = (index: number) => {
     updateAgg({ filters: filters.filter((_, i) => i !== index) });
+  };
+
+  const updateDimensionDefault = (index: number, patch: Partial<DimensionDefaultFilterEdit>) => {
+    const next = [...dimensionDefaults];
+    if (!next[index]) return;
+    next[index] = { ...next[index], ...patch };
+    updateAgg({ dimensionDefaultFilters: next });
+  };
+
+  const addDimensionDefaultFilter = () => {
+    updateAgg({
+      dimensionDefaultFilters: [
+        ...dimensionDefaults,
+        {
+          id: `ddf-${Date.now()}`,
+          field: fields[0] || "",
+          operator: "=",
+          defaultValue: "",
+          label: "",
+          inputType: "select",
+        },
+      ],
+    });
+  };
+
+  const removeDimensionDefaultFilter = (index: number) => {
+    updateAgg({ dimensionDefaultFilters: dimensionDefaults.filter((_, i) => i !== index) });
   };
 
   const setLabelOverride = (oldRaw: string, newRaw: string, display: string) => {
@@ -453,12 +606,34 @@ export function MetricConfigPanel({
     () => Object.entries(agg.tableColumnLabelOverrides ?? {}),
     [agg.tableColumnLabelOverrides]
   );
+  const tableMetricAliasByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    (agg.metrics ?? []).forEach((m, i) => {
+      const alias = String(m.alias ?? "").trim();
+      if (!alias) return;
+      map.set(alias, alias);
+      map.set(`metric_${i}`, alias);
+    });
+    const yAxes = (agg.chartYAxes ?? []).map((k) => String(k ?? "").trim()).filter(Boolean);
+    yAxes.forEach((key, i) => {
+      const alias = String((agg.metrics ?? [])[i]?.alias ?? "").trim();
+      if (alias) map.set(key, alias);
+    });
+    return map;
+  }, [agg.metrics, agg.chartYAxes]);
   const setTableColHeader = (dataKey: string, header: string) => {
     const next = { ...(agg.tableColumnLabelOverrides ?? {}) };
-    if (!Object.prototype.hasOwnProperty.call(next, dataKey)) return;
     next[dataKey] = header;
     updateAgg({ tableColumnLabelOverrides: Object.keys(next).length ? next : undefined });
   };
+  const fillTableColumnLabelOverridesFromPreview = useCallback(() => {
+    const next = { ...(agg.tableColumnLabelOverrides ?? {}) };
+    for (const col of percentFieldColumnOptions) {
+      if (Object.prototype.hasOwnProperty.call(next, col)) continue;
+      next[col] = tableMetricAliasByKey.get(col) ?? col;
+    }
+    updateAgg({ tableColumnLabelOverrides: Object.keys(next).length ? next : undefined });
+  }, [agg.tableColumnLabelOverrides, percentFieldColumnOptions, tableMetricAliasByKey]);
   const commitTableColKeyDraft = (oldKey: string, header: string) => {
     const draft = tableColKeyDrafts[oldKey];
     if (typeof draft !== "string") return;
@@ -638,6 +813,7 @@ export function MetricConfigPanel({
                 <p className="text-xs leading-relaxed text-[var(--studio-fg)]">
                   Para la <strong className="text-[var(--studio-accent)]">ubicación de la leyenda</strong>,{" "}
                   <strong className="text-[var(--studio-accent)]">etiquetas sobre barras/líneas</strong>,{" "}
+                  <strong className="text-[var(--studio-accent)]">tarjeta de detalle (tooltip)</strong>,{" "}
                   <strong className="text-[var(--studio-accent)]">colores</strong> (serie, cuadrícula, ejes),{" "}
                   <strong className="text-[var(--studio-accent)]">grosor de barras, líneas de serie y cuadrícula</strong> y{" "}
                   <strong className="text-[var(--studio-accent)]">tipografía del gráfico</strong>, usá la pestaña{" "}
@@ -718,22 +894,42 @@ export function MetricConfigPanel({
                 className="h-9 rounded-lg border-[var(--studio-border)] text-sm"
               />
               {(widget.headerIconKey || (widget.headerIconUrl ?? "").trim()) && (
-                <div>
-                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición en el área del gráfico</Label>
-                  <select
-                    className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
-                    value={widget.contentIconPosition ?? "topLeft"}
-                    onChange={(e) =>
-                      onUpdate({ contentIconPosition: e.target.value as ContentIconPosition })
-                    }
-                  >
-                    {CONTENT_ICON_POSITION_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <>
+                  <div>
+                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tamaño del icono</Label>
+                    <select
+                      className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+                      value={widget.contentIconSize ?? "md"}
+                      onChange={(e) =>
+                        onUpdate({
+                          contentIconSize: e.target.value as NonNullable<typeof widget.contentIconSize>,
+                        })
+                      }
+                    >
+                      {CONTENT_ICON_SIZE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición en el área del gráfico</Label>
+                    <select
+                      className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
+                      value={widget.contentIconPosition ?? "topLeft"}
+                      onChange={(e) =>
+                        onUpdate({ contentIconPosition: e.target.value as ContentIconPosition })
+                      }
+                    >
+                      {CONTENT_ICON_POSITION_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -759,83 +955,13 @@ export function MetricConfigPanel({
                     className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
                   />
                 </div>
-                <div>
-                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Object-fit</Label>
-                  <select
-                    className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
-                    value={widget.imageConfig?.objectFit ?? "contain"}
-                    onChange={(e) =>
-                      onUpdate({
-                        imageConfig: {
-                          ...widget.imageConfig,
-                          objectFit: e.target.value as NonNullable<typeof widget.imageConfig>["objectFit"],
-                        },
-                      })
-                    }
-                  >
-                    <option value="contain">contain</option>
-                    <option value="cover">cover</option>
-                    <option value="fill">fill</option>
-                    <option value="none">none</option>
-                    <option value="scale-down">scale-down</option>
-                  </select>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label className="text-[10px] text-[var(--studio-fg-muted)]">Ancho (px)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={widget.imageConfig?.width ?? ""}
-                      onChange={(e) =>
-                        onUpdate({
-                          imageConfig: {
-                            ...widget.imageConfig,
-                            width: e.target.value === "" ? undefined : e.target.valueAsNumber,
-                          },
-                        })
-                      }
-                      className="mt-1 h-8 rounded-lg border-[var(--studio-border)] text-sm"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-[10px] text-[var(--studio-fg-muted)]">Alto (px)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={widget.imageConfig?.height ?? ""}
-                      onChange={(e) =>
-                        onUpdate({
-                          imageConfig: {
-                            ...widget.imageConfig,
-                            height: e.target.value === "" ? undefined : e.target.valueAsNumber,
-                          },
-                        })
-                      }
-                      className="mt-1 h-8 rounded-lg border-[var(--studio-border)] text-sm"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Opacidad (0–1)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={widget.imageConfig?.opacity ?? 1}
-                    onChange={(e) => {
-                      const v = e.target.valueAsNumber;
-                      onUpdate({
-                        imageConfig: {
-                          ...widget.imageConfig,
-                          opacity: Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1,
-                        },
-                      });
-                    }}
-                    className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
-                  />
-                </div>
+                <ImageConfigFields
+                  config={{ ...DEFAULT_IMAGE_CONFIG, ...widget.imageConfig }}
+                  onChange={(imageConfig) => onUpdate({ imageConfig })}
+                  labelClassName="text-xs font-medium text-[var(--studio-fg-muted)]"
+                  inputClassName="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
+                  selectClassName="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                />
               </div>
             ) : null}
 
@@ -848,7 +974,7 @@ export function MetricConfigPanel({
                   const newType = e.target.value;
                   onUpdate({
                     type: newType,
-                    aggregationConfig: { ...agg, chartType: newType },
+                    aggregationConfig: { chartType: newType },
                   });
                 }}
                 className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
@@ -861,6 +987,64 @@ export function MetricConfigPanel({
               </select>
             </div>
             ) : null}
+
+            <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3 space-y-3">
+              <p className="text-xs font-semibold text-[var(--studio-fg)]">Ubicación de tarjetas</p>
+              <div className="flex rounded-lg border border-[var(--studio-border)] p-0.5" role="group">
+                {(
+                  [
+                    { id: "auto" as const, label: "Automático" },
+                    { id: "manual" as const, label: "Manual" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    disabled={!onCardLayoutModeChange}
+                    className={`flex-1 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
+                      cardLayoutMode === opt.id
+                        ? "bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
+                        : "text-[var(--studio-fg-muted)] hover:text-[var(--studio-fg)]"
+                    }`}
+                    onClick={() => onCardLayoutModeChange?.(opt.id)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-[var(--studio-fg-muted)] leading-snug">
+                {cardLayoutMode === "auto"
+                  ? "El lienzo optimiza huecos entre tarjetas. Usá «Mover arriba/abajo» en el menú de cada tarjeta."
+                  : "Arrastrá cada tarjeta con el asa ≡ en su cabecera. Las coordenadas se actualizan al soltar."}
+              </p>
+              {cardLayoutMode === "auto" && onReorganizeAuto ? (
+                <Button type="button" variant="outline" size="sm" className="h-8 w-full text-xs" onClick={onReorganizeAuto}>
+                  Reorganizar automáticamente
+                </Button>
+              ) : null}
+              {cardLayoutMode === "auto" && onCardLayoutModeChange ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-full text-xs text-[var(--studio-fg-muted)]"
+                  onClick={() => onCardLayoutModeChange("manual")}
+                >
+                  Pasar a ubicación manual
+                </Button>
+              ) : null}
+              {cardLayoutMode === "manual" && onCardLayoutModeChange ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-full text-xs text-[var(--studio-accent)]"
+                  onClick={() => onCardLayoutModeChange("auto")}
+                >
+                  Volver a automático y reorganizar
+                </Button>
+              ) : null}
+            </div>
 
             <div>
               <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columnas en grid</Label>
@@ -904,63 +1088,29 @@ export function MetricConfigPanel({
               />
             </div>
 
-            <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="fixed-grid-studio"
-                  checked={!!widget.fixedGrid}
-                  onCheckedChange={(c) => {
-                    if (c === true) {
-                      const fg: DashboardFixedGrid = {
-                        col: 1,
-                        row: 1,
-                        colSpan: clampGridSpan(widget.gridSpan, 2),
-                        rowSpan: 4,
-                      };
-                      onUpdate({ fixedGrid: fg });
-                    } else {
-                      onUpdate({ fixedGrid: undefined });
-                    }
-                  }}
-                />
-                <Label htmlFor="fixed-grid-studio" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
-                  Posición fija (columna/fila en la rejilla)
-                </Label>
-              </div>
-              {widget.fixedGrid ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {(["col", "row", "colSpan", "rowSpan"] as const).map((key) => {
-                    const fg = widget.fixedGrid as DashboardFixedGrid;
-                    return (
-                    <div key={key}>
-                      <Label className="text-[10px] text-[var(--studio-fg-muted)]">
-                        {key === "col"
-                          ? "Col (1-based)"
-                          : key === "row"
-                            ? "Fila (1-based)"
-                            : key === "colSpan"
-                              ? "Span columnas"
-                              : "Span filas"}
-                      </Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={key === "col" || key === "colSpan" ? DASHBOARD_GRID_COLUMN_COUNT : 99}
-                        value={fg[key]}
-                        onChange={(e) => {
-                          const n = Math.max(1, e.target.valueAsNumber || 1);
-                          onUpdate({
-                            fixedGrid: { ...fg, [key]: n },
-                          });
-                        }}
-                        className="mt-0.5 h-8 rounded-lg border-[var(--studio-border)] text-sm"
-                      />
-                    </div>
-                    );
-                  })}
+            {cardLayoutMode === "manual" && widget.fixedGrid ? (
+              <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3 space-y-2">
+                <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Posición en rejilla (solo lectura)</p>
+                <div className="grid grid-cols-2 gap-2 text-sm text-[var(--studio-fg)]">
+                  <div>
+                    <span className="text-[10px] text-[var(--studio-fg-muted)]">Columna</span>
+                    <p className="font-medium">{widget.fixedGrid.col}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[var(--studio-fg-muted)]">Fila</span>
+                    <p className="font-medium">{widget.fixedGrid.row}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[var(--studio-fg-muted)]">Ancho (cols)</span>
+                    <p className="font-medium">{widget.fixedGrid.colSpan}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[var(--studio-fg-muted)]">Alto (filas)</span>
+                    <p className="font-medium">{widget.fixedGrid.rowSpan}</p>
+                  </div>
                 </div>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
 
             {sources && sources.length > 1 ? (
               <div>
@@ -1036,8 +1186,25 @@ export function MetricConfigPanel({
               <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
                 <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Encabezados de tabla</Label>
                 <p className="text-[11px] text-[var(--studio-fg-muted)]">
-                  Mapeá el nombre de columna en los datos al texto del encabezado (ej. <code className="text-[10px]">SUM(ventas)</code> → Ventas).
+                  Mapeá el nombre de columna en los datos al texto del encabezado (ej. <code className="text-[10px]">Calc_MargenBruto</code> → Margen bruto).
                 </p>
+                {previewRows.length > 0 && tableColEntries.length === 0 ? (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Cargá datos con «Actualizar» y usá «Rellenar desde vista previa» para listar las columnas automáticamente.
+                  </p>
+                ) : null}
+                {previewRows.length > 0 ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={percentFieldColumnOptions.length === 0}
+                    onClick={fillTableColumnLabelOverridesFromPreview}
+                  >
+                    Rellenar desde vista previa
+                  </Button>
+                ) : null}
                 <div className="space-y-2">
                   {tableColEntries.map(([dataKey, headerText], idx) => (
                     <div key={`tcol-${idx}-${dataKey}`} className="flex items-center gap-2">
@@ -1152,6 +1319,9 @@ export function MetricConfigPanel({
 
                 <div>
                   <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">País por defecto</Label>
+                  <p className="mt-0.5 text-[10px] text-[var(--studio-fg-muted)]">
+                    Solo si la fila <strong>no trae país</strong> en sus columnas. Para forzar Argentina en todas las filas usá el botón de abajo o «Forzar valores».
+                  </p>
                   <Input
                     value={agg.mapDefaultCountry ?? ""}
                     onChange={(e) =>
@@ -1164,8 +1334,29 @@ export function MetricConfigPanel({
                   />
                 </div>
 
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-full text-xs"
+                  onClick={() =>
+                    updateAgg({
+                      mapDefaultCountry: "Argentina",
+                      geoComponentOverrides: {
+                        ...(agg.geoComponentOverrides ?? {}),
+                        country: "Argentina",
+                      },
+                    })
+                  }
+                >
+                  Forzar Argentina en todas las filas
+                </Button>
+
                 <div className="space-y-2">
                   <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Forzar valores (todas las filas)</p>
+                  <p className="text-[10px] text-[var(--studio-fg-muted)]">
+                    Sustituye país, provincia o ciudad inferidos en <strong>cada fila</strong> antes de geocodificar.
+                  </p>
                   <Input
                     value={agg.geoComponentOverrides?.country ?? ""}
                     onChange={(e) => setGlobalGeoOverride("country", e.target.value)}
@@ -1288,6 +1479,7 @@ export function MetricConfigPanel({
             <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
               Acá definís <strong className="text-[var(--studio-fg)]">leyenda</strong>,{" "}
               <strong className="text-[var(--studio-fg)]">etiquetas sobre los datos</strong>,{" "}
+              <strong className="text-[var(--studio-fg)]">tarjeta de detalle (tooltip)</strong>,{" "}
               <strong className="text-[var(--studio-fg)]">colores</strong> de la serie y de ejes/cuadrícula,{" "}
               <strong className="text-[var(--studio-fg)]">grosor de barras, líneas de serie y líneas de cuadrícula</strong> del
               gráfico, y <strong className="text-[var(--studio-fg)]">tipografía</strong> del dibujo. El fondo y borde de la{" "}
@@ -1381,17 +1573,98 @@ export function MetricConfigPanel({
               <div>
                 <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Base del porcentaje</Label>
                 <select
-                  value={widget.chartPercentBasis ?? "grand_total"}
+                  value={normalizeChartPercentBasis(widget.chartPercentBasis)}
                   onChange={(e) => onUpdate({ chartPercentBasis: e.target.value as ChartPercentBasis })}
                   className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
                 >
-                  <option value="grand_total">Total general (toda la torta)</option>
-                  <option value="per_category">Por categoría</option>
-                  <option value="per_series">Por serie</option>
+                  <option value="chart_visible_total">Total visible en el gráfico</option>
+                  <option value="analysis_total">Total general del análisis (sin Top N)</option>
+                  <option value="per_category_axis">Por categoría del eje (misma columna X)</option>
+                  <option value="per_series">Por serie (cada leyenda suma 100%)</option>
+                  <option value="per_dimension_group">Por dimensión / grupo (elegir abajo)</option>
+                  <option value="per_denominator_metric">Sobre otra métrica / columna</option>
                 </select>
                 <p className="mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">
-                  En circular/dona con una sola métrica, «Total general» y «Por categoría» suelen coincidir.
+                  En circular/dona con una sola métrica, «Total visible» y «Por eje X» suelen coincidir.
                 </p>
+                {normalizeChartPercentBasis(widget.chartPercentBasis) === "per_dimension_group" && (
+                  <div className="mt-2">
+                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Dimensión de agrupación</Label>
+                    <select
+                      value={widget.chartPercentGroupField ?? ""}
+                      onChange={(e) =>
+                        onUpdate({ chartPercentGroupField: e.target.value ? e.target.value : undefined })
+                      }
+                      className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                    >
+                      <option value="">Elegir columna…</option>
+                      {percentFieldColumnOptions.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {normalizeChartPercentBasis(widget.chartPercentBasis) === "per_denominator_metric" && (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columna denominador</Label>
+                      <select
+                        value={widget.chartPercentDenominatorMetric ?? ""}
+                        onChange={(e) =>
+                          onUpdate({
+                            chartPercentDenominatorMetric: e.target.value ? e.target.value : undefined,
+                          })
+                        }
+                        className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                      >
+                        <option value="">Elegir métrica o columna…</option>
+                        {yAxisKeysForUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                        {percentFieldColumnOptions
+                          .filter((k) => !yAxisKeysForUi.includes(k))
+                          .map((k) => (
+                            <option key={`col-${k}`} value={k}>
+                              {k}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Ámbito del denominador</Label>
+                      <select
+                        value={widget.chartPercentDenominatorScope ?? "analysis"}
+                        onChange={(e) =>
+                          onUpdate({
+                            chartPercentDenominatorScope: e.target.value as "analysis" | "visible",
+                          })
+                        }
+                        className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                      >
+                        <option value="analysis">Todo el análisis (sin Top N)</option>
+                        <option value="visible">Solo lo visible en el gráfico</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="pie-pct-denom-grand"
+                        checked={widget.chartPercentDenominatorGrandTotal === true}
+                        onChange={(e) =>
+                          onUpdate({ chartPercentDenominatorGrandTotal: e.target.checked ? true : undefined })
+                        }
+                        className="rounded"
+                      />
+                      <Label htmlFor="pie-pct-denom-grand" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                        Un solo total (suma la columna en todo el ámbito; si no, por categoría del eje X)
+                      </Label>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             {agg.pieLegendMode !== "integrated" && (
@@ -1465,17 +1738,98 @@ export function MetricConfigPanel({
               <div>
                 <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Base del porcentaje</Label>
                 <select
-                  value={widget.chartPercentBasis ?? "grand_total"}
+                  value={normalizeChartPercentBasis(widget.chartPercentBasis)}
                   onChange={(e) => onUpdate({ chartPercentBasis: e.target.value as ChartPercentBasis })}
                   className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
                 >
-                  <option value="grand_total">Total general (todo el gráfico)</option>
-                  <option value="per_category">Por categoría (misma columna del eje categoría)</option>
-                  <option value="per_series">Por serie (cada leyenda respecto a su total)</option>
+                  <option value="chart_visible_total">Total visible en el gráfico (p. ej. Top 10 = 100%)</option>
+                  <option value="analysis_total">Total general del análisis (respuesta completa, sin Top N)</option>
+                  <option value="per_category_axis">Por categoría del eje (suma en cada columna del eje X)</option>
+                  <option value="per_series">Por serie (cada métrica/serie suma 100%)</option>
+                  <option value="per_dimension_group">Por dimensión / grupo (elegir columna abajo)</option>
+                  <option value="per_denominator_metric">Sobre otra métrica / columna</option>
                 </select>
                 <p className="mt-0.5 text-[11px] text-[var(--studio-fg-muted)]">
-                  En combo con métricas muy distintas, «Total general» puede ser poco interpretable; probá «Por serie».
+                  Con Top N, «Total visible» y «Total del análisis» marcan la diferencia. En combo con métricas muy distintas, probá «Por serie».
                 </p>
+                {normalizeChartPercentBasis(widget.chartPercentBasis) === "per_dimension_group" && (
+                  <div className="mt-2">
+                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Dimensión de agrupación</Label>
+                    <select
+                      value={widget.chartPercentGroupField ?? ""}
+                      onChange={(e) =>
+                        onUpdate({ chartPercentGroupField: e.target.value ? e.target.value : undefined })
+                      }
+                      className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                    >
+                      <option value="">Elegir columna…</option>
+                      {percentFieldColumnOptions.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {normalizeChartPercentBasis(widget.chartPercentBasis) === "per_denominator_metric" && (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columna denominador</Label>
+                      <select
+                        value={widget.chartPercentDenominatorMetric ?? ""}
+                        onChange={(e) =>
+                          onUpdate({
+                            chartPercentDenominatorMetric: e.target.value ? e.target.value : undefined,
+                          })
+                        }
+                        className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                      >
+                        <option value="">Elegir métrica o columna…</option>
+                        {yAxisKeysForUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                        {percentFieldColumnOptions
+                          .filter((k) => !yAxisKeysForUi.includes(k))
+                          .map((k) => (
+                            <option key={`col-${k}`} value={k}>
+                              {k}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Ámbito del denominador</Label>
+                      <select
+                        value={widget.chartPercentDenominatorScope ?? "analysis"}
+                        onChange={(e) =>
+                          onUpdate({
+                            chartPercentDenominatorScope: e.target.value as "analysis" | "visible",
+                          })
+                        }
+                        className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+                      >
+                        <option value="analysis">Todo el análisis (sin Top N)</option>
+                        <option value="visible">Solo lo visible en el gráfico</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="cart-pct-denom-grand"
+                        checked={widget.chartPercentDenominatorGrandTotal === true}
+                        onChange={(e) =>
+                          onUpdate({ chartPercentDenominatorGrandTotal: e.target.checked ? true : undefined })
+                        }
+                        className="rounded"
+                      />
+                      <Label htmlFor="cart-pct-denom-grand" className="cursor-pointer text-xs text-[var(--studio-fg-muted)]">
+                        Un solo total (suma la columna en todo el ámbito; si no, por categoría del eje X)
+                      </Label>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1570,6 +1924,295 @@ export function MetricConfigPanel({
         )}
             </div>
 
+        {!["filter", "image", "text"].includes(widget.type) &&
+          ["bar", "horizontalBar", "line", "area", "pie", "doughnut", "combo", "stackedColumn", "scatter", "map"].includes(
+            chartType
+          ) && (
+            <div className="space-y-4 border-b border-[var(--studio-border)] pb-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Tarjeta de detalle (tooltip / mapa)</h4>
+              <div className="space-y-3">
+              <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+                Al pasar el mouse sobre el gráfico o al abrir un polígono/punto en el mapa. Podés usar{" "}
+                <code className="rounded bg-[var(--studio-bg)] px-1 text-[10px]">{"{{category}}"}</code> y{" "}
+                <code className="rounded bg-[var(--studio-bg)] px-1 text-[10px]">{"{{series}}"}</code> en el título.
+                Las líneas «% del total» usan la suma de la columna en todos los datos visibles del widget.
+              </p>
+              <div className="space-y-2">
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Título (opcional)</Label>
+                <Input
+                  value={(agg.chartDetailCard as ChartDetailCardConfig | undefined)?.title ?? ""}
+                  onChange={(e) =>
+                    onUpdate({
+                      aggregationConfig: {
+                        chartDetailCard: {
+                          ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                          title: e.target.value,
+                          lines: ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[],
+                        },
+                      },
+                    })
+                  }
+                  placeholder="Ej. {{category}}"
+                  className="h-8 text-xs"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-[11px] text-[var(--studio-fg-muted)]">Descripción breve (opcional)</Label>
+                <textarea
+                  value={(agg.chartDetailCard as ChartDetailCardConfig | undefined)?.description ?? ""}
+                  onChange={(e) =>
+                    onUpdate({
+                      aggregationConfig: {
+                        chartDetailCard: {
+                          ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                          description: e.target.value,
+                          lines: ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[],
+                        },
+                      },
+                    })
+                  }
+                  rows={2}
+                  className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 py-1.5 text-xs"
+                  placeholder="Texto de ayuda para interpretar la métrica…"
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Líneas mostradas</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    onClick={() => {
+                      const prev = ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[];
+                      const col = percentFieldColumnOptions[0] ?? yAxisKeysForUi[0] ?? "metric_0";
+                      const next: ChartDetailCardLine[] = [
+                        ...prev,
+                        {
+                          id: `dl-${Date.now()}`,
+                          kind: "row",
+                          label: "Etiqueta",
+                          field: col,
+                          valueFormat: "none",
+                          valueScale: "none",
+                          decimals: 2,
+                        },
+                      ];
+                      onUpdate({
+                        aggregationConfig: {
+                          chartDetailCard: {
+                            ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                            lines: next,
+                          },
+                        },
+                      });
+                    }}
+                  >
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    Añadir línea
+                  </Button>
+                </div>
+                {(((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[]).length === 0 ? (
+                  <p className="text-[11px] text-[var(--studio-fg-muted)]">Sin líneas: se usa el tooltip por defecto.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {(((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[]).map((line, idx) => {
+                      const lines = ((agg.chartDetailCard as ChartDetailCardConfig | undefined)?.lines ?? []) as ChartDetailCardLine[];
+                      const patchLine = (patch: Partial<ChartDetailCardLine>) => {
+                        const copy = [...lines];
+                        copy[idx] = { ...copy[idx]!, ...patch } as ChartDetailCardLine;
+                        onUpdate({
+                          aggregationConfig: {
+                            chartDetailCard: {
+                              ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                              lines: copy,
+                            },
+                          },
+                        });
+                      };
+                      const removeLine = () => {
+                        const copy = lines.filter((_, j) => j !== idx);
+                        onUpdate({
+                          aggregationConfig: {
+                            chartDetailCard:
+                              copy.length === 0
+                                ? undefined
+                                : {
+                                    ...((agg.chartDetailCard as ChartDetailCardConfig | undefined) ?? {}),
+                                    lines: copy,
+                                  },
+                          },
+                        });
+                      };
+                      const kind = line.kind === "computed" ? "computed" : "row";
+                      return (
+                        <div
+                          key={line.id || idx}
+                          className="rounded border p-2 space-y-2"
+                          style={{ borderColor: "var(--studio-border)", background: "var(--studio-surface)" }}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <select
+                              value={kind}
+                              onChange={(e) => {
+                                if (e.target.value === "computed") {
+                                  const numFromRow = line.kind === "row" ? line.field : line.numeratorField;
+                                  patchLine({
+                                    kind: "computed",
+                                    computed: "percent_of_total",
+                                    numeratorField: percentFieldColumnOptions[0] ?? numFromRow ?? "",
+                                    label: line.label,
+                                  } as ChartDetailCardLine);
+                                } else {
+                                  const fieldFromComputed =
+                                    line.kind === "computed" ? line.numeratorField : line.field;
+                                  patchLine({
+                                    kind: "row",
+                                    field: percentFieldColumnOptions[0] ?? fieldFromComputed ?? "",
+                                    label: line.label,
+                                  } as ChartDetailCardLine);
+                                }
+                              }}
+                              className="h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                            >
+                              <option value="row">Valor de columna</option>
+                              <option value="computed">% del total (columna)</option>
+                            </select>
+                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={removeLine}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="col-span-2">
+                              <Label className="text-[10px] text-[var(--studio-fg-muted)]">Etiqueta visible</Label>
+                              <Input
+                                value={line.label}
+                                onChange={(e) => patchLine({ label: e.target.value })}
+                                className="mt-0.5 h-7 text-[11px]"
+                              />
+                            </div>
+                            {kind === "row" ? (
+                              <div className="col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Columna en datos</Label>
+                                <select
+                                  value={(line as { field?: string }).field ?? ""}
+                                  onChange={(e) => patchLine({ field: e.target.value } as ChartDetailCardLine)}
+                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                                >
+                                  {percentFieldColumnOptions.map((k) => (
+                                    <option key={k} value={k}>
+                                      {k}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : (
+                              <div className="col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Columna numerador (para %)</Label>
+                                <select
+                                  value={(line as { numeratorField?: string }).numeratorField ?? ""}
+                                  onChange={(e) => patchLine({ numeratorField: e.target.value } as ChartDetailCardLine)}
+                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                                >
+                                  {percentFieldColumnOptions.map((k) => (
+                                    <option key={k} value={k}>
+                                      {k}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                            <div>
+                              <Label className="text-[10px] text-[var(--studio-fg-muted)]">Formato</Label>
+                              <select
+                                value={line.valueFormat ?? "none"}
+                                onChange={(e) => {
+                                  const vf = e.target.value as "none" | "currency" | "percent";
+                                  patchLine({
+                                    valueFormat: vf,
+                                    ...(vf === "percent" ? { valueScale: undefined } : {}),
+                                  });
+                                }}
+                                className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                              >
+                                <option value="none">Número</option>
+                                <option value="currency">Moneda</option>
+                                <option value="percent">Porcentaje</option>
+                              </select>
+                            </div>
+                            <div>
+                              <Label className="text-[10px] text-[var(--studio-fg-muted)]">Decimales</Label>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={8}
+                                value={line.decimals ?? 2}
+                                onChange={(e) => patchLine({ decimals: Math.min(8, Math.max(0, parseInt(e.target.value, 10) || 0)) })}
+                                className="mt-0.5 h-7 text-[11px]"
+                              />
+                            </div>
+                            {kind === "row" && line.valueFormat !== "percent" ? (
+                              <div className="col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Escala (K / M / B)</Label>
+                                <select
+                                  value={line.valueScale ?? "none"}
+                                  onChange={(e) =>
+                                    patchLine({
+                                      valueScale: e.target.value as "none" | "K" | "M" | "Bi" | "B",
+                                    })
+                                  }
+                                  className="mt-0.5 w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                                >
+                                  <option value="none">Ninguna</option>
+                                  <option value="K">Miles (K)</option>
+                                  <option value="M">Millones (M)</option>
+                                  <option value="Bi">Miles de millones (Bi)</option>
+                                  <option value="B">Billones (B)</option>
+                                </select>
+                                <p className="mt-0.5 text-[10px] text-[var(--studio-fg-muted)]">
+                                  Abrevia el número (p. ej. moneda con M) como en el formato por métrica del gráfico.
+                                </p>
+                              </div>
+                            ) : null}
+                            {line.valueFormat === "currency" ? (
+                              <div className="col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Símbolo moneda</Label>
+                                <Input
+                                  value={line.currencySymbol ?? ""}
+                                  onChange={(e) =>
+                                    patchLine({ currencySymbol: e.target.value || undefined })
+                                  }
+                                  placeholder="$"
+                                  className="mt-0.5 h-7 text-[11px]"
+                                />
+                              </div>
+                            ) : null}
+                            <label className="col-span-2 flex cursor-pointer items-center gap-2">
+                              <Checkbox
+                                checked={line.useGrouping !== false}
+                                onCheckedChange={(c) => patchLine({ useGrouping: c === true })}
+                              />
+                              <span className="text-[10px] text-[var(--studio-fg-muted)]">Separador de miles</span>
+                            </label>
+                            <label className="col-span-2 flex cursor-pointer items-center gap-2">
+                              <Checkbox
+                                checked={line.integerOnly === true}
+                                onCheckedChange={(c) => patchLine({ integerOnly: !!c })}
+                              />
+                              <span className="text-[10px] text-[var(--studio-fg-muted)]">Mostrar como entero</span>
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              </div>
+            </div>
+          )}
+
             <div className="space-y-4 border-b border-[var(--studio-border)] pb-4">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--studio-fg)]">Colores, ejes y cuadrícula</h4>
 
@@ -1592,6 +2235,48 @@ export function MetricConfigPanel({
             </div>
           </div>
         )}
+        {isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) &&
+          (chartType === "pie" ||
+            chartType === "doughnut" ||
+            ((chartType === "bar" || chartType === "horizontalBar" || chartType === "stackedColumn") &&
+              yAxisKeysForUi.length === 1) ||
+            String(agg.chartSeriesField ?? "").trim() !== "") && (
+            <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Colores por categoría o serie</Label>
+              <p className="text-[11px] text-[var(--studio-fg-muted)]">
+                «Un solo color» usa el color principal para todas las porciones, barras por categoría o series por dimensión. Podés definir{' '}
+                <strong className="text-[var(--studio-fg-muted)]">excepciones</strong> más abajo en «Color por serie» dejando un hex solo en las claves que quieras distintas.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    ["varied", "Varios colores"],
+                    ["uniform", "Un solo color"],
+                  ] as const
+                ).map(([mode, lbl]) => {
+                  const active = mode === "uniform" ? agg.chartCategoryColorMode === "uniform" : agg.chartCategoryColorMode !== "uniform";
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() =>
+                        updateAgg({
+                          chartCategoryColorMode: mode === "uniform" ? "uniform" : undefined,
+                        })
+                      }
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        active
+                          ? "border-transparent bg-[var(--studio-accent)] text-[var(--studio-bg)]"
+                          : "border-[var(--studio-border)] bg-[var(--studio-surface-hover)] text-[var(--studio-fg-muted)]"
+                      }`}
+                    >
+                      {lbl}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         {yAxisKeysForUi.length > 0 && isChartTypeIn(CHART_APPEARANCE_WITH_LEGEND, chartType) && (
           <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Nombres en leyenda (por métrica)</Label>
@@ -1623,14 +2308,21 @@ export function MetricConfigPanel({
           <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Color por serie</Label>
             <p className="text-[11px] text-[var(--studio-fg-muted)]">
-              Clave de métrica o etiqueta de serie del preview. Vacío en hex quita el color personalizado para esa clave.
+              Solo categorías o series visibles en el gráfico (Top N / ranking aplicado). Vacío en hex quita el color personalizado.
+              {agg.chartCategoryColorMode === "uniform"
+                ? " Con «Un solo color» activo, solo las claves con hex definido se apartan del color principal."
+                : null}
             </p>
             {seriesColorKeys.map((sKey) => {
+              const displayName =
+                (typeof agg.chartLabelOverrides?.[sKey] === "string" &&
+                  agg.chartLabelOverrides[sKey]!.trim()) ||
+                sKey;
               const hex = agg.chartSeriesColors?.[sKey] || widget.color || "#0ea5e9";
               return (
                 <div key={sKey} className="flex flex-wrap items-center gap-2">
-                  <span className="min-w-0 max-w-[140px] truncate font-mono text-[11px] text-[var(--studio-fg-muted)]" title={sKey}>
-                    {sKey}
+                  <span className="min-w-0 max-w-[140px] truncate font-mono text-[11px] text-[var(--studio-fg-muted)]" title={displayName}>
+                    {displayName}
                   </span>
                   <input
                     type="color"
@@ -1638,7 +2330,7 @@ export function MetricConfigPanel({
                     onChange={(e) => {
                       const next = { ...(agg.chartSeriesColors ?? {}) };
                       next[sKey] = e.target.value;
-                      updateAgg({ chartSeriesColors: next });
+                      applyChartSeriesColors(next);
                     }}
                     className="h-8 w-10 shrink-0 cursor-pointer rounded border border-[var(--studio-border)]"
                   />
@@ -1649,9 +2341,7 @@ export function MetricConfigPanel({
                       const next = { ...(agg.chartSeriesColors ?? {}) };
                       if (v.trim() === "") delete next[sKey];
                       else next[sKey] = v;
-                      updateAgg({
-                        chartSeriesColors: Object.keys(next).length ? next : undefined,
-                      });
+                      applyChartSeriesColors(next);
                     }}
                     className="h-8 min-w-[6rem] flex-1 font-mono text-[11px]"
                     placeholder="#hex"
@@ -2033,7 +2723,7 @@ export function MetricConfigPanel({
                 <input
                   type="checkbox"
                   checked={!!agg.chartComboSyncAxes}
-                  onChange={(e) => onUpdate({ aggregationConfig: { ...agg, chartComboSyncAxes: e.target.checked } })}
+                  onChange={(e) => onUpdate({ aggregationConfig: { chartComboSyncAxes: e.target.checked } })}
                   className="rounded"
                 />
                 <span className="text-xs text-[var(--studio-fg-muted)]">Sincronizar ejes</span>
@@ -2049,7 +2739,7 @@ export function MetricConfigPanel({
                 const valueType = (m.valueType ?? agg.chartValueType ?? "number") as string;
                 const valueScale = (m.valueScale ?? agg.chartValueScale ?? "none") as string;
                 const updateM = (upd: Partial<{ valueType: string; valueScale: string; currencySymbol: string; decimals: number; thousandSep: boolean }>) =>
-                  onUpdate({ aggregationConfig: { ...agg, chartMetricFormats: { ...(agg.chartMetricFormats ?? {}), [key]: { ...m, ...upd } } } });
+                  onUpdate({ aggregationConfig: { chartMetricFormats: { ...(agg.chartMetricFormats ?? {}), [key]: { ...m, ...upd } } } });
                 return (
                   <div key={key} className="rounded border p-2" style={{ borderColor: "var(--studio-border)", background: "var(--studio-surface)" }}>
                     <p className="text-[11px] font-medium mb-1.5" style={{ color: "var(--studio-fg)" }}>{label}</p>
@@ -2233,9 +2923,14 @@ export function MetricConfigPanel({
                           <option value="ytd">YTD (año hasta la fecha)</option>
                         </select>
                       </div>
-                      {(agg.cumulative === "ytd" || agg.comparePeriod) && (
+                      {(agg.cumulative === "ytd" ||
+                        agg.comparePeriod ||
+                        (agg.compare &&
+                          typeof agg.compare === "object" &&
+                          "kind" in agg.compare &&
+                          (agg.compare as CompareSpec).kind !== "none")) && (
                         <AdminFieldSelector
-                          label="Columna de fecha (para YTD / comparación)"
+                          label="Columna de fecha (para YTD / comparación temporal)"
                           value={agg.dateDimension || ""}
                           onChange={(v) => updateAgg({ dateDimension: v || undefined })}
                           etlData={etlData}
@@ -2244,18 +2939,15 @@ export function MetricConfigPanel({
                           placeholder="Campo fecha..."
                         />
                       )}
-                      <div>
-                        <Label className="text-[11px] text-[var(--studio-fg-muted)]">Comparar con período anterior</Label>
-                        <select
-                          value={agg.comparePeriod ?? ""}
-                          onChange={(e) => updateAgg({ comparePeriod: (e.target.value || undefined) as "previous_year" | "previous_month" | undefined })}
-                          className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-                        >
-                          <option value="">Ninguno</option>
-                          <option value="previous_month">Mes anterior</option>
-                          <option value="previous_year">Año anterior</option>
-                        </select>
-                      </div>
+                      <DashboardCompareSpecSection
+                        agg={agg}
+                        updateAgg={updateAgg}
+                        savedMetrics={savedMetrics}
+                        previewRows={previewRows}
+                        kpiUserTimeScope={kpiUserTimeScope}
+                        widgetType={widget.type}
+                        dashboardCompareDefaults={dashboardCompareDefaults}
+                      />
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Métricas</Label>
@@ -2473,6 +3165,99 @@ export function MetricConfigPanel({
                           ))}
                         </div>
                       </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Valores por defecto en vista</Label>
+                          <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addDimensionDefaultFilter}>
+                            + Añadir
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-[var(--studio-fg-muted)] mb-2">
+                          Preselección al abrir el dashboard (editable por el usuario). Distinto de los filtros fijos.
+                        </p>
+                        <div className="space-y-2">
+                          {dimensionDefaults.map((d, i) => (
+                            <div
+                              key={d.id || `ddf-${i}`}
+                              className="grid grid-cols-12 gap-1 items-start rounded border border-[var(--studio-border)] p-2 bg-[var(--studio-bg)]/30"
+                            >
+                              <div className="col-span-12 sm:col-span-3">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Etiqueta</Label>
+                                <Input
+                                  value={d.label ?? ""}
+                                  onChange={(e) => updateDimensionDefault(i, { label: e.target.value })}
+                                  placeholder="Ej. País"
+                                  className="h-7 text-[11px] mt-0.5"
+                                />
+                              </div>
+                              <div className="col-span-6 sm:col-span-3">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Campo</Label>
+                                <select
+                                  value={d.field}
+                                  onChange={(e) => updateDimensionDefault(i, { field: e.target.value })}
+                                  className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                                >
+                                  {fields.map((name) => (
+                                    <option key={name} value={name}>
+                                      {name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="col-span-6 sm:col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Operador</Label>
+                                <select
+                                  value={d.operator}
+                                  onChange={(e) => updateDimensionDefault(i, { operator: e.target.value })}
+                                  className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                                >
+                                  {OPERATORS.map((op) => (
+                                    <option key={op} value={op}>
+                                      {op}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="col-span-6 sm:col-span-2">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Entrada</Label>
+                                <select
+                                  value={d.inputType ?? "select"}
+                                  onChange={(e) =>
+                                    updateDimensionDefault(i, {
+                                      inputType: e.target.value as DimensionDefaultFilterEdit["inputType"],
+                                    })
+                                  }
+                                  className="w-full h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-1 text-[11px] mt-0.5"
+                                >
+                                  {DIMENSION_DEFAULT_INPUT_TYPES.map((t) => (
+                                    <option key={t} value={t}>
+                                      {t}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="col-span-5 sm:col-span-1">
+                                <Label className="text-[10px] text-[var(--studio-fg-muted)]">Valor</Label>
+                                <Input
+                                  value={d.defaultValue != null ? String(d.defaultValue) : ""}
+                                  onChange={(e) => updateDimensionDefault(i, { defaultValue: e.target.value || null })}
+                                  placeholder="Default"
+                                  className="h-7 text-[11px] mt-0.5"
+                                />
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="col-span-1 h-7 w-7 text-red-500 mt-5 sm:mt-5"
+                                onClick={() => removeDimensionDefaultFilter(i)}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                       {showLabelOverrides && (
                         <div className="border-t border-[var(--studio-border)] pt-4">
                           <ChartLabelOverridesSection
@@ -2555,6 +3340,93 @@ export function MetricConfigPanel({
                   className="mt-0.5 h-8 text-xs"
                   placeholder="Ej. 10"
                 />
+              </div>
+              <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/80 p-3 space-y-3">
+                <label className="flex items-center gap-2 text-xs font-medium text-[var(--studio-fg)] cursor-pointer">
+                  <Checkbox
+                    checked={!!agg.chartRankingEnabled}
+                    onCheckedChange={(c) =>
+                      updateAgg({
+                        chartRankingEnabled: !!c,
+                        chartRankingTop: agg.chartRankingTop ?? 5,
+                      })
+                    }
+                  />
+                  Ranking (Top N) en el gráfico
+                </label>
+                {agg.chartRankingEnabled ? (
+                  <div className="space-y-3 pl-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Label className="text-[11px] text-[var(--studio-fg-muted)]">Top</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={agg.chartRankingTop ?? 5}
+                        onChange={(e) =>
+                          updateAgg({ chartRankingTop: Math.max(1, parseInt(e.target.value, 10) || 5) })
+                        }
+                        className="h-8 w-16 text-xs"
+                      />
+                      <Label className="text-[11px] text-[var(--studio-fg-muted)]">por métrica</Label>
+                      <select
+                        value={agg.chartRankingMetric ?? ""}
+                        onChange={(e) => updateAgg({ chartRankingMetric: e.target.value || undefined })}
+                        className="h-8 min-w-[10rem] rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                      >
+                        <option value="">Automático (primera métrica)</option>
+                        {yAxisKeysForUi.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={agg.chartRankingDirection ?? "desc"}
+                        onChange={(e) =>
+                          updateAgg({ chartRankingDirection: e.target.value === "asc" ? "asc" : "desc" })
+                        }
+                        className="h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 text-[11px]"
+                      >
+                        <option value="desc">Mayor primero</option>
+                        <option value="asc">Menor primero</option>
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-[11px] text-[var(--studio-fg-muted)]">
+                        Categorías del eje X siempre visibles (además del Top N)
+                      </Label>
+                      <p className="text-[10px] text-[var(--studio-fg-muted)] mb-1">
+                        Valores tal como vienen en los datos (separados por coma). Puede haber más de N barras.
+                      </p>
+                      <Input
+                        value={(agg.chartRankingPinnedXValues ?? []).join(", ")}
+                        onChange={(e) => {
+                          const tokens = e.target.value
+                            .split(/[,;\n]+/)
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          updateAgg({
+                            chartRankingPinnedXValues: tokens.length > 0 ? tokens : undefined,
+                          });
+                        }}
+                        placeholder="Ej. Argentina, Chile"
+                        className="h-8 text-xs mt-0.5"
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 text-[11px] cursor-pointer text-[var(--studio-fg)]">
+                      <input
+                        type="checkbox"
+                        checked={agg.chartRankingShowRankInLabel !== false}
+                        onChange={(e) =>
+                          updateAgg({ chartRankingShowRankInLabel: e.target.checked ? undefined : false })
+                        }
+                        className="rounded"
+                      />
+                      Mostrar posición del ranking junto a cada categoría (#1, #2, #N)
+                    </label>
+                  </div>
+                ) : null}
               </div>
               {showLabelOverrides && (
                 <div className="border-t border-[var(--studio-border)] pt-4">

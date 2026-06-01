@@ -6,6 +6,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { Database } from "@/lib/supabase/database.types";
+import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
 
 interface Filter {
   field: string;
@@ -37,14 +38,6 @@ const ALLOWED_OPERATORS = new Set([
   "IS",
   "IS NOT",
 ]);
-
-function toSqlLiteral(v: any): string {
-  if (v === null || typeof v === "undefined") return "NULL";
-  if (typeof v === "number" && Number.isFinite(v)) return String(v);
-  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-  const s = String(v).replace(/'/g, "''");
-  return `'${s}'`;
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -182,6 +175,7 @@ export async function POST(req: NextRequest) {
           if (op === "IN") {
             const arr = Array.isArray(f.value) ? f.value : [];
             const list = arr.map((x) => toSqlLiteral(x)).join(", ");
+            if (!list) return "TRUE";
             return `"${fld}" IN (${list})`;
           }
           if (op === "BETWEEN") {

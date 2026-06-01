@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Trash2, X, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { formatNextExecutionDisplay, parseScheduleFromLayout } from "@/lib/etl/schedule";
 
 // Optional shape to help with mapping Supabase rows to the Etl UI type
 type SupabaseEtlRow = {
@@ -30,7 +31,9 @@ type SupabaseEtlRow = {
   user_id?: string;
   client_id?: string | null;
   created_at?: string | null;
+  layout?: unknown;
   lastExecution?: string | null;
+  nextExecution?: string | null;
   createdAt?: string | null;
 };
 
@@ -142,6 +145,8 @@ export default function AdminEtlGrid({
           : row.published
           ? "Publicado"
           : "Borrador";
+      const schedule = parseScheduleFromLayout(row.layout);
+      const frequency = schedule?.frequency?.trim() || null;
       return {
         id: String(row.id),
         title: row.title ?? row.name ?? "Sin título",
@@ -150,7 +155,9 @@ export default function AdminEtlGrid({
         description: row.description ?? "",
         views: typeof row.views === "number" ? row.views : 0,
         lastExecution: formatEtlDateTime(lastRunByEtlId[String(row.id)] ?? (row as SupabaseEtlRow).lastExecution),
-        nextExecution: "", // No hay próxima ejecución en el modelo actual
+        nextExecution:
+          (row as SupabaseEtlRow).nextExecution ||
+          formatNextExecutionDisplay(schedule?.lastRunAt, frequency),
         createdAt: formatEtlDate((row as SupabaseEtlRow).created_at ?? (row as SupabaseEtlRow).createdAt),
         clientId: row.client_id ?? "",
         ownerId: row.user_id,
@@ -181,6 +188,8 @@ export default function AdminEtlGrid({
               : row.published
               ? "Publicado"
               : "Borrador";
+          const schedule = parseScheduleFromLayout((row as SupabaseEtlRow).layout);
+          const frequency = schedule?.frequency?.trim() || null;
           return {
             id: String(row.id),
             title: row.title ?? row.name ?? "Sin título",
@@ -189,7 +198,9 @@ export default function AdminEtlGrid({
             description: row.description ?? "",
             views: typeof row.views === "number" ? row.views : 0,
             lastExecution: formatEtlDateTime((row as SupabaseEtlRow).lastExecution),
-            nextExecution: "", // No hay próxima ejecución en el modelo actual
+            nextExecution:
+              (row as SupabaseEtlRow).nextExecution ||
+              formatNextExecutionDisplay(schedule?.lastRunAt, frequency),
             createdAt: formatEtlDate((row as SupabaseEtlRow).created_at ?? (row as SupabaseEtlRow).createdAt),
             clientId: row.client_id ?? "",
             ownerId: row.user_id,

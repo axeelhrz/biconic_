@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { formatNextExecutionDisplay, parseScheduleFromLayout } from "@/lib/etl/schedule";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import { Database } from "@/lib/supabase/database.types";
@@ -144,6 +145,8 @@ export async function getEtlsAction(searchQuery: string = "", filter: string = "
             const status = (row.status === "Publicado" || row.status === "Borrador"
                 ? row.status
                 : row.published ? "Publicado" : "Borrador") as "Publicado" | "Borrador" | "Conectado" | "Desconectado";
+            const schedule = parseScheduleFromLayout((row as { layout?: unknown }).layout);
+            const frequency = schedule?.frequency?.trim() || null;
 
             return {
               id: String(row.id),
@@ -153,7 +156,7 @@ export async function getEtlsAction(searchQuery: string = "", filter: string = "
               description: "", // ETL table doesn't have a description field
               views: 0, // ETL table doesn't have a views field
               lastExecution: "",
-              nextExecution: "",
+              nextExecution: formatNextExecutionDisplay(schedule?.lastRunAt, frequency),
               createdAt: "",
               clientId: row.client_id ?? "",
               ownerId: row.user_id,

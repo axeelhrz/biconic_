@@ -35,6 +35,9 @@ export type ArProvinceGadmId = (typeof AR_PROVINCE_GADM_IDS)[number];
 
 export const AR_GEOJSON_PATH = "/geo/ar-provincias.geojson";
 
+/** Fallback vía API cuando el middleware bloquea el asset estático. */
+export const AR_GEOJSON_API_PATH = "/api/geo/ar-provincias";
+
 /** Alineado con el encuadre del mapa en DashboardMapWidget (lat/lng). */
 export const AR_BOUNDING_BOX = {
   minLat: -55.2,
@@ -128,9 +131,42 @@ const SYNONYM_TO_NORM: Record<string, string> = {
   bsasprovincia: "buenosaires",
   pba: "buenosaires",
   provinciadebuenosaires: "buenosaires",
+  granbuenosaires: "buenosaires",
+  gba: "buenosaires",
+  cba: "cordoba",
+  cordobacapital: "cordoba",
+  mdz: "mendoza",
+  mendozacapital: "mendoza",
+  sf: "santafe",
+  stafe: "santafe",
+  santafeprovincia: "santafe",
+  provinciadesantafe: "santafe",
+  rosario: "santafe",
+  laplata: "buenosaires",
+  mardelplata: "buenosaires",
+  neuquencapital: "neuquen",
+  jujuyprovincia: "jujuy",
+  chubutprovincia: "chubut",
+  santacruzprovincia: "santacruz",
+  lapampa: "lapampa",
+  lapampaprovincia: "lapampa",
+  entrerios: "entrerios",
+  entre: "entrerios",
+  corrientesprovincia: "corrientes",
+  misionesprovincia: "misiones",
+  formosaprovincia: "formosa",
+  catamarcaprovincia: "catamarca",
+  sanjuanprovincia: "sanjuan",
+  sanluisprovincia: "sanluis",
+  rionegro: "rionegro",
+  rionegroprovincia: "rionegro",
+  chacoprovincia: "chaco",
+  tf: "tierradelfuego",
+  tdf: "tierradelfuego",
   tierradelfuegoantartidaeislasdelatlanticosur: "tierradelfuego",
   tierradelfuegoais: "tierradelfuego",
   santiagodelestero: "santiagodelestero",
+  santiagodel: "santiagodelestero",
 };
 
 /**

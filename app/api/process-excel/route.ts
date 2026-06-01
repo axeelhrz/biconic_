@@ -15,6 +15,27 @@ import * as XLSX from "xlsx";
 dns.setDefaultResultOrder("ipv4first");
 
 // --- CONFIGURACIÓN ---
+/** Carpeta para temporales de importación (volumen con más espacio que /tmp si hace falta). */
+function getImportTempDir(): string {
+  const custom = process.env.IMPORT_TMP_DIR?.trim();
+  if (custom) return custom;
+  return os.tmpdir();
+}
+
+function isEnospcError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as NodeJS.ErrnoException & { code?: string };
+  return e.code === "ENOSPC" || String(e.message ?? "").includes("ENOSPC");
+}
+
+function enospcImportMessage(): string {
+  return (
+    "No hay espacio suficiente en disco para procesar el archivo. " +
+    "Liberá espacio en el equipo o servidor donde corre la API, o configurá IMPORT_TMP_DIR en .env apuntando a una carpeta con más espacio disponible. " +
+    "Los .xlsx/.xlsm se procesan por streaming y no deberían copiarse enteros al disco temporal si la extensión del archivo es correcta."
+  );
+}
+
 const INSERT_BATCH_SIZE = 2000;
 const SAMPLE_SIZE = 1000;
 const PROGRESS_UPDATE_INTERVAL = 2000; // Actualizar DB cada X filas
@@ -130,6 +151,11 @@ function detectSeparator(filePath: string): string {
 
 type ParseMode = "strict" | "tolerant" | "mixed";
 type FileFormat = "xlsx" | "xlsm" | "xls" | "ods" | "csv";
+
+/** Origen del archivo para el parser: ruta local o stream (solo xlsx/xlsm). */
+type RowGeneratorSource =
+  | { kind: "path"; path: string }
+  | { kind: "xlsxStream"; stream: Readable };
 type SheetSelection = {
   sheetName: string;
   sheetIndex: number; // 1-based index
@@ -150,6 +176,81 @@ class StageError extends Error {
     this.name = "StageError";
     this.stage = stage;
     this.details = details;
+  }
+}
+
+/** Encadena otra invocación en Vercel antes de que corte maxDuration (importaciones muy grandes). */
+type ImportContinuationPayload = {
+  connectionId: string;
+  dataTableId: string;
+  parseMode: ParseMode;
+  selectedSheet: string | null;
+};
+
+class ImportChunkBoundaryError extends Error {
+  readonly payload: ImportContinuationPayload;
+  constructor(payload: ImportContinuationPayload) {
+    super("IMPORT_CHUNK_BOUNDARY");
+    this.name = "ImportChunkBoundaryError";
+    this.payload = payload;
+  }
+}
+
+/** Ms máximos por invocación antes de encadenar la siguiente. 0 = desactivado. Por defecto ~3 min (margen bajo límites de función). */
+function getChunkWallMs(): number {
+  const raw = process.env.PROCESS_EXCEL_CHUNK_MS?.trim();
+  if (raw === "0" || raw === "") return 0;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 0) return n;
+  return 180_000;
+}
+
+function getAppOriginForInternalFetch(): string {
+  const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "");
+  if (explicit) return explicit;
+  const vercel = process.env.VERCEL_URL?.trim();
+  if (vercel) return `https://${vercel}`;
+  return "http://localhost:3000";
+}
+
+async function scheduleImportContinuation(
+  supabaseAdmin: any,
+  payload: ImportContinuationPayload
+): Promise<void> {
+  const url = `${getAppOriginForInternalFetch()}/api/process-excel`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const secret = process.env.INTERNAL_PROCESS_EXCEL_SECRET?.trim();
+  if (secret) headers["x-internal-process-excel"] = secret;
+  const body = JSON.stringify({
+    connectionId: payload.connectionId,
+    dataTableId: payload.dataTableId,
+    parseMode: payload.parseMode,
+    selectedSheet: payload.selectedSheet,
+    continuation: true,
+  });
+  try {
+    const res = await fetch(url, { method: "POST", headers, body });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      console.error("[process-excel] Falló encadenar continuación:", res.status, txt);
+      await supabaseAdmin
+        .from("data_tables")
+        .update({
+          import_status: "failed",
+          error_message: `No se pudo reanudar la importación en segundo plano (HTTP ${res.status}). Configurá NEXT_PUBLIC_SITE_URL en Vercel con la URL pública del sitio e INTERNAL_PROCESS_EXCEL_SECRET si usás continuaciones protegidas. ${txt.slice(0, 200)}`,
+        })
+        .eq("id", payload.dataTableId);
+    }
+  } catch (e) {
+    console.error("[process-excel] scheduleImportContinuation:", e);
+    await supabaseAdmin
+      .from("data_tables")
+      .update({
+        import_status: "failed",
+        error_message:
+          "Error de red al encadenar la importación (sucesivo). Revisá NEXT_PUBLIC_SITE_URL en el proyecto Vercel.",
+      })
+      .eq("id", payload.dataTableId);
   }
 }
 
@@ -276,13 +377,15 @@ const resolveSheetSelection = (
 
 // --- GENERADOR HIBRIDO OPTIMIZADO ---
 async function* getRowGenerator(
-  filePath: string,
+  source: RowGeneratorSource,
   format: FileFormat,
   selectedSheet?: string,
   selectedSheetIndex?: number,
   allSheets?: boolean
 ) {
   if (format === "csv") {
+    if (source.kind !== "path") throw new Error("CSV requiere archivo en disco.");
+    const filePath = source.path;
     const separator = detectSeparator(filePath);
     console.log(
       `[LOG] Modo: CSV Stream. Separador detectado: [ ${
@@ -304,6 +407,8 @@ async function* getRowGenerator(
   }
 
   if (format === "xls" || format === "ods") {
+    if (source.kind !== "path") throw new Error("XLS/ODS requiere archivo en disco.");
+    const filePath = source.path;
     console.log(`[LOG] Modo: ${format.toUpperCase()} (SheetJS)`);
     const workbook = XLSX.readFile(filePath, { cellDates: true });
 
@@ -349,7 +454,10 @@ async function* getRowGenerator(
     styles: "cache",
     hyperlinks: "ignore",
   };
-  const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, options);
+  const workbookReader =
+    source.kind === "xlsxStream"
+      ? new ExcelJS.stream.xlsx.WorkbookReader(source.stream, options)
+      : new ExcelJS.stream.xlsx.WorkbookReader(source.path, options);
   const targetSheetIndex = selectedSheetIndex ?? 1;
   let sheetIdx = 0;
   let firstSheetProcessed = false;
@@ -405,9 +513,10 @@ async function processDataImport(
   parseMode: ParseMode,
   selectedSheet?: string | null
 ) {
-  let tempFilePath: string | null = null;
+  let importSource: RowGeneratorSource | null = null;
   let sql: any = null;
   let terminalStatus = false; // true cuando ya pusimos "completed" o "failed"
+  let pendingContinuation: ImportContinuationPayload | null = null;
 
   const markFailed = async (message: string) => {
     if (terminalStatus) return;
@@ -515,7 +624,7 @@ async function processDataImport(
           }
 
           tmpPath = path.join(
-            os.tmpdir(),
+            getImportTempDir(),
             `import-${dataTableId}-${Date.now()}-${attempts}.tmp`
           );
 
@@ -525,6 +634,13 @@ async function processDataImport(
           );
           return tmpPath;
         } catch (err) {
+          if (isEnospcError(err)) {
+            throw new StageError(
+              "temp_file_access",
+              enospcImportMessage(),
+              err instanceof Error ? err.message : String(err)
+            );
+          }
           if (tmpPath && fs.existsSync(tmpPath)) {
             try {
               fs.unlinkSync(tmpPath);
@@ -549,9 +665,63 @@ async function processDataImport(
       );
     };
 
+    const downloadToXlsxReadableStream = async (): Promise<Readable> => {
+      let attempts = 0;
+      const maxAttempts = 3;
+      while (attempts < maxAttempts) {
+        try {
+          assertNotTimedOut();
+          attempts++;
+          if (attempts > 1) {
+            console.log(
+              `[LOG] Reintentando descarga stream xlsx (${attempts}/${maxAttempts})...`
+            );
+          }
+          const { data: signedData, error: signErr } = await supabaseAdmin.storage
+            .from("excel-uploads")
+            .createSignedUrl(storagePath, 3600);
+          if (signErr) throw signErr;
+          if (!signedData?.signedUrl) {
+            throw new Error("No se pudo generar URL firmada");
+          }
+          const response = await fetch(signedData.signedUrl);
+          if (!response.ok || !response.body) {
+            throw new Error(`Error descargando archivo: ${response.statusText}`);
+          }
+          return Readable.fromWeb(response.body as any);
+        } catch (err) {
+          if (isEnospcError(err)) {
+            throw new StageError(
+              "download_stream",
+              enospcImportMessage(),
+              err instanceof Error ? err.message : String(err)
+            );
+          }
+          console.warn(`[WARN] Falló descarga stream (intento ${attempts}):`, err);
+          if (attempts >= maxAttempts) {
+            throw new StageError(
+              "download_stream",
+              "No se pudo descargar el archivo para procesarlo.",
+              `[xlsx_stream] ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+      }
+      throw new StageError(
+        "download_stream",
+        "No se pudo iniciar la lectura del Excel.",
+        "[xlsx_stream] retry_exhausted"
+      );
+    };
+
     const preWarnings: string[] = [];
     const isAllSheets = selectedSheetToUse === "__ALL__";
-    tempFilePath = await downloadToTempFile();
+    const extLower = (preferredExtension || "").toLowerCase();
+    const useXlsxRemoteStream = extLower === "xlsx" || extLower === "xlsm";
+    importSource = useXlsxRemoteStream
+      ? { kind: "xlsxStream", stream: await downloadToXlsxReadableStream() }
+      : { kind: "path", path: await downloadToTempFile() };
     // -----------------------------------------------------------------------
 
     // 2. CONEXIÓN DB
@@ -582,24 +752,27 @@ async function processDataImport(
     let lastCursorSaveRows = resumeInsertedRows;
     let currentBatchSize = INSERT_BATCH_SIZE;
 
-    const ensureTempFileReadable = async () => {
-      if (!tempFilePath) {
+    const ensureImportReadable = async () => {
+      if (!importSource) {
         throw new StageError(
           "temp_file_access",
-          "El archivo temporal no está inicializado."
+          "El origen de importación no está inicializado."
         );
       }
+      if (importSource.kind === "xlsxStream") {
+        return;
+      }
       try {
-        await fs.promises.access(tempFilePath, fs.constants.R_OK);
-      } catch (err) {
+        await fs.promises.access(importSource.path, fs.constants.R_OK);
+      } catch {
         try {
-          if (tempFilePath && fs.existsSync(tempFilePath)) {
-            fs.unlinkSync(tempFilePath);
+          if (fs.existsSync(importSource.path)) {
+            fs.unlinkSync(importSource.path);
           }
         } catch (_) {}
-        tempFilePath = await downloadToTempFile();
+        importSource = { kind: "path", path: await downloadToTempFile() };
         try {
-          await fs.promises.access(tempFilePath, fs.constants.R_OK);
+          await fs.promises.access(importSource.path, fs.constants.R_OK);
         } catch (err2) {
           throw new StageError(
             "temp_file_access",
@@ -610,9 +783,13 @@ async function processDataImport(
       }
     };
     const warnings: string[] = [...preWarnings];
-    await ensureTempFileReadable();
+    await ensureImportReadable();
     assertNotTimedOut();
-    const fileFormat = detectFileFormat(tempFilePath!, preferredExtension);
+    const pathForFormat =
+      importSource!.kind === "path"
+        ? importSource.path
+        : `stream.${preferredExtension || "xlsx"}`;
+    const fileFormat = detectFileFormat(pathForFormat, preferredExtension);
     let finalSelectedSheet = isAllSheets ? undefined : (selectedSheetToUse || undefined);
     let finalSelectedSheetIndex: number | undefined = undefined;
 
@@ -631,12 +808,18 @@ async function processDataImport(
         finalSelectedSheetIndex = 1;
         canResolveByMetadata = false;
       } else {
+        if (importSource!.kind !== "path") {
+          throw new StageError(
+            "temp_file_access",
+            "Se esperaba copia local del archivo para leer las hojas (.xls/.ods)."
+          );
+        }
         try {
-          sheetNames = getSheetNamesFromWorkbook(tempFilePath!);
+          sheetNames = getSheetNamesFromWorkbook(importSource.path);
         } catch (err) {
-          await ensureTempFileReadable();
+          await ensureImportReadable();
           try {
-            sheetNames = getSheetNamesFromWorkbook(tempFilePath!);
+            sheetNames = getSheetNamesFromWorkbook(importSource.path);
           } catch (err2) {
             throw new StageError(
               "temp_file_access",
@@ -662,12 +845,51 @@ async function processDataImport(
     }
 
     let rowGenerator = getRowGenerator(
-      tempFilePath!,
+      importSource!,
       fileFormat,
       finalSelectedSheet,
       finalSelectedSheetIndex,
       isAllSheets
     );
+
+    const wallStart = Date.now();
+    const chunkWallMs = getChunkWallMs();
+
+    const maybeBreakForVercelChunk = async () => {
+      if (chunkWallMs <= 0) return;
+      const insertedThisRun = insertedRows - resumeInsertedRows;
+      if (insertedThisRun < Math.max(currentBatchSize, 1)) return;
+      if (Date.now() - wallStart < chunkWallMs) return;
+      while (isTableCreated && buffer.length > 0) {
+        const chunk = buffer.splice(0, Math.min(buffer.length, currentBatchSize));
+        await insertBatch(sql, tableName, headersSanitized, chunk);
+        insertedRows += chunk.length;
+      }
+      try {
+        await supabaseAdmin
+          .from("data_tables")
+          .update({
+            import_status: "inserting_rows",
+            total_rows: insertedRows,
+            columns: mergeCursorIntoColumns(tableState.columns, {
+              insertedRows,
+              selectedSheet: selectedSheetToUse,
+              parseMode: parseModeToUse,
+              updatedAt: new Date().toISOString(),
+            }),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", dataTableId);
+      } catch (e) {
+        console.warn("[WARN] No se pudo guardar cursor antes de chunk:", e);
+      }
+      throw new ImportChunkBoundaryError({
+        connectionId,
+        dataTableId,
+        parseMode: parseModeToUse,
+        selectedSheet: selectedSheetToUse,
+      });
+    };
 
     let generatorRetried = false;
     const consumeRows = async () => {
@@ -758,6 +980,7 @@ async function processDataImport(
             const chunk = buffer.splice(0, currentBatchSize);
             await insertBatch(sql, tableName, headersSanitized, chunk);
             insertedRows += chunk.length;
+            await maybeBreakForVercelChunk();
 
             if (insertedRows - lastReportedInsertedRows >= PROGRESS_UPDATE_INTERVAL) {
               lastReportedInsertedRows = insertedRows;
@@ -798,6 +1021,11 @@ async function processDataImport(
     try {
       await consumeRows();
     } catch (err) {
+      if (err instanceof ImportChunkBoundaryError) {
+        pendingContinuation = err.payload;
+        terminalStatus = true;
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       if (
         !generatorRetried &&
@@ -805,15 +1033,33 @@ async function processDataImport(
         msg.toLowerCase().includes("cannot access file")
       ) {
         generatorRetried = true;
-        await ensureTempFileReadable();
+        await ensureImportReadable();
+        if (importSource!.kind === "xlsxStream") {
+          try {
+            importSource.stream.destroy();
+          } catch (_) {}
+          importSource = {
+            kind: "xlsxStream",
+            stream: await downloadToXlsxReadableStream(),
+          };
+        }
         rowGenerator = getRowGenerator(
-          tempFilePath!,
+          importSource!,
           fileFormat,
           finalSelectedSheet,
           finalSelectedSheetIndex,
           isAllSheets
         );
-        await consumeRows();
+        try {
+          await consumeRows();
+        } catch (err2) {
+          if (err2 instanceof ImportChunkBoundaryError) {
+            pendingContinuation = err2.payload;
+            terminalStatus = true;
+            return;
+          }
+          throw err2;
+        }
       } else {
         if (msg.toLowerCase().includes("cannot access file")) {
           throw new StageError(
@@ -890,10 +1136,19 @@ async function processDataImport(
         msg = "El schema data_warehouse no existe. Ejecutá las migraciones de Supabase (supabase db push o desde el panel SQL).";
       if (typeof msg === "string" && (msg.includes("ECONNREFUSED") || msg.includes("connection")))
         msg = "No se pudo conectar a la base de datos. Revisá que SUPABASE_DB_URL en .env.local sea correcta (Supabase → Settings → Database).";
+      if (typeof msg === "string" && (msg.includes("ENOSPC") || msg.includes("no space left on device")))
+        msg = enospcImportMessage();
       await markFailed(msg);
     } finally {
-      if (tempFilePath && fs.existsSync(tempFilePath)) {
-        try { fs.unlinkSync(tempFilePath); } catch (_) {}
+      if (importSource?.kind === "path" && fs.existsSync(importSource.path)) {
+        try {
+          fs.unlinkSync(importSource.path);
+        } catch (_) {}
+      }
+      if (importSource?.kind === "xlsxStream") {
+        try {
+          importSource.stream.destroy();
+        } catch (_) {}
       }
       if (sql) await sql.end();
     }
@@ -908,9 +1163,14 @@ async function processDataImport(
       await markFailed("Procesamiento interrumpido.");
     }
   }
+
+  if (pendingContinuation) {
+    await scheduleImportContinuation(supabaseAdmin, pendingContinuation);
+  }
 }
 
-export const maxDuration = 300;
+/** Alineado con vercel.json (plan Pro / Fluid Compute). Hobby tiene tope menor: ajustá el plan o este valor. */
+export const maxDuration = 800;
 
 // --- ENDPOINT PRINCIPAL (Fire-and-Forget) ---
 export async function POST(req: Request) {
@@ -931,6 +1191,19 @@ export async function POST(req: Request) {
     }
 
     const { connectionId, dataTableId } = body;
+    const continuation = Boolean(body?.continuation);
+    const secret = process.env.INTERNAL_PROCESS_EXCEL_SECRET?.trim();
+    if (continuation && secret && req.headers.get("x-internal-process-excel") !== secret) {
+      return NextResponse.json(
+        {
+          error: "No autorizado.",
+          stage: "continuation_auth",
+          details: "Continuación interna rechazada (INTERNAL_PROCESS_EXCEL_SECRET).",
+        },
+        { status: 403 }
+      );
+    }
+
     const parseMode: ParseMode =
       body?.parseMode === "strict" ||
       body?.parseMode === "tolerant" ||
@@ -977,10 +1250,12 @@ export async function POST(req: Request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    const { error: queueError } = await supabaseAdmin
-      .from("data_tables")
-      .update({ import_status: "processing" })
-      .eq("id", dataTableId);
+    const { error: queueError } = continuation
+      ? { error: null as null }
+      : await supabaseAdmin
+          .from("data_tables")
+          .update({ import_status: "processing" })
+          .eq("id", dataTableId);
     if (queueError) {
       // #region agent log
       fetch(DEBUG_INGEST_URL,{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":DEBUG_SESSION_ID},body:JSON.stringify({sessionId:DEBUG_SESSION_ID,runId:String(dataTableId),hypothesisId:"H2",location:"app/api/process-excel/route.ts:1085",message:"queue update failed on POST",data:{queueError:queueError.message},timestamp:Date.now()})}).catch(()=>{});

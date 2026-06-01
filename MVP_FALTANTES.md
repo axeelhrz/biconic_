@@ -64,25 +64,17 @@ La API de agregación (`/api/dashboard/aggregate-data` y la versión pública) c
 | **Fórmulas derivadas** | Las fórmulas que referencian `metric_0`, `metric_1`, etc. están limitadas por un regex estricto. Revisar con casos reales (decimales, espacios, paréntesis) que todas las fórmulas válidas pasen y que el resultado numérico sea el esperado. |
 | **Condiciones en métricas** | Las métricas con `condition` (solo filas que cumplan algo) usan `CASE WHEN ... THEN ... END`. Verificar con datos reales que los totales y subtotales coincidan con lo esperado (por ejemplo, “ventas donde estado = Aprobado”). |
 | **Orden y alias en ORDER BY** | El ordenamiento puede ser por dimensión o por alias de métrica. Si el front envía un alias con caracteres raros o que no coinciden exactamente con lo generado, el ORDER BY puede fallar o no aplicarse. Unificar criterio de nombres (por ejemplo siempre alias interno `metric_i` en el ORDER BY del backend). |
-| **Comparación temporal** | `comparePeriod` (año anterior / mes anterior) hace un segundo query y mezcla resultados. Si las dimensiones no coinciden (por ejemplo, categorías distintas entre períodos), algunas filas pueden quedar sin valor de comparación. Documentar o ajustar el comportamiento cuando falte período anterior. |
+| **Comparación temporal** | Un solo agregado SQL + enriquecimiento en memoria (`applyCompareSpecToRows` en `/api/dashboard/aggregate-data`). Modelo canónico: `compare` (`CompareSpec`) y visualización `dashboardCompareUi`. Legacy `comparePeriod` se normaliza a `CompareSpec`. Si las dimensiones no coinciden entre períodos, algunas filas pueden quedar sin valor de comparación — documentar ese comportamiento. |
 | **Tipos de datos** | Algunos campos vienen como string desde Excel/CSV. El uso de `cast: "numeric"` o `"sanitize"` en la API debe aplicarse de forma consistente en filtros y métricas; revisar casos donde el valor tenga comas, puntos o símbolos de moneda. |
 
-### 2.2 Parámetros avanzados no enviados desde la vista
+### 2.2 Comparaciones y vista (estado actual)
 
-La API ya soporta:
+La API soporta `dimensions`, `cumulative`, `compare` / `comparePeriod` (legacy), `dateDimension`, `dateGroupBy`, etc.
 
-- `dimensions` (varias dimensiones, GROUP BY múltiple)
-- `cumulative` (`running_sum`, `ytd`)
-- `comparePeriod` y `dateDimension`
-
-En el **Viewer** (y en el Editor al previsualizar), el body que se envía a `aggregate-data` solo incluye `dimension` (una), `metrics`, `filters`, `orderBy`, `limit`. **No se envían**:
-
-- `dimensions` (array)
-- `cumulative`
-- `comparePeriod`
-- `dateDimension`
-
-El formulario de métricas en admin (`AddMetricConfigForm`) sí tiene `dimension2`, `cumulative`, `comparePeriod`, `dateDimension`. **Falta**: al guardar el widget, persistir estos campos en `aggregationConfig` y, en el Viewer (y en el Editor al cargar datos del widget), enviarlos en el POST a `aggregate-data` para que los cálculos avanzados se reflejen en la vista.
+- **Viewer y Admin Studio** cargan widgets con `loadPreviewWidgetData`, que envía `compare`, `comparePeriod`, `cumulative`, `dateDimension` y filtros expandidos para comparación temporal.
+- **Configurar métrica** usa `MetricConfigPanel` + `DashboardCompareSpecSection` (`CompareSpec` completo, `periodSource`, `dashboardCompareUi`). Los cambios de comparación recargan datos automáticamente (debounce en studio).
+- **ETL** persiste `compare` y `dashboardCompareUi` al guardar métricas/análisis; el dashboard muestra comparación sin reconfigurar el widget (fallback `ensureDashboardCompareUi` si falta UI explícita).
+- **Formulario legacy** `AddMetricConfigForm` está deprecado; tipos en `lib/dashboard/metricConfigTypes.ts`.
 
 ---
 
@@ -93,7 +85,7 @@ El formulario de métricas en admin (`AddMetricConfigForm`) sí tiene `dimension
 | ✅ | Botón **“Actualizar métricas”** en la vista: llama a `reloadAll()` y recarga todos los widgets (cada uno vuelve a llamar a aggregate o raw). |
 | ✅ | Al cambiar **filtros globales** o filtros de widget, hay un efecto con debounce que recarga los widgets afectados. |
 | ❌ | **Actualización automática en el tiempo**: No hay un intervalo (por ejemplo cada X minutos) que refresque los datos del dashboard sin que el usuario pulse el botón. Para el MVP se puede implementar: un intervalo configurable (ej. 5 min) que llame a `reloadAll()` cuando la pestaña esté visible (usar `document.visibilityState` o similar para no refrescar en segundo plano si no se desea). |
-| ⚠️ | **Datos del ETL**: Los datos mostrados son los que ya están cargados en Supabase (última ejecución del ETL). No hay “actualización automática” del ETL en sí (ej. cron). Eso es un tema de diseño: el usuario puede ejecutar el ETL manualmente y luego refrescar el dashboard; para MVP puede ser suficiente. |
+| ✅ | **Actualización automática del ETL**: Frecuencia configurable en el flujo guiado y en métricas (`layout.guided_config.schedule`). Cron Vercel cada 15 min invoca `/api/etl/run-scheduled` (requiere `CRON_SECRET` o `ETL_SCHEDULER_SECRET` en producción). |
 
 ---
 

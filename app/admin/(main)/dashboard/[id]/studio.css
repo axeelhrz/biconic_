@@ -315,11 +315,26 @@
   }
 }
 
+.studio-blocks--dragging {
+  outline: 1px dashed rgba(34, 211, 238, 0.35);
+  outline-offset: 4px;
+  border-radius: var(--studio-radius-sm);
+}
+
 .studio-block-cell {
   display: flex;
   align-items: flex-start;
   min-width: 0;
   position: relative;
+}
+
+.metric-block--dragging {
+  opacity: 0.92;
+  box-shadow: 0 0 0 2px var(--studio-accent-glow);
+}
+
+.metric-block-drag-handle {
+  touch-action: none;
 }
 /* Asas de redimensionado desde los bordes (solo cuando el widget está seleccionado) */
 .studio-resize-handle {
@@ -404,17 +419,21 @@
   background: rgba(0, 0, 0, 0.25);
   padding: 1rem 1.25rem;
 }
-/* Menú de tres puntos: siempre visible y fácil de tocar en móvil */
-.metric-block-menu-trigger {
+/* Menú de tres puntos y engranaje: siempre visible y fácil de tocar en móvil */
+.metric-block-menu-trigger,
+.metric-block-configure-trigger {
   opacity: 1;
   flex-shrink: 0;
 }
 @media (min-width: 768px) {
-  .studio-block-cell:not([data-selected="true"]) .metric-block .metric-block-menu-trigger {
+  .studio-block-cell:not([data-selected="true"]) .metric-block .metric-block-menu-trigger,
+  .studio-block-cell:not([data-selected="true"]) .metric-block .metric-block-configure-trigger {
     opacity: 0.7;
   }
   .studio-block-cell:hover .metric-block .metric-block-menu-trigger,
-  .studio-block-cell[data-selected="true"] .metric-block .metric-block-menu-trigger {
+  .studio-block-cell:hover .metric-block .metric-block-configure-trigger,
+  .studio-block-cell[data-selected="true"] .metric-block .metric-block-menu-trigger,
+  .studio-block-cell[data-selected="true"] .metric-block .metric-block-configure-trigger {
     opacity: 1;
   }
 }
@@ -447,6 +466,19 @@
   padding: 1.25rem 1.25rem;
   min-height: 200px;
   flex: 1;
+  min-width: 0;
+}
+
+/* Barras horizontales: scroll interno sin recortar etiquetas del eje Y */
+.metric-block-body .dashboard-chart-horizontal-scroll {
+  overflow-y: auto;
+  overflow-x: visible;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.studio-block-cell .metric-block:has(.dashboard-chart-horizontal-scroll) {
+  overflow: visible;
 }
 
 .metric-state-badge {

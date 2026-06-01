@@ -297,13 +297,19 @@
   flex-shrink: 0;
 }
 
-@media (max-width: 1023px) {
+@media (min-width: 768px) {
+  [data-theme="client"] .client-view-grid {
+    row-gap: 0.75rem;
+  }
+}
+
+@media (max-width: 1279px) {
   [data-theme="client"] .client-view-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 639px) {
+@media (max-width: 767px) {
   [data-theme="client"] .client-view-grid {
     grid-template-columns: 1fr;
   }
@@ -322,12 +328,18 @@
   background: var(--client-card);
   border-radius: var(--client-card-radius, var(--client-radius));
   border: var(--client-card-border-width, 1px) solid var(--client-card-border-color, var(--client-border));
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
   display: flex;
   flex-direction: column;
   min-height: 0;
   width: 100%;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+/* En preview admin, contener el contenido para forzar scroll interno en tablas. */
+.admin-view-page [data-theme="client"] .client-view-widget {
+  overflow: hidden;
 }
 
 [data-theme="client"] .client-view-widget.client-view-kpi-widget {
@@ -349,6 +361,22 @@
   flex-direction: column;
 }
 
+.admin-view-page [data-theme="client"] .client-view-widget > div {
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Tarjeta con tabla: respetar la altura fija del Card (no estirar con el contenido)
+   para que el scroll interno se active igual que en el editor del dashboard. */
+.admin-view-page [data-theme="client"] .client-view-widget > div:has(.dashboard-widget-table-scroll) {
+  flex: 0 0 auto;
+  max-height: 100%;
+}
+
+.admin-view-page [data-theme="client"] .client-view-widget:has(.dashboard-widget-table-scroll) {
+  overflow: hidden;
+}
+
 [data-theme="client"] .client-view-widget > div header {
   border-color: var(--client-border) !important;
   color: var(--client-text) !important;
@@ -365,9 +393,12 @@
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 [data-theme="client"] .client-view-widget-header {
@@ -563,8 +594,4 @@
 
 [data-theme="client"] .client-view-filters-radio-group input[type="radio"] {
   accent-color: var(--client-accent);
-}
-
-[data-theme="client"] .client-view-widget canvas {
-  max-height: 100%;
 }

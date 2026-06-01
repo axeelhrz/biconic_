@@ -2,7 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-// import { createClient } from "@/lib/supabase/client"; // Not used directly in fetchData but good to keep if needed later
+import type {
+  DashboardDataset,
+  DashboardDatasetWarnings,
+} from "@/lib/dashboard/dashboardDataset";
+import type { DatasetDimensionsMap } from "@/types/dashboard";
 
 export interface DashboardDataSource {
   id: string;
@@ -16,7 +20,7 @@ export interface DashboardDataSource {
 }
 
 /** semantic_name -> data_source_id -> physical_column_name (Dataset del Dashboard) */
-export type DatasetDimensions = Record<string, Record<string, string>>;
+export type DatasetDimensions = DatasetDimensionsMap;
 
 export interface ETLDataResponse {
   dashboard: { id: string; etl_id?: string | null; etl?: { id: string; title: string; name: string } | null };
@@ -26,6 +30,8 @@ export interface ETLDataResponse {
   etlData: { id: number; name: string; created_at: string; dataArray: any[]; rowCount: number } | null;
   fields: { all: string[]; numeric: string[]; string: string[]; date: string[] };
   datasetDimensions?: DatasetDimensions;
+  dashboardDataset?: DashboardDataset;
+  datasetWarnings?: DashboardDatasetWarnings;
 }
 
 export interface UseAdminDashboardEtlDataReturn {

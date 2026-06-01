@@ -130,14 +130,38 @@ export function getLayoutPadding(style?: ChartStyleConfig | null): number {
   return style?.layoutPadding ?? DEFAULT_LAYOUT_PADDING;
 }
 
-/** Base para calcular %: total del gráfico, por categoría (eje X) o por serie (dataset). */
-export type ChartPercentBasis = "grand_total" | "per_category" | "per_series";
+/**
+ * Base para calcular % en tooltips y etiquetas.
+ * Legacy: `grand_total` → `chart_visible_total`, `per_category` → `per_category_axis` (ver normalize).
+ */
+export type ChartPercentBasis =
+  | "chart_visible_total"
+  | "analysis_total"
+  | "per_series"
+  | "per_category_axis"
+  | "per_dimension_group"
+  | "per_denominator_metric"
+  /** @deprecated usar chart_visible_total */
+  | "grand_total"
+  /** @deprecated usar per_category_axis */
+  | "per_category";
 
 export type ChartLabelDisplayMode = "percent" | "value" | "both";
 
 export function normalizeChartPercentBasis(b?: unknown): ChartPercentBasis {
-  if (b === "per_category" || b === "per_series" || b === "grand_total") return b;
-  return "grand_total";
+  if (b === "grand_total") return "chart_visible_total";
+  if (b === "per_category") return "per_category_axis";
+  if (
+    b === "chart_visible_total" ||
+    b === "analysis_total" ||
+    b === "per_series" ||
+    b === "per_category_axis" ||
+    b === "per_dimension_group" ||
+    b === "per_denominator_metric"
+  ) {
+    return b;
+  }
+  return "chart_visible_total";
 }
 
 export function sumFiniteNumbers(values: unknown[]): number {
@@ -160,8 +184,17 @@ export function resolvePercentDenominator(
   datasetIndex: number
 ): number {
   if (!datasets || datasets.length === 0) return 0;
-  switch (basis) {
-    case "grand_total": {
+  const effective =
+    basis === "grand_total"
+      ? "chart_visible_total"
+      : basis === "per_category"
+        ? "per_category_axis"
+        : basis;
+  switch (effective) {
+    case "chart_visible_total":
+    case "analysis_total":
+    case "per_dimension_group":
+    case "per_denominator_metric": {
       let sum = 0;
       for (const ds of datasets) {
         if (!Array.isArray(ds?.data)) continue;
@@ -169,19 +202,19 @@ export function resolvePercentDenominator(
       }
       return sum;
     }
-    case "per_category": {
+    case "per_category_axis": {
       if (datasets.length === 1) {
         const arr = datasets[0]?.data;
         return Array.isArray(arr) ? sumFiniteNumbers(arr) : 0;
       }
-      let sum = 0;
+      let sumCat = 0;
       for (const ds of datasets) {
         const arr = ds?.data;
         if (!Array.isArray(arr) || dataIndex < 0 || dataIndex >= arr.length) continue;
         const n = Number(arr[dataIndex]);
-        if (Number.isFinite(n)) sum += n;
+        if (Number.isFinite(n)) sumCat += n;
       }
-      return sum;
+      return sumCat;
     }
     case "per_series": {
       const ds = datasets[datasetIndex];
@@ -197,6 +230,8 @@ export type FormatChartPointContext = {
   chart?: { data?: { datasets?: Array<{ data?: unknown[] }> } };
   dataIndex?: number;
   datasetIndex?: number;
+  /** Si está definido y es finito, sustituye el cálculo por datasets (bases avanzadas / análisis). */
+  percentDenominator?: number;
 };
 
 export function formatChartPointDisplay(
@@ -233,7 +268,9 @@ export function formatChartPointDisplay(
     typeof ctx?.datasetIndex === "number" && ctx.datasetIndex >= 0 ? ctx.datasetIndex : 0;
 
   let total: number;
-  if (di < 0) {
+  if (typeof ctx?.percentDenominator === "number" && Number.isFinite(ctx.percentDenominator)) {
+    total = ctx.percentDenominator;
+  } else if (di < 0) {
     const first = datasets[0]?.data;
     total = Array.isArray(first) ? sumFiniteNumbers(first) : 0;
   } else {
@@ -254,7 +291,7 @@ export function formatChartPointDisplay(
 export function getValueFormatter(
   style?: ChartStyleConfig | null,
   labelMode?: ChartLabelDisplayMode,
-  percentBasis: ChartPercentBasis = "grand_total"
+  percentBasis: ChartPercentBasis = "chart_visible_total"
 ) {
   return (value: number, ctx?: FormatChartPointContext) =>
     formatChartPointDisplay(Number(value), style, labelMode ?? "value", percentBasis, ctx);
@@ -467,7 +504,7 @@ export function buildChartOptions(
   type: "bar" | "line" | "pie" | "doughnut" | "horizontalBar",
   style?: ChartStyleConfig | null,
   labelDisplayMode?: ChartLabelDisplayMode,
-  chartPercentBasis: ChartPercentBasis = "grand_total"
+  chartPercentBasis: ChartPercentBasis = "chart_visible_total"
 ): Record<string, unknown> {
   const padding = getLayoutPadding(style);
   const basis = normalizeChartPercentBasis(chartPercentBasis);
@@ -482,6 +519,7 @@ export function buildChartOptions(
   const tickFamily = style?.chartFontFamily;
   const tickColor = style?.axisTickColor;
   const categoryTickOpts: Record<string, unknown> = {
+    clip: false,
     font: { size: tickFontSize, ...(tickFamily ? { family: tickFamily } : {}) },
     ...(tickColor != null && tickColor !== "" ? { color: tickColor } : {}),
     ...(style?.categoryTickMaxRotation != null
@@ -492,6 +530,7 @@ export function buildChartOptions(
       : {}),
   };
   const valueTickOpts: Record<string, unknown> = {
+    clip: false,
     font: { size: tickFontSize, ...(tickFamily ? { family: tickFamily } : {}) },
     ...(tickColor != null && tickColor !== "" ? { color: tickColor } : {}),
   };
@@ -503,7 +542,11 @@ export function buildChartOptions(
     plugins: {
       legend: {
         display: true,
+        fullSize: false,
+        align: "start" as const,
         labels: {
+          boxWidth: 12,
+          padding: 10,
           font: { size: tickFontSize, ...(tickFamily ? { family: tickFamily } : {}) },
           ...(tickColor != null && tickColor !== "" ? { color: tickColor } : {}),
         },
@@ -556,14 +599,23 @@ export function buildChartOptions(
       ticks: { ...valueTickOpts },
     };
     if (type === "horizontalBar") {
+      const horizontalCategoryTicks =
+        style?.categoryMaxTicks != null && Number.isFinite(style.categoryMaxTicks)
+          ? categoryTickOpts
+          : { ...categoryTickOpts, autoSkip: false };
       scales.x = axisXValue;
-      scales.y = { ...axisYCategory, grid: gridY };
+      scales.y = {
+        ...axisYCategory,
+        grid: gridY,
+        ticks: horizontalCategoryTicks,
+      };
     } else {
       scales.x = axisXCategory;
       scales.y = axisYValue;
     }
     return {
       ...base,
+      ...(type === "horizontalBar" ? { indexAxis: "y" as const } : {}),
       scales,
       ...(type === "bar" || type === "horizontalBar"
         ? {

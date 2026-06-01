@@ -237,7 +237,8 @@
   background: var(--client-card);
   border-radius: var(--client-radius, 14px);
   border: var(--client-border-width, 1px) solid var(--client-border);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -467,6 +468,7 @@
   accent-color: var(--client-accent);
 }
 
-[data-theme="client"] .client-view-widget canvas {
-  max-height: 100%;
+/* Ocultar chrome de UI durante exportación PDF/PPT (iconos de advertencia, etc.) */
+.dashboard-exporting [data-export-chrome] {
+  visibility: hidden !important;
 }
