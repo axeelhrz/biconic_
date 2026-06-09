@@ -52,6 +52,10 @@ import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
 import { DashboardDatasetDiagnostics } from "./DashboardDatasetDiagnostics";
 import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
+import {
+  buildGlobalFilterFieldOptions,
+  globalFilterFieldLabel,
+} from "@/lib/dashboard/globalFilterFieldOptions";
 import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
 import { shouldRefetchWidgetOnAggregationPatch } from "@/lib/dashboard/compareAggRefetch";
 import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
@@ -1503,6 +1507,27 @@ export function AdminDashboardStudio({
 
   const studioFiltersFingerprint = useMemo(() => JSON.stringify(studioFilterValues), [studioFilterValues]);
 
+  const globalFilterFieldOptions = useMemo(
+    () =>
+      buildGlobalFilterFieldOptions({
+        etlData,
+        derivedColumns: derivedColumnsFromLayout,
+        savedMetrics,
+        excludeFields: globalFilters.map((f) => f.field),
+      }),
+    [etlData, derivedColumnsFromLayout, savedMetrics, globalFilters]
+  );
+
+  const globalFilterFieldOptionsForEdit = useMemo(
+    () =>
+      buildGlobalFilterFieldOptions({
+        etlData,
+        derivedColumns: derivedColumnsFromLayout,
+        savedMetrics,
+      }),
+    [etlData, derivedColumnsFromLayout, savedMetrics]
+  );
+
   const filtersDataFingerprint = useMemo(
     () =>
       `${globalFiltersFingerprint}\x1e${studioFiltersFingerprint}\x1e${JSON.stringify(dashboardCompareDefaults ?? null)}`,
@@ -2410,10 +2435,7 @@ export function AdminDashboardStudio({
               const value = e.target.value;
               e.target.value = "";
               if (!value) return;
-              const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
-              const hasSemantic = datasetDimensions && Object.keys(datasetDimensions).length > 0 && etlData?.dataSources && etlData.dataSources.length > 1;
-              const semanticLabels: Record<string, string> = { date: "Fecha", region: "Región" };
-              const label = hasSemantic && semanticLabels[value] ? semanticLabels[value] : value;
+              const label = globalFilterFieldLabel(value, etlData, derivedColumnsFromLayout);
               setGlobalFilters((prev) => [
                 ...prev,
                 {
@@ -2430,23 +2452,11 @@ export function AdminDashboardStudio({
             }}
           >
             <option value="">+ Añadir filtro</option>
-            {((): React.ReactNode => {
-              const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
-              const hasSemantic = datasetDimensions && Object.keys(datasetDimensions).length > 0 && etlData?.dataSources && etlData.dataSources.length > 1;
-              const semanticLabels: Record<string, string> = { date: "Fecha", region: "Región" };
-              if (hasSemantic && datasetDimensions) {
-                return Object.keys(datasetDimensions).map((key) => (
-                  <option key={key} value={key}>
-                    {semanticLabels[key] || key}
-                  </option>
-                ));
-              }
-              return (etlData?.fields?.all ?? []).map((field) => (
-                <option key={field} value={field}>
-                  {field}
-                </option>
-              ));
-            })()}
+            {globalFilterFieldOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
           <button
             type="button"
@@ -2532,23 +2542,11 @@ export function AdminDashboardStudio({
                   }}
                   className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
                 >
-                  {((): React.ReactNode => {
-                    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
-                    const hasSemantic = datasetDimensions && Object.keys(datasetDimensions).length > 0 && etlData?.dataSources && etlData.dataSources.length > 1;
-                    const semanticLabels: Record<string, string> = { date: "Fecha", region: "Región" };
-                    if (hasSemantic && datasetDimensions) {
-                      return Object.keys(datasetDimensions).map((key) => (
-                        <option key={key} value={key}>
-                          {semanticLabels[key] || key}
-                        </option>
-                      ));
-                    }
-                    return (etlData?.fields?.all ?? []).map((field) => (
-                      <option key={field} value={field}>
-                        {field}
-                      </option>
-                    ));
-                  })()}
+                  {globalFilterFieldOptionsForEdit.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>
