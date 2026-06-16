@@ -763,7 +763,14 @@ export function DashboardViewer({
         primaryTableName,
         primaryDateFields,
         datasetDimensions,
-        derivedColumns: derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined,
+        derivedColumns:
+          derivedColumnsFromEtl.length > 0
+            ? derivedColumnsFromEtl.map((d) => ({
+                name: d.name,
+                expression: d.expression,
+                defaultAggregation: d.defaultAggregation ?? "SUM",
+              }))
+            : undefined,
         distinctUrl,
         safeJsonResponse,
       });
