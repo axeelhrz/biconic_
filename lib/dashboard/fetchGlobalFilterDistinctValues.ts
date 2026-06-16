@@ -3,6 +3,7 @@ import {
   getSourcesForSemanticDistinct,
   type DataSourceForDistinct,
 } from "@/lib/dashboard/applyGlobalFiltersToWidget";
+import type { DerivedColumnRef } from "@/lib/dashboard/metricExpressionToSql";
 
 const DATE_DISTINCT_TRANSFORMS = new Set(["YEAR", "MONTH", "DAY", "QUARTER", "SEMESTER"]);
 
@@ -46,6 +47,7 @@ export async function fetchGlobalFilterDistinctValues(options: {
   primaryTableName: string | undefined;
   primaryDateFields: string[];
   datasetDimensions: Record<string, Record<string, string>> | undefined;
+  derivedColumns?: DerivedColumnRef[];
   distinctUrl: string;
   safeJsonResponse: (res: Response) => Promise<unknown>;
 }): Promise<Record<string, unknown[]>> {
@@ -56,6 +58,7 @@ export async function fetchGlobalFilterDistinctValues(options: {
     primaryTableName,
     primaryDateFields,
     datasetDimensions,
+    derivedColumns,
     distinctUrl,
     safeJsonResponse,
   } = options;
@@ -111,11 +114,15 @@ export async function fetchGlobalFilterDistinctValues(options: {
           field: string;
           limit: number;
           transform?: string;
+          derivedColumns?: DerivedColumnRef[];
         } = {
           tableName: target.tableName,
           field: physicalField,
           limit: 200,
         };
+        if (derivedColumns && derivedColumns.length > 0) {
+          body.derivedColumns = derivedColumns;
+        }
         if (isDateField) {
           const t =
             filterOp === "YEAR_MONTH"

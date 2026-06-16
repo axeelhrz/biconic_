@@ -499,80 +499,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Filtros inteligentes: validar que cada filtro tenga su columna en la tabla; omitir los que no y devolver filterWarnings
     const tableColumnNames = await fetchTableColumnNames(schema, table);
     const tableColumnsSet = tableColumnNames ? new Set(tableColumnNames) : null;
-    const filterWarnings: Array<{ filterId?: string; field: string; reason: string }> = [];
-    const validFilters: Filter[] = [];
-    if (body.filters && body.filters.length > 0) {
-      for (const f of body.filters) {
-        const fieldNorm = (f.field || "").replace(/"/g, "").trim().toLowerCase();
-        if (tableColumnsSet && fieldNorm && !tableColumnsSet.has(fieldNorm)) {
-          filterWarnings.push({
-            filterId: (f as Filter & { id?: string }).id,
-            field: f.field,
-            reason: "column_not_in_table",
-          });
-        } else {
-          validFilters.push(f);
-        }
-      }
-    } else {
-      validFilters.push(...(body.filters || []));
-    }
 
-    const compareSpecForQuery = normalizeAggregationCompare({
-      compare: body.compare,
-      comparePeriod: body.comparePeriod,
-      compareFixedValue: body.compareFixedValue,
-      transformCompare: body.transformCompare,
-      transformCompareFixedValue: body.transformCompareFixedValue,
-      dateGroupBy: body.dateGroupBy,
-      dateDimension: body.dateDimension,
-    });
-    let filtersForQuery: Filter[] = [...validFilters];
-    const compareFieldForQuery =
-      body.dateGroupBy?.field?.trim() ||
-      (compareSpecForQuery.kind === "temporal" || compareSpecForQuery.kind === "cumulative"
-        ? compareSpecForQuery.timeColumn?.trim()
-        : "") ||
-      String(body.dateDimension ?? "").trim();
-    if (compareNeedsTimeGroupedRows(compareSpecForQuery) && compareFieldForQuery) {
-      const relatedDateFields = [
-        body.dateDimension,
-        compareSpecForQuery.kind === "temporal" || compareSpecForQuery.kind === "cumulative"
-          ? compareSpecForQuery.timeColumn
-          : undefined,
-      ].filter((x): x is string => !!String(x ?? "").trim());
-      filtersForQuery = expandAggregationFiltersForTemporalCompare(
-        filtersForQuery as AggregationFilterLike[],
-        {
-          compareField: compareFieldForQuery,
-          compareSpec: compareSpecForQuery,
-          aggComparePeriodSource: (body as { comparePeriodSource?: string }).comparePeriodSource,
-          relatedDateFields,
-        }
-      ) as Filter[];
-    }
-
-    // Helper: condición WHEN para métrica (solo la parte "campo op valor")
-    const buildWhenClause = (cond: MetricCondition): string => {
-      const op = (cond.operator || "=").toUpperCase().trim();
-      const f = quotedColumn(cond.field);
-      if (op === "IN") {
-        const list = (Array.isArray(cond.value) ? cond.value : [cond.value])
-          .map((x: any) => toSqlLiteral(x))
-          .join(", ");
-        if (!list.trim()) return "TRUE";
-        return `${f} IN (${list})`;
-      }
-      if ((op === "IS" || op === "IS NOT") && cond.value == null) return `${f} ${op} NULL`;
-      return `${f} ${op} ${toSqlLiteral(cond.value)}`;
-    };
-    const buildConditionExpr = (cond: MetricCondition, thenExpr: string): string =>
-      `CASE WHEN ${buildWhenClause(cond)} THEN ${thenExpr} END`;
-
-    // --- Resolver columnas derivadas: fusionar las del request con las de la DB ---
+    // --- Resolver columnas derivadas antes de validar filtros ---
     const derivedByName: Record<string, DerivedColumnRef> = {};
 
     const addDerivedFromArray = (arr: unknown[]) => {
@@ -594,7 +524,6 @@ export async function POST(req: NextRequest) {
 
     if (Array.isArray(body.derivedColumns)) addDerivedFromArray(body.derivedColumns);
 
-    // Buscar en la DB: por etlId explícito, por output_table, o por etl_runs_log
     let etlIdForLookup: string | null = body.etlId ?? null;
     if (!etlIdForLookup && table) {
       const tbl = table.toLowerCase();
@@ -697,7 +626,6 @@ export async function POST(req: NextRequest) {
         }
       } catch { /* ignore */ }
     }
-    // Fusionar métricas guardadas enviadas en el body (prioridad al cliente para multi-ETL o cuando el lookup falla)
     if (Array.isArray(body.savedMetrics) && body.savedMetrics.length > 0) {
       for (const sm of body.savedMetrics) {
         const name = typeof sm?.name === "string" ? String(sm.name).trim() : "";
@@ -721,6 +649,78 @@ export async function POST(req: NextRequest) {
       if (!field || !String(field).trim()) return undefined;
       return derivedByName[String(field).trim().toLowerCase()];
     };
+
+    // Filtros inteligentes: validar columnas físicas o derivadas; omitir las demás
+    const filterWarnings: Array<{ filterId?: string; field: string; reason: string }> = [];
+    const validFilters: Filter[] = [];
+    if (body.filters && body.filters.length > 0) {
+      for (const f of body.filters) {
+        const fieldNorm = (f.field || "").replace(/"/g, "").trim().toLowerCase();
+        const isDerivedField = !!fieldNorm && !!derivedByName[fieldNorm];
+        if (tableColumnsSet && fieldNorm && !tableColumnsSet.has(fieldNorm) && !isDerivedField) {
+          filterWarnings.push({
+            filterId: (f as Filter & { id?: string }).id,
+            field: f.field,
+            reason: "column_not_in_table",
+          });
+        } else {
+          validFilters.push(f);
+        }
+      }
+    } else {
+      validFilters.push(...(body.filters || []));
+    }
+
+    const compareSpecForQuery = normalizeAggregationCompare({
+      compare: body.compare,
+      comparePeriod: body.comparePeriod,
+      compareFixedValue: body.compareFixedValue,
+      transformCompare: body.transformCompare,
+      transformCompareFixedValue: body.transformCompareFixedValue,
+      dateGroupBy: body.dateGroupBy,
+      dateDimension: body.dateDimension,
+    });
+    let filtersForQuery: Filter[] = [...validFilters];
+    const compareFieldForQuery =
+      body.dateGroupBy?.field?.trim() ||
+      (compareSpecForQuery.kind === "temporal" || compareSpecForQuery.kind === "cumulative"
+        ? compareSpecForQuery.timeColumn?.trim()
+        : "") ||
+      String(body.dateDimension ?? "").trim();
+    if (compareNeedsTimeGroupedRows(compareSpecForQuery) && compareFieldForQuery) {
+      const relatedDateFields = [
+        body.dateDimension,
+        compareSpecForQuery.kind === "temporal" || compareSpecForQuery.kind === "cumulative"
+          ? compareSpecForQuery.timeColumn
+          : undefined,
+      ].filter((x): x is string => !!String(x ?? "").trim());
+      filtersForQuery = expandAggregationFiltersForTemporalCompare(
+        filtersForQuery as AggregationFilterLike[],
+        {
+          compareField: compareFieldForQuery,
+          compareSpec: compareSpecForQuery,
+          aggComparePeriodSource: (body as { comparePeriodSource?: string }).comparePeriodSource,
+          relatedDateFields,
+        }
+      ) as Filter[];
+    }
+
+    // Helper: condición WHEN para métrica (solo la parte "campo op valor")
+    const buildWhenClause = (cond: MetricCondition): string => {
+      const op = (cond.operator || "=").toUpperCase().trim();
+      const f = quotedColumn(cond.field);
+      if (op === "IN") {
+        const list = (Array.isArray(cond.value) ? cond.value : [cond.value])
+          .map((x: any) => toSqlLiteral(x))
+          .join(", ");
+        if (!list.trim()) return "TRUE";
+        return `${f} IN (${list})`;
+      }
+      if ((op === "IS" || op === "IS NOT") && cond.value == null) return `${f} ${op} NULL`;
+      return `${f} ${op} ${toSqlLiteral(cond.value)}`;
+    };
+    const buildConditionExpr = (cond: MetricCondition, thenExpr: string): string =>
+      `CASE WHEN ${buildWhenClause(cond)} THEN ${thenExpr} END`;
 
     const metricsBase = body.metrics.filter((m) => !m.formula);
     const metricsFormula = body.metrics.filter((m) => m.formula);
@@ -1037,7 +1037,8 @@ export async function POST(req: NextRequest) {
     if (filtersForQuery.length > 0) {
       const whereClauses = filtersForQuery
         .map((f) => {
-          const col = quotedColumn(f.field);
+          const resolvedFieldSql = resolveFieldToSql(f.field, derivedByName);
+          const col = resolvedFieldSql ?? quotedColumn(f.field);
           const op = (f.operator || "=").toUpperCase().trim();
 
           const useDateExprForYearLike =
@@ -1139,7 +1140,7 @@ export async function POST(req: NextRequest) {
             )} AND ${toSqlLiteral(to)}`;
           }
           if ((op === "IS" || op === "IS NOT") && f.value === null)
-            return `${col} ${op} NULL`;
+            return `${fieldExpression} ${op} NULL`;
 
           if (op === "EXACT") return `${fieldExpression} = ${toSqlLiteral(f.value)}`;
           if (op === "CONTAINS") return `${fieldExpression}::text ILIKE '%' || ${toSqlLiteral(String(f.value ?? ""))} || '%'`;

@@ -7,6 +7,10 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { Database } from "@/lib/supabase/database.types";
 import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
+import {
+  resolveFieldToSql,
+  type DerivedColumnRef,
+} from "@/lib/dashboard/metricExpressionToSql";
 
 interface Filter {
   field: string;
@@ -21,6 +25,7 @@ interface DistinctRequest {
   limit?: number; // 1..1000
   order?: "ASC" | "DESC";
   transform?: "DAY" | "MONTH" | "QUARTER" | "SEMESTER" | "YEAR";
+  derivedColumns?: Array<{ name: string; expression: string; defaultAggregation?: string }>;
 }
 
 const ALLOWED_OPERATORS = new Set([
@@ -104,6 +109,31 @@ export async function POST(req: NextRequest) {
     }
     const physicalField = fieldToPhysical(body.field);
 
+    const derivedByName: Record<string, DerivedColumnRef> = {};
+    if (Array.isArray(body.derivedColumns)) {
+      for (const d of body.derivedColumns) {
+        const name = String(d?.name ?? "").trim();
+        const expression = String(d?.expression ?? "").trim();
+        if (!name || !expression) continue;
+        const key = name.toLowerCase();
+        if (!derivedByName[key]) {
+          derivedByName[key] = {
+            name,
+            expression,
+            defaultAggregation: String(d?.defaultAggregation ?? "SUM"),
+          };
+        }
+      }
+    }
+
+    const resolveFilterFieldSql = (fieldName: string): string => {
+      const physical = fieldToPhysical(fieldName);
+      const resolved = resolveFieldToSql(physical, derivedByName);
+      if (resolved) return resolved;
+      const safe = physical.replace(/"/g, '""');
+      return `"${safe}"`;
+    };
+
     const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -128,7 +158,9 @@ export async function POST(req: NextRequest) {
     const safeField = physicalField.replace(/"/g, '""');
     const safeTable = table.replace(/"/g, '""');
 
-    let selectExpression = `"${safeField}"`;
+    const isDerivedField = !!derivedByName[physicalField.toLowerCase()];
+    const baseFieldSql = resolveFilterFieldSql(body.field);
+    let selectExpression = isDerivedField ? `(${baseFieldSql})::text` : `"${safeField}"`;
 
     const transformOp = (body.transform || "").toUpperCase();
     console.log("[distinct-values API] Transform op:", transformOp);
@@ -140,16 +172,16 @@ export async function POST(req: NextRequest) {
         ELSE "${safeField}"::date
       END
     )`;
-    if (transformOp === "YEAR") {
+    if (!isDerivedField && transformOp === "YEAR") {
       console.log("[distinct-values API] Applying YEAR transformation");
       selectExpression = `EXTRACT(YEAR FROM ${dateExpr})::text`;
-    } else if (transformOp === "MONTH") {
+    } else if (!isDerivedField && transformOp === "MONTH") {
       selectExpression = `TO_CHAR(${dateExpr}::timestamp, 'YYYY-MM')`;
-    } else if (transformOp === "QUARTER") {
+    } else if (!isDerivedField && transformOp === "QUARTER") {
       selectExpression = `(EXTRACT(YEAR FROM ${dateExpr})::text || '-Q' || EXTRACT(QUARTER FROM ${dateExpr})::text)`;
-    } else if (transformOp === "SEMESTER") {
+    } else if (!isDerivedField && transformOp === "SEMESTER") {
       selectExpression = `(EXTRACT(YEAR FROM ${dateExpr})::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${dateExpr}) <= 6 THEN '1' ELSE '2' END)`;
-    } else if (transformOp === "DAY") {
+    } else if (!isDerivedField && transformOp === "DAY") {
       selectExpression = `(${dateExpr}::timestamp)::date::text`;
     }
 
@@ -167,7 +199,7 @@ export async function POST(req: NextRequest) {
       const whereClauses = body.filters
         .filter((f) => f.field && f.operator)
         .map((f) => {
-          const fld = fieldToPhysical(f.field!).replace(/"/g, '""');
+          const fieldSql = resolveFilterFieldSql(f.field!);
           const op = (f.operator || "=").toUpperCase().trim();
           if (!ALLOWED_OPERATORS.has(op)) {
             throw new Error(`Operador no permitido: ${op}`);
@@ -176,7 +208,7 @@ export async function POST(req: NextRequest) {
             const arr = Array.isArray(f.value) ? f.value : [];
             const list = arr.map((x) => toSqlLiteral(x)).join(", ");
             if (!list) return "TRUE";
-            return `"${fld}" IN (${list})`;
+            return `${fieldSql} IN (${list})`;
           }
           if (op === "BETWEEN") {
             let from: any;
@@ -189,17 +221,17 @@ export async function POST(req: NextRequest) {
             }
             if (typeof from === "undefined" || typeof to === "undefined") {
               throw new Error(
-                `Filtro BETWEEN requiere 'from' y 'to' para el campo ${fld}`
+                `Filtro BETWEEN requiere 'from' y 'to' para el campo ${f.field}`
               );
             }
-            return `"${fld}" BETWEEN ${toSqlLiteral(from)} AND ${toSqlLiteral(
+            return `${fieldSql} BETWEEN ${toSqlLiteral(from)} AND ${toSqlLiteral(
               to
             )}`;
           }
           if ((op === "IS" || op === "IS NOT") && f.value === null) {
-            return `"${fld}" ${op} NULL`;
+            return `${fieldSql} ${op} NULL`;
           }
-          return `"${fld}" ${op} ${toSqlLiteral(f.value)}`;
+          return `${fieldSql} ${op} ${toSqlLiteral(f.value)}`;
         })
         .join(" AND ");
       if (whereClauses) query += ` WHERE ${whereClauses}`;

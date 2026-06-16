@@ -550,6 +550,9 @@ export function DashboardViewer({
   const widgetLoadGenRef = useRef<Record<string, number>>({});
   const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalysisForMerge[]>([]);
   const [savedMetricsFromEtl, setSavedMetricsFromEtl] = useState<SavedMetricForAnalysisMerge[]>([]);
+  const [derivedColumnsFromEtl, setDerivedColumnsFromEtl] = useState<
+    Array<{ name: string; expression: string; defaultAggregation?: string }>
+  >([]);
   const etlMetricsFetchedRef = useRef(false);
 
   const { data: etlData, error: etlDataError } = useDashboardEtlData(dashboardId, apiEndpoints?.etlData);
@@ -760,6 +763,14 @@ export function DashboardViewer({
         primaryTableName,
         primaryDateFields,
         datasetDimensions,
+        derivedColumns:
+          derivedColumnsFromEtl.length > 0
+            ? derivedColumnsFromEtl.map((d) => ({
+                name: d.name,
+                expression: d.expression,
+                defaultAggregation: d.defaultAggregation ?? "SUM",
+              }))
+            : undefined,
         distinctUrl,
         safeJsonResponse,
       });
@@ -770,7 +781,7 @@ export function DashboardViewer({
     return () => {
       cancelled = true;
     };
-  }, [etlData, globalFilters, apiEndpoints?.distinctValues]);
+  }, [etlData, globalFilters, derivedColumnsFromEtl, apiEndpoints?.distinctValues]);
 
   useEffect(() => {
     if (!etlData || etlMetricsFetchedRef.current) return;
@@ -783,18 +794,26 @@ export function DashboardViewer({
     (async () => {
       const allMetrics: SavedMetricForAnalysisMerge[] = [];
       const allAnalyses: SavedAnalysisForMerge[] = [];
+      const allDerived: Array<{ name: string; expression: string; defaultAggregation?: string }> = [];
       for (const etlId of etlIds) {
         try {
           const res = await fetch(`/api/etl/${etlId}/metrics`);
           const json = await safeJsonResponse<{
             ok?: boolean;
-            data?: { savedMetrics?: unknown[]; savedAnalyses?: unknown[] };
+            data?: {
+              savedMetrics?: unknown[];
+              savedAnalyses?: unknown[];
+              datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation?: string }[] };
+            };
           }>(res);
           if (json.ok && Array.isArray(json.data?.savedMetrics)) {
             allMetrics.push(...(json.data.savedMetrics as SavedMetricForAnalysisMerge[]));
           }
           if (json.ok && Array.isArray(json.data?.savedAnalyses)) {
             allAnalyses.push(...(json.data.savedAnalyses as SavedAnalysisForMerge[]));
+          }
+          if (json.ok && Array.isArray(json.data?.datasetConfig?.derivedColumns)) {
+            allDerived.push(...json.data.datasetConfig.derivedColumns);
           }
         } catch {
           // ignore per-ETL errors
@@ -803,6 +822,13 @@ export function DashboardViewer({
       if (cancelled) return;
       if (allMetrics.length > 0) setSavedMetricsFromEtl(allMetrics);
       if (allAnalyses.length > 0) setSavedAnalyses(allAnalyses);
+      if (allDerived.length > 0) {
+        setDerivedColumnsFromEtl((prev) => {
+          const byName = new Set(prev.map((d) => d.name.toLowerCase()));
+          const newOnes = allDerived.filter((d) => !byName.has(d.name.toLowerCase()));
+          return newOnes.length > 0 ? [...prev, ...newOnes] : prev.length > 0 ? prev : allDerived;
+        });
+      }
     })();
     return () => {
       cancelled = true;
@@ -813,6 +839,7 @@ export function DashboardViewer({
     etlMetricsFetchedRef.current = false;
     setSavedAnalyses([]);
     setSavedMetricsFromEtl([]);
+    setDerivedColumnsFromEtl([]);
   }, [dashboardId]);
 
   const getTableNameForWidget = useCallback(
@@ -1189,6 +1216,7 @@ export function DashboardViewer({
             datasetDimensions,
             savedMetrics: savedMetricsPool.length > 0 ? savedMetricsPool : layoutSavedMetrics,
             globalFilters: [...mappedGlobalFilters, ...dimensionDefaultFiltersMapped],
+            derivedColumns: derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined,
             dashboardCompareDefaults,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
@@ -1260,6 +1288,7 @@ export function DashboardViewer({
             sourceId: widgetSourceId,
             datasetDimensions,
             globalFilters: mergedForRaw,
+            derivedColumns: derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined,
             dashboardCompareDefaults,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
@@ -1327,6 +1356,7 @@ export function DashboardViewer({
       pageLayout,
       savedAnalyses,
       savedMetricsFromEtl,
+      derivedColumnsFromEtl,
       dashboardCompareDefaults,
     ]
   );
