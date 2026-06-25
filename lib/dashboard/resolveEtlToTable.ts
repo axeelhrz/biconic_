@@ -1,4 +1,6 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppDbClient } from "@/lib/supabase/db-client";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 
 export type ResolvedEtlTable = {
   schema: string;
@@ -9,7 +11,7 @@ export type ResolvedEtlTable = {
 };
 
 export async function resolveEtlToTableAndFields(
-  supabase: SupabaseClient,
+  supabase: AppDbClient,
   etlId: string
 ): Promise<ResolvedEtlTable | null> {
   const { data: latestRun } = await supabase
@@ -45,18 +47,64 @@ export async function resolveEtlToTableAndFields(
 
   const schema = latestRun.destination_schema || "etl_output";
   const tableName = latestRun.destination_table_name;
-  const schemaClient = supabase.schema(schema as "public" | "etl_output") as ReturnType<
-    SupabaseClient["schema"]
-  >;
-  const { count } = await schemaClient
+  const schemaClient = supabase.schema(schema as "public" | "etl_output");
+  const countRes = await schemaClient
     .from(tableName)
     .select("*", { count: "exact", head: true });
-  const rowCount = count ?? 0;
+  let rowCount = countRes.count ?? 0;
   let sampleData: Record<string, unknown>[] = [];
   if (rowCount > 0) {
     const { data } = await schemaClient.from(tableName).select("*").limit(1);
     sampleData = (data as Record<string, unknown>[]) || [];
   }
+
+  if (rowCount === 0 && shouldUseOwnBackend()) {
+    const { data: etlRow } = await supabase
+      .from("etl")
+      .select("output_table")
+      .eq("id", etlId)
+      .maybeSingle();
+    const outputTable = (etlRow as { output_table?: string | null } | null)?.output_table?.trim();
+    if (outputTable) {
+      const admin = createServiceRoleClient();
+      if (admin._sql) {
+        const safeTable = outputTable.replace(/"/g, '""');
+        const countRows = await admin._sql.unsafe<{ c: number }[]>(
+          `SELECT COUNT(*)::int AS c FROM etl_output."${safeTable}"`
+        );
+        rowCount = Number(countRows[0]?.c ?? 0);
+        if (rowCount > 0) {
+          const sampleRows = await admin._sql.unsafe<Record<string, unknown>[]>(
+            `SELECT * FROM etl_output."${safeTable}" LIMIT 1`
+          );
+          sampleData = sampleRows ?? [];
+        }
+        if (rowCount > 0) {
+          return {
+            schema: "etl_output",
+            tableName: outputTable,
+            created_at: latestRun.completed_at ?? null,
+            sampleData,
+            rowCount,
+          };
+        }
+      }
+    }
+  }
+
+  if (rowCount > 0 && sampleData.length === 0 && shouldUseOwnBackend()) {
+    const admin = createServiceRoleClient();
+    if (admin._sql) {
+      const safeSchema = schema.replace(/"/g, '""');
+      const safeTable = String(tableName).replace(/"/g, '""');
+      const sampleRows = await admin._sql.unsafe<Record<string, unknown>[]>(
+        `SELECT * FROM "${safeSchema}"."${safeTable}" LIMIT 1`
+      );
+      sampleData = sampleRows ?? [];
+    }
+  }
+
+  if (rowCount === 0) return null;
   return {
     schema,
     tableName,

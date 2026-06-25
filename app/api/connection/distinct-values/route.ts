@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
+import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { Client as PgClient } from "pg";
 import mysql from "mysql2/promise";
 import { quoteIdent, quoteQualified } from "@/lib/sql/helpers";
@@ -38,9 +41,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });
     }
 
-    const { data: conn, error: connError } = await supabase
+    const dbClient = shouldUseOwnBackend() ? createServiceRoleClient() : supabase;
+    const { data: conn, error: connError } = await dbClient
       .from("connections")
-      .select("id, user_id, type, db_host, db_name, db_user, db_port, db_password_encrypted")
+      .select(
+        shouldUseOwnBackend()
+          ? "*"
+          : "id, user_id, type, db_host, db_name, db_user, db_port, db_password_encrypted"
+      )
       .eq("id", String(connectionId))
       .maybeSingle();
     if (connError || !conn) {
@@ -52,27 +60,23 @@ export async function POST(req: NextRequest) {
 
     const type = (conn as any).type;
     if (type === "excel_file" || type === "excel") {
-      const { data: meta } = await supabase
+      const { data: meta } = await dbClient
         .from("data_tables")
         .select("physical_schema_name, physical_table_name")
         .eq("connection_id", String(connectionId))
-        .single();
+        .maybeSingle();
       if (!meta?.physical_table_name) {
         return NextResponse.json(
           { ok: false, error: "Metadatos de Excel no encontrados" },
           { status: 404 }
         );
       }
-      const schema = (meta as any).physical_schema_name || "data_warehouse";
-      const table = (meta as any).physical_table_name;
-      const dbUrl = process.env.SUPABASE_DB_URL;
-      if (!dbUrl) {
-        return NextResponse.json(
-          { ok: false, error: "SUPABASE_DB_URL no configurado" },
-          { status: 500 }
-        );
-      }
-      const client = new PgClient({ connectionString: dbUrl });
+      const schema = EXCEL_PHYSICAL_SCHEMA;
+      const table = (meta as { physical_table_name: string }).physical_table_name;
+      const client = new PgClient({
+        connectionString: getInternalDbUrl(),
+        ssl: false,
+      } as { connectionString: string; ssl: boolean });
       await client.connect();
       try {
         const col = quoteIdent(columnName.trim(), "postgres");

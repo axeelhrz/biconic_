@@ -6,8 +6,10 @@ import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { toast } from "sonner";
 import ConnectionForm, { type ExcelUploadErrorInfo } from "./ConnectionForm";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
+import { uploadExcelViaOwnBackend } from "@/lib/excel-import/upload-excel-client";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppDbClient } from "@/lib/supabase/db-client";
 
 type NewConnectionDialogProps = {
   open: boolean;
@@ -104,7 +106,7 @@ export default function NewConnectionDialog({
   };
 
   const getActiveClientId = async (
-    supabase: SupabaseClient,
+    supabase: AppDbClient,
     userId: string
   ): Promise<string> => {
     // 1. Intentamos obtener el cliente asociado
@@ -145,59 +147,74 @@ export default function NewConnectionDialog({
       }
 
       const activeClientId = await getActiveClientId(supabase, user.id);
-      const filePath = `${user.id}/${new Date().getTime()}.${fileExt}`;
 
-      toast.info("Subiendo archivo de forma segura...");
-      const { error: uploadError } = await supabase.storage
-        .from("excel-uploads")
-        .upload(filePath, file);
-      if (uploadError) {
-        throw toStageError(
-          "upload_storage",
-          "Error al subir el archivo.",
-          uploadError.message
-        );
+      let newConnectionId: string;
+      let dataTableId: string;
+
+      if (isOwnBackendEnabled()) {
+        toast.info("Subiendo archivo de forma segura...");
+        const uploaded = await uploadExcelViaOwnBackend({
+          file,
+          connectionName,
+          clientId: activeClientId,
+        });
+        newConnectionId = uploaded.connectionId;
+        dataTableId = uploaded.dataTableId;
+      } else {
+        const filePath = `${user.id}/${new Date().getTime()}.${fileExt}`;
+
+        toast.info("Subiendo archivo de forma segura...");
+        const { error: uploadError } = await supabase.storage
+          .from("excel-uploads")
+          .upload(filePath, file);
+        if (uploadError) {
+          throw toStageError(
+            "upload_storage",
+            "Error al subir el archivo.",
+            uploadError.message
+          );
+        }
+
+        const { data: newConnection, error: connectionError } = await supabase
+          .from("connections")
+          .insert({
+            name: connectionName,
+            user_id: user.id,
+            client_id: activeClientId,
+            type: "excel_file",
+            storage_object_path: filePath,
+            original_file_name: file.name,
+          })
+          .select("id")
+          .single();
+        if (connectionError) {
+          throw toStageError(
+            "insert_connection",
+            "Error al crear la conexión.",
+            connectionError.message
+          );
+        }
+
+        newConnectionId = newConnection.id;
+        const { data: dataTableMeta, error: metaError } = await supabase
+          .from("data_tables")
+          .insert({
+            connection_id: newConnectionId,
+            import_status: "pending",
+            physical_table_name: `import_${newConnectionId.replaceAll("-", "_")}`,
+          })
+          .select("id")
+          .single();
+        if (metaError || !dataTableMeta) {
+          throw toStageError(
+            "insert_data_table",
+            "No se pudo crear el registro de metadatos.",
+            metaError?.message
+          );
+        }
+
+        dataTableId = dataTableMeta.id;
       }
-
-      const { data: newConnection, error: connectionError } = await supabase
-        .from("connections")
-        .insert({
-          name: connectionName,
-          user_id: user.id,
-          client_id: activeClientId,
-          type: "excel_file",
-          storage_object_path: filePath,
-          original_file_name: file.name,
-        })
-        .select("id")
-        .single();
-      if (connectionError) {
-        throw toStageError(
-          "insert_connection",
-          "Error al crear la conexión.",
-          connectionError.message
-        );
-      }
-
-      const newConnectionId = newConnection.id;
-      const { data: dataTableMeta, error: metaError } = await supabase
-        .from("data_tables")
-        .insert({
-          connection_id: newConnectionId,
-          import_status: "pending",
-          physical_table_name: `import_${newConnectionId.replaceAll("-", "_")}`,
-        })
-        .select("id")
-        .single();
-      if (metaError || !dataTableMeta) {
-        throw toStageError(
-          "insert_data_table",
-          "No se pudo crear el registro de metadatos.",
-          metaError?.message
-        );
-      }
-
-      const dataTableId = dataTableMeta.id;
 
       let selectedSheet = options.selectedSheet;
       const wantsAllSheets = selectedSheet === "__ALL__";

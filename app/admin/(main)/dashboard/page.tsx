@@ -94,7 +94,7 @@ function AdminDashboardContent() {
           className="flex items-center gap-1 rounded-xl border p-1"
           style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
         >
-          {(["todos", "publicados", "borradores"] as const).map((f) => (
+          {(["todos", "publicados", "borradores"] as const).map((f: any) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -128,7 +128,7 @@ export default function AdminDashboardPage() {
         <div className="flex w-full flex-col gap-8 p-6">
           <div className="h-32 rounded-3xl animate-pulse" style={{ background: "var(--platform-surface-hover)" }} />
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
+            {[1, 2, 3, 4, 5, 6].map((i: any) => (
               <div
                 key={i}
                 className="h-[220px] rounded-2xl animate-pulse border"

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
@@ -144,7 +145,7 @@ function buildWhereClausePg(
   knownColumns: string[] = []
 ) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = aliases
       ? resolveColumnPg(c.column, aliases, knownColumns)
       : cleanSingleTableCol(c.column);
@@ -164,16 +165,16 @@ function buildWhereClausePg(
         params.push(`%${c.value ?? ""}`);
         return `${col} ILIKE $${params.length}`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
         return `${col} IN (${idxs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
@@ -190,7 +191,7 @@ function buildWhereClausePg(
 
 function buildWhereClauseMy(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     let cleanCol = c.column;
     if (cleanCol.startsWith("primary_")) cleanCol = cleanCol.substring(8);
     const m = cleanCol.match(/^join_\d+[._](.+)$/);
@@ -213,13 +214,13 @@ function buildWhereClauseMy(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} LIKE ?`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} IN (${qs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} NOT IN (${qs.join(", ")})`;
@@ -349,7 +350,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       }
 
       if (isExcel) {
-        const dbUrl = process.env.SUPABASE_DB_URL;
+        const dbUrl = getInternalDbUrl();
         if (!dbUrl) throw new Error("DB interna no configurada");
         client = new PgClient({ connectionString: dbUrl });
       } else {
@@ -526,7 +527,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const tableNamePhysical =
         (meta as any).physical_table_name ||
         `import_${String(connectionId).replaceAll("-", "_")}`;
-      const dbUrl = process.env.SUPABASE_DB_URL;
+      const dbUrl = getInternalDbUrl();
       if (!dbUrl)
         return NextResponse.json(
           {

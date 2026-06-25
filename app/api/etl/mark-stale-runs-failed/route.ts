@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { shouldUseOwnBackend, proxyToBackend } from "@/lib/api/backend-proxy";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 
 /** Minutos desde started_at para considerar un run "stale" (por encima de maxDuration 300s de Vercel). El cron en vercel.json invoca este endpoint cada 10 min. */
@@ -41,7 +42,7 @@ async function markStaleRunsFailed() {
     return { ok: true, marked: 0, message: "No hay runs obsoletos." };
   }
 
-  const ids = staleRows.map((r) => (r as { id: string }).id);
+  const ids = staleRows.map((r: any) => (r as { id: string }).id);
   const { error: updateErr } = await supabase
     .from("etl_runs_log")
     .update({
@@ -62,6 +63,9 @@ async function markStaleRunsFailed() {
 }
 
 export async function POST(req: NextRequest) {
+  if (shouldUseOwnBackend()) {
+    return proxyToBackend(req, "/etl/mark-stale-runs-failed");
+  }
   const secret = getSecret(req);
   if (!isAuthorized(secret)) {
     return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });
@@ -78,6 +82,9 @@ export async function POST(req: NextRequest) {
 
 /** GET para cron (Vercel Cron suele usar GET). */
 export async function GET(req: NextRequest) {
+  if (shouldUseOwnBackend()) {
+    return proxyToBackend(req, "/etl/mark-stale-runs-failed", { method: "POST" });
+  }
   const secret = getSecret(req);
   if (!isAuthorized(secret)) {
     return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });

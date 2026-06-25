@@ -28,8 +28,10 @@ const nextConfig: NextConfig = {
   },
   output: "standalone",
   experimental: {
+    // Límite del body cuando pasa por middleware (default 10MB trunca FormData)
+    middlewareClientMaxBodySize: "256mb",
     serverActions: {
-      bodySizeLimit: "10mb",
+      bodySizeLimit: "256mb",
     },
   },
   eslint: {

@@ -94,10 +94,10 @@ export function AdminShareDashboardModal({
     if (membersErr) throw membersErr;
 
     const filtered = (members ?? []).filter(
-      (m) => !excludeClientMemberIds.includes(m.id)
+      (m: any) => !excludeClientMemberIds.includes(m.id)
     );
     const userIds = Array.from(
-      new Set(filtered.map((m) => m.user_id))
+      new Set(filtered.map((m: any) => m.user_id))
     ) as string[];
 
     if (userIds.length === 0) {
@@ -112,8 +112,8 @@ export function AdminShareDashboardModal({
 
     if (profilesErr) throw profilesErr;
 
-    const profileById = new Map((profiles ?? []).map((p) => [p.id, p]));
-    const options: ClientMemberOption[] = filtered.map((m) => {
+    const profileById = new Map<string, any>((profiles ?? []).map((p: any) => [p.id, p]));
+    const options: ClientMemberOption[] = filtered.map((m: any) => {
       const p = profileById.get(m.user_id as string);
       return {
         client_member_id: m.id,
@@ -142,7 +142,7 @@ export function AdminShareDashboardModal({
         });
         const list = await fetchPermissions();
         if (cancelled) return;
-        const excludeIds = list.map((p) => p.client_member_id);
+        const excludeIds = list.map((p: any) => p.client_member_id);
         await fetchClientMembers(excludeIds);
       } catch (e) {
         console.error("[AdminShareDashboardModal] Init error", e);
@@ -180,7 +180,7 @@ export function AdminShareDashboardModal({
     console.debug("[AdminShareDashboardModal] Permission added, refreshing lists");
     // Refresh lists
     const list = await fetchPermissions();
-    const excludeIds = list.map((p) => p.client_member_id);
+    const excludeIds = list.map((p: any) => p.client_member_id);
     await fetchClientMembers(excludeIds);
     setSelectedMemberUserId(null);
     setSelectedPermission("VIEW");
@@ -204,7 +204,7 @@ export function AdminShareDashboardModal({
       "[AdminShareDashboardModal] Permission removed, refreshing lists"
     );
     const list = await fetchPermissions();
-    const excludeIds = list.map((p) => p.client_member_id);
+    const excludeIds = list.map((p: any) => p.client_member_id);
     await fetchClientMembers(excludeIds);
   };
 
@@ -231,7 +231,7 @@ export function AdminShareDashboardModal({
                 disabled={isLoading || clientMembers.length === 0}
               >
                 <option value="">Selecciona un miembro…</option>
-                {clientMembers.map((m) => (
+                {clientMembers.map((m: any) => (
                   <option key={m.client_member_id} value={m.userId}>
                     {m.full_name || "Sin nombre"}{" "}
                     {m.email ? `(${m.email})` : ""}
@@ -271,7 +271,7 @@ export function AdminShareDashboardModal({
                   Aún no hay permisos configurados.
                 </p>
               ) : (
-                permissions.map((p) => {
+                permissions.map((p: any) => {
                   const label =
                     p.permission_type === "UPDATE" ? "Editor" : "Visualizador";
                   return (

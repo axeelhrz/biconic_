@@ -56,7 +56,7 @@ export async function GET(
       dashboardDataset: ctx.dashboardDataset,
       datasetDimensions: ctx.datasetDimensions,
       datasetWarnings: ctx.datasetWarnings,
-      dataSources: ctx.dataSources.map((s) => ({ id: s.id, alias: s.alias, etlName: s.etlName })),
+      dataSources: ctx.dataSources.map((s: any) => ({ id: s.id, alias: s.alias, etlName: s.etlName })),
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Error interno";
@@ -117,7 +117,7 @@ export async function PATCH(
     if (action === "rebuild") {
       const saved = parseLayoutDashboardDataset(dashboard.layout);
       const rebuilt = buildDashboardDataset(
-        ctx.dataSources.map((ds) => ({
+        ctx.dataSources.map((ds: any) => ({
           id: ds.id,
           etlId: ds.etlId,
           alias: ds.alias,

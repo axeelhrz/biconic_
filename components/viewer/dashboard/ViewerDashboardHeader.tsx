@@ -61,7 +61,7 @@ export default function ViewerDashboardHeader() {
       setIsUserLoading(false);
     }
     loadUser();
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event: any) => {
       if (event === "TOKEN_REFRESHED") return;
       setIsUserLoading(true);
       loadUser();
@@ -96,7 +96,7 @@ export default function ViewerDashboardHeader() {
         <span>biconic</span>
       </Link>
       <nav className="flex items-center gap-5">
-        {navLinks.map((link) => {
+        {navLinks.map((link: any) => {
           const isActive =
             link.match === "exact"
               ? pathname === link.href || pathname === `${link.href}/`

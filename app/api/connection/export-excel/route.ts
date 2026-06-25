@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import * as ExcelJS from "exceljs";
@@ -87,7 +88,7 @@ const toExcelBuffer = async (
       wroteHeader = true;
     }
     for (const r of batch) {
-      const arr = headers.map((k) => r[k]);
+      const arr = headers.map((k: any) => r[k]);
       tableRows.push(arr);
       ws.addRow(arr);
     }
@@ -248,10 +249,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const allConnIds = [
         primaryConnectionId,
         ...sanitizedJoins.map((j: any) => j.secondaryConnectionId),
-      ].filter((x) => x != null);
+      ].filter((x: any) => x != null);
       const uniqueConnIds = [...new Set(allConnIds)];
       const connResults = await Promise.all(
-        uniqueConnIds.map((id) =>
+        uniqueConnIds.map((id: any) =>
           supabase
             .from("connections")
             .select("id,type,db_host,db_name,db_user,db_port")
@@ -284,7 +285,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         joinsCount: number
       ) => {
         const params: any[] = [];
-        const parts = conds.map((c) => {
+        const parts = conds.map((c: any) => {
           let col: string;
           const raw = c.column || "";
           const mPrimary = raw.match(/^primary\.(.+)$/i);
@@ -312,16 +313,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               params.push(`%${c.value ?? ""}`);
               return `${col} ILIKE $${params.length}`;
             case "in": {
-              const list = (c.value ?? "").split(",").map((v) => v.trim());
-              const idxs = list.map((v) => {
+              const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+              const idxs = list.map((v: any) => {
                 params.push(v);
                 return `$${params.length}`;
               });
               return `${col} IN (${idxs.join(", ")})`;
             }
             case "not in": {
-              const list = (c.value ?? "").split(",").map((v) => v.trim());
-              const idxs = list.map((v) => {
+              const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+              const idxs = list.map((v: any) => {
                 params.push(v);
                 return `$${params.length}`;
               });
@@ -338,10 +339,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       };
 
       if (dbType === "excel_file" || dbType === "excel") {
-        const dbUrl = process.env.SUPABASE_DB_URL;
+        const dbUrl = getInternalDbUrl();
         if (!dbUrl)
           return NextResponse.json(
-            { ok: false, error: "SUPABASE_DB_URL no configurada" },
+            { ok: false, error: "DATABASE_URL no configurada" },
             { status: 500 }
           );
         const client = new PgClient({ connectionString: dbUrl });
@@ -368,7 +369,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             sanitizedJoins.map((jn: any) => resolvePhysical(jn.secondaryConnectionId))
           );
           const pQualified = quoteQualified(pPhysical, "postgres");
-          const jQualified = jPhysicals.map((q) =>
+          const jQualified = jPhysicals.map((q: any) =>
             quoteQualified(q, "postgres")
           );
 
@@ -480,7 +481,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         try {
           await client.connect();
           const pQualified = quoteQualified(primaryTable as string, "postgres");
-          const jQualified = (sanitizedJoins as any[]).map((jn) =>
+          const jQualified = (sanitizedJoins as any[]).map((jn: any) =>
             quoteQualified(jn.secondaryTable || "", "postgres")
           );
           const selectParts: string[] = [];
@@ -636,7 +637,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         let rightQualified = rightTable;
 
         if (type === ("excel" as any)) {
-          const dbUrl = process.env.SUPABASE_DB_URL;
+          const dbUrl = getInternalDbUrl();
           if (!dbUrl)
             return NextResponse.json(
               {
@@ -758,8 +759,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         }
 
         const headerKeys = [
-          ...(lCols || []).map((c) => `left_${c}`),
-          ...(rCols || []).map((c) => `right_${c}`),
+          ...(lCols || []).map((c: any) => `left_${c}`),
+          ...(rCols || []).map((c: any) => `right_${c}`),
         ];
         const buffer = await toExcelBuffer(generator(), headerKeys);
         const ab = buffer.buffer.slice(
@@ -805,7 +806,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             `SELECT COLUMN_NAME as c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION`,
             [ls, ln]
           );
-          lCols = rowsCols.map((r) => r.c);
+          lCols = rowsCols.map((r: any) => r.c);
         }
         if (!rCols || rCols.length === 0) {
           const [rs, rn] = rightTable!.includes(".")
@@ -815,7 +816,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             `SELECT COLUMN_NAME as c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION`,
             [rs, rn]
           );
-          rCols = rowsCols.map((r) => r.c);
+          rCols = rowsCols.map((r: any) => r.c);
         }
         const selectList = [
           ...(lCols || []).map(
@@ -861,8 +862,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         }
 
         const headerKeys = [
-          ...(lCols || []).map((c) => `left_${c}`),
-          ...(rCols || []).map((c) => `right_${c}`),
+          ...(lCols || []).map((c: any) => `left_${c}`),
+          ...(rCols || []).map((c: any) => `right_${c}`),
         ];
         const buffer = await toExcelBuffer(generator(), headerKeys);
         const ab = buffer.buffer.slice(
@@ -909,7 +910,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const physical =
         (meta as any).physical_table_name ||
         `import_${String((body as any).connectionId).replace(/-/g, "_")}`;
-      const dbUrl = process.env.SUPABASE_DB_URL;
+      const dbUrl = getInternalDbUrl();
       if (!dbUrl)
         return NextResponse.json(
           {
@@ -924,7 +925,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const fullQ = quoteQualified(`${schema}.${physical}`, "postgres");
       const colsList =
         columns && columns.length
-          ? columns.map((c) => quoteIdent(c, "postgres")).join(", ")
+          ? columns.map((c: any) => quoteIdent(c, "postgres")).join(", ")
           : "*";
       const { clause, params } = buildWhereClausePg(conditions || []);
 
@@ -994,7 +995,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       )}`;
       const colsList =
         columns && columns.length
-          ? columns.map((c) => quoteIdent(c, "postgres")).join(", ")
+          ? columns.map((c: any) => quoteIdent(c, "postgres")).join(", ")
           : "*";
       const { clause, params } = buildWhereClausePg(conditions || []);
 
@@ -1050,7 +1051,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       )}`;
       const colsList =
         columns && columns.length
-          ? columns.map((c) => quoteIdent(c, "mysql")).join(", ")
+          ? columns.map((c: any) => quoteIdent(c, "mysql")).join(", ")
           : "*";
       const { clause, params } = buildWhereClauseMy(conditions || []);
 

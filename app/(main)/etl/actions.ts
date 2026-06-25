@@ -2,10 +2,10 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { formatNextExecutionDisplay, parseScheduleFromLayout } from "@/lib/etl/schedule";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 import { Database } from "@/lib/supabase/database.types";
 import postgres from "postgres";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 
 type AppPermissionType = Database["public"]["Enums"]["app_permission_type"];
 
@@ -16,17 +16,7 @@ async function getSupabase() {
 }
 
 async function getServiceRoleClient() {
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!serviceRoleKey) {
-    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not defined");
-  }
-  const cookieStore = await cookies();
-  return createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, {
-    cookies: {
-        getAll() { return cookieStore.getAll() },
-        setAll(cookiesToSet) {}
-    }
-  });
+  return createServiceRoleClient();
 }
 
 // Logic to bypass checks for App Admin
@@ -88,14 +78,14 @@ export async function getEtlsAction(searchQuery: string = "", filter: string = "
         
         let sharedEtls: any[] = [];
         if (members?.length) {
-            const memberIds = members.map(m => m.id);
+            const memberIds = members.map((m: any) => m.id);
             const { data: perms } = await supabase
                 .from("etl_has_permissions")
                 .select("etl_id")
                 .in("client_member_id", memberIds);
             
             if (perms?.length) {
-                const etlIds = Array.from(new Set(perms.map(p => p.etl_id).filter(id => id !== null))) as string[];
+                const etlIds = Array.from(new Set(perms.map((p: any) => p.etl_id).filter((id: any) => id !== null))) as string[];
                 const { data: shared, error: sharedErr } = await supabase
                     .from("etl")
                     .select("*")
@@ -137,7 +127,7 @@ export async function getEtlsAction(searchQuery: string = "", filter: string = "
         
         if (ownerIds.length) {
             const {data: profiles} = await supabase.from("profiles").select("id, full_name").in("id", ownerIds);
-            profiles?.forEach(p => ownerMap.set(p.id, p.full_name ?? ""));
+            profiles?.forEach((p: any) => ownerMap.set(p.id, p.full_name ?? ""));
         }
 
         // Map to Etl UI type
@@ -458,7 +448,7 @@ export async function deleteEtlAction(etlId: string) {
 
         if (targetTableName) {
              // 2. Drop table using direct SQL connection
-             const sql = postgres(process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL!);
+             const sql = postgres(getInternalDbUrl());
              try {
                  await sql`DROP TABLE IF EXISTS etl_output.${sql(targetTableName)}`;
              } catch (err) {

@@ -101,8 +101,8 @@ export default function ShareDashboardModal({
             setSearchingExternal(false);
             if (res.ok && res.data) {
                 const validUsers = res.data
-                    .filter(u => u.email !== null)
-                    .map(u => ({
+                    .filter((u: any) => u.email !== null)
+                    .map((u: any) => ({
                         ...u,
                         email: u.email as string
                     }));
@@ -272,7 +272,7 @@ export default function ShareDashboardModal({
   };
 
   // Filtering candidates for dropdown
-  const filteredCandidates = clientMembers.filter((m) =>
+  const filteredCandidates = clientMembers.filter((m: any) =>
     m.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     m.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (m.job_title && m.job_title.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -338,7 +338,7 @@ export default function ShareDashboardModal({
                                 {searchTerm ? "No se encontraron miembros" : "Todos los miembros ya tienen acceso"}
                             </div>
                             ) : (
-                            filteredCandidates.map((member) => {
+                            filteredCandidates.map((member: any) => {
                                 const isSelected = selectedMemberUserId === member.user_id;
                                 return (
                                 <div
@@ -397,7 +397,7 @@ export default function ShareDashboardModal({
                                     <div className="py-4 text-center text-sm text-gray-500">No se encontraron usuarios.</div>
                                 )}
                                 
-                                {foundUsers.map((user) => (
+                                {foundUsers.map((user: any) => (
                                     <div
                                         key={user.id}
                                         onClick={() => setInviteEmail(user.email)}
@@ -567,7 +567,7 @@ export default function ShareDashboardModal({
                       <p className="text-sm text-gray-500">Nadie tiene acceso extra aparte del dueño.</p>
                     </div>
                  ) : (
-                   permissions.map((p) => (
+                   permissions.map((p: any) => (
                      <div key={p.id} className="group flex items-start justify-between gap-3 rounded-lg p-2 hover:bg-gray-50">
                         <div className="flex items-start gap-3">
                            <div className="relative h-9 w-9 overflow-hidden rounded-full border border-gray-200">

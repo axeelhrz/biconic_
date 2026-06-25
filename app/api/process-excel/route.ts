@@ -1,7 +1,15 @@
-import { createClient } from "@supabase/supabase-js";
 import ExcelJS from "exceljs";
 import postgres from "postgres";
 import { NextResponse } from "next/server";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import {
+  createImportAdminClient,
+  getImportDbUrl,
+} from "@/lib/excel-import/import-admin-client";
+import {
+  getLocalExcelAbsolutePath,
+  hasLocalExcelFile,
+} from "@/lib/storage/excel-upload-storage";
 import { Readable } from "stream";
 import fs from "fs";
 import path from "path";
@@ -107,7 +115,7 @@ function inferColumnTypes(rows: any[][], headerCount: number): ColumnType[] {
         checks.isFloat = false;
     }
   }
-  return columnChecks.map((checks) => {
+  return columnChecks.map((checks: any) => {
     if (checks.isBool) return "BOOLEAN";
     if (checks.isDate) return "DATE";
     if (checks.isInt) return "BIGINT";
@@ -228,30 +236,49 @@ async function scheduleImportContinuation(
     selectedSheet: payload.selectedSheet,
     continuation: true,
   });
+
   try {
-    const res = await fetch(url, { method: "POST", headers, body });
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      console.error("[process-excel] Falló encadenar continuación:", res.status, txt);
-      await supabaseAdmin
-        .from("data_tables")
-        .update({
-          import_status: "failed",
-          error_message: `No se pudo reanudar la importación en segundo plano (HTTP ${res.status}). Configurá NEXT_PUBLIC_SITE_URL en Vercel con la URL pública del sitio e INTERNAL_PROCESS_EXCEL_SECRET si usás continuaciones protegidas. ${txt.slice(0, 200)}`,
-        })
-        .eq("id", payload.dataTableId);
-    }
-  } catch (e) {
-    console.error("[process-excel] scheduleImportContinuation:", e);
     await supabaseAdmin
       .from("data_tables")
       .update({
-        import_status: "failed",
-        error_message:
-          "Error de red al encadenar la importación (sucesivo). Revisá NEXT_PUBLIC_SITE_URL en el proyecto Vercel.",
+        import_status: "processing",
+        updated_at: new Date().toISOString(),
       })
       .eq("id", payload.dataTableId);
+  } catch (e) {
+    console.warn("[process-excel] No se pudo marcar processing antes de continuar:", e);
   }
+
+  const runContinuation = () => {
+    void fetch(url, { method: "POST", headers, body })
+      .then(async (res) => {
+        if (!res.ok) {
+          const txt = await res.text().catch(() => "");
+          console.error("[process-excel] Falló encadenar continuación:", res.status, txt);
+          await supabaseAdmin
+            .from("data_tables")
+            .update({
+              import_status: "failed",
+              error_message: `No se pudo reanudar la importación en segundo plano (HTTP ${res.status}). Configurá NEXT_PUBLIC_SITE_URL en .env.local (ej. http://localhost:3000) e INTERNAL_PROCESS_EXCEL_SECRET si usás continuaciones protegidas. ${txt.slice(0, 200)}`,
+            })
+            .eq("id", payload.dataTableId);
+        }
+      })
+      .catch(async (e) => {
+        console.error("[process-excel] scheduleImportContinuation:", e);
+        await supabaseAdmin
+          .from("data_tables")
+          .update({
+            import_status: "failed",
+            error_message:
+              "Error de red al encadenar la importación. Revisá NEXT_PUBLIC_SITE_URL en .env.local.",
+          })
+          .eq("id", payload.dataTableId);
+      });
+  };
+
+  // Evita deadlock en dev: no llamar al mismo worker de Next mientras aún corre el chunk actual.
+  setImmediate(runContinuation);
 }
 
 const getExtensionFromPath = (filePath: string) =>
@@ -544,7 +571,7 @@ async function processDataImport(
     try {
       assertNotTimedOut();
       if (!dbUrl || dbUrl.trim() === "") {
-        await markFailed("SUPABASE_DB_URL no está configurada. Configurala en .env.local (Supabase → Settings → Database → Connection string).");
+        await markFailed("DATABASE_URL no está configurada. Configurala en .env.local.");
         return;
       }
 
@@ -595,6 +622,10 @@ async function processDataImport(
       connection.original_file_name || storagePath
     );
     const downloadToTempFile = async (): Promise<string> => {
+      if (hasLocalExcelFile(storagePath)) {
+        return getLocalExcelAbsolutePath(storagePath);
+      }
+
       let attempts = 0;
       const maxAttempts = 3;
       let tmpPath: string | null = null;
@@ -666,6 +697,10 @@ async function processDataImport(
     };
 
     const downloadToXlsxReadableStream = async (): Promise<Readable> => {
+      if (hasLocalExcelFile(storagePath)) {
+        return fs.createReadStream(getLocalExcelAbsolutePath(storagePath));
+      }
+
       let attempts = 0;
       const maxAttempts = 3;
       while (attempts < maxAttempts) {
@@ -725,8 +760,9 @@ async function processDataImport(
     // -----------------------------------------------------------------------
 
     // 2. CONEXIÓN DB
+    const useSsl = !/localhost|127\.0\.0\.1/.test(dbUrl);
     sql = postgres(dbUrl, {
-      ssl: { rejectUnauthorized: false },
+      ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
       prepare: false,
       max: 1,
       connect_timeout: 20,
@@ -1116,6 +1152,7 @@ async function processDataImport(
       .from("data_tables")
       .update({
         import_status: "completed",
+        physical_schema_name: "data_warehouse",
         columns: columnMetadata,
         total_rows: insertedRows,
         error_message: warnings.length
@@ -1133,9 +1170,9 @@ async function processDataImport(
         msg = `[${error.stage}] ${error.message}${error.details ? ` | ${error.details}` : ""}`;
       }
       if (typeof msg === "string" && msg.includes("does not exist") && msg.toLowerCase().includes("schema"))
-        msg = "El schema data_warehouse no existe. Ejecutá las migraciones de Supabase (supabase db push o desde el panel SQL).";
+        msg = "El schema data_warehouse no existe. Ejecutá las migraciones SQL en migrations/.";
       if (typeof msg === "string" && (msg.includes("ECONNREFUSED") || msg.includes("connection")))
-        msg = "No se pudo conectar a la base de datos. Revisá que SUPABASE_DB_URL en .env.local sea correcta (Supabase → Settings → Database).";
+        msg = "No se pudo conectar a la base de datos. Revisá que DATABASE_URL en .env.local sea correcta.";
       if (typeof msg === "string" && (msg.includes("ENOSPC") || msg.includes("no space left on device")))
         msg = enospcImportMessage();
       await markFailed(msg);
@@ -1215,26 +1252,20 @@ export async function POST(req: Request) {
         ? body.selectedSheet.trim()
         : null;
 
-    // Validar variables de entorno antes de iniciar (evita que "siempre falle" sin mensaje claro)
+    const dbUrl = getImportDbUrl();
+
     const missing: string[] = [];
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) missing.push("NEXT_PUBLIC_SUPABASE_URL");
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) missing.push("SUPABASE_SERVICE_ROLE_KEY");
-    if (!process.env.SUPABASE_DB_URL) missing.push("SUPABASE_DB_URL");
+    if (!dbUrl) missing.push("DATABASE_URL");
 
     if (missing.length > 0) {
-      const msg = `Configuración del servidor incompleta. Agregá en .env.local: ${missing.join(", ")}. SUPABASE_DB_URL es la URL de conexión directa a Postgres (Supabase → Settings → Database).`;
-      if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-        try {
-          const supabaseAdmin = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL,
-            process.env.SUPABASE_SERVICE_ROLE_KEY
-          );
-          await supabaseAdmin
-            .from("data_tables")
-            .update({ import_status: "failed", error_message: msg })
-            .eq("id", dataTableId);
-        } catch (_) {}
-      }
+      const msg = `Configuración incompleta. Agregá DATABASE_URL en .env.local (postgres local).`;
+      try {
+        const admin = createImportAdminClient();
+        await admin
+          .from("data_tables")
+          .update({ import_status: "failed", error_message: msg })
+          .eq("id", dataTableId);
+      } catch (_) {}
       return NextResponse.json(
         {
           error: "Configuración del servidor incompleta.",
@@ -1245,10 +1276,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabaseAdmin = createImportAdminClient();
 
     const { error: queueError } = continuation
       ? { error: null as null }
@@ -1274,7 +1302,7 @@ export async function POST(req: Request) {
       connectionId,
       dataTableId,
       supabaseAdmin,
-      process.env.SUPABASE_DB_URL!,
+      dbUrl!,
       parseMode,
       selectedSheet
     ).catch((err) => console.error("[FATAL BACKGROUND ERROR]", err));
@@ -1310,7 +1338,7 @@ async function insertBatch(
 ) {
   if (!rows.length) return;
 
-  const data = rows.map((r) => {
+  const data = rows.map((r: any) => {
     const obj: any = {};
     headers.forEach((h, i) => (obj[h.replaceAll('"', "")] = cleanValue(r[i])));
     return obj;

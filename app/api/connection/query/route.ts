@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import { resolveExcelTableName } from "@/lib/excel-import/excel-metadata";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
 type FilterCondition = {
@@ -44,7 +48,7 @@ type QueryBody = {
 
 function buildWhereClausePg(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = `"${c.column.replace(/"/g, '"')}"`;
     switch (c.operator) {
       case "is null":
@@ -61,16 +65,16 @@ function buildWhereClausePg(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} ILIKE $${params.length}`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
         return `${col} IN (${idxs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
@@ -96,7 +100,7 @@ function firebirdQuotedIdent(name: string): string {
 
 function buildWhereClauseFirebird(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = firebirdQuotedIdent(c.column || "");
     switch (c.operator) {
       case "is null":
@@ -113,13 +117,13 @@ function buildWhereClauseFirebird(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} LIKE ?`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} IN (${qs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} NOT IN (${qs.join(", ")})`;
@@ -136,7 +140,7 @@ function buildWhereClauseFirebird(conds: FilterCondition[]) {
 
 function buildWhereClauseMy(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = `\`${c.column.replace(/`/g, "``")}\``;
     switch (c.operator) {
       case "is null":
@@ -153,13 +157,13 @@ function buildWhereClauseMy(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} LIKE ?`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} IN (${qs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} NOT IN (${qs.join(", ")})`;
@@ -226,12 +230,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         { status: 401 }
       );
 
+    const dbClient = shouldUseOwnBackend() ? createServiceRoleClient() : supabase;
+
     // Load connection creds by ID, if provided
     if (connectionId != null) {
-      const { data: conn, error: connError } = await supabase
+      const { data: conn, error: connError } = await dbClient
         .from("connections")
         .select(
-          "id, user_id, type, db_host, db_name, db_user, db_port, original_file_name, db_password_encrypted"
+          shouldUseOwnBackend()
+            ? "*"
+            : "id, user_id, type, db_host, db_name, db_user, db_port, original_file_name, db_password_encrypted"
         )
         .eq("id", String(connectionId))
         .maybeSingle();
@@ -240,10 +248,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           { ok: false, error: connError?.message || "Conexión no encontrada" },
           { status: 404 }
         );
-      host = (conn as any)?.db_host ?? host;
-      database = (conn as any)?.db_name ?? database;
-      user = (conn as any)?.db_user ?? user;
-      port = (conn as any)?.db_port ?? port;
+      const cfg = (conn as { config?: Record<string, unknown> })?.config ?? {};
+      host = (conn as any)?.db_host ?? (cfg.db_host as string | undefined) ?? host;
+      database = (conn as any)?.db_name ?? (cfg.db_name as string | undefined) ?? database;
+      user = (conn as any)?.db_user ?? (cfg.db_user as string | undefined) ?? user;
+      port = (conn as any)?.db_port ?? (cfg.db_port as number | undefined) ?? port;
       if (!password && (conn as any)?.db_password_encrypted) {
         try {
           password = decryptConnectionPassword((conn as any).db_password_encrypted);
@@ -265,7 +274,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
     // Manejar consultas Excel consultando data_warehouse.{physical_table_name}
     if (type === "excel") {
-      const { data: meta, error: metaError } = await supabase
+      const { data: meta, error: metaError } = await dbClient
         .from("data_tables")
         .select("physical_table_name")
         .eq("connection_id", String(connectionId))
@@ -276,26 +285,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           { status: 404 }
         );
       }
-      const tableNamePhysical =
-        (meta as any).physical_table_name ||
-        `import_${String(connectionId).replaceAll("-", "_")}`;
+      const tableNamePhysical = resolveExcelTableName(
+        String(connectionId),
+        meta as { physical_table_name?: string | null }
+      );
 
-      const dbUrl = process.env.SUPABASE_DB_URL;
-      if (!dbUrl) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error: "Configuración de base de datos interna no disponible",
-          },
-          { status: 500 }
-        );
-      }
-
-      const client = new PgClient({ connectionString: dbUrl } as any);
+      const client = new PgClient({
+        connectionString: getInternalDbUrl(),
+        ssl: false,
+      } as { connectionString: string; ssl: boolean });
       await client.connect();
       const cols =
         columns && columns.length
-          ? columns.map((c) => `"${c.replace(/"/g, '""')}"`).join(", ")
+          ? columns.map((c: any) => `"${c.replace(/"/g, '""')}"`).join(", ")
           : "*";
       const fullTable = `"data_warehouse"."${tableNamePhysical.replace(
         /"/g,
@@ -348,7 +350,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       await client.connect();
       const cols =
         columns && columns.length
-          ? columns.map((c) => `"${c.replace(/"/g, '"')}"`).join(", ")
+          ? columns.map((c: any) => `"${c.replace(/"/g, '"')}"`).join(", ")
           : "*";
       const fullTable = `"${schema.replace(/"/g, '"')}"."${tableName.replace(
         /"/g,
@@ -387,7 +389,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       });
       const cols =
         columns && columns.length
-          ? columns.map((c) => `\`${c.replace(/`/g, "``")}\``).join(", ")
+          ? columns.map((c: any) => `\`${c.replace(/`/g, "``")}\``).join(", ")
           : "*";
       const fullTable = `\`${schema.replace(
         /`/g,
@@ -416,7 +418,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         );
       const Firebird = require("node-firebird");
       const tablePart = table.includes(".")
-        ? table.split(".", 2).map((s) => `"${s.replace(/"/g, '""')}"`).join(".")
+        ? table.split(".", 2).map((s: any) => `"${s.replace(/"/g, '""')}"`).join(".")
         : `"${tableName.replace(/"/g, '""')}"`;
       // Firebird: usar siempre SELECT * para evitar -206 (Column unknown) por nombre/casing distinto al de la base.
       const cols = "*";
@@ -452,7 +454,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             let outRows = rows || [];
             if (wantColumns && wantColumns.length > 0 && outRows.length > 0) {
               const keys = Object.keys(outRows[0] as object);
-              const keyMap = Object.fromEntries(keys.map((k) => [k.toUpperCase(), k]));
+              const keyMap = Object.fromEntries(keys.map((k: any) => [k.toUpperCase(), k]));
               outRows = outRows.map((r: Record<string, unknown>) => {
                 const out: Record<string, unknown> = {};
                 for (const c of wantColumns) {

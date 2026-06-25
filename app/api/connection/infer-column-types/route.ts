@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { deriveColumnTypesFromSample } from "@/lib/derive-column-types";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import { resolveExcelTableName } from "@/lib/excel-import/excel-metadata";
 
 type Body = { connectionId: string | number; tableName?: string };
 
@@ -21,21 +25,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });
     }
 
-    const { data: conn, error: connError } = await supabase
+    const dbClient = shouldUseOwnBackend() ? createServiceRoleClient() : supabase;
+    const { data: conn, error: connError } = await dbClient
       .from("connections")
-      .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted")
+      .select(
+        shouldUseOwnBackend()
+          ? "*"
+          : "id, type, db_host, db_name, db_user, db_port, db_password_encrypted"
+      )
       .eq("id", String(body.connectionId))
       .maybeSingle();
     if (connError || !conn) {
       return NextResponse.json({ ok: false, error: "Conexión no encontrada" }, { status: 404 });
     }
 
-    let type = (conn as any).type === "excel_file" || (conn as any).type === "excel" ? "excel" : (conn as any).type;
+    const cfg = (conn as { config?: Record<string, unknown> }).config ?? {};
+    let type =
+      (conn as { type?: string }).type === "excel_file" ||
+      (conn as { type?: string }).type === "excel"
+        ? "excel"
+        : (conn as { type?: string }).type;
     if (type === "postgresql") type = "postgres";
-    let host = (conn as any).db_host;
-    let database = (conn as any).db_name;
-    let userDb = (conn as any).db_user;
-    let port = (conn as any).db_port;
+    let host = (conn as { db_host?: string }).db_host ?? (cfg.db_host as string | undefined);
+    let database = (conn as { db_name?: string }).db_name ?? (cfg.db_name as string | undefined);
+    let userDb = (conn as { db_user?: string }).db_user ?? (cfg.db_user as string | undefined);
+    let port = (conn as { db_port?: number }).db_port ?? (cfg.db_port as number | undefined);
     let password: string | undefined;
     try {
       password = (conn as any).db_password_encrypted ? decryptConnectionPassword((conn as any).db_password_encrypted) : undefined;
@@ -49,7 +63,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     let rows: Record<string, unknown>[] = [];
 
     if (type === "excel") {
-      const { data: meta, error: metaError } = await supabase
+      const { data: meta, error: metaError } = await dbClient
         .from("data_tables")
         .select("physical_table_name")
         .eq("connection_id", String(body.connectionId))
@@ -57,12 +71,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (metaError || !meta) {
         return NextResponse.json({ ok: false, error: "Metadatos de Excel no encontrados" }, { status: 404 });
       }
-      const tableName = (meta as any).physical_table_name || `import_${String(body.connectionId).replaceAll("-", "_")}`;
-      const dbUrl = process.env.SUPABASE_DB_URL;
-      if (!dbUrl) {
-        return NextResponse.json({ ok: false, error: "Configuración de base de datos no disponible" }, { status: 500 });
-      }
-      const client = new PgClient({ connectionString: dbUrl } as any);
+      const tableName = resolveExcelTableName(String(body.connectionId), meta as { physical_table_name?: string | null });
+      const client = new PgClient({ connectionString: getInternalDbUrl(), ssl: false } as { connectionString: string; ssl: boolean });
       await client.connect();
       try {
         const safeTable = tableName.replace(/"/g, '""');

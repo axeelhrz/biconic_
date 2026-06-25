@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import postgres from "postgres";
@@ -31,7 +32,7 @@ function deriveFieldsFromSample(sampleData: any[]): FieldsInfo {
       .replace(/,/g, ".");
     return /^-?\d+(?:\.\d+)?$/.test(sanitized);
   };
-  const numericFields = availableFields.filter((field) => {
+  const numericFields = availableFields.filter((field: any) => {
     let nonNull = 0, numericCount = 0;
     for (const row of sampleData) {
       const val = (row as any)[field];
@@ -41,7 +42,7 @@ function deriveFieldsFromSample(sampleData: any[]): FieldsInfo {
     }
     return nonNull > 0 && numericCount / nonNull >= 0.6;
   });
-  const stringFields = availableFields.filter((field) => {
+  const stringFields = availableFields.filter((field: any) => {
     if (numericFields.includes(field)) return false;
     const val0 = (sampleRow as any)[field];
     if (typeof val0 === "string" && !isNumericLike(val0)) return true;
@@ -75,7 +76,7 @@ function deriveFieldsFromSample(sampleData: any[]): FieldsInfo {
     }
     return false;
   };
-  const dateFields = availableFields.filter((field) => {
+  const dateFields = availableFields.filter((field: any) => {
     let nonNull = 0, dateCount = 0;
     for (const row of sampleData) {
       const v = (row as any)[field];
@@ -156,7 +157,7 @@ function inferNaturalPeriodicity(
     return key !== undefined ? row[key] : undefined;
   };
 
-  const rawValues = rawRows.map(getVal).filter((v) => v !== undefined && v !== null && v !== "");
+  const rawValues = rawRows.map(getVal).filter((v: any) => v !== undefined && v !== null && v !== "");
   if (rawValues.length === 0) return "Irregular";
 
   const colLower = String(dateColumn).toLowerCase();
@@ -224,7 +225,7 @@ async function fetchColumnTypesFromSchema(
   schemaName: string,
   tableName: string
 ): Promise<FieldsInfo | null> {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getInternalDbUrl();
   if (!dbUrl) return null;
   const safeSchema = schemaName === "etl_output" ? "etl_output" : "public";
   const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
@@ -285,7 +286,7 @@ async function fetchFromEtlOutputViaPostgres(
   limit: number,
   dateFilter?: ProfileDateFilter | null
 ): Promise<{ rowCount: number; rows: any[]; tableExists?: boolean }> {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getInternalDbUrl();
   if (!dbUrl) return { rowCount: 0, rows: [], tableExists: false };
   const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
   const sql = postgres(dbUrl);
@@ -666,12 +667,7 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "ETL no encontrado" }, { status: 404 });
     }
 
-    let serviceClient: Awaited<ReturnType<typeof createServiceRoleClient>> | null = null;
-    try {
-      if (process.env.SUPABASE_SERVICE_ROLE_KEY) serviceClient = createServiceRoleClient();
-    } catch (_) {
-      // En Vercel/edge puede fallar si la key no está disponible
-    }
+    const serviceClient = createServiceRoleClient();
     const tableReader = serviceClient;
 
     let resolved = await resolveEtlToTableAndFields(supabase, etlId, tableReader);
@@ -768,7 +764,7 @@ export async function GET(
     const yearsParam = url.searchParams.get("years") ?? url.searchParams.get("year") ?? "";
     const dateFromParam = url.searchParams.get("dateFrom") ?? url.searchParams.get("date_from") ?? "";
     const dateToParam = url.searchParams.get("dateTo") ?? url.searchParams.get("date_to") ?? "";
-    const parsedYears = yearsParam ? yearsParam.split(",").map((y) => parseInt(y.trim(), 10)).filter((n) => !isNaN(n) && n >= 1900 && n <= 2100) : [];
+    const parsedYears = yearsParam ? yearsParam.split(",").map((y: any) => parseInt(y.trim(), 10)).filter((n: any) => !isNaN(n) && n >= 1900 && n <= 2100) : [];
     const fromOk = dateFromParam && /^\d{4}-\d{2}-\d{2}$/.test(dateFromParam.trim());
     const toOk = dateToParam && /^\d{4}-\d{2}-\d{2}$/.test(dateToParam.trim());
     const hasValidDateFilter =
@@ -875,9 +871,9 @@ export async function GET(
       if (schemaTypes && schemaTypes.all.length > 0) {
         fields = {
           all: selectedColumns,
-          date: selectedColumns.filter((c) => schemaTypes!.date.some((d) => sameStr(d, c))),
-          numeric: selectedColumns.filter((c) => schemaTypes!.numeric.some((n) => sameStr(n, c))),
-          string: selectedColumns.filter((c) => schemaTypes!.string.some((s) => sameStr(s, c))),
+          date: selectedColumns.filter((c: any) => schemaTypes!.date.some((d) => sameStr(d, c))),
+          numeric: selectedColumns.filter((c: any) => schemaTypes!.numeric.some((n) => sameStr(n, c))),
+          string: selectedColumns.filter((c: any) => schemaTypes!.string.some((s) => sameStr(s, c))),
         };
       } else {
         fields = deriveFieldsFromSample(rawRows);
@@ -902,11 +898,11 @@ export async function GET(
 
     // Incluir en fields.date todas las columnas marcadas como Fecha en el ETL (columnDisplay[].type)
     if (columnDisplay && typeof columnDisplay === "object") {
-      const dateKeysFromConfig = Object.keys(columnDisplay).filter((k) => {
+      const dateKeysFromConfig = Object.keys(columnDisplay).filter((k: any) => {
         const t = String((columnDisplay as Record<string, { type?: string }>)[k]?.type ?? "").toLowerCase();
         return t === "fecha" || t === "date";
       });
-      const existingDateSet = new Set(fields.date.map((d) => d.toLowerCase()));
+      const existingDateSet = new Set(fields.date.map((d: any) => d.toLowerCase()));
       for (const configKey of dateKeysFromConfig) {
         const colInFields = fields.all.find((c) => sameStr(c, configKey));
         if (colInFields && !existingDateSet.has(colInFields.toLowerCase())) {
@@ -915,7 +911,7 @@ export async function GET(
         }
       }
       if (fields.all.length > 0) {
-        fields.date = fields.all.filter((col) => fields.date.some((d) => sameStr(d, col)));
+        fields.date = fields.all.filter((col: any) => fields.date.some((d) => sameStr(d, col)));
       }
     }
 

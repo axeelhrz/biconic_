@@ -73,9 +73,9 @@ export default function ClientPermissionsPanel({
         new Set(
           (data ?? [])
             .map(
-              (r) => (r as any).client_members?.user_id as string | undefined
+              (r: any) => (r as any).client_members?.user_id as string | undefined
             )
-            .filter((id): id is string => Boolean(id))
+            .filter((id: any): id is string => Boolean(id))
         )
       );
       
@@ -101,7 +101,7 @@ export default function ClientPermissionsPanel({
         }
       }
 
-      const mapped: PermissionRecord[] = (data ?? []).map((r) => {
+      const mapped: PermissionRecord[] = (data ?? []).map((r: any) => {
         const cm = (r as any).client_members as {
           id: string;
           user_id: string;
@@ -148,7 +148,7 @@ export default function ClientPermissionsPanel({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
-    return rows.filter((r) => {
+    return rows.filter((r: any) => {
       const name = r.member?.full_name?.toLowerCase() ?? "";
       const email = r.member?.email?.toLowerCase() ?? "";
       const title = r.dashboard?.title?.toLowerCase() ?? "";
@@ -160,7 +160,7 @@ export default function ClientPermissionsPanel({
     const supabase = createClient();
     const prev = rows;
     setRows((cur) =>
-      cur.map((r) => (r.id === id ? { ...r, is_active: value } : r))
+      cur.map((r: any) => (r.id === id ? { ...r, is_active: value } : r))
     );
     const { error } = await supabase
       .from("dashboard_has_client_permissions")
@@ -173,11 +173,11 @@ export default function ClientPermissionsPanel({
   }
 
   const actives = useMemo(
-    () => filtered.filter((r) => r.is_active),
+    () => filtered.filter((r: any) => r.is_active),
     [filtered]
   );
   const inactives = useMemo(
-    () => filtered.filter((r) => !r.is_active),
+    () => filtered.filter((r: any) => !r.is_active),
     [filtered]
   );
 
@@ -203,7 +203,7 @@ export default function ClientPermissionsPanel({
               No hay permisos activos
             </div>
           ) : (
-            actives.map((r) => (
+            actives.map((r: any) => (
               <DataRow
                 key={r.id}
                 rec={r}
@@ -230,7 +230,7 @@ export default function ClientPermissionsPanel({
               No hay permisos desactivados
             </div>
           ) : (
-            inactives.map((r) => (
+            inactives.map((r: any) => (
               <DataRow
                 key={r.id}
                 rec={r}

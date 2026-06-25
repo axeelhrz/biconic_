@@ -24,6 +24,7 @@ import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector"
 import { DashboardWidgetRenderer } from "@/components/dashboard/DashboardWidgetRenderer";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { getDataEndpoints } from "@/lib/api/endpoints";
 import EtlScheduleSettings from "@/components/etl/EtlScheduleSettings";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
@@ -817,12 +818,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     prevAnalysisSelectionSigRef.current = "";
   }, []);
 
-  const startNewAnalysis = useCallback(() => {
+  const startNewAnalysis = useCallback((opts?: { metricIds?: string[]; wizardStep?: number }) => {
     resetChartWizardState();
     clearAnalysisDraft();
     setEditingId(null);
     setEditingSavedAnalysisId(null);
-    setAnalysisSelectedMetricIds([]);
+    setAnalysisSelectedMetricIds(opts?.metricIds ?? []);
     setFormDimensions([]);
     setFormFilters([]);
     setDimensionDefaultFiltersForm([]);
@@ -845,7 +846,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setAnalysisNameToSave("");
     setPreviewData(null);
     setWizard("C");
-    setWizardStep(0);
+    setWizardStep(opts?.wizardStep ?? 0);
     setShowForm(true);
   }, [resetChartWizardState, clearAnalysisDraft]);
 
@@ -1037,7 +1038,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         return;
       }
       if (json.datasetListUpdated === false) {
-        toast.warning("Configuración guardada; la lista de Datasets no se pudo actualizar (revisar tabla en Supabase).");
+        toast.warning("Configuración guardada; la lista de Datasets no se pudo actualizar (falta la tabla dataset en Postgres — migración 006_dataset.sql).");
       } else {
         toast.success("Configuración del dataset guardada. Podés crear métricas sin volver a configurar.");
       }
@@ -2190,9 +2191,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           if (gxl) (body as Record<string, unknown>).geoOverridesByXLabel = gxl;
         }
       }
-      const res = await fetch("/api/dashboard/aggregate-data", {
+      const res = await fetch(getDataEndpoints().aggregateData, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(body),
       });
       const json = await safeJsonResponse(res);
@@ -7808,6 +7810,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     </span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    {hasData && !datasetOnly && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="rounded-xl hidden sm:inline-flex"
+                        style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
+                        onClick={() => startNewAnalysis({ metricIds: [s.id], wizardStep: 1 })}
+                        disabled={hideDatasetTab && !currentDataset}
+                      >
+                        Crear análisis
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="ghost"
@@ -7977,7 +7992,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>Dashboard</h2>
                 <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                  Para añadir gráficos al dashboard, guardá un análisis en el paso Análisis o Gráfico y luego, en el Dashboard, usá «Añadir análisis».
+                  En el dashboard podés añadir métricas guardadas directamente, o guardar un análisis (varias métricas + dimensiones) con «Crear análisis» arriba y usarlo desde el estudio.
                 </p>
               </div>
               {linkedDashboardId && (

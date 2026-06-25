@@ -66,6 +66,7 @@ import {
 import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
 import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
 import { fetchGlobalFilterDistinctValues } from "@/lib/dashboard/fetchGlobalFilterDistinctValues";
+import type { DerivedColumnRef } from "@/lib/dashboard/metricExpressionToSql";
 import { GLOBAL_MONTH_FILTER_VALUES } from "@/lib/dashboard/globalMonthFilterValues";
 import {
   mapDimensionDefaultFiltersToAggregationFilters,
@@ -763,7 +764,9 @@ export function DashboardViewer({
         primaryTableName,
         primaryDateFields,
         datasetDimensions,
-        derivedColumns: derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined,
+        derivedColumns: (derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined) as
+          | DerivedColumnRef[]
+          | undefined,
         distinctUrl,
         safeJsonResponse,
       });
@@ -1209,7 +1212,9 @@ export function DashboardViewer({
             datasetDimensions,
             savedMetrics: savedMetricsPool.length > 0 ? savedMetricsPool : layoutSavedMetrics,
             globalFilters: [...mappedGlobalFilters, ...dimensionDefaultFiltersMapped],
-            derivedColumns: derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined,
+            derivedColumns: (derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined) as
+          | DerivedColumnRef[]
+          | undefined,
             dashboardCompareDefaults,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
@@ -1281,7 +1286,9 @@ export function DashboardViewer({
             sourceId: widgetSourceId,
             datasetDimensions,
             globalFilters: mergedForRaw,
-            derivedColumns: derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined,
+            derivedColumns: (derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined) as
+          | DerivedColumnRef[]
+          | undefined,
             dashboardCompareDefaults,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",

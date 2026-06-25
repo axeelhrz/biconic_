@@ -3209,31 +3209,85 @@ export function AdminDashboardStudio({
         }}
       >
         <DialogContent className="studio-modal-content border-0 p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col">
-          <div className="studio-modal-inner p-6 pb-4">
+          <div className="studio-modal-inner p-6 pb-4 overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Añadir análisis</DialogTitle>
+              <DialogTitle>Añadir al dashboard</DialogTitle>
               <DialogDescription>
-                Elegí un análisis ya creado para agregar al dashboard. Los análisis son gráficos configurados (métricas + dimensiones + tipo). Para crear nuevos, andá a Métricas del ETL y guardá un análisis en el paso C o D.
+                Elegí una métrica guardada o un análisis completo. Las métricas de «Calculadas» ya incluyen tipo de gráfico y configuración; los análisis combinan varias métricas con dimensiones.
               </DialogDescription>
             </DialogHeader>
-            {savedAnalyses.length > 0 ? (
-              <div className="mt-4 space-y-2 max-h-[280px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
-                {savedAnalyses.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => addSavedAnalysisToDashboard(a)}
-                    className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
-                    style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
-                  >
-                    <span className="font-medium truncate">{a.name}</span>
-                    <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir al dashboard</span>
-                  </button>
-                ))}
+            {savedMetrics.length > 0 && (
+              <div className="mt-4">
+                <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--studio-fg-muted)" }}>
+                  Métricas guardadas
+                </p>
+                <div className="space-y-2 max-h-[220px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
+                  {savedMetrics.map((m) => {
+                    const expr = (m.metric as { expression?: string })?.expression?.trim();
+                    const formula = (m.metric as { formula?: string })?.formula?.trim();
+                    const func = (m.metric as { func?: string })?.func;
+                    const field = (m.metric as { field?: string })?.field;
+                    const subtitle =
+                      expr || formula
+                        ? `${expr || formula}${func ? ` · ${func}` : ""}`
+                        : field
+                          ? `${func ?? "SUM"}(${field})`
+                          : "";
+                    const chartType = String(
+                      (m.aggregationConfig as { chartType?: string } | undefined)?.chartType ??
+                        (m as { chartType?: string }).chartType ??
+                        "bar"
+                    );
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => addSavedMetricToDashboard(m)}
+                        className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
+                        style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="font-medium block truncate">{m.name}</span>
+                          {subtitle ? (
+                            <span className="text-xs block truncate mt-0.5 font-mono" style={{ color: "var(--studio-fg-muted)" }}>
+                              {subtitle}
+                            </span>
+                          ) : null}
+                          <span className="text-xs block mt-0.5" style={{ color: "var(--studio-fg-muted)" }}>
+                            Tipo: {chartType}
+                          </span>
+                        </span>
+                        <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            ) : (
+            )}
+            {savedAnalyses.length > 0 && (
+              <div className={savedMetrics.length > 0 ? "mt-5" : "mt-4"}>
+                <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--studio-fg-muted)" }}>
+                  Análisis guardados
+                </p>
+                <div className="space-y-2 max-h-[220px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
+                  {savedAnalyses.map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => addSavedAnalysisToDashboard(a)}
+                      className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
+                      style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
+                    >
+                      <span className="font-medium truncate">{a.name}</span>
+                      <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {savedMetrics.length === 0 && savedAnalyses.length === 0 && (
               <p className="mt-3 text-sm" style={{ color: "var(--studio-fg-muted)" }}>
-                No hay análisis guardados para este ETL. En la página de métricas del ETL, completá el paso C (Análisis) o D (Gráfico) y usá «Guardar como análisis» para que aparezcan aquí.
+                No hay métricas ni análisis guardados para este ETL. Creá una métrica en la página de métricas del ETL y volvé acá para añadirla al dashboard.
               </p>
             )}
           </div>
@@ -3246,7 +3300,7 @@ export function AdminDashboardStudio({
                 onClick={() => setAddMetricOpen(false)}
               >
                 <BarChart2 className="h-4 w-4" />
-                Ir a métricas del ETL para crear nuevas
+                Ir a métricas del ETL
               </Link>
             ) : (
               <p className="text-sm" style={{ color: "var(--studio-fg-muted)" }}>

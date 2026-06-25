@@ -1,12 +1,15 @@
 "use client";
 import { useEffect, useState } from "react";
 import DashboardCard, { Dashboard } from "@/components/dashboard/DashboardCard";
-// @ts-ignore
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
 import { DeleteDashboardDialog } from "./dashboard/DeleteDashboardDialog";
 import { SearchX, LayoutDashboard } from "lucide-react";
 import { toast } from "sonner";
-import { publishDashboardAdmin } from "@/app/admin/(main)/dashboard/actions";
+import {
+  listAdminDashboardsForGrid,
+  publishDashboardAdmin,
+} from "@/app/admin/(main)/dashboard/actions";
 import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
 
 // Shape for mapping Supabase rows
@@ -56,54 +59,49 @@ export default function AdminDashboardGrid({
       try {
         setLoading(true);
 
-        // Fetch ALL dashboards (Admin View)
-        let query = supabase.from("dashboard").select("*");
-        
-        // Optimize fetching if clientId is provided? 
-        // We handle filtering client-side for "searchQuery" but clientId can be server-side filtered too.
-        // But for consistency with search, let's keep fetching all or filter if simple.
-        // Given we fetch all, let's filter client-side to avoid re-fetching on every filter change if manageable,
-        // BUT user might have many dashboards. Ideally server-side.
-        // However, existing code fetches ALL. Let's stick to client-side filter for now to match pattern,
-        // unless performance is concern.
-        
-        const { data, error } = await query;
+        if (isOwnBackendEnabled()) {
+          const mapped = await listAdminDashboardsForGrid();
+          if (!isMounted) return;
+          setDashboards(mapped);
+          setError(null);
+          return;
+        }
 
+        const { data, error } = await supabase.from("dashboard").select("*");
         if (error) throw error;
 
-        const rows = (data as SupabaseDashboardRow[] | null) ?? [];
+        const rows = Array.isArray(data) ? (data as SupabaseDashboardRow[]) : [];
 
-        // Fetch owners for all dashboards
         const ownerIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
         let ownerById = new Map<string, { full_name: string | null }>();
 
         if (ownerIds.length > 0) {
-            const { data: owners } = await supabase
+          const { data: owners } = await supabase
             .from("profiles")
             .select("id, full_name")
             .in("id", ownerIds);
-            
-            ownerById = new Map((owners ?? []).map((o) => [o.id, o]));
+
+          const ownerList = Array.isArray(owners) ? owners : owners ? [owners] : [];
+          ownerById = new Map(ownerList.map((o) => [o.id, o]));
         }
 
         const mapped: Dashboard[] = rows.map((row) => {
-            const status = dashboardPublishedStatusFromRow(row);
+          const status = dashboardPublishedStatusFromRow(row);
+          const ownerProfile = row.user_id ? ownerById.get(row.user_id) : undefined;
 
-            const ownerProfile = row.user_id ? ownerById.get(row.user_id) : undefined;
-
-            return {
-              id: String(row.id),
-              title: row.title ?? row.name ?? "Sin título",
-              imageUrl: row.image_url ?? row.thumbnail_url ?? "/Image.svg",
-              status,
-              description: row.description ?? "",
-              views: typeof row.views === "number" ? row.views : 0,
-              owner: { fullName: ownerProfile?.full_name ?? "Desconocido" },
-              clientId: row.client_id ?? undefined,
-              ownerId: row.user_id,
-              layout: row.layout ?? undefined,
-            } satisfies Dashboard;
-          });
+          return {
+            id: String(row.id),
+            title: row.title ?? row.name ?? "Sin título",
+            imageUrl: row.image_url ?? row.thumbnail_url ?? "/Image.svg",
+            status,
+            description: row.description ?? "",
+            views: typeof row.views === "number" ? row.views : 0,
+            owner: { fullName: ownerProfile?.full_name ?? "Desconocido" },
+            clientId: row.client_id ?? undefined,
+            ownerId: row.user_id,
+            layout: row.layout ?? undefined,
+          } satisfies Dashboard;
+        });
 
         if (!isMounted) return;
         setDashboards(mapped);

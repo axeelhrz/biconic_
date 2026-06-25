@@ -1,6 +1,8 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { listConnectionsFromDb } from "@/lib/admin/connections-repository";
 import { Connection } from "@/components/connections/ConnectionsCard";
 
 type SupabaseConnectionRow = {
@@ -30,6 +32,10 @@ export type GetConnectionsOptions = {
 };
 
 export async function getConnections(options?: GetConnectionsOptions): Promise<Connection[]> {
+  if (shouldUseOwnBackend()) {
+    return listConnectionsFromDb({ clientId: options?.clientId });
+  }
+
   const supabase = await createClient();
   const clientId = options?.clientId ?? null;
 
@@ -67,7 +73,7 @@ export async function getConnections(options?: GetConnectionsOptions): Promise<C
   }
 
   // 3. Obtener metadatos (data_tables) para las conexiones encontradas
-  const ids = uniqueRows.map((r) => r.id);
+  const ids = uniqueRows.map((r: any) => r.id);
   const { data: metas } = await supabase
     .from("data_tables")
     .select(
@@ -77,7 +83,7 @@ export async function getConnections(options?: GetConnectionsOptions): Promise<C
 
   const metaByConnId = new Map<string, DataTableMetaRow>();
   if (metas) {
-    (metas as DataTableMetaRow[]).forEach((m) => {
+    (metas as DataTableMetaRow[]).forEach((m: any) => {
       metaByConnId.set(m.connection_id, m);
     });
   }
@@ -85,7 +91,7 @@ export async function getConnections(options?: GetConnectionsOptions): Promise<C
   // 4. Obtener información de los Dueños (Profiles)
   // Extraemos los user_id únicos para hacer una sola consulta eficiente
   const ownerIds = Array.from(
-    new Set(uniqueRows.map((r) => r.user_id).filter(Boolean))
+    new Set(uniqueRows.map((r: any) => r.user_id).filter(Boolean))
   ) as string[];
 
   let ownerById = new Map<string, { full_name: string | null }>();
@@ -97,7 +103,7 @@ export async function getConnections(options?: GetConnectionsOptions): Promise<C
       .in("id", ownerIds);
 
     if (owners) {
-      owners.forEach((o) => ownerById.set(o.id, { full_name: o.full_name }));
+      owners.forEach((o: any) => ownerById.set(o.id, { full_name: o.full_name }));
     }
   }
 
@@ -139,7 +145,7 @@ export async function getConnections(options?: GetConnectionsOptions): Promise<C
   };
 
   // 5. Retornar datos mapeados
-  const result = uniqueRows.map((row) => {
+  const result = uniqueRows.map((row: any) => {
     const meta = metaByConnId.get(row.id);
     const isExcel = row.type === "excel_file" || row.type === "excel";
     

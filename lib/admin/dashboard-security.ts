@@ -1,4 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { getServerAuthUser } from "@/lib/supabase/server-backend";
+import { verifyDashboardEditAccessFromDb } from "@/lib/admin/dashboard-repository";
 
 /**
  * Verifies if a user has edit access to a dashboard.
@@ -8,6 +11,15 @@ import { createClient } from "@/lib/supabase/server";
  * 3. User has explicit UPDATE permission (dashboard_has_client_permissions)
  */
 export async function verifyDashboardEditAccess(dashboardId: string, userId: string): Promise<boolean> {
+  if (shouldUseOwnBackend()) {
+    const authUser = await getServerAuthUser();
+    return verifyDashboardEditAccessFromDb(
+      dashboardId,
+      userId,
+      authUser?.app_role
+    );
+  }
+
   const supabase = await createClient();
 
   // 0. Check Global App Admin

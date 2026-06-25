@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
@@ -125,7 +126,7 @@ function quoteQualified(qname: string, dbType: "postgres" | "mysql"): string {
   if (!qname) return '""';
   const parts = qname.split(".");
   if (parts.length === 1) return quoteIdent(parts[0], dbType);
-  return parts.map((p) => quoteIdent(p, dbType)).join(".");
+  return parts.map((p: any) => quoteIdent(p, dbType)).join(".");
 }
 
 function buildCastWrapper(
@@ -199,7 +200,7 @@ function buildArithmeticExpression(
   conversions: CastConversion[] | undefined
 ): string {
   const convMap = new Map<string, CastConversion>();
-  (conversions || []).forEach((c) => convMap.set(c.column, c));
+  (conversions || []).forEach((c: any) => convMap.set(c.column, c));
   const getOperandValue = (operand: {
     type: "column" | "constant";
     value: string;
@@ -338,7 +339,7 @@ function buildConditionExprMy(rule: ConditionRule) {
 
 function buildWhereClausePg(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = `"${c.column.replace(/"/g, '""')}"`;
     switch (c.operator) {
       case "is null":
@@ -355,16 +356,16 @@ function buildWhereClausePg(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} ILIKE $${params.length}`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
         return `${col} IN (${idxs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
@@ -383,7 +384,7 @@ function buildWhereClausePg(conds: FilterCondition[]) {
 
 function buildWhereClauseMy(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = `\`${c.column.replace(/`/g, "``")}\``;
     switch (c.operator) {
       case "is null":
@@ -400,13 +401,13 @@ function buildWhereClauseMy(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} LIKE ?`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} IN (${qs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} NOT IN (${qs.join(", ")})`;
@@ -512,7 +513,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
              return NextResponse.json({ ok: false, error: "Error cargando conexiones para JOIN" }, { status: 500 });
         }
         
-        const connMap = new Map(connsData.map(c => [String(c.id), c]));
+        const connMap = new Map<string, any>(connsData.map((c: any) => [String(c.id), c]));
         const primaryConn = connMap.get(String(primaryConnectionId));
         if (!primaryConn) return NextResponse.json({ ok: false, error: "Conexión principal no encontrada" }, { status: 404 });
 
@@ -652,8 +653,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             const aliasSub = "sub";
             
             // Rules & Operations
-            const ruleCols = (rules || []).map((r) => buildConditionExprPg(r)); // uses resolveOperandAlias -> primary_col (available in sub)
-            const arithmeticCols = safeOperations.map((op) => {
+            const ruleCols = (rules || []).map((r: any) => buildConditionExprPg(r)); // uses resolveOperandAlias -> primary_col (available in sub)
+            const arithmeticCols = safeOperations.map((op: any) => {
                 const expr = buildArithmeticExpression(op, "postgres", undefined); // uses resolveOperandAlias
                 const alias = `"${op.resultColumn.replace(/"/g, '""')}"`;
                 return `${expr} AS ${alias}`;
@@ -749,7 +750,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const tableNamePhysical =
         (meta as any).physical_table_name ||
         `import_${String(connectionId).replaceAll("-", "_")}`;
-      const dbUrl = process.env.SUPABASE_DB_URL;
+      const dbUrl = getInternalDbUrl();
       if (!dbUrl) {
         return NextResponse.json(
           {
@@ -763,12 +764,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       await client.connect();
 
       const convMap = new Map<string, CastConversion>();
-      (conversions || []).forEach((c) => convMap.set(c.column, c));
+      (conversions || []).forEach((c: any) => convMap.set(c.column, c));
 
       // Inner Query: Apply Casts + Select Original Cols
       const originalCols =
         columns && columns.length
-          ? columns.map((c) => {
+          ? columns.map((c: any) => {
              const conv = convMap.get(c);
              if (conv) {
                 return `${buildCastWrapper("postgres", c, conv.targetType)} AS "${c.replace(/"/g, '""')}"`;
@@ -783,8 +784,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const subQuery = `SELECT ${originalCols.join(", ")} FROM ${fullTable} ${baseWhere}`;
 
       // Outer Query: Rules + Arithmetic based on subquery results
-      const ruleCols = (rules || []).map((r) => buildConditionExprPg(r));
-      const arithmeticCols = safeOperations.map((op) => {
+      const ruleCols = (rules || []).map((r: any) => buildConditionExprPg(r));
+      const arithmeticCols = safeOperations.map((op: any) => {
         // Conversions are handled in subquery, so pass undefined here to avoid double cast?
         // Actually buildArithmeticExpression adds casts. If subquery outputs proper types, we don't need casts.
         // But if subquery aliases match original names, convMap still has them.
@@ -839,12 +840,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       await client.connect();
 
       const convMap = new Map<string, CastConversion>();
-      (conversions || []).forEach((c) => convMap.set(c.column, c));
+      (conversions || []).forEach((c: any) => convMap.set(c.column, c));
 
       // Inner Query
       const originalCols =
         columns && columns.length
-          ? columns.map((c) => {
+          ? columns.map((c: any) => {
              const conv = convMap.get(c);
              if (conv) {
                 return `${buildCastWrapper("postgres", c, conv.targetType)} AS "${c.replace(/"/g, '""')}"`;
@@ -859,7 +860,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
       // Outer Query
       const ruleCols = (rules || []).map(r => buildConditionExprPg(r));
-      const arithmeticCols = safeOperations.map((op) => {
+      const arithmeticCols = safeOperations.map((op: any) => {
         // Use subquery values as-is
         const expr = buildArithmeticExpression(op, "postgres", undefined);
         const alias = `"${op.resultColumn.replace(/"/g, '""')}"`;
@@ -898,12 +899,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       });
 
       const convMap = new Map<string, CastConversion>();
-      (conversions || []).forEach((c) => convMap.set(c.column, c));
+      (conversions || []).forEach((c: any) => convMap.set(c.column, c));
 
       // Inner Query
       const originalCols =
         columns && columns.length
-          ? columns.map((c) => {
+          ? columns.map((c: any) => {
              const conv = convMap.get(c);
              if (conv) {
                 return `${buildCastWrapper("mysql", c, conv.targetType)} AS \`${c.replace(/`/g, "``")}\``;
@@ -918,7 +919,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
       // Outer Query
       const ruleCols = (rules || []).map(r => buildConditionExprMy(r));
-      const arithmeticCols = safeOperations.map((op) => {
+      const arithmeticCols = safeOperations.map((op: any) => {
         const expr = buildArithmeticExpression(op, "mysql", undefined);
         const alias = `\`${op.resultColumn.replace(/`/g, "``")}\``;
         return `${expr} AS ${alias}`;

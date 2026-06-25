@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
@@ -45,18 +46,44 @@ export default function ImportStatus({
       ? new Date(importStartedAt).getTime()
       : Date.now();
 
-    const supabase = createClient();
-
     const pollStatus = async () => {
-      const { data, error } = await supabase
-        .from("data_tables")
-        .select("import_status, total_rows, error_message, physical_table_name")
-        .eq("id", dataTableId)
-        .single();
+      let data: ImportStatusData | null = null;
 
-      if (error) {
-        console.error("[Polling] Error al buscar el estado:", error);
-        return;
+      if (isOwnBackendEnabled()) {
+        let res = await fetch(
+          `/api/process-excel/status?dataTableId=${encodeURIComponent(dataTableId)}`,
+          { credentials: "include" }
+        );
+        if (res.status === 401) {
+          const refresh = await fetch("/api/auth/refresh", {
+            method: "POST",
+            credentials: "include",
+          });
+          if (refresh.ok) {
+            res = await fetch(
+              `/api/process-excel/status?dataTableId=${encodeURIComponent(dataTableId)}`,
+              { credentials: "include" }
+            );
+          }
+        }
+        if (!res.ok) {
+          console.error("[Polling] Error al buscar el estado:", res.status);
+          return;
+        }
+        data = await safeJsonResponse<ImportStatusData>(res);
+      } else {
+        const supabase = createClient();
+        const { data: row, error } = await supabase
+          .from("data_tables")
+          .select("import_status, total_rows, error_message, physical_table_name")
+          .eq("id", dataTableId)
+          .single();
+
+        if (error) {
+          console.error("[Polling] Error al buscar el estado:", error);
+          return;
+        }
+        data = row as ImportStatusData | null;
       }
 
       if (data) {

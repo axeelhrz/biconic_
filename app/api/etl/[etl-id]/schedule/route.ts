@@ -11,14 +11,14 @@ import {
 } from "@/lib/etl/schedule";
 
 function requireAdmin(supabase: Awaited<ReturnType<typeof createClient>>) {
-  return supabase.auth.getUser().then(({ data: { user }, error }) => {
+  return supabase.auth.getUser().then(({ data: { user }, error }: any) => {
     if (error || !user) return { ok: false as const, status: 401, error: "No autorizado" };
     return supabase
       .from("profiles")
       .select("app_role")
       .eq("id", user.id)
       .single()
-      .then(({ data: profile }) => {
+      .then(({ data: profile }: any) => {
         if ((profile as { app_role?: string })?.app_role !== "APP_ADMIN")
           return { ok: false as const, status: 403, error: "Requiere rol de administrador" };
         return { ok: true as const };

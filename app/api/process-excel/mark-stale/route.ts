@@ -1,5 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { createImportAdminClient } from "@/lib/excel-import/import-admin-client";
+import { getServerAuthUser } from "@/lib/supabase/server-backend";
 
 const STALE_MINUTES = 45;
 
@@ -15,15 +18,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Faltan dataTableId" }, { status: 400 });
     }
 
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    if (shouldUseOwnBackend()) {
+      const user = await getServerAuthUser();
+      if (!user?.id) {
+        return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+      }
+    } else {
+      const supabase = await createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+      }
     }
 
-    const { data: row, error: fetchErr } = await supabase
+    const db = createImportAdminClient();
+    const { data: row, error: fetchErr } = await db
       .from("data_tables")
       .select("id, import_status, updated_at")
       .eq("id", dataTableId)
@@ -53,7 +64,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const { error: updateErr } = await supabase
+    const { error: updateErr } = await db
       .from("data_tables")
       .update({
         import_status: "failed",

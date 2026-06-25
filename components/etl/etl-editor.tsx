@@ -369,43 +369,33 @@ export function ETLEditor({
      return () => { isMounted = false; };
   }, [etlId]);
 
-  // 2. Persistent Subscription for Active Run (Global)
+  // 2. Persistent Subscription for Active Run (Global) — SSE/polling via data-provider
   useEffect(() => {
      if (!activeRunId || !etlId) return;
 
-     const supabase = createClient();
-     const channelId = `etl-run-${activeRunId}`;
      console.log("Subscribing to run (Global):", activeRunId);
+     let unsubscribe: (() => void) | undefined;
 
-     const channel = supabase.channel(channelId)
-        .on(
-            "postgres_changes",
-            {
-                event: "UPDATE",
-                schema: "public",
-                table: "etl_runs_log",
-                filter: `id=eq.${activeRunId}`
-            },
-            (payload) => {
-                 const newRow = payload.new as any;
-                 if (newRow) {
-                     console.log("Run update:", newRow.status, newRow.rows_processed);
-                     if (typeof newRow.rows_processed === "number") {
-                        setProgress(newRow.rows_processed);
-                        const updatedAt = newRow.updated_at ? new Date(newRow.updated_at).getTime() : Date.now();
-                        lastProgressAtRef.current = updatedAt;
-                     }
-                     if (newRow.status) {
-                        setActiveRunStatus(newRow.status);
-                     }
-                 }
-            }
-        )
-        .subscribe();
+     import("@/lib/data/data-provider").then(({ subscribeEtlRunUpdates }) => {
+       unsubscribe = subscribeEtlRunUpdates(activeRunId, (newRow) => {
+         if (!newRow) return;
+         console.log("Run update:", newRow.status, newRow.rows_processed);
+         if (typeof newRow.rows_processed === "number") {
+           setProgress(newRow.rows_processed);
+           const updatedAt = newRow.updated_at
+             ? new Date(String(newRow.updated_at)).getTime()
+             : Date.now();
+           lastProgressAtRef.current = updatedAt;
+         }
+         if (newRow.status) {
+           setActiveRunStatus(String(newRow.status) as "started" | "running" | "completed" | "failed");
+         }
+       });
+     });
 
      return () => {
         console.log("Unsubscribing run:", activeRunId);
-        supabase.removeChannel(channel);
+        unsubscribe?.();
      };
   }, [activeRunId, etlId]);
 

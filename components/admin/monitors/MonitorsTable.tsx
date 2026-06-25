@@ -83,7 +83,7 @@ export default function MonitorsTable({
       }
 
       const etlIds = Array.from(
-        new Set(logsData.map((l) => l.etl_id).filter(Boolean).map((id) => String(id)))
+        new Set(logsData.map((l: any) => l.etl_id).filter(Boolean).map((id: any) => String(id)))
       ) as string[];
 
       const etlNameMap = new Map<string, string>();
@@ -101,7 +101,7 @@ export default function MonitorsTable({
         }
       }
 
-      const mappedLogs: LogEntry[] = logsData.map((log) => ({
+      const mappedLogs: LogEntry[] = logsData.map((log: any) => ({
         ...log,
         etl_name: log.etl_id ? (etlNameMap.get(String(log.etl_id)) || "—") : "—",
       }));
@@ -133,7 +133,7 @@ export default function MonitorsTable({
     return () => clearInterval(interval);
   }, [hasInProgress, loadLogs]);
 
-  const filteredLogs = logs.filter((log) => {
+  const filteredLogs = logs.filter((log: any) => {
     const matchesSearch =
       searchQuery === "" ||
       log.etl_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -149,14 +149,14 @@ export default function MonitorsTable({
   const selectedSet = new Set(selectedIds);
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      prev.includes(id) ? prev.filter((x: any) => x !== id) : [...prev, id]
     );
   };
   const selectAllFiltered = () => {
-    const ids = filteredLogs.map((l) => l.id);
+    const ids = filteredLogs.map((l: any) => l.id);
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      ids.forEach((id) => next.add(id));
+      ids.forEach((id: any) => next.add(id));
       return Array.from(next);
     });
   };
@@ -387,7 +387,7 @@ export default function MonitorsTable({
                 </TableCell>
               </TableRow>
             ) : (
-              filteredLogs.map((log) => (
+              filteredLogs.map((log: any) => (
                 <TableRow
                   key={log.id}
                   className="hover:opacity-90"

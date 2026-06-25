@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import EtlCard, { Etl } from "@/components/etl/EtlCard";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
 import { getEtlsAdmin, deleteEtlAdmin } from "@/app/admin/(main)/etl/actions";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
@@ -177,6 +178,13 @@ export default function AdminEtlGrid({
         setTimeout(() => reject(new Error("timeout")), timeoutMs)
       );
       const res = await Promise.race([adminPromise, timeoutPromise]);
+      if (!res.ok) {
+        if (isOwnBackendEnabled()) {
+          setError(res.error ?? "Error cargando ETLs");
+          setEtls([]);
+          return;
+        }
+      }
       if (res.ok && res.data) {
         const rows = (res.data ?? []) as SupabaseEtlRow[];
         const owners: Record<string, string | null> = res.owners ?? {};
@@ -213,14 +221,19 @@ export default function AdminEtlGrid({
       }
       const mapped = await loadFromClient();
       setEtls(mapped);
-    } catch {
-      try {
-        const mapped = await loadFromClient();
-        setEtls(mapped);
-        setError(null);
-      } catch (err: any) {
-        setError(err?.message ?? "Error cargando ETLs");
+    } catch (err: unknown) {
+      if (isOwnBackendEnabled()) {
+        setError(err instanceof Error ? err.message : "Error cargando ETLs");
         setEtls([]);
+      } else {
+        try {
+          const mapped = await loadFromClient();
+          setEtls(mapped);
+          setError(null);
+        } catch (fallbackErr: unknown) {
+          setError(fallbackErr instanceof Error ? fallbackErr.message : "Error cargando ETLs");
+          setEtls([]);
+        }
       }
     } finally {
       setLoading(false);

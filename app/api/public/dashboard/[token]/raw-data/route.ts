@@ -124,7 +124,7 @@ export async function POST(
     let selectClause = "*";
     if (body.columns && body.columns.length > 0) {
       selectClause = body.columns
-        .map((c) => `"${c.replace(/"/g, '""')}"`)
+        .map((c: any) => `"${c.replace(/"/g, '""')}"`)
         .join(", ");
     }
 
@@ -133,7 +133,7 @@ export async function POST(
     // Filtros
     if (body.filters && body.filters.length > 0) {
       const whereClauses = body.filters
-        .map((f) => {
+        .map((f: any) => {
           const safeField = f.field.replace(/"/g, '""');
           const op = (f.operator || "=").toUpperCase().trim();
 
@@ -164,7 +164,7 @@ export async function POST(
           }
           if (op === "IN") {
             const list = (Array.isArray(f.value) ? f.value : [])
-              .map((x) => toSqlLiteral(x))
+              .map((x: any) => toSqlLiteral(x))
               .join(", ");
             if (!list) return "TRUE";
             return `${fieldExpression} IN (${list})`;

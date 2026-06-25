@@ -32,7 +32,7 @@ export async function GET() {
       return NextResponse.json({ ok: false, error: fetchError.message }, { status: 500 });
     }
 
-    const etlsWithMetrics = (etls ?? []).map((etl) => {
+    const etlsWithMetrics = (etls ?? []).map((etl: any) => {
       const layout = (etl as { layout?: { saved_metrics?: unknown[]; saved_analyses?: unknown[] } }).layout;
       const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
       const savedAnalyses = Array.isArray(layout?.saved_analyses) ? layout.saved_analyses : [];

@@ -1574,7 +1574,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <Select
                       value={selectedTable ?? ""}
                       onChange={(v: string) => setSelectedTable(v || null)}
-                      options={tables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
+                      options={tables.map((t) => ({
+                        value: `${t.schema}.${t.name}`,
+                        label: (t as { label?: string }).label ?? `${t.schema}.${t.name}`,
+                      }))}
                       placeholder={connectionId && tables.length === 0 ? "No hay tablas. Configurá tablas en Conexiones." : "Seleccionar tabla…"}
                       disabled={!connectionId || tables.length === 0}
                       searchable

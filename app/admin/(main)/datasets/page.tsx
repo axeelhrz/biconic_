@@ -279,7 +279,7 @@ export default function AdminDatasetsPage() {
                 </div>
               ) : (
                 <ul className="space-y-1.5 py-1">
-                  {etlOptions.map((etl) => (
+                  {etlOptions.map((etl: any) => (
                     <li key={etl.id}>
                       <button
                         type="button"
@@ -424,7 +424,7 @@ export default function AdminDatasetsPage() {
               <div className="sm:col-span-3 text-right">Acciones</div>
             </div>
             <ul className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
-              {datasets.map((ds) => (
+              {datasets.map((ds: any) => (
                 <li
                   key={ds.id}
                   className="grid grid-cols-1 sm:grid-cols-12 gap-3 px-4 py-3 items-center"

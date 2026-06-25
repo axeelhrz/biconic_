@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
@@ -108,10 +109,10 @@ function normalizeFilterColumnRef(ref: string): string {
 /** Devuelve los pares (leftColumn, rightColumn) para un join: conditions si existe, si no el par único primaryColumn/secondaryColumn. */
 function getJoinConditionPairs(jn: { conditions?: StarJoinConditionPair[]; primaryColumn?: string; secondaryColumn?: string }): Array<{ leftColumn: string; rightColumn: string }> {
   if (jn.conditions && jn.conditions.length > 0) {
-    return jn.conditions.map((c) => ({
+    return jn.conditions.map((c: any) => ({
       leftColumn: (c.primaryColumn || "").trim(),
       rightColumn: (c.secondaryColumn || "").trim(),
-    })).filter((p) => p.leftColumn || p.rightColumn);
+    })).filter((p: any) => p.leftColumn || p.rightColumn);
   }
   const pc = (jn.primaryColumn || "").trim();
   const sc = (jn.secondaryColumn || "").trim();
@@ -183,7 +184,7 @@ function quoteQualified(qname: string, dbType: "postgres" | "mysql"): string {
   if (!qname) return '""';
   const parts = qname.split(".");
   if (parts.length === 1) return quoteIdent(parts[0], dbType);
-  return parts.map((p) => quoteIdent(p, dbType)).join(".");
+  return parts.map((p: any) => quoteIdent(p, dbType)).join(".");
 }
 
 /** Obtiene nombres de columnas de una tabla en PostgreSQL (evita p.* / j*.* para alias consistentes). */
@@ -209,7 +210,7 @@ function buildJoinClause(
 ): string {
   const jt = joinConditions[0]?.joinType || "INNER";
   const onExpr = joinConditions
-    .map((jc) => {
+    .map((jc: any) => {
       const leftColQuoted = quoteIdent(jc.leftColumn, dbType);
       const rightColQuoted = quoteIdent(jc.rightColumn, dbType);
       return `l.${leftColQuoted} = r.${rightColQuoted}`;
@@ -220,7 +221,7 @@ function buildJoinClause(
 
 function buildWhereClausePg(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     let col: string;
     const lc = c.column || "";
     const mLeft = lc.match(/^(left|l)\.(.+)$/i);
@@ -243,16 +244,16 @@ function buildWhereClausePg(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} ILIKE $${params.length}`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
         return `${col} IN (${idxs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
@@ -270,7 +271,7 @@ function buildWhereClausePg(conds: FilterCondition[]) {
 
 function buildWhereClauseMy(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     let col: string;
     const lc = c.column || "";
     const mLeft = lc.match(/^(left|l)\.(.+)$/i);
@@ -293,13 +294,13 @@ function buildWhereClauseMy(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} LIKE ?`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} IN (${qs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} NOT IN (${qs.join(", ")})`;
@@ -316,7 +317,7 @@ function buildWhereClauseMy(conds: FilterCondition[]) {
 
 function buildWhereClausePgStar(conds: FilterCondition[], joinsCount: number) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     let col: string;
     const raw = c.column || "";
     const mPrimary = raw.match(/^primary\.(.+)$/i);
@@ -344,16 +345,16 @@ function buildWhereClausePgStar(conds: FilterCondition[], joinsCount: number) {
         params.push(`%${c.value ?? ""}`);
         return `${col} ILIKE $${params.length}`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
         return `${col} IN (${idxs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
@@ -373,7 +374,7 @@ function normalizeStarConditions(
   conds: FilterCondition[],
   joinsCount: number
 ): FilterCondition[] {
-  return conds.map((c) => {
+  return conds.map((c: any) => {
     const raw = (c.column || "").trim();
     if (/^primary\./i.test(raw)) return c;
     const m = raw.match(/^join_(\d+)\.(.+)$/i);
@@ -389,7 +390,7 @@ function normalizeStarConditions(
 
 function buildWhereClauseMyStar(conds: FilterCondition[], joinsCount: number) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     let col: string;
     const raw = c.column || "";
     const mPrimary = raw.match(/^primary\.(.+)$/i);
@@ -417,13 +418,13 @@ function buildWhereClauseMyStar(conds: FilterCondition[], joinsCount: number) {
         params.push(`%${c.value ?? ""}`);
         return `${col} LIKE ?`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} IN (${qs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} NOT IN (${qs.join(", ")})`;
@@ -445,7 +446,7 @@ function buildColumnSelection(
 ): string {
   const leftCols =
     leftColumns && leftColumns.length > 0
-      ? leftColumns.map((col) => {
+      ? leftColumns.map((col: any) => {
           const colQuoted = quoteIdent(col, dbType);
           return `l.${colQuoted} AS ${
             dbType === "postgres"
@@ -456,7 +457,7 @@ function buildColumnSelection(
       : ["l.*"];
   const rightCols =
     rightColumns && rightColumns.length > 0
-      ? rightColumns.map((col) => {
+      ? rightColumns.map((col: any) => {
           const colQuoted = quoteIdent(col, dbType);
           return `r.${colQuoted} AS ${
             dbType === "postgres"
@@ -546,7 +547,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       body.dateFilter = { ...body.dateFilter, column: normalizeFilterColumnRef(body.dateFilter.column) };
     }
     if (Array.isArray(body.conditions)) {
-      body.conditions = body.conditions.map((c) => ({ ...c, column: c.column ? normalizeFilterColumnRef(c.column) : c.column }));
+      body.conditions = body.conditions.map((c: any) => ({ ...c, column: c.column ? normalizeFilterColumnRef(c.column) : c.column }));
     }
     const countMode = body.countMode || "fast";
 
@@ -646,7 +647,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       log("Cargando metadatos de conexiones en paralelo...");
       const allConnectionIds = [
         primaryConnectionId,
-        ...joins.map((j) => j.secondaryConnectionId),
+        ...joins.map((j: any) => j.secondaryConnectionId),
       ].filter((id): id is string | number => id != null);
       const uniqueConnectionIds = [...new Set(allConnectionIds)];
 
@@ -703,7 +704,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       log(`Tipo de base de datos determinada: ${dbType}`);
 
       // --- LÓGICA DE BIFURCACIÓN BASADA EN EL TIPO DE BD ---
-      const joinsConnections = (joins || []).map((jn) =>
+      const joinsConnections = (joins || []).map((jn: any) =>
         connectionsMap.get(String(jn.secondaryConnectionId))
       );
       const hasFirebirdInChain = [primaryConn, ...joinsConnections].some(
@@ -742,7 +743,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const joinsCount = (joins || []).length;
         // ---------- MATERIALIZATION PATH: Firebird + 2+ joins ----------
         if (hasFirebirdInChain && joinsCount >= 2) {
-          const pgUrl = process.env.SUPABASE_DB_URL;
+          const pgUrl = getInternalDbUrl();
           if (pgUrl) {
             const skipCleanup = (body as any)._skipMaterializationCleanup === true;
             const externalPrefix = (body as any)._materializationPrefix as string | undefined;
@@ -804,7 +805,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 }
 
                 for (const mr of matResults) tempTables.push(mr.qualifiedTable);
-                log("Materialización completada.", matResults.map((r) => ({ table: r.qualifiedTable, rows: r.rowCount })));
+                log("Materialización completada.", matResults.map((r: any) => ({ table: r.qualifiedTable, rows: r.rowCount })));
               } else {
                 tempTables.push(`etl_temp."${reqSuffix}_primary"`);
                 for (let idx = 0; idx < joins.length; idx++) {
@@ -894,7 +895,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const mergedParams = [...condParams, ...dfParams];
 
               const stableOrderBy = resolvedPrimaryCols.length > 0
-                ? `ORDER BY ${resolvedPrimaryCols.map((c) => `p."${normalizeKey(c)}"`).join(", ")}`
+                ? `ORDER BY ${resolvedPrimaryCols.map((c: any) => `p."${normalizeKey(c)}"`).join(", ")}`
                 : "ORDER BY 1";
               const effectiveLimit = limit ?? 50;
               const effectiveOffset = offset ?? 0;
@@ -1067,7 +1068,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const tablePart = resolvedTable.includes(".")
                 ? (resolvedTable.split(".").pop() || resolvedTable).trim().toUpperCase()
                 : firebirdSafePart(resolvedTable);
-              const cols = columns?.length ? columns.map((c) => firebirdSafePart(c)).join(", ") : "*";
+              const cols = columns?.length ? columns.map((c: any) => firebirdSafePart(c)).join(", ") : "*";
               const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterForTable);
               const baseWhereFb = dfClause ? ` WHERE ${dfClause}` : "";
               const escapeFbLiteral = (v: any): string => {
@@ -1081,15 +1082,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 return `'${String(v).replace(/'/g, "''")}'`;
               };
               if (filterByKeys?.columns?.length && filterByKeys?.valueTuples?.length) {
-                const fbCols = filterByKeys.columns.map((c) => firebirdSafePart(c));
+                const fbCols = filterByKeys.columns.map((c: any) => firebirdSafePart(c));
                 const allRows: Record<string, any>[] = [];
                 for (let b = 0; b < filterByKeys.valueTuples.length; b += IN_KEYS_BATCH) {
                   const batch = filterByKeys.valueTuples.slice(b, b + IN_KEYS_BATCH);
                   if (batch.length === 0) continue;
                   const keysCondition =
                     fbCols.length === 1
-                      ? `${fbCols[0]} IN (${batch.map((t) => escapeFbLiteral(t[0])).join(", ")})`
-                      : `(${batch.map((t) => fbCols.map((fc, i) => `${fc} = ${escapeFbLiteral(t[i])}`).join(" AND ")).join(" OR ")})`;
+                      ? `${fbCols[0]} IN (${batch.map((t: any) => escapeFbLiteral(t[0])).join(", ")})`
+                      : `(${batch.map((t: any) => fbCols.map((fc, i) => `${fc} = ${escapeFbLiteral(t[i])}`).join(" AND ")).join(" OR ")})`;
                   const keysWhere = baseWhereFb ? `${baseWhereFb} AND ${keysCondition}` : ` WHERE ${keysCondition}`;
                   let sqlFb = `SELECT ${cols} FROM ${tablePart}${keysWhere}`;
                   if (dfParams.length > 0) {
@@ -1117,7 +1118,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const skip = rowOffset > 0 ? rowOffset : 0;
               const orderByFb =
                 columns?.length
-                  ? columns.map((c) => firebirdSafePart(c)).join(", ")
+                  ? columns.map((c: any) => firebirdSafePart(c)).join(", ")
                   : "1";
               let sql = skip > 0
                 ? `SELECT FIRST ${sourceLimit} SKIP ${skip} ${cols} FROM ${tablePart}${wherePart} ORDER BY ${orderByFb}`
@@ -1148,7 +1149,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 : conn.db_password || "");
             const connectionString =
               cType === "excel_file"
-                ? process.env.SUPABASE_DB_URL
+                ? getInternalDbUrl()
                 : `postgres://${conn.db_user}:${encodeURIComponent(String(password || ""))}@${conn.db_host}:${conn.db_port || 5432}/${conn.db_name}?sslmode=require`;
             if (!connectionString) throw new Error("No se pudo resolver la conexión para JOIN en memoria.");
             const client = new PgClient({
@@ -1158,7 +1159,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             });
             await client.connect();
             try {
-              const sel = columns?.length ? columns.map((c) => quoteIdent(c, "postgres")).join(", ") : "*";
+              const sel = columns?.length ? columns.map((c: any) => quoteIdent(c, "postgres")).join(", ") : "*";
               const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterForTable, 1, "");
               const baseWhere = dfClause ? ` WHERE ${dfClause}` : "";
               const paramStart = (dfParams?.length || 0) + 1;
@@ -1166,7 +1167,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               if (filterByKeys?.columns?.length && filterByKeys?.valueTuples?.length) {
                 const allRows: Record<string, any>[] = [];
                 const cols = filterByKeys.columns;
-                const quotedCols = cols.map((c) => quoteIdent(c, "postgres"));
+                const quotedCols = cols.map((c: any) => quoteIdent(c, "postgres"));
                 const aliasNames = cols.length <= 3 ? ["x", "y", "z"].slice(0, cols.length) : cols.map((_, i) => `c${i + 1}`);
                 for (let b = 0; b < filterByKeys.valueTuples.length; b += IN_KEYS_BATCH) {
                   const batch = filterByKeys.valueTuples.slice(b, b + IN_KEYS_BATCH);
@@ -1177,8 +1178,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                       : ` AND (${quotedCols.join(", ")}) IN (SELECT ${aliasNames.join(", ")} FROM unnest(${cols.map((_, i) => `$${paramStart + i}::text[]`).join(", ")}) AS t(${aliasNames.join(", ")}) )`;
                   const batchParams =
                     cols.length === 1
-                      ? [...(dfParams || []), batch.map((t) => t[0])]
-                      : [...(dfParams || []), ...cols.map((_, i) => batch.map((t) => t[i]))];
+                      ? [...(dfParams || []), batch.map((t: any) => t[0])]
+                      : [...(dfParams || []), ...cols.map((_, i) => batch.map((t: any) => t[i]))];
                   const q = `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${baseWhere}${keysWhere}`;
                   const res = await client.query(q, batchParams);
                   allRows.push(...(res.rows || []).map((r: any) => normalizeRow(r)));
@@ -1190,7 +1191,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const off = rowOffset > 0 ? rowOffset : 0;
               const orderByStable =
                 columns?.length
-                  ? columns.map((c) => quoteIdent(c, "postgres")).join(", ")
+                  ? columns.map((c: any) => quoteIdent(c, "postgres")).join(", ")
                   : "1";
               const q = off > 0
                 ? `SELECT ${sel} FROM ${quoteQualified(resolvedTable, "postgres")}${wherePart} ORDER BY ${orderByStable} LIMIT ${sourceLimit} OFFSET ${off}`
@@ -1236,11 +1237,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               case "endsWith":
                 return String(value ?? "").toLowerCase().endsWith(String(opVal).toLowerCase());
               case "in": {
-                const list = String(opVal).split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
+                const list = String(opVal).split(",").map((v: any) => v.trim().toLowerCase()).filter(Boolean);
                 return list.includes(String(value ?? "").trim().toLowerCase());
               }
               case "not in": {
-                const list = String(opVal).split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
+                const list = String(opVal).split(",").map((v: any) => v.trim().toLowerCase()).filter(Boolean);
                 return !list.includes(String(value ?? "").trim().toLowerCase());
               }
               case "=":
@@ -1276,7 +1277,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const d2 = new Date(s.slice(0, 10));
               return !Number.isNaN(d2.getTime()) ? d2 : null;
             }
-            const parts = s.split(/[./\-]/).map((p) => parseInt(p, 10)).filter((n) => !Number.isNaN(n));
+            const parts = s.split(/[./\-]/).map((p: any) => parseInt(p, 10)).filter((n: any) => !Number.isNaN(n));
             if (parts.length >= 3) {
               let year: number, month: number, day: number;
               if (parts[0] >= 1000) {
@@ -1364,7 +1365,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           const primaryTableResolved = await resolvePhysicalIfExcel(primaryConn, primaryTable || "");
           const COMPOSITE_KEY_SEP = "\u0001";
           const buildCompositeKey = (row: Record<string, any>, pairs: Array<{ leftColumn: string; rightColumn: string }>, useRight: boolean) =>
-            pairs.map((p) => normalizeJoinKeyValue(useRight ? getByColumnName(row, p.rightColumn) : mapPrefixedValue(row, p.leftColumn))).join(COMPOSITE_KEY_SEP);
+            pairs.map((p: any) => normalizeJoinKeyValue(useRight ? getByColumnName(row, p.rightColumn) : mapPrefixedValue(row, p.leftColumn))).join(COMPOSITE_KEY_SEP);
 
           let secRowsCache: Record<number, Record<string, any>[]> | null = null;
           const runOneBlock = async (primaryRowsRaw: Record<string, any>[], useSecCache: boolean): Promise<Record<string, any>[]> => {
@@ -1374,7 +1375,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 : primaryRowsRaw[0]
                 ? Object.keys(primaryRowsRaw[0])
                 : [];
-            let joinedRows: Record<string, any>[] = primaryRowsRaw.map((r) => {
+            let joinedRows: Record<string, any>[] = primaryRowsRaw.map((r: any) => {
               const out: Record<string, any> = {};
               for (const c of primaryCols) out[`primary_${c}`] = getByColumnName(r, c);
               return out;
@@ -1389,13 +1390,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const secTableResolved = await resolvePhysicalIfExcel(secConn, jn.secondaryTable || "");
               let secRowsRaw: Record<string, any>[];
               if (useSecCache) {
-                const leftKeys = new Set<string>(joinedRows.map((lr) => buildCompositeKey(lr, pairs, false)));
-                const valueTuples = Array.from(leftKeys).map((k) => k.split(COMPOSITE_KEY_SEP));
+                const leftKeys = new Set<string>(joinedRows.map((lr: any) => buildCompositeKey(lr, pairs, false)));
+                const valueTuples = Array.from(leftKeys).map((k: any) => k.split(COMPOSITE_KEY_SEP));
                 if (valueTuples.length === 0) {
                   secRowsRaw = [];
                 } else {
                   secRowsRaw = await fetchRowsFromConn(secConn, secTableResolved, jn.secondaryColumns, getDateFilterForJoin(idx), 0, {
-                    filterByKeys: { columns: pairs.map((p) => p.rightColumn), valueTuples },
+                    filterByKeys: { columns: pairs.map((p: any) => p.rightColumn), valueTuples },
                   });
                 }
               } else {
@@ -1458,8 +1459,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               }
             }
             const rowsAfterJoin = joinedRows.length;
-            const afterConditions = joinedRows.filter((r) => normalizedConditions.every((c) => passesCondition(r, c)));
-            const rowsAfterDateFilter = afterConditions.filter((r) => passesDateFilter(r, body.dateFilter));
+            const afterConditions = joinedRows.filter((r: any) => normalizedConditions.every((c) => passesCondition(r, c)));
+            const rowsAfterDateFilter = afterConditions.filter((r: any) => passesDateFilter(r, body.dateFilter));
             if (useSecCache) {
               log("JOIN star iteración bloque.", {
                 rowsAfterJoin,
@@ -1584,10 +1585,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
       if (dbType === "excel_file") {
         log("Detectado tipo 'excel_file'. Iniciando flujo de JOIN interno.");
-        const dbUrl = process.env.SUPABASE_DB_URL;
+        const dbUrl = getInternalDbUrl();
         if (!dbUrl) {
           log(
-            "Error crítico: SUPABASE_DB_URL no está configurada en el entorno."
+            "Error crítico: DATABASE_URL no está configurada en el entorno."
           );
           return NextResponse.json(
             {
@@ -1642,7 +1643,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           });
 
           const pQualified = quoteQualified(pPhysical, "postgres");
-          const jQualified = jPhysicals.map((q) =>
+          const jQualified = jPhysicals.map((q: any) =>
             quoteQualified(q, "postgres")
           );
 
@@ -1740,7 +1741,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
           const mergedParams = [...params, ...dfParams];
           const stableOrderBy = primaryCols.length > 0
-            ? `ORDER BY ${primaryCols.map((c) => `p.${quoteIdent(c, "postgres")}`).join(", ")}`
+            ? `ORDER BY ${primaryCols.map((c: any) => `p.${quoteIdent(c, "postgres")}`).join(", ")}`
             : "ORDER BY 1";
           const sql = `SELECT ${selectParts.join(
             ", "
@@ -1843,7 +1844,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           log("Conexión a PostgreSQL externo establecida.");
 
           const pQualified = quoteQualified(primaryTable, "postgres");
-          const jQualified = joins.map((jn) =>
+          const jQualified = joins.map((jn: any) =>
             quoteQualified(jn.secondaryTable || "", "postgres")
           );
 
@@ -1941,7 +1942,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
           const mergedParams = [...params, ...dfParams];
           const stableOrderBy = primaryCols.length > 0
-            ? `ORDER BY ${primaryCols.map((c) => `p.${quoteIdent(c, "postgres")}`).join(", ")}`
+            ? `ORDER BY ${primaryCols.map((c: any) => `p.${quoteIdent(c, "postgres")}`).join(", ")}`
             : "ORDER BY 1";
           const sql = `SELECT ${selectParts.join(
             ", "

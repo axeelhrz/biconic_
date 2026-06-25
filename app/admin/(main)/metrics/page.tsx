@@ -351,7 +351,7 @@ export default function AdminMetricsPage() {
                 </div>
               ) : (
                 <ul className="space-y-1.5 py-1">
-                  {datasetFiltered.map((ds) => (
+                  {datasetFiltered.map((ds: any) => (
                     <li key={ds.id}>
                       <button
                         type="button"
@@ -582,7 +582,7 @@ export default function AdminMetricsPage() {
               </Button>
             </div>
           </div>
-          {etlsWithContent.map((etl) => {
+          {etlsWithContent.map((etl: any) => {
             const analyses = etl.savedAnalyses ?? [];
             const metrics = etl.savedMetrics ?? [];
             return (
@@ -613,7 +613,7 @@ export default function AdminMetricsPage() {
               </div>
               {metrics.length > 0 ? (
               <ul className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
-                {metrics.map((m) => (
+                {metrics.map((m: any) => (
                   <li
                     key={m.id}
                     className="flex items-center justify-between gap-4 px-4 py-3"
@@ -671,7 +671,7 @@ export default function AdminMetricsPage() {
                     </p>
                   </div>
                   <ul className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
-                    {analyses.map((raw) => {
+                    {analyses.map((raw: any) => {
                       const aid = String(raw.id ?? "");
                       const label = raw.name?.trim() || "Sin nombre";
                       return (

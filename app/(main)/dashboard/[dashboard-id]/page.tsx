@@ -37,20 +37,22 @@ export default async function DashboardByIdPage({ params }: PageProps) {
     | null;
 
   // 2. Fetch Dashboard
-  const { data: dashboard, error } = await supabase
+  const { data: dashboardRow, error } = await supabase
     .from("dashboard")
-    .select(
-      `
-      *,
-      etl:etl_id (
-        id,
-        title,
-        name
-      )
-    `
-    )
+    .select("*")
     .eq("id", dashboardId)
     .maybeSingle();
+
+  const dashboard = dashboardRow as Record<string, unknown> | null;
+  let etlInfo: { title?: string; name?: string } | null = null;
+  if (dashboard?.etl_id && typeof dashboard.etl_id === "string") {
+    const { data: etlRow } = await supabase
+      .from("etl")
+      .select("id, title, name")
+      .eq("id", dashboard.etl_id)
+      .maybeSingle();
+    etlInfo = (etlRow as { title?: string; name?: string } | null) ?? null;
+  }
 
   if (error) {
     console.error("Error fetching dashboard:", error.message);
@@ -61,7 +63,8 @@ export default async function DashboardByIdPage({ params }: PageProps) {
   console.log("[Dashboard Page] Checking permissions. User:", user.id, "Role:", appRole);
 
   const isAccessAllowed =
-    appRole === "APP_ADMIN" || (dashboard && dashboard.user_id === user.id);
+    appRole === "APP_ADMIN" ||
+    (dashboard && dashboard.user_id === user.id);
   
   console.log("[Dashboard Page] isAccessAllowed (Admin/Owner):", isAccessAllowed, "Dashboard Owner:", dashboard?.user_id);
 
@@ -80,17 +83,22 @@ export default async function DashboardByIdPage({ params }: PageProps) {
             .select("id")
             .eq("user_id", user.id);
             
-         const memberIds = memberParams?.map(m => m.id) || [];
+         const memberIds =
+           (Array.isArray(memberParams)
+             ? memberParams.map((m: { id: string }) => m.id)
+             : []) || [];
          console.log("[Dashboard Page] Member IDs:", memberIds);
          
          if (memberIds.length > 0) {
-             const { data: perm } = await supabase
+             const { data: permRow } = await supabase
                 .from("dashboard_has_client_permissions")
                 .select("permission_type")
                 .eq("dashboard_id", dashboardId)
                 .in("client_member_id", memberIds)
                 .eq("is_active", true)
-                .maybeSingle(); // Assuming one permission per user/dashboard for simplicity
+                .maybeSingle();
+
+             const perm = permRow as { permission_type?: string } | null;
 
              console.log("[Dashboard Page] Permission found:", perm);
 
@@ -126,12 +134,14 @@ export default async function DashboardByIdPage({ params }: PageProps) {
     // Si tu tabla usa id numérico autoincremental, ya estamos creando el row desde /api/dashboard
     try {
       // Auto-associate with first client found for this user
-      const { data: member } = await supabase
+      const { data: memberRow } = await supabase
         .from("client_members")
         .select("client_id")
         .eq("user_id", user.id)
         .limit(1)
         .maybeSingle();
+
+      const member = memberRow as { client_id?: string } | null;
 
       if (member?.client_id) {
         const payload: import("@/lib/supabase/database.types").Database["public"]["Tables"]["dashboard"]["Insert"] = {
@@ -156,8 +166,7 @@ export default async function DashboardByIdPage({ params }: PageProps) {
     }
   }
 
-  const title = (ensured && (ensured as any).title) || dashboardId;
-  const etlInfo = ensured?.etl;
+  const title = (ensured && (ensured as Record<string, unknown>).title) || dashboardId;
   const etlName = etlInfo?.title || etlInfo?.name || null;
   return (
     <div className="flex-1 w-full flex flex-col gap-4">

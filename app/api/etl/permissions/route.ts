@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { Database } from "@/lib/supabase/database.types";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 
 type AppPermissionType = Database["public"]["Enums"]["app_permission_type"];
 
@@ -111,25 +112,9 @@ export async function GET(req: Request) {
       // 2. Initialize Scope Client (Service Role for Admin)
       let scopeSupabase = supabase;
       if (isAppAdmin) {
-          const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-          if (serviceRoleKey) {
-            const { createServerClient } = await import("@supabase/ssr");
-            const { cookies } = await import("next/headers");
-            const cookieStore = await cookies();
-            
-            scopeSupabase = createServerClient(
-                process.env.NEXT_PUBLIC_SUPABASE_URL!,
-                serviceRoleKey,
-                {
-                    cookies: {
-                        getAll() { return cookieStore.getAll() },
-                        setAll(cookiesToSet) {}
-                    }
-                }
-            ) as any;
-          } else {
-             console.warn("SUPABASE_SERVICE_ROLE_KEY not found, falling back to user client");
-          }
+        scopeSupabase = createServiceRoleClient() as Awaited<
+          ReturnType<typeof getServerClient>
+        >;
       } else {
         // If not admin, check permissions using regular client
         const canUpdate = await verifyUpdatePermission(
@@ -187,7 +172,7 @@ export async function GET(req: Request) {
           return NextResponse.json({ ok: false, error: profilesErr.message }, { status: 500 });
       }
 
-      const profileById = new Map((profiles ?? []).map((p: any) => [p.id, p]));
+      const profileById = new Map<string, any>((profiles ?? []).map((p: any) => [p.id, p]));
 
       const candidates = (members ?? []).map((m: any) => {
           const p = profileById.get(m.user_id);
@@ -241,7 +226,7 @@ export async function GET(req: Request) {
 
   // Fetch related client_members
   const clientMemberIds = Array.from(
-    new Set(perms.map((p) => p.client_member_id).filter(Boolean))
+    new Set(perms.map((p: any) => p.client_member_id).filter(Boolean))
   ) as string[];
   
   // Use admin client if needed here too? Probably not, since "permissions" usually viewable by owners.
@@ -262,7 +247,7 @@ export async function GET(req: Request) {
   }
 
   const userIds = Array.from(
-    new Set((members ?? []).map((m) => m.user_id).filter(Boolean))
+    new Set((members ?? []).map((m: any) => m.user_id).filter(Boolean))
   ) as string[];
   const { data: profiles, error: profilesErr } = await supabase
     .from("profiles")
@@ -276,10 +261,10 @@ export async function GET(req: Request) {
     );
   }
 
-  const memberById = new Map((members ?? []).map((m) => [m.id, m]));
-  const profileById = new Map((profiles ?? []).map((p) => [p.id, p]));
+  const memberById = new Map<string, any>((members ?? []).map((m: any) => [m.id, m]));
+  const profileById = new Map<string, any>((profiles ?? []).map((p: any) => [p.id, p]));
 
-  const result = perms.map((p) => {
+  const result = perms.map((p: any) => {
     const member = memberById.get(p.client_member_id as string);
     const profile = member
       ? profileById.get(member.user_id as string)
@@ -336,23 +321,9 @@ export async function POST(req: Request) {
   let scopeSupabase = supabase;
 
   if (isAppAdmin) {
-      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (serviceRoleKey) {
-        const { createServerClient } = await import("@supabase/ssr");
-        const { cookies } = await import("next/headers");
-        const cookieStore = await cookies();
-        
-        scopeSupabase = createServerClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            serviceRoleKey,
-            {
-                cookies: {
-                    getAll() { return cookieStore.getAll() },
-                    setAll(cookiesToSet) {}
-                }
-            }
-        ) as any;
-      }
+    scopeSupabase = createServiceRoleClient() as Awaited<
+      ReturnType<typeof getServerClient>
+    >;
   }
 
   // 2. Verify Permission

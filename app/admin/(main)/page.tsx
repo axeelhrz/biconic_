@@ -1,64 +1,15 @@
-import { createClient } from "@/lib/supabase/server";
+import { getAdminOverviewFromDb, type DashboardRowForOverview } from "@/lib/admin/overview-repository";
 import AdminOverviewPanel from "@/components/admin/dashboard/AdminOverviewPanel";
 
-export type DashboardRowForOverview = {
-  id: string;
-  title: string;
-  published: boolean;
-  clientName: string;
-  clientId: string;
-};
-
-function toPublishedFlag(row: { published?: unknown; visibility?: unknown }): boolean {
-  if (typeof row.published === "boolean") return row.published;
-  const visibility = String(row.visibility ?? "")
-    .trim()
-    .toLowerCase();
-  return visibility === "public" || visibility === "published" || visibility === "publicado";
-}
+export type { DashboardRowForOverview };
 
 export default async function Page() {
-  const supabase = await createClient();
-
-  const [
-    { count: dashboardCount },
-    { count: clientsCount },
-    { count: etlCount },
-    { count: connectionsCount },
-    { data: dashData, error: dashErr },
-  ] = await Promise.all([
-    supabase.from("dashboard").select("*", { count: "exact", head: true }),
-    supabase.from("clients").select("*", { count: "exact", head: true }),
-    supabase.from("etl").select("*", { count: "exact", head: true }),
-    supabase.from("connections").select("*", { count: "exact", head: true }),
-    supabase
-      .from("dashboard")
-      .select("id, title, visibility, client_id, clients(company_name)")
-      .order("created_at", { ascending: false }),
-  ]);
-
-  const initialAllDashboards: DashboardRowForOverview[] =
-    !dashErr && Array.isArray(dashData)
-      ? dashData.map((d: any) => ({
-          id: d.id,
-          title: d.title ?? "Sin título",
-          published: toPublishedFlag(d),
-          clientName: d.clients?.company_name ?? "—",
-          clientId: d.client_id != null ? String(d.client_id) : "",
-        }))
-      : [];
-
-  const statsCounts = {
-    dashboards: dashboardCount ?? 0,
-    clients: clientsCount ?? 0,
-    etls: etlCount ?? 0,
-    connections: connectionsCount ?? 0,
-  };
-
+  const overview = await getAdminOverviewFromDb();
   return (
     <AdminOverviewPanel
-      statsCounts={statsCounts}
-      initialAllDashboards={initialAllDashboards}
+      statsCounts={overview.statsCounts}
+      initialAllDashboards={overview.initialAllDashboards}
+      initialClients={overview.initialClients}
     />
   );
 }

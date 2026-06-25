@@ -25,6 +25,8 @@ import {
   CastTargetType
 } from "@/lib/etl/transformations";
 import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT, ETL_PREVIEW_MAX_WHEN_UNLIMITED } from "@/lib/etl/limits";
+import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
+import { connectionsSelectColumns } from "@/lib/db/connections-query";
 
 // Reuse types from run/route.ts (duplicated here for independence)
 type FilterCondition = {
@@ -267,9 +269,9 @@ export async function POST(req: NextRequest) {
     const sqlConditions = allConditions.filter((c: FilterCondition) => c.operator !== "not in");
     const excludeRowsRules: { column: string; excluded: string[] }[] = allConditions
       .filter((c: FilterCondition) => c.operator === "not in")
-      .map((c) => ({
+      .map((c: any) => ({
         column: (c.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim(),
-        excluded: (c.value ?? "").split(",").map((v) => v.trim()).filter(Boolean),
+        excluded: (c.value ?? "").split(",").map((v: any) => v.trim()).filter(Boolean),
       }));
     const dateFilter = body?.filter?.dateFilter ?? undefined;
 
@@ -295,7 +297,7 @@ export async function POST(req: NextRequest) {
           if (c.type === "excel_file") {
             const { data: meta } = await supabaseAdmin.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", connId).single();
             if (!meta?.physical_table_name) throw new Error(`Sin tabla física para conexión Excel ${connId}.`);
-            return `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
+            return `${EXCEL_PHYSICAL_SCHEMA}.${meta.physical_table_name}`;
           }
           return (f?.table || "").trim() || "";
         };
@@ -303,8 +305,9 @@ export async function POST(req: NextRequest) {
         const rightTable = await resolveTable(right.connectionId, right.filter);
         if (!leftTable || !rightTable) throw new Error("UNION: ambas fuentes deben tener tabla.");
 
-        const { data: leftConn } = await supabaseService.from("connections").select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted").eq("id", left.connectionId).single();
-        const { data: rightConn } = await supabaseService.from("connections").select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted").eq("id", right.connectionId).single();
+        const connCols = connectionsSelectColumns();
+        const { data: leftConn } = await supabaseService.from("connections").select(connCols).eq("id", left.connectionId).single();
+        const { data: rightConn } = await supabaseService.from("connections").select(connCols).eq("id", right.connectionId).single();
         if (!leftConn) throw new Error(`Conexión izquierda ${left.connectionId} no encontrada.`);
         if (!rightConn) throw new Error(`Conexión derecha ${right.connectionId} no encontrada.`);
 
@@ -318,8 +321,7 @@ export async function POST(req: NextRequest) {
         const leftType = (leftConn.type || "").toLowerCase();
         let dbUrlUnion: string | null = null;
         if (leftType === "excel_file") {
-          dbUrlUnion = process.env.SUPABASE_DB_URL || null;
-          if (!dbUrlUnion) throw new Error("Para vista previa UNION con archivos Excel configurá la variable de entorno SUPABASE_DB_URL.");
+          dbUrlUnion = getInternalDbUrl();
         } else if (leftType === "postgres" || leftType === "postgresql") {
           dbUrlUnion = buildPgUrl(leftConn);
         }
@@ -498,8 +500,7 @@ export async function POST(req: NextRequest) {
         if (rightType === "firebird") {
           rightRows = await runOneFirebird(rightConn, right, rightTable);
         } else if (rightType === "excel_file") {
-          const rightUrl = process.env.SUPABASE_DB_URL || "";
-          if (!rightUrl) throw new Error("Para UNION con Excel en la tabla derecha configurá SUPABASE_DB_URL.");
+          const rightUrl = getInternalDbUrl();
           const clientRight = new PgClient({ connectionString: rightUrl });
           await clientRight.connect();
           try {
@@ -619,7 +620,7 @@ export async function POST(req: NextRequest) {
               starOffset = nextSourceOffset;
             }
             } finally {
-              const pgUrl = process.env.SUPABASE_DB_URL;
+              const pgUrl = getInternalDbUrl();
               if (pgUrl) {
                 import("@/lib/etl/materialize-firebird").then(({ cleanupTempTables }) =>
                   cleanupTempTables(pgUrl, matTempTables).catch((e: any) => console.error("[Preview materialize cleanup]", e))
@@ -643,13 +644,13 @@ export async function POST(req: NextRequest) {
 
           const { data: conn1 } = await supabaseService
             .from("connections")
-            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+            .select(connectionsSelectColumns())
             .eq("id", primaryConnId)
             .single();
 
           const { data: conn2 } = await supabaseService
             .from("connections")
-            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+            .select(connectionsSelectColumns())
             .eq("id", secondaryConnId || "")
             .single();
 
@@ -667,7 +668,7 @@ export async function POST(req: NextRequest) {
               ? joinConf.joinConditions!.map((c: { leftColumn?: string; rightColumn?: string }) => ({
                   leftColumn: (c.leftColumn ?? "").trim(),
                   rightColumn: (c.rightColumn ?? "").trim(),
-                })).filter((p) => p.leftColumn || p.rightColumn)
+                })).filter((p: any) => p.leftColumn || p.rightColumn)
               : (joinConf as { leftColumn?: string; rightColumn?: string }).leftColumn != null && (joinConf as { leftColumn?: string; rightColumn?: string }).rightColumn != null
                 ? [{ leftColumn: String((joinConf as any).leftColumn ?? "").trim(), rightColumn: String((joinConf as any).rightColumn ?? "").trim() }]
                 : [];
@@ -712,7 +713,7 @@ export async function POST(req: NextRequest) {
             };
             const COMPOSITE_KEY_SEP = "\u0001";
             const compositeKey = (row: Record<string, any>, pairs: Array<{ leftColumn: string; rightColumn: string }>, useRight: boolean) =>
-              pairs.map((p) => String(getVal(row, useRight ? p.rightColumn : p.leftColumn) ?? "")).join(COMPOSITE_KEY_SEP);
+              pairs.map((p: any) => String(getVal(row, useRight ? p.rightColumn : p.leftColumn) ?? "")).join(COMPOSITE_KEY_SEP);
 
             const fetchFromConn = async (
               conn: any,
@@ -734,7 +735,7 @@ export async function POST(req: NextRequest) {
                 const fbUser = (conn as any).db_user ?? "";
                 if (!fbUser) return Promise.reject(new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión."));
                 const tablePart = tableName.includes(".") ? (tableName.split(".").pop() || tableName.trim()).trim().toUpperCase() : tableName.trim().toUpperCase();
-                const { clause, params } = buildWhereClauseFirebird(conditions.filter((c) => (c.column ?? "").trim() !== ""));
+                const { clause, params } = buildWhereClauseFirebird(conditions.filter((c: any) => (c.column ?? "").trim() !== ""));
                 const colForFb = (dateFilterOpt?.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
                 const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterOpt?.column ? { ...dateFilterOpt, column: colForFb } : dateFilterOpt);
                 const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
@@ -771,7 +772,7 @@ export async function POST(req: NextRequest) {
               const client = new PgClient({ connectionString: dbUrl });
               await client.connect();
               try {
-                const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
+                const sel = columns?.length ? columns.map((c: any) => quoteIdent(c)).join(", ") : "*";
                 const { clause: condClause, params: condParams } = buildWhereClausePg(conditions);
                 const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterOpt, condParams.length + 1);
                 const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
@@ -789,7 +790,7 @@ export async function POST(req: NextRequest) {
             const canPushDownIn = dateFilterForRight && joinPairs.length === 1;
             if (canPushDownIn) {
               rightRows = await fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions, dateFilterForRight);
-              const rightKeys = new Set(rightRows.map((r) => compositeKey(r, joinPairs, true)));
+              const rightKeys = new Set(rightRows.map((r: any) => compositeKey(r, joinPairs, true)));
               const leftConditionsWithIn =
                 rightKeys.size > 0
                   ? [
@@ -905,7 +906,7 @@ export async function POST(req: NextRequest) {
             );
 
             // Map filter conditions (primary. -> left., join_0. -> right.)
-            const mappedConds = (sqlConditions as FilterCondition[]).map((c) => {
+            const mappedConds = (sqlConditions as FilterCondition[]).map((c: any) => {
                const col = c.column || "";
                let mapped = col.replace(/^primary\./i, "left."); // or l.
                mapped = mapped.replace(/^join_\d+\./i, "right.");   // or r.
@@ -962,7 +963,7 @@ export async function POST(req: NextRequest) {
           try {
             const res = await supabaseService
               .from("connections")
-              .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+              .select(connectionsSelectColumns())
               .eq("id", connectionIdStr)
               .single();
             if (res.data) conn = res.data as Record<string, unknown>;
@@ -973,7 +974,7 @@ export async function POST(req: NextRequest) {
           if (!conn) {
             const adminRes = await supabaseAdmin
               .from("connections")
-              .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+              .select(connectionsSelectColumns())
               .eq("id", connectionIdStr)
               .single();
             if (adminRes.data) conn = adminRes.data as Record<string, unknown>;
@@ -1002,14 +1003,9 @@ export async function POST(req: NextRequest) {
             if (!meta || !meta.physical_table_name) {
                  throw new Error(`No se encontraron metadatos de tabla física para la conexión de Excel ID ${conn.id}.`);
             }
-            const schema = meta.physical_schema_name || "excel_imports";
-            // Sobreescribimos la tabla a consultar con la física interna
-            tableToQuery = `${schema}.${meta.physical_table_name}`;
+            tableToQuery = `${EXCEL_PHYSICAL_SCHEMA}.${meta.physical_table_name}`;
             console.log("[Preview] Table to query:", tableToQuery);
-            
-            const internalDbUrl = process.env.SUPABASE_DB_URL;
-            if (!internalDbUrl) throw new Error("Variable de entorno SUPABASE_DB_URL no encontrada para conexión interna.");
-            dbUrl = internalDbUrl;
+            dbUrl = getInternalDbUrl();
 
         } else if (String(conn.type ?? "").toLowerCase() === "firebird") {
             // Vista previa tabla única Firebird: misma lógica segura que en UNION (solo nombre de tabla, SELECT *, WHERE inlined)
@@ -1121,7 +1117,7 @@ export async function POST(req: NextRequest) {
 
             const selectList =
               columns && columns.length
-                ? columns.map((c) => quoteIdent(c)).join(", ")
+                ? columns.map((c: any) => quoteIdent(c)).join(", ")
                 : "*";
 
             const { clause: condClause, params: condParams } = buildWhereClausePg(sqlConditions);

@@ -3,6 +3,8 @@
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { AlertTriangle } from "lucide-react";
 
 type DeleteConnectionDialogProps = {
@@ -23,16 +25,29 @@ export default function DeleteConnectionDialog({
   const handleConfirm = async () => {
     try {
       if (!connectionId) return;
-      const supabase = createClient();
-      await supabase
-        .from("data_tables")
-        .delete()
-        .eq("connection_id", connectionId);
-      const { error } = await supabase
-        .from("connections")
-        .delete()
-        .eq("id", connectionId);
-      if (error) throw error;
+
+      if (isOwnBackendEnabled()) {
+        const res = await fetch(`/api/admin/connections/${connectionId}`, {
+          method: "DELETE",
+          credentials: "include",
+        });
+        const data = await safeJsonResponse<{ ok?: boolean; error?: string }>(res);
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error ?? "No se pudo eliminar la conexión");
+        }
+      } else {
+        const supabase = createClient();
+        await supabase
+          .from("data_tables")
+          .delete()
+          .eq("connection_id", connectionId);
+        const { error } = await supabase
+          .from("connections")
+          .delete()
+          .eq("id", connectionId);
+        if (error) throw error;
+      }
+
       toast.success("Conexión eliminada correctamente");
       onOpenChange(false);
       onDeleted?.();

@@ -2,12 +2,80 @@
 
 import { createClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/database.types";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import {
+  deleteDashboardFromDb,
+  listAdminDashboardsForGridFromDb,
+  publishDashboardFromDb,
+  searchClientsFromDb,
+  verifyDashboardEditAccessFromDb,
+} from "@/lib/admin/dashboard-repository";
+import { getServerAuthUser } from "@/lib/supabase/server-backend";
+import type { Dashboard } from "@/components/dashboard/DashboardCard";
+import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
 
 type DashboardInsert = Database["public"]["Tables"]["dashboard"]["Insert"];
 
-export async function searchClients(query: string) {
+export async function listAdminDashboardsForGrid(): Promise<Dashboard[]> {
+  if (shouldUseOwnBackend()) {
+    try {
+      return await listAdminDashboardsForGridFromDb();
+    } catch (err) {
+      console.error("Error listing dashboards from DB:", err);
+      return [];
+    }
+  }
+
   const supabase = await createClient();
-  
+  const { data, error } = await supabase.from("dashboard").select("*");
+  if (error) {
+    console.error("Error listing dashboards:", error);
+    return [];
+  }
+
+  const rows = Array.isArray(data) ? data : [];
+  const ownerIds = Array.from(new Set(rows.map((r: { user_id?: string }) => r.user_id).filter(Boolean))) as string[];
+  let ownerById = new Map<string, { full_name: string | null }>();
+
+  if (ownerIds.length > 0) {
+    const { data: owners } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", ownerIds);
+    const ownerList = Array.isArray(owners) ? owners : owners ? [owners] : [];
+    ownerById = new Map(ownerList.map((o: { id: string; full_name: string | null }) => [o.id, o]));
+  }
+
+  return rows.map((row: Record<string, unknown>) => {
+    const userId = row.user_id as string | undefined;
+    const ownerProfile = userId ? ownerById.get(userId) : undefined;
+    return {
+      id: String(row.id),
+      title: String(row.title ?? row.name ?? "Sin título"),
+      imageUrl: String(row.image_url ?? row.thumbnail_url ?? "/Image.svg"),
+      status: dashboardPublishedStatusFromRow(row as { published?: boolean; visibility?: string; status?: string }),
+      description: String(row.description ?? ""),
+      views: typeof row.views === "number" ? row.views : 0,
+      owner: { fullName: ownerProfile?.full_name ?? "Desconocido" },
+      clientId: row.client_id != null ? String(row.client_id) : undefined,
+      ownerId: userId,
+      layout: (row.layout as Dashboard["layout"]) ?? undefined,
+    };
+  });
+}
+
+export async function searchClients(query: string) {
+  if (shouldUseOwnBackend()) {
+    try {
+      return await searchClientsFromDb(query);
+    } catch (err) {
+      console.error("Error searching clients:", err);
+      return [];
+    }
+  }
+
+  const supabase = await createClient();
+
   let dbQuery = supabase
     .from("clients")
     .select("id, company_name, individual_full_name")
@@ -26,7 +94,8 @@ export async function searchClients(query: string) {
     return [];
   }
 
-  return data.map((c) => ({
+  const rows = Array.isArray(data) ? data : [];
+  return rows.map((c: any) => ({
     id: c.id,
     name: c.company_name || c.individual_full_name || "Sin nombre",
   }));
@@ -47,10 +116,18 @@ export async function createDashboardAdmin(
   }
 
   const etlIds = Array.isArray(etlIdOrIds)
-    ? etlIdOrIds
+    ? etlIdOrIds.filter(Boolean)
     : etlIdOrIds
     ? [etlIdOrIds]
     : [];
+
+  if (etlIds.length === 0) {
+    return {
+      ok: false,
+      error: "Seleccioná al menos un ETL como fuente de datos del dashboard.",
+    };
+  }
+
   const firstEtlId = etlIds[0] ?? null;
 
   const insertPayload: DashboardInsert = {
@@ -81,7 +158,11 @@ export async function createDashboardAdmin(
         sort_order: i,
       }))
     );
-    if (srcError) console.error("Error adding dashboard_data_sources:", srcError);
+    if (srcError) {
+      console.error("Error adding dashboard_data_sources:", srcError);
+      await supabase.from("dashboard").delete().eq("id", data.id);
+      return { ok: false, error: `No se pudo vincular el ETL: ${srcError.message}` };
+    }
   }
 
   return { ok: true, dashboardId: data.id };
@@ -108,7 +189,7 @@ export async function searchEtls(query: string) {
     return [];
   }
 
-  return data.map((e) => ({
+  return data.map((e: any) => ({
     id: e.id,
     title: e.title || e.name || "Sin título",
   }));
@@ -281,6 +362,18 @@ export async function publishDashboardAdmin(
   dashboardId: string,
   published: boolean
 ) {
+  if (shouldUseOwnBackend()) {
+    try {
+      return await publishDashboardFromDb(dashboardId, published);
+    } catch (err) {
+      console.error("Error publishing dashboard:", err);
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "Error al publicar",
+      };
+    }
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -407,6 +500,35 @@ export async function restoreVersion(versionId: string) {
 }
 
 export async function deleteDashboard(dashboardId: string) {
+  if (shouldUseOwnBackend()) {
+    const authUser = await getServerAuthUser();
+    if (!authUser?.id) {
+      return { ok: false, error: "Unauthorized" };
+    }
+
+    const canEdit = await verifyDashboardEditAccessFromDb(
+      dashboardId,
+      authUser.id,
+      authUser.app_role
+    );
+    if (!canEdit) {
+      return {
+        ok: false,
+        error: "Forbidden: You don't have permission to delete this dashboard",
+      };
+    }
+
+    try {
+      return await deleteDashboardFromDb(dashboardId);
+    } catch (err) {
+      console.error("Error deleting dashboard:", err);
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "Error al eliminar",
+      };
+    }
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -414,11 +536,13 @@ export async function deleteDashboard(dashboardId: string) {
     return { ok: false, error: "Unauthorized" };
   }
 
-  // Verify access (reuse edit access for delete for now, or check ownership)
-  // Usually delete requires higher privs or ownership. 
-  // For admin, we assume they can delete if they can edit/access this admin route.
   const canEdit = await verifyDashboardEditAccess(dashboardId, user.id);
-  if (!canEdit) return { ok: false, error: "Forbidden: You don't have permission to delete this dashboard" };
+  if (!canEdit) {
+    return {
+      ok: false,
+      error: "Forbidden: You don't have permission to delete this dashboard",
+    };
+  }
 
   const { error } = await supabase
     .from("dashboard")

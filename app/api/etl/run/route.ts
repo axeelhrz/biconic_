@@ -26,6 +26,8 @@ import {
 } from "@/lib/etl/transformations";
 import { ETL_MAX_ROWS_CEILING, ETL_JOIN_CHUNK_SIZE_DEFAULT } from "@/lib/etl/limits";
 import { updateEtlScheduleLastRunAt } from "@/lib/etl/schedule";
+import { shouldUseOwnBackend, proxyToBackend } from "@/lib/api/backend-proxy";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 
 // ===================================================================
 // TIPOS Y DEFINICIONES
@@ -166,6 +168,10 @@ type RunBody = {
   _resumeAttempt?: number;
   /** Programación automática (frecuencia + última ejecución programada). */
   schedule?: { frequency?: string; lastRunAt?: string };
+  /** Callback del worker BullMQ (backend propio). */
+  runId?: string;
+  userId?: string;
+  asyncWorker?: boolean;
 };
 
 function createHttpError(message: string, status: number): Error & { status: number } {
@@ -181,11 +187,11 @@ function getStarJoinPairs(jn: {
 }): Array<{ primaryColumn: string; secondaryColumn: string }> {
   if (Array.isArray(jn.conditions) && jn.conditions.length > 0) {
     return jn.conditions
-      .map((c) => ({
+      .map((c: any) => ({
         primaryColumn: String(c?.primaryColumn ?? "").trim(),
         secondaryColumn: String(c?.secondaryColumn ?? "").trim(),
       }))
-      .filter((p) => p.primaryColumn || p.secondaryColumn);
+      .filter((p: any) => p.primaryColumn || p.secondaryColumn);
   }
   const primaryColumn = String(jn.primaryColumn ?? "").trim();
   const secondaryColumn = String(jn.secondaryColumn ?? "").trim();
@@ -357,7 +363,7 @@ async function executeEtlPipeline(
   supabaseAdmin: any, // Typed as any to avoid conflicts with different client versions
   user: any,
   req: NextRequest
-) {
+): Promise<number> {
   const asPositiveInt = (raw: string | undefined, fallback: number) => {
     const parsed = Number(raw);
     return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -449,8 +455,8 @@ async function executeEtlPipeline(
     } catch (_) {}
   }, PIPELINE_TIMEOUT_MS);
 
-  const dbUrl = process.env.SUPABASE_DB_URL;
-  if (!dbUrl) throw new Error("Variable de entorno SUPABASE_DB_URL no encontrada.");
+  const dbUrl = getInternalDbUrl();
+  if (!dbUrl) throw new Error("Variable de entorno DATABASE_URL no encontrada.");
   const sqlPersistent = postgres(dbUrl);
 
   try {
@@ -517,7 +523,7 @@ async function executeEtlPipeline(
       body.filter!.dateFilter = { ...body.filter!.dateFilter!, column: normalizeFilterColumnRef(body.filter!.dateFilter!.column) };
     }
     if (body?.filter?.conditions?.length) {
-      body.filter!.conditions = body.filter!.conditions!.map((c) => ({ ...c, column: c.column ? normalizeFilterColumnRef(c.column) : c.column }));
+      body.filter!.conditions = body.filter!.conditions!.map((c: any) => ({ ...c, column: c.column ? normalizeFilterColumnRef(c.column) : c.column }));
     }
 
     // Excluir filas: aplicar en memoria después de UNION/JOIN (no en WHERE)
@@ -525,9 +531,9 @@ async function executeEtlPipeline(
     const sqlConditions = allConditions.filter((c: FilterCondition) => c.operator !== "not in");
     const excludeRowsRules: { column: string; excluded: string[] }[] = allConditions
       .filter((c: FilterCondition) => c.operator === "not in")
-      .map((c) => ({
+      .map((c: any) => ({
         column: (c.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim(),
-        excluded: (c.value ?? "").split(",").map((v) => v.trim()).filter(Boolean),
+        excluded: (c.value ?? "").split(",").map((v: any) => v.trim()).filter(Boolean),
       }));
     const dateFilter = body?.filter?.dateFilter ?? undefined;
 
@@ -609,9 +615,9 @@ async function executeEtlPipeline(
         const filterColumns = body!.filter?.columns as string[] | undefined;
         const explicitColumnNames: string[] =
           filterColumns && filterColumns.length > 0
-            ? filterColumns.map((c) => toSaneKey(c))
+            ? filterColumns.map((c: any) => toSaneKey(c))
             : firstRow
-            ? Object.keys(firstRow).map((k) => toSaneKey(k))
+            ? Object.keys(firstRow).map((k: any) => toSaneKey(k))
             : [];
 
         const seen = new Set<string>();
@@ -686,14 +692,14 @@ async function executeEtlPipeline(
           const createTableQuery = `CREATE TABLE etl_output."${newTableName}" (${columnParts.join(", ")});`;
           await sqlPersistent.unsafe(createTableQuery);
           tableCreated = true;
-          tableColumnNames = Object.keys(columnsDefinition).map((k) => k.replace(/^"|"$/g, ""));
+          tableColumnNames = Object.keys(columnsDefinition).map((k: any) => k.replace(/^"|"$/g, ""));
         }
         if (mode === "append" && tableCreated && !tableColumnNames) {
           const colsRes = await sqlPersistent.unsafe(
             `SELECT column_name FROM information_schema.columns WHERE table_schema = 'etl_output' AND table_name = $1 ORDER BY ordinal_position`,
             [newTableName]
           );
-          tableColumnNames = Array.isArray(colsRes) ? colsRes.map((r) => String((r as unknown as { column_name: string }).column_name)) : [];
+          tableColumnNames = Array.isArray(colsRes) ? colsRes.map((r: any) => String((r as unknown as { column_name: string }).column_name)) : [];
         }
       }
 
@@ -717,9 +723,9 @@ async function executeEtlPipeline(
 
       // --- INSERT TO DB ---
       const allowedKeys = tableColumnNames && tableColumnNames.length > 0
-        ? new Set(tableColumnNames.map((c) => c.toLowerCase()))
+        ? new Set(tableColumnNames.map((c: any) => c.toLowerCase()))
         : null;
-      const batchToInsert = batch.map((row) => {
+      const batchToInsert = batch.map((row: any) => {
         const saneRow: Record<string, any> = {};
         for (const key in row) {
           const saneKey = key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
@@ -763,8 +769,8 @@ async function executeEtlPipeline(
         // UNION: apilar Dataset principal + una o más tablas (mismas columnas). Default UNION ALL.
         const left = unionConf.left;
         const pageSizeUnion = pageSize;
-        const dbUrlUnion = process.env.SUPABASE_DB_URL;
-        if (!dbUrlUnion) throw new Error("SUPABASE_DB_URL no disponible para UNION.");
+        const dbUrlUnion = getInternalDbUrl();
+        if (!dbUrlUnion) throw new Error("DATABASE_URL no disponible para UNION.");
 
         const resolveTableAndConn = async (
           connId: string,
@@ -1077,7 +1083,7 @@ async function executeEtlPipeline(
               if (sourceExhausted) break;
             }
             } finally {
-              const pgUrl = process.env.SUPABASE_DB_URL;
+              const pgUrl = getInternalDbUrl();
               if (pgUrl) {
                 import("@/lib/etl/materialize-firebird").then(({ cleanupTempTables }) =>
                   cleanupTempTables(pgUrl, matTempTables).catch((e: any) => console.error("[ETL Run materialize cleanup]", e))
@@ -1104,8 +1110,8 @@ async function executeEtlPipeline(
                   : []);
           const stripTablePrefix = (col: string) =>
             (col || "").trim().replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
-          const leftColsFb = joinConditionPairsFb.map((p) => stripTablePrefix(p.primaryColumn || "")).filter(Boolean);
-          const rightColsFb = joinConditionPairsFb.map((p) => stripTablePrefix(p.secondaryColumn || "")).filter(Boolean);
+          const leftColsFb = joinConditionPairsFb.map((p: any) => stripTablePrefix(p.primaryColumn || "")).filter(Boolean);
+          const rightColsFb = joinConditionPairsFb.map((p: any) => stripTablePrefix(p.secondaryColumn || "")).filter(Boolean);
           const leftCol = leftColsFb[0] ?? "";
           const rightCol = rightColsFb[0] ?? "";
           const joinType = (jc.joinType || "INNER").toString().toUpperCase();
@@ -1158,9 +1164,9 @@ async function executeEtlPipeline(
           const aliasWhereFirebird = (conds: FilterCondition[], alias: string) => {
             const params: any[] = [];
             const parts = conds
-              .map((c) => ({ ...c, column: (c.column || "").trim() }))
-              .filter((c) => (c.column ?? "").length > 0)
-              .map((c) => {
+              .map((c: any) => ({ ...c, column: (c.column || "").trim() }))
+              .filter((c: any) => (c.column ?? "").length > 0)
+              .map((c: any) => {
                 const col = `${alias}.${safePart(c.column || "")}`;
                 switch (c.operator) {
                   case "is null":
@@ -1177,7 +1183,7 @@ async function executeEtlPipeline(
                     params.push(`%${c.value ?? ""}`);
                     return `${col} LIKE ?`;
                   case "in": {
-                    const list = (c.value ?? "").split(",").map((v) => v.trim()).filter(Boolean);
+                    const list = (c.value ?? "").split(",").map((v: any) => v.trim()).filter(Boolean);
                     const qs = list.map(() => "?");
                     params.push(...list);
                     return list.length ? `${col} IN (${qs.join(", ")})` : "1=1";
@@ -1213,8 +1219,8 @@ async function executeEtlPipeline(
                 const lTable = leftTable.includes(".") ? safePart((leftTable.split(".").pop() || leftTable).trim()) : safePart(leftTable);
                 const rTable = rightTable.includes(".") ? safePart((rightTable.split(".").pop() || rightTable).trim()) : safePart(rightTable);
                 const selectParts = [
-                  ...leftColumns.map((c) => `l.${safePart(c)} AS "primary_${c.replace(/"/g, '""')}"`),
-                  ...rightColumns.map((c) => `r.${safePart(c)} AS "join_0_${c.replace(/"/g, '""')}"`),
+                  ...leftColumns.map((c: any) => `l.${safePart(c)} AS "primary_${c.replace(/"/g, '""')}"`),
+                  ...rightColumns.map((c: any) => `r.${safePart(c)} AS "join_0_${c.replace(/"/g, '""')}"`),
                 ];
                 const onClause = leftColsFb.map((_, i) => `l.${safePart(leftColsFb[i])} = r.${safePart(rightColsFb[i])}`).join(" AND ");
                 const { clause: lClause, params: lParams } = aliasWhereFirebird(leftConditions, "l");
@@ -1269,14 +1275,14 @@ async function executeEtlPipeline(
           const getRowValFb = (row: Record<string, any>, col: string) => row[normColFb(col)] ?? (row as any)[col];
           const compositeKeySep = "\u0001";
           const compositeKeyFb = (row: Record<string, any>, cols: string[]) =>
-            cols.map((c) => String(getRowValFb(row, c) ?? "")).join(compositeKeySep);
+            cols.map((c: any) => String(getRowValFb(row, c) ?? "")).join(compositeKeySep);
           const COMPOSITE_KEYSET_BATCH = 100;
           const rightKeyQuery = async (compositeKeys: string[]): Promise<Record<string, any>[]> => {
             if (compositeKeys.length === 0) return [];
             const isSingleCol = rightColsFb.length <= 1;
             if (isSingleCol) {
               const keys = compositeKeys;
-              const escapedList = keys.map((k) => escapeFb(k)).join(", ");
+              const escapedList = keys.map((k: any) => escapeFb(k)).join(", ");
               const rightKeyCond = { column: rightCol, operator: "in" as const, value: keys.join(",") };
               const allRightConditions = [...rightConditions, rightKeyCond];
               const { clause: rClause, params: rParams } = buildWhereClauseFirebird(allRightConditions);
@@ -1289,7 +1295,7 @@ async function executeEtlPipeline(
                 return new Promise((resolve, reject) => {
                   Firebird.attach(opts2, (err: Error | null, db2: any) => {
                     if (err) return reject(err);
-                    const cols = rightColumns.length ? rightColumns.map((c) => safePart(c)).join(", ") : "*";
+                    const cols = rightColumns.length ? rightColumns.map((c: any) => safePart(c)).join(", ") : "*";
                     let sql = `SELECT FIRST ${ETL_MAX_ROWS_CEILING} ${cols} FROM ${rightTablePart} ${mergedRightClause}`.trim();
                     sql = inlineClauseParams(sql, mergedRightParams);
                     if (!/IN\s*\(/i.test(sql)) {
@@ -1315,7 +1321,7 @@ async function executeEtlPipeline(
               });
               await pgClient.connect();
               try {
-                const sel = rightColumns.length ? rightColumns.map((c) => quoteIdent(c)).join(", ") : "*";
+                const sel = rightColumns.length ? rightColumns.map((c: any) => quoteIdent(c)).join(", ") : "*";
                 const q = `SELECT ${sel} FROM ${quoteQualified(rightTable)} WHERE ${quoteIdent(rightCol)} = ANY($1::text[])`;
                 const res = await pgClient.query(q, [compositeKeys]);
                 return (res.rows || []).map(normalizeRow);
@@ -1323,7 +1329,7 @@ async function executeEtlPipeline(
                 await pgClient.end();
               }
             }
-            const tuples = compositeKeys.map((k) => k.split(compositeKeySep));
+            const tuples = compositeKeys.map((k: any) => k.split(compositeKeySep));
             const { clause: rClause0, params: rParams0 } = buildWhereClauseFirebird(rightConditions);
             const { clause: rDfClause0, params: rDfParams0 } = buildDateFilterWhereFragmentFirebird(rightDateFilter);
             const mergedRightClause0 = rDfClause0 ? (rClause0 ? `${rClause0} AND ${rDfClause0}` : `WHERE ${rDfClause0}`) : rClause0;
@@ -1331,11 +1337,11 @@ async function executeEtlPipeline(
             const allRows: Record<string, any>[] = [];
             for (let t = 0; t < tuples.length; t += COMPOSITE_KEYSET_BATCH) {
               const batch = tuples.slice(t, t + COMPOSITE_KEYSET_BATCH);
-              const orParts = batch.map((vals) =>
+              const orParts = batch.map((vals: any) =>
                 rightColsFb.map((col, i) => `${safePart(col)} = ${escapeFb(vals[i] ?? "")}`).join(" AND ")
               ).join(" OR ");
               const extraWhere = orParts ? (mergedRightClause0 ? ` AND (${orParts})` : ` WHERE (${orParts})`) : "";
-              let sql = `SELECT FIRST ${ETL_MAX_ROWS_CEILING} ${rightColumns.length ? rightColumns.map((c) => safePart(c)).join(", ") : "*"} FROM ${rightTablePart} ${mergedRightClause0}`.trim();
+              let sql = `SELECT FIRST ${ETL_MAX_ROWS_CEILING} ${rightColumns.length ? rightColumns.map((c: any) => safePart(c)).join(", ") : "*"} FROM ${rightTablePart} ${mergedRightClause0}`.trim();
               sql = inlineClauseParams(sql, mergedRightParams0);
               sql = sql + extraWhere;
               if (String((conn2 as any).type || "").toLowerCase() === "firebird") {
@@ -1368,8 +1374,8 @@ async function executeEtlPipeline(
                   const flatParams = batch.flatMap((vals) => vals);
                   const placeholders = batch.map((_, bi) =>
                     rightColsFb.map((_, i) => `$${bi * rightColsFb.length + i + 1}`).join(", ")
-                  ).map((p) => `(${p})`).join(", ");
-                  const sel = rightColumns.length ? rightColumns.map((c) => quoteIdent(c)).join(", ") : "*";
+                  ).map((p: any) => `(${p})`).join(", ");
+                  const sel = rightColumns.length ? rightColumns.map((c: any) => quoteIdent(c)).join(", ") : "*";
                   const q = `SELECT ${sel} FROM ${quoteQualified(rightTable)} WHERE (${rightColsFb.map((c, i) => quoteIdent(c)).join(", ")}) IN (${placeholders})`;
                   const res = await pgClient.query(q, flatParams);
                   allRows.push(...(res.rows || []).map(normalizeRow));
@@ -1412,7 +1418,7 @@ async function executeEtlPipeline(
               const leftNorm = leftRows.map(normalizeRow);
               if (leftNorm.length === 0) break;
               const uniqueKeys = Array.from(
-                new Set(leftNorm.map((lr) => compositeKeyFb(lr, leftColsFb)).filter(Boolean))
+                new Set(leftNorm.map((lr: any) => compositeKeyFb(lr, leftColsFb)).filter(Boolean))
               );
               const rightMap = new Map<string, Record<string, any>[]>();
               for (let i = 0; i < uniqueKeys.length; i += JOIN_KEYSET_SIZE) {
@@ -1425,8 +1431,8 @@ async function executeEtlPipeline(
                 }
               }
 
-              const leftKeys = leftColumns.length ? leftColumns.map((c) => normColFb(c)) : (leftNorm[0] ? Object.keys(leftNorm[0]) : []);
-              const rightKeys = rightColumns.length ? rightColumns.map((c) => normColFb(c)) : [];
+              const leftKeys = leftColumns.length ? leftColumns.map((c: any) => normColFb(c)) : (leftNorm[0] ? Object.keys(leftNorm[0]) : []);
+              const rightKeys = rightColumns.length ? rightColumns.map((c: any) => normColFb(c)) : [];
               const batch: Record<string, any>[] = [];
               for (const lr of leftNorm) {
                 const key = compositeKeyFb(lr, leftColsFb);
@@ -1464,11 +1470,11 @@ async function executeEtlPipeline(
           : safePart(tableToQuery);
         const cols = "*";
         const firebirdConditions = (sqlConditions as FilterCondition[])
-          .map((c) => ({
+          .map((c: any) => ({
             ...c,
             column: (c.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim(),
           }))
-          .filter((c) => (c.column ?? "").length > 0);
+          .filter((c: any) => (c.column ?? "").length > 0);
         const { clause, params } = buildWhereClauseFirebird(firebirdConditions);
         const dateFilterFb = dateFilter?.column
           ? { ...dateFilter, column: (dateFilter.column || "").replace(/^primary\./i, "").trim() }
@@ -1551,8 +1557,8 @@ async function executeEtlPipeline(
               : (jc.leftColumn && jc.rightColumn)
                 ? [{ primaryColumn: (jc.leftColumn || "").trim(), secondaryColumn: (jc.rightColumn || "").trim() }]
                 : []);
-        const leftCols = joinConditionPairs.map((p) => (p.primaryColumn || "").trim()).filter(Boolean);
-        const rightCols = joinConditionPairs.map((p) => (p.secondaryColumn || "").trim()).filter(Boolean);
+        const leftCols = joinConditionPairs.map((p: any) => (p.primaryColumn || "").trim()).filter(Boolean);
+        const rightCols = joinConditionPairs.map((p: any) => (p.secondaryColumn || "").trim()).filter(Boolean);
         const joinType = (jc.joinType || "INNER").toString().toUpperCase();
         const selectedCols = (body!.filter?.columns || []) as string[];
         const leftColumns = selectedCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, "").trim());
@@ -1576,7 +1582,7 @@ async function executeEtlPipeline(
           row[normCol(col)] ?? (row as any)[col];
         const COMPOSITE_KEY_SEP = "\u0001";
         const compositeKey = (row: Record<string, any>, cols: string[]) =>
-          cols.map((c) => String(getRowVal(row, c) ?? "")).join(COMPOSITE_KEY_SEP);
+          cols.map((c: any) => String(getRowVal(row, c) ?? "")).join(COMPOSITE_KEY_SEP);
 
         const createCrossDbClient = async (connection: any): Promise<{ client: PgClient; resolvedTable: string }> => {
           const connType = (connection.type || "").toLowerCase();
@@ -1594,8 +1600,8 @@ async function executeEtlPipeline(
             return { client: c, resolvedTable: "" };
           }
           if (connType === "excel_file") {
-            const dbUrl = process.env.SUPABASE_DB_URL;
-            if (!dbUrl) throw new Error("SUPABASE_DB_URL no disponible para JOIN con Excel.");
+            const dbUrl = getInternalDbUrl();
+            if (!dbUrl) throw new Error("DATABASE_URL no disponible para JOIN con Excel.");
             const { data: meta } = await supabaseService
               .from("data_tables")
               .select("physical_schema_name, physical_table_name")
@@ -1623,7 +1629,7 @@ async function executeEtlPipeline(
           const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, condParams.length + 1);
           const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
           const params = [...condParams, ...dfParams];
-          const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
+          const sel = columns?.length ? columns.map((c: any) => quoteIdent(c)).join(", ") : "*";
           const limitVal = limit ?? ETL_MAX_ROWS_CEILING;
           const offsetVal = offset ?? 0;
           const q = `SELECT ${sel} FROM ${quoteQualified(tableName)} ${clause}  LIMIT ${limitVal} OFFSET ${offsetVal}`;
@@ -1664,11 +1670,11 @@ async function executeEtlPipeline(
             rightOffset += pageSize;
           }
 
-          const rightKeys = rightColumns.length ? rightColumns.map((c) => normCol(c)) : (rightSampleRow ? Object.keys(rightSampleRow) : []);
+          const rightKeys = rightColumns.length ? rightColumns.map((c: any) => normCol(c)) : (rightSampleRow ? Object.keys(rightSampleRow) : []);
 
           const prefixLeft = (row: Record<string, any>) => {
             const out: Record<string, any> = {};
-            const leftKeys = leftColumns.length ? leftColumns.map((c) => normCol(c)) : Object.keys(row);
+            const leftKeys = leftColumns.length ? leftColumns.map((c: any) => normCol(c)) : Object.keys(row);
             if (leftKeys.length) for (const k of leftKeys) out["primary_" + k] = row[k];
             else for (const key in row) out["primary_" + key] = row[key];
             return out;
@@ -1709,8 +1715,8 @@ async function executeEtlPipeline(
 
       let client: PgClient;
       if (conn.type === "excel_file") {
-        const dbUrl = process.env.SUPABASE_DB_URL;
-        if (!dbUrl) throw new Error("SUPABASE_DB_URL no disponible.");
+        const dbUrl = getInternalDbUrl();
+        if (!dbUrl) throw new Error("DATABASE_URL no disponible.");
         client = new PgClient({ connectionString: dbUrl, connectionTimeoutMillis: 15000, statement_timeout: 600000 });
       } else if (conn.type === "postgres" || conn.type === "postgresql") {
         const password =
@@ -1750,7 +1756,7 @@ async function executeEtlPipeline(
            if (!isStarJoin) {
               // Binary
               const { leftTable, rightTable, joinConditions, leftColumns, rightColumns } = joinObj;
-              const mappedConds = (sqlConditions as FilterCondition[]).map((c) => {
+              const mappedConds = (sqlConditions as FilterCondition[]).map((c: any) => {
                   const col = c.column || "";
                   let mapped = col.replace(/^primary\./i, "left.");
                   mapped = mapped.replace(/^join_\d+\./i, "right.");
@@ -1831,7 +1837,7 @@ async function executeEtlPipeline(
                });
 
                if (dbType === "excel_file") {
-                  const internalClient = new PgClient({ connectionString: process.env.SUPABASE_DB_URL, connectionTimeoutMillis: 15000, statement_timeout: 600000 });
+                  const internalClient = new PgClient({ connectionString: getInternalDbUrl(), connectionTimeoutMillis: 15000, statement_timeout: 600000 });
                   await internalClient.connect();
                   try {
                      const resolvePhysical = async (connId: string | number) => {
@@ -2168,6 +2174,18 @@ async function executeEtlPipeline(
         finalRows.sort((a, b) => (b[resultColumn] || 0) - (a[resultColumn] || 0));
         await insertBatch(finalRows);
     }
+
+    // Último sync de progreso (el intervalo puede no haber cubierto el tramo final)
+    if (rowsProcessed > 0 && rowsProcessed !== lastLoggedRows) {
+      try {
+        await supabaseAdmin
+          .from("etl_runs_log")
+          .update({ rows_processed: rowsProcessed })
+          .eq("id", runId);
+      } catch (logErr) {
+        console.warn("[Background] Final progress log update failed (non-fatal):", logErr);
+      }
+    }
     
     // --- COMPLETION ---
     await withRetry(
@@ -2198,6 +2216,7 @@ async function executeEtlPipeline(
     }
 
     console.log(`[Background Run ${runId}] Completed successfully. Rows: ${rowsProcessed}`);
+    return rowsProcessed;
   } catch (err: any) {
     console.error(`[Background Run ${runId}] Fatal Error:`, err);
     try {
@@ -2232,6 +2251,7 @@ async function executeEtlPipeline(
     const elapsedMs = Date.now() - pipelineStartedAt;
     console.log(`[Background Run ${runId}] Finished in ${elapsedMs}ms.`);
   }
+  return rowsProcessed;
 }
 
 // ===================================================================
@@ -2241,19 +2261,60 @@ async function executeEtlPipeline(
 export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {
-  const runId = uuidv4();
+  const internalEtl = req.headers.get("x-internal-etl");
+  const expectedInternal =
+    process.env.INTERNAL_ETL_SECRET ?? process.env.CRON_SECRET ?? "";
+  const isWorkerCallback =
+    !!internalEtl && !!expectedInternal && internalEtl === expectedInternal;
+  if (shouldUseOwnBackend() && !isWorkerCallback) {
+    const proxied = await proxyToBackend(req, "/etl/run");
+    const text = await proxied.text();
+    if (proxied.ok && text.trim()) {
+      try {
+        const json = JSON.parse(text) as { ok?: boolean; runId?: string };
+        if (json.runId && json.ok !== true) {
+          return NextResponse.json({ ok: true, ...json });
+        }
+      } catch {
+        /* respuesta no JSON: devolver tal cual */
+      }
+    }
+    return new NextResponse(text, {
+      status: proxied.status,
+      headers: { "content-type": proxied.headers.get("content-type") ?? "application/json" },
+    });
+  }
+
+  let runId = uuidv4();
   let runLogInserted = false;
   
   try {
      const body = (await req.json()) as RunBody | null;
      if (!body) throw new Error("Cuerpo vacío");
 
-     const supabaseAdmin = await createClient();
+     runId =
+       isWorkerCallback && body.runId ? String(body.runId) : runId;
+
+     const supabaseAdmin = isWorkerCallback
+       ? createServiceRoleClient()
+       : await createClient();
      let user: { id: string } | null = null;
      const cronSecret = req.headers.get("x-cron-secret");
      const validCronSecret =
        process.env.ETL_SCHEDULER_SECRET || process.env.CRON_SECRET;
-     if (body.etlId && cronSecret && validCronSecret && cronSecret === validCronSecret) {
+     if (isWorkerCallback) {
+       if (body.userId) {
+         user = { id: String(body.userId) };
+       } else if (body.etlId) {
+         const serviceClient = createServiceRoleClient();
+         const { data: etlRow } = await serviceClient
+           .from("etl")
+           .select("user_id")
+           .eq("id", body.etlId)
+           .single();
+         if (etlRow?.user_id) user = { id: (etlRow as { user_id: string }).user_id };
+       }
+     } else if (body.etlId && cronSecret && validCronSecret && cronSecret === validCronSecret) {
        const serviceClient = createServiceRoleClient();
        const { data: etlRow } = await serviceClient.from("etl").select("user_id").eq("id", body.etlId).single();
        if (etlRow?.user_id) user = { id: (etlRow as { user_id: string }).user_id };
@@ -2272,23 +2333,25 @@ export async function POST(req: NextRequest) {
        }
      }
 
-     // 1. Log Initial "started" state
-     // We do this BEFORE starting background work to ensure the ID exists for realtime listeners
-     // Calculate initial table name (same logic as background, but simple version for log)
+     // 1. Log Initial "started" state (el worker/Nest ya creó el log)
      const rawTable = body.end?.target?.table?.trim();
      const cleanTable = rawTable ? rawTable.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() : "";
 
-     await supabaseAdmin
-       .from("etl_runs_log")
-       .insert({
-         id: runId,
-         etl_id: body.etlId,
-         status: "started",
-         destination_schema: "etl_output", 
-         destination_table_name: cleanTable,
-       })
-       .throwOnError();
-     runLogInserted = true;
+     if (!isWorkerCallback) {
+       await supabaseAdmin
+         .from("etl_runs_log")
+         .insert({
+           id: runId,
+           etl_id: body.etlId,
+           status: "started",
+           destination_schema: "etl_output", 
+           destination_table_name: cleanTable,
+         })
+         .throwOnError();
+       runLogInserted = true;
+     } else {
+       runLogInserted = true;
+     }
 
      // Guardar configuración del flujo guiado en el ETL para poder cargarla al editar
      if (body.etlId) {
@@ -2311,15 +2374,17 @@ export async function POST(req: NextRequest) {
        } catch (_) {}
      }
 
-      // 2. Run pipeline (síncrono si waitForCompletion, sino fire-and-forget)
+      // 2. Run pipeline (síncrono si waitForCompletion o callback del worker)
       const pipelinePromise = executeEtlPipeline(body, runId, supabaseAdmin, user, req);
+      const waitForCompletion = isWorkerCallback || body.waitForCompletion;
 
-      if (body.waitForCompletion) {
-        await pipelinePromise;
+      if (waitForCompletion) {
+        const rowsProcessed = await pipelinePromise;
         return NextResponse.json({
           ok: true,
-          runId,
+          runId: runId,
           completed: true,
+          rowsProcessed,
           message: "ETL completado. Los datos están listos."
         });
       }

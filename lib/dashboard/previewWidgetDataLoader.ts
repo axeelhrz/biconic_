@@ -182,7 +182,10 @@ function mapField(
   return datasetDimensions[field]?.[sourceId] ?? field;
 }
 
+import { getDataEndpoints } from "@/lib/api/endpoints";
+
 export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams): Promise<LoadedPreviewWidgetData> {
+  const endpoints = getDataEndpoints();
   const {
     widget,
     tableName,
@@ -191,8 +194,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     datasetDimensions,
     savedMetrics,
     globalFilters = [],
-    aggregateEndpoint = "/api/dashboard/aggregate-data",
-    rawEndpoint = "/api/dashboard/raw-data",
+    aggregateEndpoint = endpoints.aggregateData,
+    rawEndpoint = endpoints.rawData,
     rawLimit = 500,
     accentColor = "#0ea5e9",
     metricsOverride,

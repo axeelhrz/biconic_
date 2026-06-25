@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { shouldUseOwnBackend, proxyToBackend } from "@/lib/api/backend-proxy";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import {
   ACTIVE_RUN_GUARD_MINUTES,
@@ -132,6 +133,9 @@ async function runScheduled() {
  * Requiere header x-cron-secret, Authorization: Bearer <secret>, o query secret=.
  */
 export async function POST(req: NextRequest) {
+  if (shouldUseOwnBackend()) {
+    return proxyToBackend(req, "/etl/run-scheduled");
+  }
   const secret = getSecret(req);
   if (!isAuthorized(secret)) {
     return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });
@@ -148,6 +152,9 @@ export async function POST(req: NextRequest) {
 
 /** GET para cron (Vercel Cron suele usar GET). */
 export async function GET(req: NextRequest) {
+  if (shouldUseOwnBackend()) {
+    return proxyToBackend(req, "/etl/run-scheduled", { method: "POST" });
+  }
   const secret = getSecret(req);
   if (!isAuthorized(secret)) {
     return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });

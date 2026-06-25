@@ -5,7 +5,9 @@ import { Dialog, DialogContent, DialogTitle, DialogHeader, DialogDescription } f
 import { toast } from "sonner";
 import ConnectionForm, { type ExcelUploadErrorInfo } from "@/components/connections/ConnectionForm";
 import { createClient } from "@/lib/supabase/client";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
+import { uploadExcelViaOwnBackend } from "@/lib/excel-import/upload-excel-client";
+import type { AppDbClient } from "@/lib/supabase/db-client";
 import ShareConnectionModal from "@/components/connection/ShareConnectionModal";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { Button } from "@/components/ui/button";
@@ -103,7 +105,7 @@ export default function AdminNewConnectionDialog({
       .from("clients")
       .select("id, company_name")
       .order("company_name", { ascending: true })
-      .then(({ data, error }) => {
+      .then(({ data, error }: any) => {
         if (!error && data) setClients(data as ClientOption[]);
         setClientsLoading(false);
       });
@@ -111,7 +113,7 @@ export default function AdminNewConnectionDialog({
 
   const clientOptions: SelectOption[] = [
     { value: "", label: "Ninguno" },
-    ...clients.map((c) => ({ value: c.id, label: c.company_name })),
+    ...clients.map((c: any) => ({ value: c.id, label: c.company_name })),
   ];
 
   const handleOpenChange = useCallback(
@@ -224,7 +226,7 @@ export default function AdminNewConnectionDialog({
   };
 
   const getActiveClientId = async (
-    supabase: SupabaseClient,
+    supabase: AppDbClient,
     userId: string
   ): Promise<string | null> => {
     const { data, error } = await supabase
@@ -273,59 +275,80 @@ export default function AdminNewConnectionDialog({
       }
 
       const activeClientId = selectedClientId.trim() || (await getActiveClientId(supabase, user.id));
-      const filePath = `${user.id}/${new Date().getTime()}.${fileExt}`;
 
-      toast.info("Subiendo archivo de forma segura...");
-      const { error: uploadError } = await supabase.storage
-        .from("excel-uploads")
-        .upload(filePath, file);
-      if (uploadError) {
-        throw toStageError(
-          "upload_storage",
-          "Error al subir el archivo.",
-          uploadError.message
-        );
+      let newConnectionId: string;
+      let dataTableId: string;
+
+      if (isOwnBackendEnabled()) {
+        if (!activeClientId) {
+          throw toStageError(
+            "insert_connection",
+            "Seleccioná un cliente para la conexión Excel."
+          );
+        }
+        toast.info("Subiendo archivo de forma segura...");
+        const uploaded = await uploadExcelViaOwnBackend({
+          file,
+          connectionName,
+          clientId: activeClientId,
+        });
+        newConnectionId = uploaded.connectionId;
+        dataTableId = uploaded.dataTableId;
+      } else {
+        const filePath = `${user.id}/${new Date().getTime()}.${fileExt}`;
+
+        toast.info("Subiendo archivo de forma segura...");
+        const { error: uploadError } = await supabase.storage
+          .from("excel-uploads")
+          .upload(filePath, file);
+        if (uploadError) {
+          throw toStageError(
+            "upload_storage",
+            "Error al subir el archivo.",
+            uploadError.message
+          );
+        }
+
+        const { data: newConnection, error: connectionError } = await supabase
+          .from("connections")
+          .insert({
+            name: connectionName,
+            user_id: user.id,
+            client_id: activeClientId as any,
+            type: "excel_file",
+            storage_object_path: filePath,
+            original_file_name: file.name,
+          })
+          .select("id")
+          .single();
+        if (connectionError) {
+          throw toStageError(
+            "insert_connection",
+            "Error al crear la conexión.",
+            connectionError.message
+          );
+        }
+
+        newConnectionId = newConnection.id;
+        const { data: dataTableMeta, error: metaError } = await supabase
+          .from("data_tables")
+          .insert({
+            connection_id: newConnectionId,
+            import_status: "pending",
+            physical_table_name: `import_${newConnectionId.replaceAll("-", "_")}`,
+          })
+          .select("id")
+          .single();
+        if (metaError || !dataTableMeta) {
+          throw toStageError(
+            "insert_data_table",
+            "No se pudo crear el registro de metadatos.",
+            metaError?.message
+          );
+        }
+
+        dataTableId = dataTableMeta.id;
       }
-
-      const { data: newConnection, error: connectionError } = await supabase
-        .from("connections")
-        .insert({
-          name: connectionName,
-          user_id: user.id,
-          client_id: activeClientId as any,
-          type: "excel_file",
-          storage_object_path: filePath,
-          original_file_name: file.name,
-        })
-        .select("id")
-        .single();
-      if (connectionError) {
-        throw toStageError(
-          "insert_connection",
-          "Error al crear la conexión.",
-          connectionError.message
-        );
-      }
-
-      const newConnectionId = newConnection.id;
-      const { data: dataTableMeta, error: metaError } = await supabase
-        .from("data_tables")
-        .insert({
-          connection_id: newConnectionId,
-          import_status: "pending",
-          physical_table_name: `import_${newConnectionId.replaceAll("-", "_")}`,
-        })
-        .select("id")
-        .single();
-      if (metaError || !dataTableMeta) {
-        throw toStageError(
-          "insert_data_table",
-          "No se pudo crear el registro de metadatos.",
-          metaError?.message
-        );
-      }
-
-      const dataTableId = dataTableMeta.id;
 
       let selectedSheet = options.selectedSheet;
       const wantsAllSheets = selectedSheet === "__ALL__";
@@ -425,6 +448,14 @@ export default function AdminNewConnectionDialog({
 
       setIsFinished(true);
       setIsProcessing(false);
+
+      if (isOwnBackendEnabled()) {
+        toast.success("Conexión Excel creada correctamente.");
+        onCreated?.();
+        handleOpenChange(false);
+        return;
+      }
+
       setShowPermissions(true);
       toast.success("Conexión creada correctamente. Ahora puedes configurar los permisos.");
       onCreated?.();
@@ -446,7 +477,7 @@ export default function AdminNewConnectionDialog({
         if (data.ok && Array.isArray(data.metadata?.tables)) {
           const tables = data.metadata.tables;
           setTablesFromMetadata(tables);
-          setSelectedTableKeys(new Set(tables.map((t) => `${t.schema}.${t.name}`)));
+          setSelectedTableKeys(new Set(tables.map((t: any) => `${t.schema}.${t.name}`)));
         } else {
           setTablesFromMetadata([]);
           toast.error(data.error || "No se pudieron cargar las tablas.");
@@ -467,7 +498,7 @@ export default function AdminNewConnectionDialog({
       return next;
     });
   };
-  const selectAllTables = () => setSelectedTableKeys(new Set(tablesFromMetadata.map((t) => `${t.schema}.${t.name}`)));
+  const selectAllTables = () => setSelectedTableKeys(new Set(tablesFromMetadata.map((t: any) => `${t.schema}.${t.name}`)));
   const deselectAllTables = () => setSelectedTableKeys(new Set());
   const [savingTables, setSavingTables] = useState(false);
   const handleTableSelectionDone = async () => {
@@ -534,8 +565,8 @@ export default function AdminNewConnectionDialog({
               </div>
               <div className="border rounded-md overflow-auto max-h-[320px] p-2 space-y-1">
                 {tablesFromMetadata
-                  .filter((t) => !tableSearchQuery.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(tableSearchQuery.trim().toLowerCase()))
-                  .map((t) => {
+                  .filter((t: any) => !tableSearchQuery.trim() || `${t.schema}.${t.name}`.toLowerCase().includes(tableSearchQuery.trim().toLowerCase()))
+                  .map((t: any) => {
                   const key = `${t.schema}.${t.name}`;
                   const qualified = `${t.schema}.${t.name}`;
                   return (

@@ -9,6 +9,8 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { Controller, useForm } from "react-hook-form";
@@ -137,36 +139,70 @@ export default function ConnectionConfigDialog({
     }
     let cancelled = false;
     setLoading(true);
-    const supabase = createClient();
-    Promise.all([
-      supabase
-        .from("connections")
-        .select("id, name, type, client_id, db_host, db_name, db_user, db_port, connection_tables, updated_at, original_file_name")
-        .eq("id", connectionId)
-        .single(),
-      supabase.from("clients").select("id, company_name").order("company_name", { ascending: true }),
-    ]).then(([connRes, clientsRes]) => {
-      if (cancelled) return;
-      setLoading(false);
-      if (connRes.error) {
-        setError(connRes.error.message);
-        setConn(null);
-        return;
+
+    const loadClients = async (): Promise<ClientOption[]> => {
+      if (isOwnBackendEnabled()) {
+        const res = await fetch("/api/admin/clients/options", { credentials: "include" });
+        const data = await safeJsonResponse<{ id: string; name: string }[]>(res);
+        return Array.isArray(data)
+          ? data.map((c) => ({ id: c.id, company_name: c.name }))
+          : [];
       }
-      const row = connRes.data as ConnectionRow;
-      setConn(row);
-      setError(null);
-      if (clientsRes.data) setClients(clientsRes.data as ClientOption[]);
-      reset({
-        name: row.name ?? "",
-        type: row.type ?? "",
-        client_id: row.client_id ?? "",
-        db_host: row.db_host ?? "",
-        db_name: row.db_name ?? "",
-        db_user: row.db_user ?? "",
-        db_port: row.db_port != null ? String(row.db_port) : "",
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("clients")
+        .select("id, company_name")
+        .order("company_name", { ascending: true });
+      return (data as ClientOption[]) ?? [];
+    };
+
+    const loadConnection = async (): Promise<ConnectionRow> => {
+      if (isOwnBackendEnabled()) {
+        const res = await fetch(`/api/admin/connections/${connectionId}`, {
+          credentials: "include",
+        });
+        const data = await safeJsonResponse<ConnectionRow & { error?: string }>(res);
+        if (!res.ok) {
+          throw new Error(data.error ?? "No se pudo cargar la conexión");
+        }
+        return data;
+      }
+      const supabase = createClient();
+      const { data, error: connError } = await supabase
+        .from("connections")
+        .select(
+          "id, name, type, client_id, db_host, db_name, db_user, db_port, connection_tables, updated_at, original_file_name"
+        )
+        .eq("id", connectionId)
+        .single();
+      if (connError) throw new Error(connError.message);
+      return data as ConnectionRow;
+    };
+
+    Promise.all([loadConnection(), loadClients()])
+      .then(([row, clientRows]) => {
+        if (cancelled) return;
+        setConn(row);
+        setError(null);
+        setClients(clientRows);
+        reset({
+          name: row.name ?? "",
+          type: row.type ?? "",
+          client_id: row.client_id ?? "",
+          db_host: row.db_host ?? "",
+          db_name: row.db_name ?? "",
+          db_user: row.db_user ?? "",
+          db_port: row.db_port != null ? String(row.db_port) : "",
+        });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Error al cargar la conexión");
+        setConn(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
-    });
     return () => {
       cancelled = true;
     };
@@ -176,22 +212,42 @@ export default function ConnectionConfigDialog({
     if (!connectionId) return;
     setSaving(true);
     try {
-      const supabase = createClient();
-      const portNum = values.db_port.trim() ? parseInt(values.db_port, 10) : null;
-      const { error: updateError } = await supabase
-        .from("connections")
-        .update({
-          name: values.name.trim(),
-          type: values.type,
-          client_id: values.client_id.trim() || null,
-          db_host: values.db_host.trim() || null,
-          db_name: values.db_name.trim() || null,
-          db_user: values.db_user.trim() || null,
-          db_port: portNum,
-        })
-        .eq("id", connectionId);
+      if (isOwnBackendEnabled()) {
+        const res = await fetch(`/api/connections/${connectionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            name: values.name.trim(),
+            clientId: values.client_id.trim() || null,
+            config: {
+              db_host: values.db_host.trim() || null,
+              db_name: values.db_name.trim() || null,
+              db_user: values.db_user.trim() || null,
+              db_port: values.db_port.trim() ? parseInt(values.db_port, 10) : null,
+            },
+          }),
+        });
+        const data = await safeJsonResponse<{ message?: string; error?: string }>(res);
+        if (!res.ok) throw new Error(data.message ?? data.error ?? "Error al guardar");
+      } else {
+        const supabase = createClient();
+        const portNum = values.db_port.trim() ? parseInt(values.db_port, 10) : null;
+        const { error: updateError } = await supabase
+          .from("connections")
+          .update({
+            name: values.name.trim(),
+            type: values.type,
+            client_id: values.client_id.trim() || null,
+            db_host: values.db_host.trim() || null,
+            db_name: values.db_name.trim() || null,
+            db_user: values.db_user.trim() || null,
+            db_port: portNum,
+          })
+          .eq("id", connectionId);
 
-      if (updateError) throw updateError;
+        if (updateError) throw updateError;
+      }
       toast.success("Conexión actualizada");
       onOpenChange(false);
       onSaved?.();
@@ -300,6 +356,9 @@ export default function ConnectionConfigDialog({
                     {isExcel && conn.original_file_name && (
                       <FieldRow icon={FileText} label="Archivo" value={conn.original_file_name} />
                     )}
+                    {isExcel && tables.length > 0 && (
+                      <FieldRow icon={Table2} label="Tabla importada" value={tables[0]} />
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -391,6 +450,22 @@ export default function ConnectionConfigDialog({
                   </div>
                 )}
               </div>
+
+              {/* Tabla importada (Excel) */}
+              {isExcel && tables.length > 0 && (
+                <div
+                  className="rounded-xl border p-4 mb-5"
+                  style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+                >
+                  <h3 className="text-xs font-semibold uppercase tracking-wider mb-3 flex items-center gap-2" style={{ color: "var(--platform-fg-muted)" }}>
+                    <Table2 className="h-3.5 w-3.5" />
+                    Tabla disponible para ETL
+                  </h3>
+                  <p className="text-sm font-mono" style={{ color: "var(--platform-fg)" }}>
+                    {tables[0]}
+                  </p>
+                </div>
+              )}
 
               {/* Tablas para ETL */}
               {(conn.type === "firebird" || conn.type === "mysql" || conn.type === "postgres" || conn.type === "postgresql") && (

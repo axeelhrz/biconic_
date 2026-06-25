@@ -159,8 +159,8 @@ export async function POST(
 
     if (body.filters && body.filters.length > 0) {
       const whereClauses = body.filters
-        .filter((f) => f.field && f.operator)
-        .map((f) => {
+        .filter((f: any) => f.field && f.operator)
+        .map((f: any) => {
           const fld = fieldToPhysical(f.field!).replace(/"/g, '""');
           const op = (f.operator || "=").toUpperCase().trim();
           if (!ALLOWED_OPERATORS.has(op)) {
@@ -168,7 +168,7 @@ export async function POST(
           }
           if (op === "IN") {
             const arr = Array.isArray(f.value) ? f.value : [];
-            const list = arr.map((x) => toSqlLiteral(x)).join(", ");
+            const list = arr.map((x: any) => toSqlLiteral(x)).join(", ");
             if (!list) return "TRUE";
             return `"${fld}" IN (${list})`;
           }

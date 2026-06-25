@@ -2,6 +2,8 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { deleteEtlRunsFromDb } from "@/lib/admin/etl-runs-repository";
 
 /** Eliminar una o más entradas de etl_runs_log (solo APP_ADMIN). */
 export async function deleteMonitorRunsAdmin(ids: string[]): Promise<{ ok: boolean; error?: string }> {
@@ -20,6 +22,15 @@ export async function deleteMonitorRunsAdmin(ids: string[]): Promise<{ ok: boole
     return { ok: false, error: "Solo administradores" };
 
   if (!ids.length) return { ok: true };
+
+  if (shouldUseOwnBackend()) {
+    try {
+      await deleteEtlRunsFromDb(ids);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "Error" };
+    }
+  }
 
   const adminClient = createServiceRoleClient();
   const { error } = await adminClient

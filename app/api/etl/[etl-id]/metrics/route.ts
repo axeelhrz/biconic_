@@ -4,9 +4,9 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 
 function requireAdmin(supabase: Awaited<ReturnType<typeof createClient>>) {
-  return supabase.auth.getUser().then(({ data: { user }, error }) => {
+  return supabase.auth.getUser().then(({ data: { user }, error }: any) => {
     if (error || !user) return { ok: false as const, status: 401, error: "No autorizado" };
-    return supabase.from("profiles").select("app_role").eq("id", user.id).single().then(({ data: profile }) => {
+    return supabase.from("profiles").select("app_role").eq("id", user.id).single().then(({ data: profile }: any) => {
       if ((profile as { app_role?: string })?.app_role !== "APP_ADMIN")
         return { ok: false as const, status: 403, error: "Requiere rol de administrador" };
       return { ok: true as const };
@@ -59,7 +59,7 @@ export async function GET(
     const datasetConfig = layout?.dataset_config && typeof layout.dataset_config === "object" ? layout.dataset_config : undefined;
     const rawDerived = datasetConfig?.derivedColumns ?? datasetConfig?.derived_columns;
     const derivedColumns = Array.isArray(rawDerived)
-      ? rawDerived.map((d) => ({
+      ? rawDerived.map((d: any) => ({
           name: d.name,
           expression: d.expression,
           defaultAggregation: (d as { defaultAggregation?: string }).defaultAggregation ?? (d as { default_aggregation?: string }).default_aggregation ?? "SUM",
@@ -547,7 +547,7 @@ async function propagateMetricsDeletionToDashboards(
         }
 
         if (Array.isArray(widget.metricIds) && widget.metricIds.length > 0) {
-          const filtered = widget.metricIds.filter((id) => !deletedIdSet.has(String(id).trim()));
+          const filtered = widget.metricIds.filter((id: any) => !deletedIdSet.has(String(id).trim()));
           if (filtered.length !== widget.metricIds.length) {
             widgetsChanged = true;
             nextWidget = { ...nextWidget, metricIds: filtered };
@@ -682,19 +682,19 @@ export async function DELETE(
       return NextResponse.json({ ok: false, error: "Ninguna métrica encontrada para eliminar" }, { status: 404 });
     }
 
-    const deletedIdSet = new Set(deletedPayloads.map((m) => String(m.id ?? "").trim()).filter(Boolean));
-    const nextSavedMetrics = savedMetricsList.filter((m) => {
+    const deletedIdSet = new Set(deletedPayloads.map((m: any) => String(m.id ?? "").trim()).filter(Boolean));
+    const nextSavedMetrics = savedMetricsList.filter((m: any) => {
       const id = typeof (m as { id?: string }).id === "string" ? String((m as { id?: string }).id).trim() : "";
       return !id || !deletedIdSet.has(id);
     });
 
     const nextSavedAnalyses = savedAnalysesList
-      .map((a) => {
-        const metricIdsArr = Array.isArray(a.metricIds) ? a.metricIds.map((x) => String(x).trim()) : [];
-        const filtered = metricIdsArr.filter((mid) => !deletedIdSet.has(mid));
+      .map((a: any) => {
+        const metricIdsArr = Array.isArray(a.metricIds) ? a.metricIds.map((x: any) => String(x).trim()) : [];
+        const filtered = metricIdsArr.filter((mid: any) => !deletedIdSet.has(mid));
         return { ...a, metricIds: filtered };
       })
-      .filter((a) => (Array.isArray(a.metricIds) ? a.metricIds.length > 0 : false));
+      .filter((a: any) => (Array.isArray(a.metricIds) ? a.metricIds.length > 0 : false));
 
     const updatedLayout = {
       ...currentLayout,

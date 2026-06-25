@@ -157,7 +157,7 @@ export function CreateEtlDialog({ open, onOpenChange }: CreateEtlDialogProps) {
                 </p>
               ) : (
                 <div className="flex flex-col gap-0.5">
-                  {clients.map((client) => (
+                  {clients.map((client: any) => (
                     <button
                       type="button"
                       key={client.id}
