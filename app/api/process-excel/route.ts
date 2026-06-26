@@ -38,10 +38,13 @@ function isEnospcError(err: unknown): boolean {
 }
 
 function enospcImportMessage(): string {
+  const onVercel = Boolean(process.env.VERCEL);
   return (
     "No hay espacio suficiente en disco para procesar el archivo. " +
-    "Liberá espacio en el equipo o servidor donde corre la API, o configurá IMPORT_TMP_DIR en .env apuntando a una carpeta con más espacio disponible. " +
-    "Los .xlsx/.xlsm se procesan por streaming y no deberían copiarse enteros al disco temporal si la extensión del archivo es correcta."
+    (onVercel
+      ? "En Vercel el disco temporal es muy pequeño (~512 MB): usá solo la primera hoja en archivos grandes o procesá en un entorno con más espacio (Railway/local). "
+      : "Liberá espacio en el servidor o configurá IMPORT_TMP_DIR en .env apuntando a una carpeta con más espacio. ") +
+    "Los .xlsx/.xlsm se procesan por streaming; evitá importar todas las hojas en archivos muy grandes."
   );
 }
 
@@ -478,8 +481,8 @@ async function* getRowGenerator(
   console.log("[LOG] Modo: XLSX/XLSM Stream (ExcelJS)");
   const options: any = {
     entries: "emit",
-    sharedStrings: "cache",
-    styles: "cache",
+    sharedStrings: "emit",
+    styles: "ignore",
     hyperlinks: "ignore",
   };
   const workbookReader =
@@ -746,7 +749,13 @@ async function processDataImport(
     };
 
     const preWarnings: string[] = [];
-    const isAllSheets = selectedSheetToUse === "__ALL__";
+    let isAllSheets = selectedSheetToUse === "__ALL__";
+    if (isAllSheets && process.env.VERCEL) {
+      preWarnings.push(
+        "Importación de todas las hojas desactivada en producción (espacio en disco limitado). Se importará la primera hoja."
+      );
+      isAllSheets = false;
+    }
     const extLower = (preferredExtension || "").toLowerCase();
     const useXlsxRemoteStream = extLower === "xlsx" || extLower === "xlsm";
     importSource = useXlsxRemoteStream
