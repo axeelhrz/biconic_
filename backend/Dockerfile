@@ -22,11 +22,11 @@ WORKDIR /app
 COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/backend/node_modules ./backend/node_modules
 COPY --from=builder /app/backend/package.json ./backend/
-COPY --from=builder /app/backend/docker-entrypoint.sh ./docker-entrypoint.sh
 COPY --from=builder /app/lib ./lib/
 WORKDIR /app/backend
-EXPOSE 4000
+COPY --from=builder /app/backend/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x docker-entrypoint.sh
+EXPOSE 4000
 # Railway inyecta PORT; Nest lee process.env.PORT
 # BICONIC_START=etl-worker | excel-worker en servicios worker (ver docs/DEPLOY_RAILWAY_VERCEL.md)
 ENTRYPOINT ["./docker-entrypoint.sh"]
