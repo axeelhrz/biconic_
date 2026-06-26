@@ -1,4 +1,5 @@
 import { Worker } from "bullmq";
+import { createServer } from "http";
 import { Pool } from "pg";
 import { ETL_QUEUE } from "../etl/etl.constants";
 
@@ -93,3 +94,18 @@ worker.on("failed", (job, err) => {
 });
 
 console.log("[etl-worker] started, runner:", getEtlRunnerBase());
+
+const healthPort = Number(process.env.PORT ?? 0);
+if (Number.isFinite(healthPort) && healthPort > 0) {
+  createServer((req, res) => {
+    if (req.url === "/v1/health" || req.url === "/health") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  }).listen(healthPort, () => {
+    console.log(`[etl-worker] healthcheck listening on :${healthPort}`);
+  });
+}
