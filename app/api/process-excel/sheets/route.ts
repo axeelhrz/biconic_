@@ -7,16 +7,34 @@ import {
   getLocalExcelAbsolutePath,
   hasLocalExcelFile,
 } from "@/lib/storage/excel-upload-storage";
+import { getPresignedDownloadUrl } from "@/lib/storage/s3-excel-storage";
 import { getServerAuthUser } from "@/lib/supabase/server-backend";
 
 const getExtensionFromPath = (filePath: string) =>
   path.extname(filePath || "").replace(".", "").toLowerCase();
 
-async function loadWorkbookBuffer(storagePath: string): Promise<Buffer> {
-  if (!hasLocalExcelFile(storagePath)) {
-    throw new Error("Archivo no encontrado en almacenamiento local.");
+async function loadWorkbookBuffer(
+  storagePath: string,
+  cookieHeader?: string | null
+): Promise<Buffer> {
+  if (hasLocalExcelFile(storagePath)) {
+    return fs.promises.readFile(getLocalExcelAbsolutePath(storagePath));
   }
-  return fs.promises.readFile(getLocalExcelAbsolutePath(storagePath));
+
+  try {
+    const url = await getPresignedDownloadUrl(storagePath, { cookieHeader });
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Error descargando archivo: ${res.status}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  } catch (err) {
+    throw new Error(
+      err instanceof Error
+        ? err.message
+        : "Archivo no encontrado en almacenamiento."
+    );
+  }
 }
 
 export async function POST(req: Request) {
@@ -54,7 +72,7 @@ export async function POST(req: Request) {
     }
 
     const storagePath = connection.storage_object_path as string;
-    const buffer = await loadWorkbookBuffer(storagePath);
+    const buffer = await loadWorkbookBuffer(storagePath, req.headers.get("cookie"));
     const ext = getExtensionFromPath(storagePath);
     const originalFileName =
       (connection.original_file_name as string | null) ?? storagePath;

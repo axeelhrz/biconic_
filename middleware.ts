@@ -7,6 +7,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|geo/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|geojson|json)|public.*|api/public.*|api/admin/connections/excel-upload|api/upload-excel).*)",
+    "/((?!_next/static|_next/image|favicon.ico|geo/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|geojson|json)|public.*|api/public.*|api/admin/connections/excel-upload(?:/init)?|api/upload-excel).*)",
   ],
 };

@@ -17,6 +17,14 @@ export declare class StorageController {
         url: string;
         key: string;
     }>;
+    internalDownloadUrl(body: {
+        key: string;
+    }, req: Request & {
+        headers: Record<string, string | string[] | undefined>;
+    }): Promise<{
+        url: string;
+        key: string;
+    }>;
     processExcel(body: {
         connectionId: string;
         objectKey: string;

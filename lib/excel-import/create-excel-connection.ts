@@ -29,14 +29,30 @@ export async function createExcelConnectionWithFile(input: {
   clientId: string;
   userId: string;
 }): Promise<{ connectionId: string; dataTableId: string; storagePath: string }> {
+  const buffer = Buffer.from(await input.file.arrayBuffer());
+  return createExcelConnectionWithBuffer({
+    buffer,
+    fileName: input.file.name,
+    connectionName: input.connectionName,
+    clientId: input.clientId,
+    userId: input.userId,
+  });
+}
+
+export async function createExcelConnectionRecord(input: {
+  connectionName: string;
+  clientId: string;
+  userId: string;
+  fileName: string;
+  storagePath?: string;
+}): Promise<{ connectionId: string; dataTableId: string; storagePath: string }> {
   const sql = getSql();
   try {
     await ensureExcelSchema(sql);
 
-    const fileExt = input.file.name.split(".").pop()?.toLowerCase() ?? "xlsx";
-    const storagePath = buildExcelStoragePath(input.userId, fileExt);
-    const buffer = Buffer.from(await input.file.arrayBuffer());
-    await saveExcelFileLocal(storagePath, buffer);
+    const fileExt = input.fileName.split(".").pop()?.toLowerCase() ?? "xlsx";
+    const storagePath =
+      input.storagePath ?? buildExcelStoragePath(input.userId, fileExt);
 
     const [connection] = await sql<{ id: string }[]>`
       INSERT INTO public.connections (
@@ -48,7 +64,7 @@ export async function createExcelConnectionWithFile(input: {
         ${input.clientId},
         'excel_file',
         ${storagePath},
-        ${input.file.name}
+        ${input.fileName}
       )
       RETURNING id
     `;
@@ -87,6 +103,26 @@ export async function createExcelConnectionWithFile(input: {
   } finally {
     await sql.end();
   }
+}
+
+export async function createExcelConnectionWithBuffer(input: {
+  buffer: Buffer;
+  fileName: string;
+  connectionName: string;
+  clientId: string;
+  userId: string;
+}): Promise<{ connectionId: string; dataTableId: string; storagePath: string }> {
+  const fileExt = input.fileName.split(".").pop()?.toLowerCase() ?? "xlsx";
+  const storagePath = buildExcelStoragePath(input.userId, fileExt);
+  await saveExcelFileLocal(storagePath, input.buffer);
+
+  return createExcelConnectionRecord({
+    connectionName: input.connectionName,
+    clientId: input.clientId,
+    userId: input.userId,
+    fileName: input.fileName,
+    storagePath,
+  });
 }
 
 export async function requireAuthUserId(): Promise<string> {

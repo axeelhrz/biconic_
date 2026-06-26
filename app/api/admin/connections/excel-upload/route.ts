@@ -52,6 +52,19 @@ export async function POST(req: Request) {
       );
     }
 
+    const { shouldUseDirectS3Upload } = await import("@/lib/storage/s3-excel-storage");
+    if (shouldUseDirectS3Upload(file.size)) {
+      return NextResponse.json(
+        {
+          error:
+            "Este archivo es demasiado grande para subir por el servidor. El cliente debe usar subida directa a almacenamiento.",
+          stage: "upload_storage",
+          useDirectUpload: true,
+        },
+        { status: 413 }
+      );
+    }
+
     const allowed = ["xlsx", "xls", "xlsm", "csv", "ods"];
     const ext = file.name.split(".").pop()?.toLowerCase();
     if (!ext || !allowed.includes(ext)) {

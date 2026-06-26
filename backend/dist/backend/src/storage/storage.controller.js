@@ -26,6 +26,17 @@ let StorageController = class StorageController {
     downloadUrl(body) {
         return this.storage.getDownloadUrl(body.key);
     }
+    internalDownloadUrl(body, req) {
+        const secret = process.env.INTERNAL_PROCESS_EXCEL_SECRET?.trim() ??
+            process.env.CRON_SECRET?.trim() ??
+            "";
+        const header = req.headers["x-internal-storage"];
+        const provided = Array.isArray(header) ? header[0] : header;
+        if (!secret || provided !== secret) {
+            throw new common_1.UnauthorizedException();
+        }
+        return this.storage.getDownloadUrl(body.key);
+    }
     processExcel(body, req) {
         return this.storage.enqueueExcelProcessing({
             connectionId: body.connectionId,
@@ -49,6 +60,14 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", void 0)
 ], StorageController.prototype, "downloadUrl", null);
+__decorate([
+    (0, common_1.Post)("internal/download-url"),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", void 0)
+], StorageController.prototype, "internalDownloadUrl", null);
 __decorate([
     (0, common_1.Post)("excel/process"),
     __param(0, (0, common_1.Body)()),

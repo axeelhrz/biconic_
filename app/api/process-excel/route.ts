@@ -10,6 +10,7 @@ import {
   getLocalExcelAbsolutePath,
   hasLocalExcelFile,
 } from "@/lib/storage/excel-upload-storage";
+import { getPresignedDownloadUrl } from "@/lib/storage/s3-excel-storage";
 import { Readable } from "stream";
 import fs from "fs";
 import path from "path";
@@ -538,7 +539,8 @@ async function processDataImport(
   supabaseAdmin: any,
   dbUrl: string,
   parseMode: ParseMode,
-  selectedSheet?: string | null
+  selectedSheet?: string | null,
+  storageOptions?: { cookieHeader?: string | null; internal?: boolean }
 ) {
   let importSource: RowGeneratorSource | null = null;
   let sql: any = null;
@@ -640,16 +642,12 @@ async function processDataImport(
             );
           }
 
-          const { data: signedData, error: signErr } = await supabaseAdmin.storage
-            .from("excel-uploads")
-            .createSignedUrl(storagePath, 3600);
+          const signedUrl = await getPresignedDownloadUrl(storagePath, {
+            cookieHeader: storageOptions?.cookieHeader,
+            internal: storageOptions?.internal,
+          });
 
-          if (signErr) throw signErr;
-          if (!signedData?.signedUrl) {
-            throw new Error("No se pudo generar URL firmada");
-          }
-
-          const response = await fetch(signedData.signedUrl);
+          const response = await fetch(signedUrl);
           if (!response.ok || !response.body) {
             throw new Error(`Error descargando archivo: ${response.statusText}`);
           }
@@ -712,14 +710,11 @@ async function processDataImport(
               `[LOG] Reintentando descarga stream xlsx (${attempts}/${maxAttempts})...`
             );
           }
-          const { data: signedData, error: signErr } = await supabaseAdmin.storage
-            .from("excel-uploads")
-            .createSignedUrl(storagePath, 3600);
-          if (signErr) throw signErr;
-          if (!signedData?.signedUrl) {
-            throw new Error("No se pudo generar URL firmada");
-          }
-          const response = await fetch(signedData.signedUrl);
+          const signedUrl = await getPresignedDownloadUrl(storagePath, {
+            cookieHeader: storageOptions?.cookieHeader,
+            internal: storageOptions?.internal,
+          });
+          const response = await fetch(signedUrl);
           if (!response.ok || !response.body) {
             throw new Error(`Error descargando archivo: ${response.statusText}`);
           }
@@ -1304,7 +1299,11 @@ export async function POST(req: Request) {
       supabaseAdmin,
       dbUrl!,
       parseMode,
-      selectedSheet
+      selectedSheet,
+      {
+        cookieHeader: req.headers.get("cookie"),
+        internal: continuation,
+      }
     ).catch((err) => console.error("[FATAL BACKGROUND ERROR]", err));
 
     // Next 15: after() evita que el proceso se corte al enviar la respuesta (Vercel/local)
