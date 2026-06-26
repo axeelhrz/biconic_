@@ -58,15 +58,67 @@ const DEBUG_INGEST_URL =
 const DEBUG_SESSION_ID = "ccff04";
 
 // --- UTILIDADES ---
-const sanitizeColumnName = (name: any) =>
-  `"${
-    name
-      ? name
-          .toString()
-          .replace(/[^a-zA-Z0-9_]/g, "_")
-          .toLowerCase()
-      : "unnamed_column"
-  }"`;
+function normalizeHeaderLabel(value: unknown, index: number): string {
+  if (value === null || value === undefined) {
+    return `column_${index + 1}`;
+  }
+  if (value instanceof Date) {
+    return value.toISOString().split("T")[0];
+  }
+  if (typeof value === "object") {
+    const cell = value as Record<string, unknown>;
+    if (typeof cell.text === "string" && cell.text.trim()) {
+      return cell.text.trim();
+    }
+    if (cell.result !== null && cell.result !== undefined && cell.result !== "") {
+      return String(cell.result).trim();
+    }
+    if (Array.isArray(cell.richText)) {
+      const text = cell.richText
+        .map((part) =>
+          part && typeof part === "object" && "text" in part
+            ? String((part as { text?: unknown }).text ?? "")
+            : ""
+        )
+        .join("")
+        .trim();
+      if (text) return text;
+    }
+    if (typeof cell.hyperlink === "string" && cell.hyperlink.trim()) {
+      return cell.hyperlink.trim();
+    }
+    return `column_${index + 1}`;
+  }
+  const text = String(value).trim();
+  if (!text || text === "[object Object]") {
+    return `column_${index + 1}`;
+  }
+  return text;
+}
+
+const slugifyColumnBase = (name: string) => {
+  const slug = name
+    .replace(/[^a-zA-Z0-9_]/g, "_")
+    .toLowerCase()
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+  return slug || "unnamed_column";
+};
+
+const sanitizeColumnName = (name: string) => `"${slugifyColumnBase(name)}"`;
+
+/** Evita CREATE TABLE con columnas duplicadas (p. ej. varios [object Object] en Excel). */
+function buildUniqueSanitizedHeaders(values: unknown[]): string[] {
+  const labels = values.map((value, index) => normalizeHeaderLabel(value, index));
+  const seen = new Map<string, number>();
+  return labels.map((label) => {
+    const base = slugifyColumnBase(label);
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    const unique = count === 0 ? base : `${base}_${count + 1}`;
+    return `"${unique}"`;
+  });
+}
 
 const cleanValue = (val: any) => {
   if (val === null || val === undefined) return null;
@@ -973,8 +1025,8 @@ async function processDataImport(
           continue;
 
         if (rowCount === 0) {
-          headers = values.map(String);
-          headersSanitized = headers.map(sanitizeColumnName);
+          headers = values.map((value, index) => normalizeHeaderLabel(value, index));
+          headersSanitized = buildUniqueSanitizedHeaders(values);
 
           const numCols = headers.length;
           if (numCols > 0) {
