@@ -120,19 +120,46 @@ function buildUniqueSanitizedHeaders(values: unknown[]): string[] {
   });
 }
 
-const cleanValue = (val: any) => {
+function coerceExcelCellValue(val: unknown): string | number | boolean | null {
   if (val === null || val === undefined) return null;
-  // ExcelJS devuelve objetos Date, CSV devuelve strings
   if (val instanceof Date) return val.toISOString().split("T")[0];
-  if (typeof val === "object")
-    return val.text || val.result || JSON.stringify(val);
+  if (typeof val === "boolean" || typeof val === "number") return val;
+  if (typeof val === "object") {
+    const cell = val as Record<string, unknown>;
+    // Referencia sin resolver de ExcelJS streaming (sharedStrings: emit)
+    if ("sharedString" in cell) return null;
+    if (typeof cell.text === "string") {
+      const trimmed = cell.text.trim();
+      return trimmed === "" ? null : trimmed;
+    }
+    if (cell.result !== null && cell.result !== undefined && cell.result !== "") {
+      return coerceExcelCellValue(cell.result);
+    }
+    if (Array.isArray(cell.richText)) {
+      const text = cell.richText
+        .map((part) =>
+          part && typeof part === "object" && "text" in part
+            ? String((part as { text?: unknown }).text ?? "")
+            : ""
+        )
+        .join("")
+        .trim();
+      return text === "" ? null : text;
+    }
+    if (typeof cell.hyperlink === "string") {
+      const trimmed = cell.hyperlink.trim();
+      return trimmed === "" ? null : trimmed;
+    }
+    return null;
+  }
   if (typeof val === "string") {
     const trimmed = val.trim();
-    if (trimmed === "") return null;
-    return trimmed;
+    return trimmed === "" ? null : trimmed;
   }
-  return val;
-};
+  return val as string | number | boolean;
+}
+
+const cleanValue = (val: unknown) => coerceExcelCellValue(val);
 
 // --- INFERENCIA DE TIPOS ---
 const isInteger = (v: string) => /^-?\d+$/.test(v);
@@ -151,17 +178,11 @@ function inferColumnTypes(rows: any[][], headerCount: number): ColumnType[] {
 
   for (const row of rows) {
     for (let i = 0; i < headerCount; i++) {
-      let value = row[i];
-      // Normalización para inferencia
-      if (typeof value === "object" && value !== null) {
-        if (value instanceof Date) value = value.toISOString().split("T")[0];
-        else if ("text" in value) value = value.text;
-        else value = String(value);
-      }
-      if (value === null || value === undefined || String(value).trim() === "")
-        continue;
+      const coerced = coerceExcelCellValue(row[i]);
+      if (coerced === null || coerced === undefined) continue;
 
-      const strValue = String(value);
+      const strValue = String(coerced);
+      if (strValue.trim() === "") continue;
       const checks = columnChecks[i];
       if (checks.isBool && !isBoolean(strValue)) checks.isBool = false;
       if (checks.isDate && !isDate(strValue)) checks.isDate = false;
@@ -547,9 +568,10 @@ async function* getRowGenerator(
   }
 
   console.log("[LOG] Modo: XLSX/XLSM Stream (ExcelJS)");
+  // cache resuelve shared strings; en Railway hay más disco que en Vercel /tmp
   const options: any = {
     entries: "emit",
-    sharedStrings: "emit",
+    sharedStrings: process.env.VERCEL ? "emit" : "cache",
     styles: "ignore",
     hyperlinks: "ignore",
   };
