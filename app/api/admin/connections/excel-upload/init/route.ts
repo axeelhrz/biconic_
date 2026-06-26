@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { shouldUseOwnBackend, getBackendApiUrl } from "@/lib/api/backend-config";
+import { createExcelUploadToken } from "@/lib/auth/excel-upload-token";
 import {
   createExcelConnectionRecord,
   requireAuthUserId,
@@ -66,7 +67,14 @@ export async function POST(req: Request) {
     });
 
     const cookieHeader = req.headers.get("cookie");
-    let presigned: { url: string; key: string };
+    const uploadToken = await createExcelUploadToken({
+      userId,
+      storagePath: record.storagePath,
+      connectionId: record.connectionId,
+    });
+    const directUploadUrl = `${getBackendApiUrl()}/storage/excel/direct-upload`;
+
+    let presigned: { url: string; key: string } | null = null;
     try {
       presigned = await getPresignedUploadUrl(
         record.storagePath,
@@ -74,18 +82,17 @@ export async function POST(req: Request) {
         cookieHeader
       );
     } catch (presignErr) {
-      const detail =
-        presignErr instanceof Error ? presignErr.message : "No se pudo preparar la subida";
-      const hint = isVercelRuntime()
-        ? " Configurá Cloudflare R2 (S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET) en Railway."
-        : "";
-      return NextResponse.json(
-        {
-          error: `Almacenamiento no disponible: ${detail}.${hint}`,
-          stage: "upload_storage",
-        },
-        { status: 503 }
-      );
+      if (!isVercelRuntime()) {
+        const detail =
+          presignErr instanceof Error ? presignErr.message : "No se pudo preparar la subida";
+        return NextResponse.json(
+          {
+            error: `Almacenamiento no disponible: ${detail}.`,
+            stage: "upload_storage",
+          },
+          { status: 503 }
+        );
+      }
     }
 
     return NextResponse.json({
@@ -93,7 +100,10 @@ export async function POST(req: Request) {
       connectionId: record.connectionId,
       dataTableId: record.dataTableId,
       storagePath: record.storagePath,
-      uploadUrl: presigned.url,
+      uploadMode: "direct",
+      uploadToken,
+      directUploadUrl,
+      uploadUrl: presigned?.url ?? null,
     });
   } catch (err) {
     console.error("excel-upload/init:", err);

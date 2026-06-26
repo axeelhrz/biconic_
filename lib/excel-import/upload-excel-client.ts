@@ -1,10 +1,68 @@
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { getPublicBackendApiUrl } from "@/lib/api/backend-config";
 import { shouldUseDirectS3Upload } from "@/lib/storage/s3-excel-storage";
 
 function uploadError(message: string, stage = "upload_storage"): Error & { stage: string } {
   const err = new Error(message) as Error & { stage: string };
   err.stage = stage;
   return err;
+}
+
+function postFormWithUploadToken(
+  url: string,
+  uploadToken: string,
+  file: File,
+  fields: Record<string, string>
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    for (const [key, value] of Object.entries(fields)) {
+      formData.append(key, value);
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("X-Upload-Token", uploadToken);
+    xhr.timeout = 45 * 60 * 1000;
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+        return;
+      }
+      let detail = xhr.responseText?.slice(0, 200) || xhr.statusText;
+      try {
+        const parsed = JSON.parse(xhr.responseText) as { message?: string; error?: string };
+        detail = parsed.message ?? parsed.error ?? detail;
+      } catch {
+        /* ignore */
+      }
+      reject(
+        uploadError(
+          `El servidor rechazó la subida (HTTP ${xhr.status}): ${detail}`
+        )
+      );
+    };
+
+    xhr.onerror = () => {
+      reject(
+        uploadError(
+          "No se pudo conectar con el servidor de archivos. Verificá CORS_ORIGIN=https://biconic-blush.vercel.app en Railway."
+        )
+      );
+    };
+
+    xhr.ontimeout = () => {
+      reject(uploadError("Tiempo de espera agotado al subir el archivo (más de 45 min)."));
+    };
+
+    xhr.onabort = () => {
+      reject(uploadError("Subida cancelada."));
+    };
+
+    xhr.send(formData);
+  });
 }
 
 function putFileToPresignedUrl(url: string, file: File): Promise<void> {
@@ -105,7 +163,7 @@ async function uploadExcelViaPresignedUrl(input: {
     });
   } catch (err) {
     throw uploadError(
-      `No se pudo iniciar la subida: ${err instanceof Error ? err.message : "error de red"}. Verificá que estés logueado y que el deploy incluya /excel-upload/init.`
+      `No se pudo iniciar la subida: ${err instanceof Error ? err.message : "error de red"}. Verificá que estés logueado.`
     );
   }
 
@@ -113,15 +171,45 @@ async function uploadExcelViaPresignedUrl(input: {
     ok?: boolean;
     connectionId?: string;
     dataTableId?: string;
-    uploadUrl?: string;
+    storagePath?: string;
+    uploadToken?: string;
+    directUploadUrl?: string;
+    uploadUrl?: string | null;
     error?: string;
     stage?: string;
   }>(initRes);
 
-  if (!initRes.ok || !initData.connectionId || !initData.dataTableId || !initData.uploadUrl) {
+  if (!initRes.ok || !initData.connectionId || !initData.dataTableId) {
     throw uploadError(
       initData.error ?? "Error al iniciar la subida",
       initData.stage ?? "upload_storage"
+    );
+  }
+
+  const storagePath = initData.storagePath ?? "";
+  const directUrl =
+    initData.directUploadUrl ??
+    `${getPublicBackendApiUrl()}/storage/excel/direct-upload`;
+
+  if (initData.uploadToken && storagePath) {
+    try {
+      await postFormWithUploadToken(directUrl, initData.uploadToken, input.file, {
+        storagePath,
+        connectionId: initData.connectionId,
+      });
+      return {
+        connectionId: initData.connectionId,
+        dataTableId: initData.dataTableId,
+      };
+    } catch (directErr) {
+      if (!initData.uploadUrl) throw directErr;
+      console.warn("[excel-upload] direct upload failed, trying R2 presigned:", directErr);
+    }
+  }
+
+  if (!initData.uploadUrl) {
+    throw uploadError(
+      "No se pudo subir el archivo por el servidor ni por almacenamiento directo."
     );
   }
 

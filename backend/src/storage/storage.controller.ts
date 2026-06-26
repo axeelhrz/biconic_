@@ -1,19 +1,38 @@
-import { Body, Controller, Post, Req, UnauthorizedException, UseGuards } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Headers,
+  Post,
+  Req,
+  UnauthorizedException,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { JwtService } from "@nestjs/jwt";
 import type { Request } from "express";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { StorageService } from "./storage.service";
 
+const EXCEL_UPLOAD_MAX_BYTES = 200 * 1024 * 1024;
+
 @Controller("storage")
-@UseGuards(JwtAuthGuard)
 export class StorageController {
-  constructor(private readonly storage: StorageService) {}
+  constructor(
+    private readonly storage: StorageService,
+    private readonly jwt: JwtService
+  ) {}
 
   @Post("upload-url")
+  @UseGuards(JwtAuthGuard)
   uploadUrl(@Body() body: { key: string; contentType: string }) {
     return this.storage.getUploadUrl(body.key, body.contentType);
   }
 
   @Post("download-url")
+  @UseGuards(JwtAuthGuard)
   downloadUrl(@Body() body: { key: string }) {
     return this.storage.getDownloadUrl(body.key);
   }
@@ -35,7 +54,49 @@ export class StorageController {
     return this.storage.getDownloadUrl(body.key);
   }
 
+  @Post("excel/direct-upload")
+  @UseInterceptors(
+    FileInterceptor("file", { limits: { fileSize: EXCEL_UPLOAD_MAX_BYTES } })
+  )
+  async directUpload(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body("storagePath") storagePath: string,
+    @Body("connectionId") connectionId: string,
+    @Headers("x-upload-token") uploadToken: string | undefined
+  ) {
+    if (!uploadToken?.trim()) {
+      throw new UnauthorizedException("Falta token de subida");
+    }
+    if (!file?.buffer?.length) {
+      throw new BadRequestException("Archivo requerido");
+    }
+    if (!storagePath?.trim() || !connectionId?.trim()) {
+      throw new BadRequestException("storagePath y connectionId son requeridos");
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = await this.jwt.verifyAsync<Record<string, unknown>>(uploadToken);
+    } catch {
+      throw new UnauthorizedException("Token de subida inválido o expirado");
+    }
+
+    if (payload.purpose !== "excel-upload") {
+      throw new UnauthorizedException("Token de subida inválido");
+    }
+    if (String(payload.key ?? "") !== storagePath.trim()) {
+      throw new UnauthorizedException("Token no coincide con la ruta de almacenamiento");
+    }
+    if (String(payload.connectionId ?? "") !== connectionId.trim()) {
+      throw new UnauthorizedException("Token no coincide con la conexión");
+    }
+
+    await this.storage.putObject(storagePath.trim(), file.buffer, file.mimetype);
+    return { ok: true, key: storagePath.trim() };
+  }
+
   @Post("excel/process")
+  @UseGuards(JwtAuthGuard)
   processExcel(
     @Body() body: { connectionId: string; objectKey: string },
     @Req() req: Request & { user: { sub: string } }

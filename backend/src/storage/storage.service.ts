@@ -28,6 +28,18 @@ export class StorageService {
     });
   }
 
+  async putObject(key: string, body: Buffer, contentType?: string) {
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ...(contentType ? { ContentType: contentType } : {}),
+      })
+    );
+    return { key, bucket: this.bucket };
+  }
+
   async getUploadUrl(key: string, _contentType?: string) {
     // Sin ContentType en la firma: el navegador no debe enviar headers extra en el PUT
     // (evita 403 por mismatch y simplifica CORS en R2).

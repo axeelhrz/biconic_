@@ -25,6 +25,8 @@ async function bootstrap() {
   app.enableCors({
     origin: process.env.CORS_ORIGIN?.split(",") ?? ["http://localhost:3000"],
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization", "X-Upload-Token", "x-upload-token"],
+    exposedHeaders: ["ETag"],
   });
   const port = Number(process.env.PORT ?? 4000);
   await app.listen(port);
