@@ -250,28 +250,17 @@ export async function listAdminClientsFromDb(
 }
 
 export async function listCompanyOptionsFromDb(): Promise<{ id: string; name: string }[]> {
-  const user = await getServerAuthUser();
-  if (!user?.id) return [];
+  await requireAppAdmin();
   const sql = getSql();
   try {
     const schema = await getClientSchema(sql);
     const { nameCol } = schema;
-    const hasType = await sql<{ exists: boolean }[]>`
-      SELECT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'clients' AND column_name = 'type'
-      ) AS exists
-    `;
-    const typeFilter = hasType[0]?.exists
-      ? "WHERE c.type = 'empresa'"
-      : "";
 
     return await sql.unsafe<{ id: string; name: string }[]>(
       `
       SELECT c.id::text AS id,
         COALESCE(NULLIF(TRIM(c.${nameCol}), ''), 'Sin nombre') AS name
       FROM public.clients c
-      ${typeFilter}
       ORDER BY c.${nameCol} ASC
       `
     );

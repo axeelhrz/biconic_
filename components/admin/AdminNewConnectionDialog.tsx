@@ -99,16 +99,33 @@ export default function AdminNewConnectionDialog({
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     setClientsLoading(true);
-    const supabase = createClient();
-    supabase
-      .from("clients")
-      .select("id, company_name")
-      .order("company_name", { ascending: true })
-      .then(({ data, error }: any) => {
-        if (!error && data) setClients(data as ClientOption[]);
-        setClientsLoading(false);
-      });
+
+    const loadClients = async () => {
+      if (isOwnBackendEnabled()) {
+        const res = await fetch("/api/admin/clients/options", { credentials: "include" });
+        const data = await safeJsonResponse<{ id: string; name: string }[]>(res);
+        if (!cancelled && Array.isArray(data)) {
+          setClients(data.map((c) => ({ id: c.id, company_name: c.name })));
+        }
+        return;
+      }
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("clients")
+        .select("id, company_name")
+        .order("company_name", { ascending: true });
+      if (!cancelled && !error && data) setClients(data as ClientOption[]);
+    };
+
+    void loadClients().finally(() => {
+      if (!cancelled) setClientsLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   const clientOptions: SelectOption[] = [
