@@ -11,6 +11,8 @@ FROM base AS builder
 COPY --from=deps /app/backend/node_modules ./backend/node_modules
 COPY backend/ ./backend/
 COPY lib/ ./lib/
+# lib/ vive en /app/lib; TypeScript resuelve imports (postgres, chart.js) desde /app/node_modules
+RUN ln -s /app/backend/node_modules /app/node_modules
 WORKDIR /app/backend
 RUN npm run build
 
