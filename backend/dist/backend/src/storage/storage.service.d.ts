@@ -4,7 +4,7 @@ export declare class StorageService {
     private readonly s3;
     private readonly bucket;
     constructor(excelQueue: Queue);
-    getUploadUrl(key: string, contentType: string): Promise<{
+    getUploadUrl(key: string, _contentType?: string): Promise<{
         url: string;
         key: string;
         bucket: string;

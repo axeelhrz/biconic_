@@ -282,15 +282,20 @@ export default function NewConnectionDialog({
         );
       }
     } catch (err: unknown) {
-      const fallback = toStageError(
-        "unknown",
-        "Error inesperado durante la carga.",
-        err instanceof Error ? err.message : String(err)
-      );
-      const parsed =
-        typeof err === "object" && err !== null && "stage" in err && "message" in err
-          ? (err as ExcelUploadErrorInfo)
-          : fallback;
+      const staged =
+        err instanceof Error &&
+        "stage" in err &&
+        typeof (err as Error & { stage?: unknown }).stage === "string";
+      const parsed = staged
+        ? toStageError(
+            (err as Error & { stage: string }).stage,
+            err.message
+          )
+        : toStageError(
+            "unknown",
+            "Error inesperado durante la carga.",
+            err instanceof Error ? err.message : String(err)
+          );
       setExcelError(parsed);
       toast.error(parsed.message);
       setIsProcessing(false);

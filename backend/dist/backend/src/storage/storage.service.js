@@ -34,11 +34,10 @@ let StorageService = class StorageService {
             },
         });
     }
-    async getUploadUrl(key, contentType) {
+    async getUploadUrl(key, _contentType) {
         const command = new client_s3_1.PutObjectCommand({
             Bucket: this.bucket,
             Key: key,
-            ContentType: contentType,
         });
         const url = await (0, s3_request_presigner_1.getSignedUrl)(this.s3, command, { expiresIn: 3600 });
         return { url, key, bucket: this.bucket };
