@@ -1,4 +1,29 @@
 import { getBackendApiUrl } from "@/lib/api/backend-config";
+import { Readable } from "stream";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cachedS3Client: any = null;
+
+function getLocalS3Client() {
+  if (!cachedS3Client) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { S3Client } = require("@aws-sdk/client-s3");
+    cachedS3Client = new S3Client({
+      region: process.env.S3_REGION ?? "us-east-1",
+      endpoint: process.env.S3_ENDPOINT,
+      forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== "false",
+      credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY ?? "",
+        secretAccessKey: process.env.S3_SECRET_KEY ?? "",
+      },
+    });
+  }
+  return cachedS3Client;
+}
+
+export function getS3BucketName(): string {
+  return process.env.S3_BUCKET ?? "excel-uploads";
+}
 
 export function isS3Configured(): boolean {
   return Boolean(
@@ -94,6 +119,28 @@ export async function getPresignedDownloadUrl(
   }
   if (!data.url) throw new Error("No se pudo obtener URL de descarga");
   return data.url;
+}
+
+/** Lectura directa desde S3/R2 (evita fetch a URL presignada; usar en Railway/workers). */
+export async function getS3ObjectReadableStream(key: string): Promise<Readable> {
+  if (!isS3Configured()) {
+    throw new Error("S3 no configurado para lectura directa");
+  }
+  const { GetObjectCommand } = require("@aws-sdk/client-s3");
+  const response = await getLocalS3Client().send(
+    new GetObjectCommand({
+      Bucket: getS3BucketName(),
+      Key: key,
+    })
+  );
+  const body = response.Body;
+  if (!body) {
+    throw new Error("Objeto vacío en almacenamiento S3");
+  }
+  if (body instanceof Readable) {
+    return body;
+  }
+  return Readable.from(body as AsyncIterable<Uint8Array>);
 }
 
 export async function fetchExcelBytesFromStorage(

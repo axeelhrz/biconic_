@@ -9,7 +9,7 @@ import {
   getLocalExcelAbsolutePath,
   hasLocalExcelFile,
 } from "@/lib/storage/excel-upload-storage";
-import { getPresignedDownloadUrl } from "@/lib/storage/s3-excel-storage";
+import { getPresignedDownloadUrl, getS3ObjectReadableStream, isS3Configured } from "@/lib/storage/s3-excel-storage";
 import { Readable } from "stream";
 import fs from "fs";
 import path from "path";
@@ -642,6 +642,11 @@ async function processDataImport(
     const preferredExtension = getExtensionFromPath(
       connection.original_file_name || storagePath
     );
+    const useDirectS3Read =
+      isS3Configured() &&
+      (storageOptions?.internal === true ||
+        Boolean(process.env.RAILWAY_ENVIRONMENT));
+
     const downloadToTempFile = async (): Promise<string> => {
       if (hasLocalExcelFile(storagePath)) {
         return getLocalExcelAbsolutePath(storagePath);
@@ -661,6 +666,19 @@ async function processDataImport(
             );
           }
 
+          tmpPath = path.join(
+            getImportTempDir(),
+            `import-${dataTableId}-${Date.now()}-${attempts}.tmp`
+          );
+
+          if (useDirectS3Read) {
+            await pipeline(
+              await getS3ObjectReadableStream(storagePath),
+              fs.createWriteStream(tmpPath)
+            );
+            return tmpPath;
+          }
+
           const signedUrl = await getPresignedDownloadUrl(storagePath, {
             cookieHeader: storageOptions?.cookieHeader,
             internal: storageOptions?.internal,
@@ -670,11 +688,6 @@ async function processDataImport(
           if (!response.ok || !response.body) {
             throw new Error(`Error descargando archivo: ${response.statusText}`);
           }
-
-          tmpPath = path.join(
-            getImportTempDir(),
-            `import-${dataTableId}-${Date.now()}-${attempts}.tmp`
-          );
 
           await pipeline(
             Readable.fromWeb(response.body as any),
@@ -729,6 +742,10 @@ async function processDataImport(
               `[LOG] Reintentando descarga stream xlsx (${attempts}/${maxAttempts})...`
             );
           }
+          if (useDirectS3Read) {
+            return getS3ObjectReadableStream(storagePath);
+          }
+
           const signedUrl = await getPresignedDownloadUrl(storagePath, {
             cookieHeader: storageOptions?.cookieHeader,
             internal: storageOptions?.internal,

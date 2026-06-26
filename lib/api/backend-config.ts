@@ -3,11 +3,14 @@ export function shouldUseOwnBackend(): boolean {
 }
 
 export function getBackendApiUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_API_URL ??
-    process.env.API_URL ??
-    "http://localhost:4000/v1"
-  ).replace(/\/$/, "");
+  const explicit =
+    process.env.NEXT_PUBLIC_API_URL?.trim() ??
+    process.env.API_URL?.trim() ??
+    process.env.PROCESS_EXCEL_RUNNER_URL?.trim();
+  if (explicit) return explicit.replace(/\/$/, "");
+  const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
+  if (railwayDomain) return `https://${railwayDomain}/v1`;
+  return "http://localhost:4000/v1";
 }
 
 /** URL pública del backend para llamadas desde el navegador. */
