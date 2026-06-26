@@ -1,4 +1,6 @@
 {
+  "installCommand": "npm ci --legacy-peer-deps",
+  "buildCommand": "npm run build",
   "functions": {
     "app/api/**/*.ts": { "maxDuration": 30 },
     "app/api/process-excel/route.ts": { "maxDuration": 800 },
