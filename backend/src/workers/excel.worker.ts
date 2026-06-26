@@ -3,12 +3,30 @@ import { EXCEL_QUEUE } from "../etl/etl.constants";
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 
+function getRunnerBase(): string {
+  const explicit = process.env.PROCESS_EXCEL_RUNNER_URL?.trim().replace(/\/$/, "");
+  if (explicit) return explicit;
+  const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
+  if (railwayDomain) return `https://${railwayDomain}/v1`;
+  return (
+    process.env.NEXT_PUBLIC_API_URL?.trim().replace(/\/$/, "") ??
+    "http://localhost:4000/v1"
+  );
+}
+
 async function processExcelImport(job: {
-  data: { connectionId: string; objectKey: string; userId: string };
+  data: {
+    connectionId: string;
+    objectKey: string;
+    userId: string;
+    dataTableId?: string;
+    parseMode?: string;
+    selectedSheet?: string | null;
+  };
 }) {
-  const nextUrl = process.env.NEXT_INTERNAL_URL ?? "http://localhost:3000";
+  const runnerBase = getRunnerBase();
   const internalSecret = process.env.INTERNAL_PROCESS_EXCEL_SECRET ?? "";
-  const res = await fetch(`${nextUrl}/api/process-excel`, {
+  const res = await fetch(`${runnerBase}/internal/excel/run-import`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -16,8 +34,9 @@ async function processExcelImport(job: {
     },
     body: JSON.stringify({
       connectionId: job.data.connectionId,
-      storageObjectPath: job.data.objectKey,
-      asyncWorker: true,
+      dataTableId: job.data.dataTableId,
+      parseMode: job.data.parseMode ?? "mixed",
+      selectedSheet: job.data.selectedSheet ?? null,
     }),
   });
   if (!res.ok) {

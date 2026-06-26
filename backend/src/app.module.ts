@@ -8,6 +8,7 @@ import { ConnectionsModule } from "./connections/connections.module";
 import { EtlModule } from "./etl/etl.module";
 import { StorageModule } from "./storage/storage.module";
 import { AdminModule } from "./admin/admin.module";
+import { ExcelImportModule } from "./excel-import/excel-import.module";
 import { HealthController } from "./health.controller";
 
 @Module({
@@ -25,6 +26,7 @@ import { HealthController } from "./health.controller";
     EtlModule,
     StorageModule,
     AdminModule,
+    ExcelImportModule,
   ],
   controllers: [HealthController],
 })
