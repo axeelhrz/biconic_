@@ -9,6 +9,16 @@ const databaseUrl =
 
 const pool = new Pool({ connectionString: databaseUrl, max: 5 });
 
+function getEtlRunnerBase(): string {
+  const explicit = process.env.PROCESS_EXCEL_RUNNER_URL?.trim().replace(/\/$/, "");
+  if (explicit) return explicit;
+  const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
+  if (railwayDomain) return `https://${railwayDomain}/v1`;
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL?.trim().replace(/\/$/, "");
+  if (apiUrl) return apiUrl;
+  return "http://localhost:4000/v1";
+}
+
 async function processEtlRun(job: {
   data: { runId: string; etlId: string; userId: string; body: Record<string, unknown> };
 }) {
@@ -19,23 +29,23 @@ async function processEtlRun(job: {
   );
 
   try {
-    // Delegates to Next.js ETL endpoint during transition period
-    const nextUrl = process.env.NEXT_INTERNAL_URL ?? "http://localhost:3000";
-    const internalSecret = process.env.INTERNAL_ETL_SECRET ?? process.env.CRON_SECRET ?? "";
-    const res = await fetch(`${nextUrl}/api/etl/run`, {
+    const runnerBase = getEtlRunnerBase();
+    const internalSecret =
+      process.env.INTERNAL_ETL_SECRET ?? process.env.CRON_SECRET ?? "";
+    const res = await fetch(`${runnerBase}/internal/etl/run-pipeline`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(internalSecret ? { "x-internal-etl": internalSecret } : {}),
       },
       body: JSON.stringify({
-      ...job.data.body,
-      etlId,
-      runId,
-      userId: job.data.userId,
-      asyncWorker: true,
-      waitForCompletion: true,
-    }),
+        ...job.data.body,
+        etlId,
+        runId,
+        userId: job.data.userId,
+        asyncWorker: true,
+        waitForCompletion: true,
+      }),
     });
 
     if (!res.ok) {
@@ -82,4 +92,4 @@ worker.on("failed", (job, err) => {
   console.error(`[etl-worker] failed ${job?.id}:`, err.message);
 });
 
-console.log("[etl-worker] started");
+console.log("[etl-worker] started, runner:", getEtlRunnerBase());

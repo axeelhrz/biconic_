@@ -552,19 +552,38 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const countMode = body.countMode || "fast";
 
     log("Autenticando usuario...");
-    const supabase = await createClient();
-    const {
-      data: { user: currentUser },
-      error: authError,
-    } = await supabase.auth.getUser();
-    if (authError || !currentUser) {
-      log("Error de autenticación.", { authError });
-      return NextResponse.json(
-        { ok: false, error: "No autorizado" },
-        { status: 401 }
-      );
+    const internalEtl = req.headers.get("x-internal-etl");
+    const expectedInternal =
+      process.env.INTERNAL_ETL_SECRET ?? process.env.CRON_SECRET ?? "";
+    const isInternalEtlRun =
+      body.fromEtlRun === true &&
+      !!internalEtl &&
+      !!expectedInternal &&
+      internalEtl === expectedInternal;
+
+    const supabase = isInternalEtlRun
+      ? createServiceRoleClient()
+      : await createClient();
+
+    let currentUser: { id: string };
+    if (isInternalEtlRun) {
+      currentUser = { id: "internal-etl-worker" };
+      log("Autenticación interna ETL (Railway worker).");
+    } else {
+      const {
+        data: { user: authUser },
+        error: authError,
+      } = await supabase.auth.getUser();
+      if (authError || !authUser) {
+        log("Error de autenticación.", { authError });
+        return NextResponse.json(
+          { ok: false, error: "No autorizado" },
+          { status: 401 }
+        );
+      }
+      currentUser = authUser;
+      log(`Usuario autenticado: ${currentUser.id}`);
     }
-    log(`Usuario autenticado: ${currentUser.id}`);
 
     const isStar = !!body.primaryTable || Array.isArray(body.joins);
 
@@ -654,6 +673,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const supabaseService = createServiceRoleClient();
       const connectionPromises = uniqueConnectionIds.map(async (id) => {
         const idStr = String(id);
+        if (isInternalEtlRun) {
+          const svcRes = await supabaseService
+            .from("connections")
+            .select("*, db_password_secret_id")
+            .eq("id", idStr)
+            .single();
+          return { data: svcRes.data, error: svcRes.error };
+        }
         const ownRes = await supabase
           .from("connections")
           .select("*, db_password_secret_id")
