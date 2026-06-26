@@ -4450,7 +4450,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                 variant="outline"
                 className="rounded-xl"
                 style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-                onClick={startNewAnalysis}
+                onClick={() => startNewAnalysis()}
                 disabled={hideDatasetTab && !currentDataset}
               >
                 <BarChart2 className="h-4 w-4 mr-2" />
@@ -7873,7 +7873,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
               size="sm"
               className="rounded-xl shrink-0"
               style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
-              onClick={startNewAnalysis}
+              onClick={() => startNewAnalysis()}
               disabled={savedMetrics.length === 0 || (hideDatasetTab && !currentDataset)}
             >
               <Plus className="h-3.5 w-3.5 mr-1" />
