@@ -18,6 +18,12 @@ import { StorageService } from "./storage.service";
 
 const EXCEL_UPLOAD_MAX_BYTES = 200 * 1024 * 1024;
 
+type MulterUploadedFile = {
+  buffer: Buffer;
+  mimetype?: string;
+  size?: number;
+};
+
 @Controller("storage")
 export class StorageController {
   constructor(
@@ -59,7 +65,7 @@ export class StorageController {
     FileInterceptor("file", { limits: { fileSize: EXCEL_UPLOAD_MAX_BYTES } })
   )
   async directUpload(
-    @UploadedFile() file: Express.Multer.File | undefined,
+    @UploadedFile() file: MulterUploadedFile | undefined,
     @Body("storagePath") storagePath: string,
     @Body("connectionId") connectionId: string,
     @Headers("x-upload-token") uploadToken: string | undefined
