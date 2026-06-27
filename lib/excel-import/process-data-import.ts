@@ -281,7 +281,6 @@ class ImportChunkBoundaryError extends Error {
   }
 }
 
-/** Ms máximos por invocación antes de encadenar la siguiente. 0 = desactivado. */
 function getChunkWallMs(): number {
   const raw = process.env.PROCESS_EXCEL_CHUNK_MS?.trim();
   if (raw === "0") return 0;
@@ -295,6 +294,19 @@ function getChunkWallMs(): number {
     Boolean(process.env.PROCESS_EXCEL_RUNNER_URL?.trim());
   if (onRailway || !process.env.VERCEL) return 0;
   return 180_000;
+}
+
+/** En Railway: copiar xlsx a disco local antes de parsear (evita stream lento desde R2). */
+function shouldUseLocalXlsxCopy(expectedFileSize: number): boolean {
+  if (process.env.VERCEL) return false;
+  if (
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.RAILWAY_PUBLIC_DOMAIN ||
+    process.env.PROCESS_EXCEL_RUNNER_URL?.trim()
+  ) {
+    return true;
+  }
+  return expectedFileSize > 15 * 1024 * 1024;
 }
 
 function getProcessExcelRunnerBase(): string {
@@ -575,10 +587,10 @@ async function* getRowGenerator(
   }
 
   console.log("[LOG] Modo: XLSX/XLSM Stream (ExcelJS)");
-  // cache resuelve shared strings; en Railway hay más disco que en Vercel /tmp
   const options: any = {
     entries: "emit",
-    sharedStrings: process.env.VERCEL ? "emit" : "cache",
+    // emit + coerceExcelCellValue: evita precargar sharedStrings (lento en archivos 200MB+).
+    sharedStrings: "emit",
     styles: "ignore",
     hyperlinks: "ignore",
   };
@@ -934,10 +946,22 @@ async function processDataImport(
       isAllSheets = false;
     }
     const extLower = (preferredExtension || "").toLowerCase();
-    const useXlsxRemoteStream = extLower === "xlsx" || extLower === "xlsm";
-    importSource = useXlsxRemoteStream
-      ? { kind: "xlsxStream", stream: await downloadToXlsxReadableStream() }
-      : { kind: "path", path: await downloadToTempFile() };
+    const isXlsxLike = extLower === "xlsx" || extLower === "xlsm";
+    const useLocalXlsxCopy = isXlsxLike && shouldUseLocalXlsxCopy(expectedFileSize);
+
+    if (useLocalXlsxCopy) {
+      console.log(
+        `[LOG] Archivo xlsx grande (~${Math.round((expectedFileSize || 0) / (1024 * 1024))} MB): descarga a disco local antes de parsear.`
+      );
+      importSource = { kind: "path", path: await downloadToTempFile() };
+    } else if (isXlsxLike) {
+      importSource = {
+        kind: "xlsxStream",
+        stream: await downloadToXlsxReadableStream(),
+      };
+    } else {
+      importSource = { kind: "path", path: await downloadToTempFile() };
+    }
     // -----------------------------------------------------------------------
 
     // 2. CONEXIÓN DB
@@ -952,7 +976,7 @@ async function processDataImport(
     // 3. PROCESAMIENTO STREAMING
     await supabaseAdmin
       .from("data_tables")
-      .update({ import_status: "creating_table" })
+      .update({ import_status: "reading_workbook" })
       .eq("id", dataTableId);
 
     const tableName = `import_${connectionId.replaceAll("-", "_")}`;
@@ -1129,6 +1153,13 @@ async function processDataImport(
               `[LOG] Batch Size ajustado a: ${currentBatchSize} filas (Columnas: ${numCols})`
             );
           }
+
+          try {
+            await supabaseAdmin
+              .from("data_tables")
+              .update({ import_status: "creating_table" })
+              .eq("id", dataTableId);
+          } catch (_) {}
 
           rowCount++;
           continue;

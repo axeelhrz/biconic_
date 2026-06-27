@@ -91,7 +91,8 @@ export default function ImportStatus({
 
         switch (data.import_status) {
           case "downloading_file": setProgress(10); break;
-          case "creating_table": setProgress(30); break;
+          case "reading_workbook": setProgress(25); break;
+          case "creating_table": setProgress(35); break;
           case "inserting_rows": setProgress(60); break;
           case "processing":
             // En importación resumible evitamos "retroceder" visualmente cuando se re-encola el siguiente tramo.
@@ -174,9 +175,11 @@ export default function ImportStatus({
           ? `Reanudando importación... (${status.total_rows} procesadas)`
           : "Preparando...";
       case "downloading_file":
-        return "Descargando archivo...";
+        return "Descargando archivo desde almacenamiento...";
+      case "reading_workbook":
+        return "Leyendo estructura del Excel (archivos grandes pueden tardar 1–3 min)...";
       case "creating_table":
-        return "Preparando importación...";
+        return "Preparando tabla de destino...";
       case "inserting_rows":
         return compact 
             ? `${status.total_rows || 0} filas` 
