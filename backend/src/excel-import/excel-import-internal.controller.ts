@@ -18,6 +18,7 @@ export class ExcelImportInternalController {
       parseMode?: ParseMode;
       selectedSheet?: string | null;
       continuation?: boolean;
+      forceReimport?: boolean;
     },
     @Headers("x-internal-process-excel") internalSecret?: string
   ) {
@@ -47,6 +48,7 @@ export class ExcelImportInternalController {
       parseMode,
       selectedSheet,
       continuation: Boolean(body.continuation),
+      forceReimport: Boolean(body.forceReimport),
     }).catch(async (err) => {
       console.error("[excel-import/run-import]", err);
       try {

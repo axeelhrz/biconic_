@@ -22,6 +22,7 @@ async function delegateImportToRailway(input: {
   parseMode: ParseMode;
   selectedSheet: string | null;
   continuation?: boolean;
+  forceReimport?: boolean;
 }): Promise<Response> {
   const secret = process.env.INTERNAL_PROCESS_EXCEL_SECRET?.trim();
   const res = await fetch(`${getBackendApiUrl()}/internal/excel/run-import`, {
@@ -69,6 +70,7 @@ export async function POST(req: Request) {
 
     const { connectionId, dataTableId } = body;
     const continuation = Boolean(body?.continuation);
+    const forceReimport = Boolean(body?.forceReimport);
     const secret = process.env.INTERNAL_PROCESS_EXCEL_SECRET?.trim();
     if (continuation && secret && req.headers.get("x-internal-process-excel") !== secret) {
       return NextResponse.json(
@@ -93,6 +95,7 @@ export async function POST(req: Request) {
       parseMode,
       selectedSheet,
       continuation,
+      forceReimport,
       cookieHeader: req.headers.get("cookie"),
     };
 

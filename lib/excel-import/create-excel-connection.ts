@@ -45,6 +45,7 @@ export async function createExcelConnectionRecord(input: {
   userId: string;
   fileName: string;
   storagePath?: string;
+  fileSizeBytes?: number;
 }): Promise<{ connectionId: string; dataTableId: string; storagePath: string }> {
   const sql = getSql();
   try {
@@ -56,7 +57,7 @@ export async function createExcelConnectionRecord(input: {
 
     const [connection] = await sql<{ id: string }[]>`
       INSERT INTO public.connections (
-        name, user_id, client_id, type, storage_object_path, original_file_name
+        name, user_id, client_id, type, storage_object_path, original_file_name, config
       )
       VALUES (
         ${input.connectionName},
@@ -64,7 +65,10 @@ export async function createExcelConnectionRecord(input: {
         ${input.clientId},
         'excel_file',
         ${storagePath},
-        ${input.fileName}
+        ${input.fileName},
+        ${input.fileSizeBytes && input.fileSizeBytes > 0
+          ? sql.json({ file_size_bytes: input.fileSizeBytes })
+          : null}
       )
       RETURNING id
     `;

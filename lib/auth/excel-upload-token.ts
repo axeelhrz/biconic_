@@ -5,17 +5,20 @@ export type ExcelUploadTokenPayload = {
   purpose: "excel-upload";
   key: string;
   connectionId: string;
+  fileSize?: number;
 };
 
 export async function createExcelUploadToken(input: {
   userId: string;
   storagePath: string;
   connectionId: string;
+  fileSize?: number;
 }): Promise<string> {
   return new SignJWT({
     purpose: "excel-upload",
     key: input.storagePath,
     connectionId: input.connectionId,
+    ...(input.fileSize && input.fileSize > 0 ? { fileSize: input.fileSize } : {}),
   } satisfies ExcelUploadTokenPayload)
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(input.userId)

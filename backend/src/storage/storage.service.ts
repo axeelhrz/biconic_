@@ -5,6 +5,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { EXCEL_QUEUE } from "../etl/etl.constants";
@@ -58,6 +59,17 @@ export class StorageService {
     });
     const url = await getSignedUrl(this.s3, command, { expiresIn: 3600 });
     return { url, key };
+  }
+
+  async getObjectContentLength(key: string): Promise<number | null> {
+    const response = await this.s3.send(
+      new HeadObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      })
+    );
+    const len = Number(response.ContentLength ?? 0);
+    return Number.isFinite(len) && len > 0 ? len : null;
   }
 
   async enqueueExcelProcessing(payload: {

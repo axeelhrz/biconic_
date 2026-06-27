@@ -9,7 +9,7 @@ import {
   getLocalExcelAbsolutePath,
   hasLocalExcelFile,
 } from "@/lib/storage/excel-upload-storage";
-import { getPresignedDownloadUrl, getS3ObjectReadableStream, isS3Configured } from "@/lib/storage/s3-excel-storage";
+import { getPresignedDownloadUrl, getS3ObjectReadableStream, getS3ObjectContentLength, isS3Configured } from "@/lib/storage/s3-excel-storage";
 import { Readable } from "stream";
 import fs from "fs";
 import path from "path";
@@ -281,12 +281,19 @@ class ImportChunkBoundaryError extends Error {
   }
 }
 
-/** Ms máximos por invocación antes de encadenar la siguiente. 0 = desactivado. Por defecto ~3 min (margen bajo límites de función). */
+/** Ms máximos por invocación antes de encadenar la siguiente. 0 = desactivado. */
 function getChunkWallMs(): number {
   const raw = process.env.PROCESS_EXCEL_CHUNK_MS?.trim();
-  if (raw === "0" || raw === "") return 0;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n > 0) return n;
+  if (raw === "0") return 0;
+  if (raw && Number.isFinite(Number(raw)) && Number(raw) > 0) {
+    return Math.floor(Number(raw));
+  }
+  // Solo trocear en Vercel serverless (límite de duración). En Railway importar de una pasada.
+  const onRailway =
+    Boolean(process.env.RAILWAY_ENVIRONMENT) ||
+    Boolean(process.env.RAILWAY_PUBLIC_DOMAIN) ||
+    Boolean(process.env.PROCESS_EXCEL_RUNNER_URL?.trim());
+  if (onRailway || !process.env.VERCEL) return 0;
   return 180_000;
 }
 
@@ -633,7 +640,8 @@ async function processDataImport(
   dbUrl: string,
   parseMode: ParseMode,
   selectedSheet?: string | null,
-  storageOptions?: { cookieHeader?: string | null; internal?: boolean }
+  storageOptions?: { cookieHeader?: string | null; internal?: boolean },
+  forceReimport?: boolean
 ) {
   let importSource: RowGeneratorSource | null = null;
   let sql: any = null;
@@ -679,20 +687,63 @@ async function processDataImport(
         await markFailed("No se encontró el estado de importación.");
         return;
       }
-      if (tableState.import_status === "completed") {
+      if (tableState.import_status === "completed" && !forceReimport) {
         terminalStatus = true;
         return;
       }
-      const resumeCursor = parseImportCursor(tableState.columns);
+
+      const tableNameEarly = `import_${connectionId.replaceAll("-", "_")}`;
+      if (forceReimport) {
+        const useSslReset = !/localhost|127\.0\.0\.1/.test(dbUrl);
+        const resetSql = postgres(dbUrl, {
+          ...(useSslReset ? { ssl: { rejectUnauthorized: false } } : {}),
+          prepare: false,
+          max: 1,
+        });
+        try {
+          await resetSql.unsafe(
+            `TRUNCATE TABLE data_warehouse.${tableNameEarly}`
+          );
+        } catch (truncateErr: any) {
+          const msg = String(truncateErr?.message ?? "");
+          if (!msg.includes("does not exist")) {
+            console.warn("[WARN] No se pudo truncar tabla en reimport:", truncateErr);
+          }
+        } finally {
+          await resetSql.end();
+        }
+        const baseColumns =
+          tableState.columns &&
+          typeof tableState.columns === "object" &&
+          !Array.isArray(tableState.columns)
+            ? { ...(tableState.columns as Record<string, unknown>) }
+            : {};
+        delete baseColumns[IMPORT_CURSOR_KEY];
+        await supabaseAdmin
+          .from("data_tables")
+          .update({
+            import_status: "processing",
+            total_rows: null,
+            error_message: null,
+            columns: Object.keys(baseColumns).length ? baseColumns : null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", dataTableId);
+      }
+      const resumeCursor = parseImportCursor(
+        forceReimport ? null : tableState.columns
+      );
       const selectedSheetToUse =
         resumeCursor?.selectedSheet !== null && resumeCursor?.selectedSheet !== undefined
           ? resumeCursor.selectedSheet
           : selectedSheet ?? null;
       const parseModeToUse = resumeCursor?.parseMode || parseMode;
-      const resumeInsertedRows = Math.max(
-        resumeCursor?.insertedRows || 0,
-        Number(tableState.total_rows || 0)
-      );
+      const resumeInsertedRows = forceReimport
+        ? 0
+        : Math.max(
+            resumeCursor?.insertedRows || 0,
+            Number(tableState.total_rows || 0)
+          );
 
       // 1. DESCARGA EFICIENTE -------------------------------------
       await supabaseAdmin
@@ -702,7 +753,7 @@ async function processDataImport(
 
     const { data: connection } = await supabaseAdmin
       .from("connections")
-      .select("storage_object_path, original_file_name")
+      .select("storage_object_path, original_file_name, config")
       .eq("id", connectionId)
       .single()
       .throwOnError();
@@ -713,6 +764,25 @@ async function processDataImport(
       );
     }
     const storagePath = connection.storage_object_path;
+    const expectedFileSize = Number(
+      (connection.config as { file_size_bytes?: number } | null)?.file_size_bytes ?? 0
+    );
+    if (isS3Configured() && expectedFileSize > 0) {
+      const storedLen = await getS3ObjectContentLength(storagePath);
+      if (storedLen != null) {
+        const tolerance = Math.max(4096, Math.floor(expectedFileSize * 0.001));
+        if (Math.abs(storedLen - expectedFileSize) > tolerance) {
+          throw new StageError(
+            "download_stream",
+            `El archivo en almacenamiento parece incompleto (${Math.round(storedLen / (1024 * 1024))} MB de ${Math.round(expectedFileSize / (1024 * 1024))} MB esperados). Volvé a subir el Excel.`,
+            `stored=${storedLen} expected=${expectedFileSize}`
+          );
+        }
+        console.log(
+          `[LOG] Tamaño en R2 verificado: ${storedLen} bytes (~${Math.round(storedLen / (1024 * 1024))} MB)`
+        );
+      }
+    }
     const preferredExtension = getExtensionFromPath(
       connection.original_file_name || storagePath
     );
@@ -1323,6 +1393,7 @@ export type ProcessExcelImportInput = {
   parseMode: ParseMode;
   selectedSheet: string | null;
   continuation?: boolean;
+  forceReimport?: boolean;
   cookieHeader?: string | null;
 };
 
@@ -1360,7 +1431,8 @@ export async function runProcessExcelImport(input: ProcessExcelImportInput): Pro
     {
       cookieHeader: input.cookieHeader,
       internal: useInternalStorage,
-    }
+    },
+    Boolean(input.forceReimport)
   );
 }
 

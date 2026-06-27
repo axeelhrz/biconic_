@@ -96,8 +96,22 @@ export class StorageController {
       throw new UnauthorizedException("Token no coincide con la conexión");
     }
 
+    const expectedSize = Number(payload.fileSize ?? 0);
+    const receivedSize = file.buffer.length;
+    if (expectedSize > 0 && receivedSize !== expectedSize) {
+      throw new BadRequestException(
+        `Upload incompleto: se recibieron ${receivedSize} bytes y se esperaban ${expectedSize}.`
+      );
+    }
+
     await this.storage.putObject(storagePath.trim(), file.buffer, file.mimetype);
-    return { ok: true, key: storagePath.trim() };
+    const storedSize = await this.storage.getObjectContentLength(storagePath.trim());
+    if (expectedSize > 0 && storedSize != null && storedSize !== expectedSize) {
+      throw new BadRequestException(
+        `El archivo en almacenamiento no coincide con el tamaño esperado (${storedSize} vs ${expectedSize} bytes).`
+      );
+    }
+    return { ok: true, key: storagePath.trim(), bytesUploaded: receivedSize };
   }
 
   @Post("excel/process")

@@ -121,6 +121,20 @@ export async function getPresignedDownloadUrl(
   return data.url;
 }
 
+/** Tamaño del objeto en bytes (HeadObject). */
+export async function getS3ObjectContentLength(key: string): Promise<number | null> {
+  if (!isS3Configured()) return null;
+  const { HeadObjectCommand } = require("@aws-sdk/client-s3");
+  const response = await getLocalS3Client().send(
+    new HeadObjectCommand({
+      Bucket: getS3BucketName(),
+      Key: key,
+    })
+  );
+  const len = Number(response.ContentLength ?? 0);
+  return Number.isFinite(len) && len > 0 ? len : null;
+}
+
 /** Lectura directa desde S3/R2 (evita fetch a URL presignada; usar en Railway/workers). */
 export async function getS3ObjectReadableStream(key: string): Promise<Readable> {
   if (!isS3Configured()) {

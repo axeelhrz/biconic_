@@ -64,6 +64,7 @@ export async function POST(req: Request) {
       clientId,
       userId,
       fileName,
+      fileSizeBytes: fileSize,
     });
 
     const cookieHeader = req.headers.get("cookie");
@@ -71,6 +72,7 @@ export async function POST(req: Request) {
       userId,
       storagePath: record.storagePath,
       connectionId: record.connectionId,
+      fileSize,
     });
     const directUploadUrl = `${getBackendApiUrl()}/storage/excel/direct-upload`;
 
