@@ -15,8 +15,7 @@ import { JwtService } from "@nestjs/jwt";
 import type { Request } from "express";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { StorageService } from "./storage.service";
-
-const EXCEL_UPLOAD_MAX_BYTES = 200 * 1024 * 1024;
+import { EXCEL_UPLOAD_MAX_BYTES } from "@/lib/excel-import/upload-limits";
 
 type MulterUploadedFile = {
   buffer: Buffer;
