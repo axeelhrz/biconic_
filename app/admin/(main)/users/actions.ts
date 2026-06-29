@@ -100,6 +100,8 @@ export interface CreateAdminUserParams {
   password: string;
   fullName?: string;
   appRole?: Database["public"]["Enums"]["app_role"];
+  clientId?: string;
+  clientRole?: Database["public"]["Enums"]["client_role"];
 }
 
 export async function createAdminUser(
@@ -442,6 +444,9 @@ export interface UserForEdit {
   app_role: Database["public"]["Enums"]["app_role"] | null;
   role: string | null; // active/inactive status
   avatar_url: string | null;
+  clientId?: string | null;
+  clientName?: string | null;
+  clientRole?: Database["public"]["Enums"]["client_role"] | null;
 }
 
 export async function getUserById(userId: string): Promise<{
@@ -500,6 +505,8 @@ export interface UpdateUserParams {
   app_role?: Database["public"]["Enums"]["app_role"];
   role?: string; // for active/inactive status
   avatar_url?: string | null;
+  clientId?: string | null;
+  clientRole?: Database["public"]["Enums"]["client_role"];
 }
 
 export async function updateUser(params: UpdateUserParams): Promise<{
@@ -513,6 +520,8 @@ export async function updateUser(params: UpdateUserParams): Promise<{
         full_name: params.full_name,
         app_role: params.app_role,
         avatar_url: params.avatar_url,
+        clientId: params.clientId,
+        clientRole: params.clientRole,
       });
       return { ok: true };
     }

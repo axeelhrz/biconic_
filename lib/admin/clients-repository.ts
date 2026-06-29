@@ -84,6 +84,13 @@ async function getClientSchema(sql: ReturnType<typeof postgres>): Promise<Client
   return cachedSchema;
 }
 
+export async function resolveClientNameColumn(
+  sql: ReturnType<typeof postgres>
+): Promise<"company_name" | "name"> {
+  const schema = await getClientSchema(sql);
+  return schema.nameCol;
+}
+
 function mapSubscription(
   raw: unknown
 ): { plan: string | null; subscription: AdminClientTableRow["subscription"] } {

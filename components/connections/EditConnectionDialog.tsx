@@ -117,7 +117,7 @@ export default function EditConnectionDialog({
   const handleTest = async (values: FormValues) => {
     try {
       toast.info("Probando conexión...");
-      const res = await fetch("/api/test-connection", {
+      const res = await fetch("/api/connection/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

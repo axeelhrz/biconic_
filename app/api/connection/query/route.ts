@@ -7,6 +7,7 @@ import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { resolveExcelTableName } from "@/lib/excel-import/excel-metadata";
+import { resolveConnectionType } from "@/lib/connection/resolve-connection-type";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
 type FilterCondition = {
@@ -261,15 +262,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (!password && (conn as any)?.type === "firebird") {
         password = process.env.FLEXXUS_PASSWORD ?? undefined;
       }
-      // Detectar si es una conexión Excel por el campo type
+      // Detectar tipo desde la conexión guardada
       if (
         (conn as any)?.type === "excel_file" ||
         (conn as any)?.type === "excel"
       ) {
         type = "excel";
-      }
-      if ((conn as any)?.type === "firebird") {
-        type = "firebird";
+      } else {
+        type = resolveConnectionType((conn as any)?.type, type);
       }
     }
     // Manejar consultas Excel consultando data_warehouse.{physical_table_name}

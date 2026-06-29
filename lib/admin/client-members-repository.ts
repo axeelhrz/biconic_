@@ -125,6 +125,74 @@ export async function createUserAndAddToClientInDb(input: {
   }
 }
 
+export async function getUserClientAssignmentFromDb(userId: string) {
+  await requireAppAdmin();
+  const sql = getSql();
+  try {
+    const { resolveClientNameColumn } = await import("@/lib/admin/clients-repository");
+    const nameCol = await resolveClientNameColumn(sql);
+    const rows = await sql.unsafe<
+      Array<{
+        member_id: string;
+        client_id: string;
+        role: string;
+        client_name: string;
+      }>
+    >(
+      `
+      SELECT cm.id::text AS member_id,
+             cm.client_id::text AS client_id,
+             cm.role::text AS role,
+             COALESCE(NULLIF(TRIM(c.${nameCol}), ''), 'Sin nombre') AS client_name
+      FROM public.client_members cm
+      JOIN public.clients c ON c.id = cm.client_id
+      WHERE cm.user_id = $1::uuid
+      ORDER BY cm.created_at ASC
+      LIMIT 1
+      `,
+      [userId]
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      memberId: row.member_id,
+      clientId: row.client_id,
+      clientName: row.client_name,
+      role: row.role as ClientRole,
+    };
+  } finally {
+    await sql.end();
+  }
+}
+
+export async function setUserClientAssignmentInDb(
+  userId: string,
+  clientId: string | null | undefined,
+  role?: string
+) {
+  await requireAppAdmin();
+  const sql = getSql();
+  const clientRole = normalizeClientRole(role);
+  try {
+    if (!clientId) {
+      await sql`DELETE FROM public.client_members WHERE user_id = ${userId}`;
+      return;
+    }
+
+    await sql`
+      DELETE FROM public.client_members
+      WHERE user_id = ${userId} AND client_id <> ${clientId}::uuid
+    `;
+    await sql`
+      INSERT INTO public.client_members (client_id, user_id, role)
+      VALUES (${clientId}::uuid, ${userId}, ${clientRole}::public.client_role)
+      ON CONFLICT (client_id, user_id) DO UPDATE SET role = EXCLUDED.role
+    `;
+  } finally {
+    await sql.end();
+  }
+}
+
 export async function getClientUsersFromDb(clientId: string) {
   await requireAppAdmin();
   const sql = getSql();

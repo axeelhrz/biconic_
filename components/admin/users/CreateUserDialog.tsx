@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Loader2, User, Mail, Lock, Shield } from "lucide-react";
+import { Plus, Loader2, User, Mail, Lock, Shield, Building2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/Select";
+import { useCompanyOptions } from "@/hooks/useCompanyOptions";
+import { CLIENT_ROLE_OPTIONS } from "@/lib/admin/client-role-options";
 import {
   Dialog,
   DialogContent,
@@ -18,6 +20,7 @@ import { createAdminUser } from "@/app/admin/(main)/users/actions";
 import type { Database } from "@/lib/supabase/database.types";
 
 type AppRole = Database["public"]["Enums"]["app_role"];
+type ClientRole = Database["public"]["Enums"]["client_role"];
 
 const ROLE_HINTS: Record<AppRole, string> = {
   VIEWER: "Solo puede ver dashboards asignados. Ideal para clientes finales.",
@@ -108,12 +111,17 @@ export function CreateUserDialog({ onCreated }: Props) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [appRole, setAppRole] = useState<AppRole>("VIEWER");
+  const [clientId, setClientId] = useState("");
+  const [clientRole, setClientRole] = useState<ClientRole>("viewer");
+  const { options: companyOptions, loading: loadingCompanies } = useCompanyOptions();
 
   const reset = () => {
     setFullName("");
     setEmail("");
     setPassword("");
     setAppRole("VIEWER");
+    setClientId("");
+    setClientRole("viewer");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -128,6 +136,8 @@ export function CreateUserDialog({ onCreated }: Props) {
       password,
       fullName: fullName.trim() || undefined,
       appRole,
+      clientId: clientId || undefined,
+      clientRole: clientId ? clientRole : undefined,
     });
     setSubmitting(false);
     if (!res.ok) {
@@ -235,6 +245,42 @@ export function CreateUserDialog({ onCreated }: Props) {
                 autoComplete="new-password"
               />
             </FormField>
+
+            <FormField
+              id="user-company"
+              label="Empresa"
+              hint="Cliente al que pertenece el usuario. Podés asignarla ahora o más tarde desde el detalle del cliente."
+              icon={Building2}
+            >
+              <Select
+                value={clientId}
+                onChange={(v: string) => setClientId(v)}
+                placeholder={loadingCompanies ? "Cargando empresas…" : "Sin empresa asignada"}
+                options={[
+                  { label: "Sin empresa", value: "" },
+                  ...companyOptions,
+                ]}
+                buttonClassName="h-11 rounded-xl w-full justify-between px-4 text-sm font-medium border"
+                disablePortal
+              />
+            </FormField>
+
+            {clientId ? (
+              <FormField
+                id="user-client-role"
+                label="Rol en la empresa"
+                hint="Permisos del usuario dentro del espacio de trabajo del cliente."
+                icon={Shield}
+              >
+                <Select
+                  value={clientRole}
+                  onChange={(v: string) => setClientRole(v as ClientRole)}
+                  options={CLIENT_ROLE_OPTIONS}
+                  buttonClassName="h-11 rounded-xl w-full justify-between px-4 text-sm font-medium border"
+                  disablePortal
+                />
+              </FormField>
+            ) : null}
 
             <FormField
               id="user-role"

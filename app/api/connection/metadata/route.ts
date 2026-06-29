@@ -7,6 +7,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { EXCEL_PHYSICAL_SCHEMA } from "@/lib/db/internal-db-url";
 import { buildExcelMetadataTables } from "@/lib/excel-import/excel-metadata";
+import { resolveConnectionType } from "@/lib/connection/resolve-connection-type";
 
 type ConnectionBody = {
   type?: "mysql" | "postgres" | "postgresql" | "excel" | "firebird";
@@ -85,14 +86,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (!password && (conn as any)?.type === "firebird") {
         password = process.env.FLEXXUS_PASSWORD ?? undefined;
       }
+      type = resolveConnectionType((conn as any)?.type, type) as ConnectionBody["type"];
       if (
         (conn as any)?.type === "excel_file" ||
         (conn as any)?.type === "excel"
       ) {
         type = "excel";
-      }
-      if ((conn as any)?.type === "firebird") {
-        type = "firebird";
       }
       const rawTables = (conn as any)?.connection_tables;
       connectionTables = discoverTables

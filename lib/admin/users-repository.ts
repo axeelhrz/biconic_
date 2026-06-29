@@ -144,6 +144,8 @@ export async function createAdminUserInDb(input: {
   password: string;
   fullName?: string;
   appRole?: Database["public"]["Enums"]["app_role"];
+  clientId?: string;
+  clientRole?: string;
 }) {
   await requireAppAdmin();
   const sql = getSql();
@@ -165,7 +167,17 @@ export async function createAdminUserInDb(input: {
       VALUES (gen_random_uuid(), ${email}, ${fullName}, ${passwordHash}, ${appRole}::public.app_role)
       RETURNING id
     `;
-    return { id: rows[0]?.id };
+    const userId = rows[0]?.id;
+    if (!userId) throw new Error("No se pudo crear el usuario");
+
+    if (input.clientId) {
+      const { setUserClientAssignmentInDb } = await import(
+        "@/lib/admin/client-members-repository"
+      );
+      await setUserClientAssignmentInDb(userId, input.clientId, input.clientRole);
+    }
+
+    return { id: userId };
   } finally {
     await sql.end();
   }
@@ -222,6 +234,12 @@ export async function getUserByIdFromDb(userId: string): Promise<UserForEdit> {
     `;
     const row = rows[0];
     if (!row) throw new Error("Usuario no encontrado");
+
+    const { getUserClientAssignmentFromDb } = await import(
+      "@/lib/admin/client-members-repository"
+    );
+    const assignment = await getUserClientAssignmentFromDb(userId);
+
     return {
       id: row.id,
       full_name: row.full_name,
@@ -230,6 +248,9 @@ export async function getUserByIdFromDb(userId: string): Promise<UserForEdit> {
       app_role: row.app_role as Database["public"]["Enums"]["app_role"],
       role: "activo",
       avatar_url: row.avatar_url,
+      clientId: assignment?.clientId ?? null,
+      clientName: assignment?.clientName ?? null,
+      clientRole: assignment?.role ?? null,
     };
   } finally {
     await sql.end();
@@ -241,6 +262,8 @@ export async function updateUserInDb(params: {
   full_name?: string;
   app_role?: Database["public"]["Enums"]["app_role"];
   avatar_url?: string | null;
+  clientId?: string | null;
+  clientRole?: string;
 }) {
   await requireAppAdmin();
   const sql = getSql();
@@ -253,6 +276,16 @@ export async function updateUserInDb(params: {
     }
     if (params.avatar_url !== undefined) {
       await sql`UPDATE public.profiles SET avatar_url = ${params.avatar_url}, updated_at = now() WHERE id = ${params.userId}`;
+    }
+    if (params.clientId !== undefined) {
+      const { setUserClientAssignmentInDb } = await import(
+        "@/lib/admin/client-members-repository"
+      );
+      await setUserClientAssignmentInDb(
+        params.userId,
+        params.clientId,
+        params.clientRole
+      );
     }
   } finally {
     await sql.end();
