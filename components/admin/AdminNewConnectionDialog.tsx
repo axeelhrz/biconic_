@@ -531,13 +531,17 @@ export default function AdminNewConnectionDialog({
     }
     setSavingTables(true);
     try {
-      const supabase = createClient();
       const connectionTablesList = Array.from(selectedTableKeys);
-      const { error } = await supabase
-        .from("connections")
-        .update({ connection_tables: connectionTablesList })
-        .eq("id", createdConnectionId);
-      if (error) throw error;
+      const res = await fetch("/api/connection/update", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionId: createdConnectionId,
+          connection_tables: connectionTablesList,
+        }),
+      });
+      const data = await safeJsonResponse<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !data.ok) throw new Error(data.error || "No se pudieron guardar las tablas");
       toast.success(
         connectionTablesList.length > 0
           ? `${connectionTablesList.length} tabla(s) guardada(s). En el ETL solo se verán estas tablas para esta conexión.`

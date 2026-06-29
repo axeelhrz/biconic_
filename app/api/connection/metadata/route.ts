@@ -8,6 +8,10 @@ import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { EXCEL_PHYSICAL_SCHEMA } from "@/lib/db/internal-db-url";
 import { buildExcelMetadataTables } from "@/lib/excel-import/excel-metadata";
 import { resolveConnectionType } from "@/lib/connection/resolve-connection-type";
+import {
+  readConnectionTablesFromRow,
+  readCredentialsFromConnectionRow,
+} from "@/lib/connection/connection-persistence";
 
 type ConnectionBody = {
   type?: "mysql" | "postgres" | "postgresql" | "excel" | "firebird";
@@ -74,26 +78,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         );
       }
       conn = connRow as Record<string, unknown>;
-      host = (conn as any)?.db_host ?? host;
-      database = (conn as any)?.db_name ?? database;
-      user = (conn as any)?.db_user ?? user;
-      port = (conn as any)?.db_port ?? port;
-      if (!password && (conn as any)?.db_password_encrypted) {
+      const creds = readCredentialsFromConnectionRow(conn);
+      host = creds.host || host;
+      database = creds.database || database;
+      user = creds.user || user;
+      port = creds.port || port;
+      if (!password && creds.passwordEncrypted) {
         try {
-          password = decryptConnectionPassword((conn as any).db_password_encrypted);
+          password = decryptConnectionPassword(creds.passwordEncrypted);
         } catch {}
       }
       if (!password && (conn as any)?.type === "firebird") {
         password = process.env.FLEXXUS_PASSWORD ?? undefined;
       }
-      type = resolveConnectionType((conn as any)?.type, type) as ConnectionBody["type"];
+      type = resolveConnectionType((conn as any)?.type, type);
       if (
         (conn as any)?.type === "excel_file" ||
         (conn as any)?.type === "excel"
       ) {
         type = "excel";
       }
-      const rawTables = (conn as any)?.connection_tables;
+      const rawTables = readConnectionTablesFromRow(conn);
       connectionTables = discoverTables
         ? null
         : Array.isArray(rawTables)

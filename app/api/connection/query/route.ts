@@ -8,6 +8,7 @@ import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { resolveExcelTableName } from "@/lib/excel-import/excel-metadata";
 import { resolveConnectionType } from "@/lib/connection/resolve-connection-type";
+import { readCredentialsFromConnectionRow } from "@/lib/connection/connection-persistence";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 
 type FilterCondition = {
@@ -249,14 +250,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           { ok: false, error: connError?.message || "Conexión no encontrada" },
           { status: 404 }
         );
-      const cfg = (conn as { config?: Record<string, unknown> })?.config ?? {};
-      host = (conn as any)?.db_host ?? (cfg.db_host as string | undefined) ?? host;
-      database = (conn as any)?.db_name ?? (cfg.db_name as string | undefined) ?? database;
-      user = (conn as any)?.db_user ?? (cfg.db_user as string | undefined) ?? user;
-      port = (conn as any)?.db_port ?? (cfg.db_port as number | undefined) ?? port;
-      if (!password && (conn as any)?.db_password_encrypted) {
+      const creds = readCredentialsFromConnectionRow(conn as Record<string, unknown>);
+      host = creds.host || host;
+      database = creds.database || database;
+      user = creds.user || user;
+      port = creds.port || port;
+      if (!password && creds.passwordEncrypted) {
         try {
-          password = decryptConnectionPassword((conn as any).db_password_encrypted);
+          password = decryptConnectionPassword(creds.passwordEncrypted);
         } catch {}
       }
       if (!password && (conn as any)?.type === "firebird") {
