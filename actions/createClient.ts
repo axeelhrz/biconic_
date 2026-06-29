@@ -1,6 +1,7 @@
 "use server";
 
 import { getBackendApiUrl } from "@/lib/api/backend-config";
+import { getServerAuthUser } from "@/lib/supabase/server-backend";
 
 export type ClientType = "empresa" | "individuo";
 
@@ -30,10 +31,7 @@ export interface NewClientForm {
 
 export async function createNewClient(form: NewClientForm) {
   try {
-    const supabase = await (await import("@/lib/supabase/server")).createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getServerAuthUser();
     if (!user) return { ok: false, error: "No autorizado" } as const;
 
     const payload = {

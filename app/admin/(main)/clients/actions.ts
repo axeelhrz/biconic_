@@ -9,6 +9,12 @@ import {
   listCompanyOptionsFromDb,
   type ListAdminClientsParams,
 } from "@/lib/admin/clients-repository";
+import {
+  addClientMemberInDb,
+  createUserAndAddToClientInDb,
+  getClientUsersFromDb,
+  searchUsersInDb,
+} from "@/lib/admin/client-members-repository";
 
 export async function getCompanyOptions(): Promise<{ id: string; name: string }[]> {
   try {
@@ -70,6 +76,11 @@ export type ClientMemberUser = {
 
 export async function getClientUsers(clientId: string): Promise<{ ok: boolean; data?: ClientMemberUser[]; error?: string }> {
   try {
+    if (shouldUseOwnBackend()) {
+      const data = await getClientUsersFromDb(clientId);
+      return { ok: true, data };
+    }
+
     const supabase = await (await import("@/lib/supabase/server")).createClient();
     
     // 1. Fetch members first
@@ -154,6 +165,12 @@ export async function searchUserByEmail(email: string) {
 
 export async function addClientMember(clientId: string, userId: string, role: string) {
   try {
+    if (shouldUseOwnBackend()) {
+      await addClientMemberInDb(clientId, userId, role);
+      revalidatePath("/admin/clients/[clientId]");
+      return { ok: true };
+    }
+
     const supabase = await (await import("@/lib/supabase/server")).createClient();
     
     // Check if already member (locally)
@@ -254,6 +271,11 @@ export async function addClientPermission(clientMemberId: string, dashboardId: s
 
 export async function searchUsers(query: string) {
     try {
+        if (shouldUseOwnBackend()) {
+            const data = await searchUsersInDb(query);
+            return { ok: true, data };
+        }
+
         const supabase = await (await import("@/lib/supabase/server")).createClient();
         const { data, error } = await supabase
             .from("profiles")
@@ -275,14 +297,32 @@ export async function createAndAddMember(input: {
     email: string;
     password: string;
 }) {
-    // 1. Create user via edge function/action
+    if (shouldUseOwnBackend()) {
+      try {
+        const result = await createUserAndAddToClientInDb({
+          clientId: input.clientId,
+          email: input.email,
+          password: input.password,
+          fullName: input.fullName,
+          role: input.role,
+        });
+        revalidatePath("/admin/clients/[clientId]");
+        return { ok: true as const, userId: result.userId };
+      } catch (err) {
+        return {
+          ok: false as const,
+          error: err instanceof Error ? err.message : "Error al crear usuario",
+        };
+      }
+    }
+
     const { addClientMember: addMemberAction } = await import("@/actions/addClientMember");
     const res = await addMemberAction({
         existingClientId: input.clientId,
         userEmail: input.email,
         userPassword: input.password,
         userFullName: input.fullName,
-        userJobTitle: input.role
+        role: input.role,
     });
     
     if (!res.ok) return { ok: false, error: res.error };

@@ -43,6 +43,20 @@ export class AdminController {
     return this.admin.addClientMember(req.user.app_role, body);
   }
 
+  @Post("users")
+  createUser(
+    @Body()
+    body: {
+      email: string;
+      password: string;
+      fullName?: string;
+      appRole?: string;
+    },
+    @Req() req: Request & { user: { app_role?: string } }
+  ) {
+    return this.admin.createUser(req.user.app_role, body);
+  }
+
   @Get("users")
   listUsers(@Req() req: Request & { user: { app_role?: string } }) {
     return this.admin.listUsers(req.user.app_role);

@@ -1,5 +1,4 @@
-import { createRequire } from "node:module";
-import { join } from "node:path";
+import bcrypt from "bcryptjs";
 import postgres from "postgres";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { toSqlParams } from "@/lib/db/sql-params";
@@ -12,11 +11,6 @@ import type {
   GetAdminUsersParams,
   UserForEdit,
 } from "@/app/admin/(main)/users/actions";
-
-const require = createRequire(import.meta.url);
-const bcrypt = require(join(process.cwd(), "backend/node_modules/bcryptjs")) as {
-  hash: (password: string, rounds: number) => Promise<string>;
-};
 
 function getSql() {
   return postgres(getInternalDbUrl(), { max: 5 });

@@ -1,6 +1,8 @@
 "use server";
 
 import { getBackendApiUrl } from "@/lib/api/backend-config";
+import { normalizeClientRole } from "@/lib/admin/client-members-repository";
+import { getServerAuthUser } from "@/lib/supabase/server-backend";
 
 export interface AddClientMemberInput {
   existingClientId: string;
@@ -8,18 +10,17 @@ export interface AddClientMemberInput {
   userPassword: string;
   userFullName?: string;
   userJobTitle?: string;
+  role?: string;
 }
 
 export async function addClientMember(input: AddClientMemberInput) {
   try {
-    const supabase = await (await import("@/lib/supabase/server")).createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getServerAuthUser();
     if (!user) return { ok: false, error: "No autorizado" } as const;
 
     const apiUrl = getBackendApiUrl();
     const cookieStore = await (await import("next/headers")).cookies();
+    const role = normalizeClientRole(input.role ?? input.userJobTitle);
     const res = await fetch(`${apiUrl}/admin/members`, {
       method: "POST",
       headers: {
@@ -31,7 +32,7 @@ export async function addClientMember(input: AddClientMemberInput) {
         email: input.userEmail,
         password: input.userPassword,
         fullName: input.userFullName,
-        role: "viewer",
+        role,
       }),
     });
     const data = await res.json();

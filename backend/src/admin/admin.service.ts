@@ -111,4 +111,36 @@ export class AdminService {
        FROM public.profiles ORDER BY created_at DESC`
     );
   }
+
+  async createUser(
+    appRole: string | undefined,
+    payload: {
+      email: string;
+      password: string;
+      fullName?: string;
+      appRole?: string;
+    }
+  ) {
+    this.assertAdmin(appRole);
+    const email = payload.email.trim().toLowerCase();
+    const existing = await this.db.queryOne<{ id: string }>(
+      `SELECT id FROM public.profiles WHERE lower(email) = lower($1)`,
+      [email]
+    );
+    if (existing) {
+      throw new ConflictException("El email ya está registrado");
+    }
+
+    const id = crypto.randomUUID();
+    const hash = await bcrypt.hash(payload.password, 12);
+    const role = payload.appRole ?? "VIEWER";
+    const user = await this.db.queryOne<{ id: string }>(
+      `INSERT INTO public.profiles (id, email, full_name, password_hash, app_role)
+       VALUES ($1, $2, $3, $4, $5::public.app_role)
+       RETURNING id`,
+      [id, email, payload.fullName ?? null, hash, role]
+    );
+    if (!user) throw new ConflictException("No se pudo crear el usuario");
+    return { userId: user.id };
+  }
 }
