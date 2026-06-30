@@ -4,6 +4,7 @@ import { PassportModule } from "@nestjs/passport";
 import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
 import { JwtStrategy } from "./jwt.strategy";
+import { getAccessTokenExpires } from "@/lib/auth/session-config";
 
 @Module({
   imports: [
@@ -11,7 +12,7 @@ import { JwtStrategy } from "./jwt.strategy";
     JwtModule.register({
       secret: process.env.JWT_SECRET ?? "dev-jwt-secret-change-me-32chars!!",
       signOptions: {
-        expiresIn: (process.env.JWT_ACCESS_EXPIRES ?? "15m") as `${number}${"s" | "m" | "h" | "d"}`,
+        expiresIn: getAccessTokenExpires() as `${number}${"s" | "m" | "h" | "d"}`,
       },
     }),
   ],

@@ -10,6 +10,10 @@ import {
 import type { Request, Response } from "express";
 import { AuthService } from "./auth.service";
 import { JwtAuthGuard } from "./jwt-auth.guard";
+import {
+  getAccessCookieMaxAgeMs,
+  getRefreshCookieMaxAgeMs,
+} from "@/lib/auth/session-config";
 
 @Controller("auth")
 export class AuthController {
@@ -24,14 +28,14 @@ export class AuthController {
       httpOnly: true,
       secure,
       sameSite: "lax",
-      maxAge: 15 * 60 * 1000,
+      maxAge: getAccessCookieMaxAgeMs(),
       path: "/",
     });
     res.cookie("biconic_refresh", tokens.refreshToken, {
       httpOnly: true,
       secure,
       sameSite: "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: getRefreshCookieMaxAgeMs(),
       path: "/",
     });
   }

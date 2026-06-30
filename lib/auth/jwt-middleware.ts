@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
+import { getBackendApiUrl } from "@/lib/api/backend-config";
 import { getJwtSecretKey } from "@/lib/auth/jwt-config";
 
 type JwtPayload = {
@@ -16,10 +17,57 @@ async function verifyAccessToken(token: string): Promise<JwtPayload | null> {
   }
 }
 
+async function tryRefreshSession(
+  request: NextRequest
+): Promise<{ payload: JwtPayload | null; setCookieHeaders: string[] }> {
+  const refresh = request.cookies.get("biconic_refresh")?.value;
+  if (!refresh) return { payload: null, setCookieHeaders: [] };
+
+  try {
+    const res = await fetch(`${getBackendApiUrl()}/auth/refresh`, {
+      method: "POST",
+      headers: { cookie: request.headers.get("cookie") ?? "" },
+    });
+    const setCookieHeaders = res.headers.getSetCookie?.() ?? [];
+    if (!res.ok || setCookieHeaders.length === 0) {
+      return { payload: null, setCookieHeaders: [] };
+    }
+
+    const accessCookie = setCookieHeaders.find((c) => c.startsWith("biconic_access="));
+    if (!accessCookie) {
+      return { payload: null, setCookieHeaders };
+    }
+
+    const token = accessCookie.split(";")[0].slice("biconic_access=".length);
+    const payload = await verifyAccessToken(token);
+    return { payload, setCookieHeaders };
+  } catch {
+    return { payload: null, setCookieHeaders: [] };
+  }
+}
+
+function withRefreshedCookies(
+  response: NextResponse,
+  setCookieHeaders: string[]
+): NextResponse {
+  for (const cookie of setCookieHeaders) {
+    response.headers.append("set-cookie", cookie);
+  }
+  return response;
+}
+
 export async function updateJwtSession(request: NextRequest) {
-  const response = NextResponse.next({ request });
+  let setCookieHeaders: string[] = [];
+
   const accessToken = request.cookies.get("biconic_access")?.value;
-  const payload = accessToken ? await verifyAccessToken(accessToken) : null;
+  let payload = accessToken ? await verifyAccessToken(accessToken) : null;
+
+  if (!payload?.sub) {
+    const refreshed = await tryRefreshSession(request);
+    payload = refreshed.payload;
+    setCookieHeaders = refreshed.setCookieHeaders;
+  }
+
   const userId = payload?.sub;
   const role = payload?.app_role ?? null;
 
@@ -41,13 +89,13 @@ export async function updateJwtSession(request: NextRequest) {
   ) {
     const url = request.nextUrl.clone();
     url.pathname = getHomeForRole(role);
-    return NextResponse.redirect(url);
+    return withRefreshedCookies(NextResponse.redirect(url), setCookieHeaders);
   }
 
   if (userId && request.nextUrl.pathname === "/") {
     const url = request.nextUrl.clone();
     url.pathname = getHomeForRole(role);
-    return NextResponse.redirect(url);
+    return withRefreshedCookies(NextResponse.redirect(url), setCookieHeaders);
   }
 
   if (
@@ -59,7 +107,7 @@ export async function updateJwtSession(request: NextRequest) {
   ) {
     const url = request.nextUrl.clone();
     url.pathname = "/admin";
-    return NextResponse.redirect(url);
+    return withRefreshedCookies(NextResponse.redirect(url), setCookieHeaders);
   }
 
   if (
@@ -71,7 +119,7 @@ export async function updateJwtSession(request: NextRequest) {
   ) {
     const url = request.nextUrl.clone();
     url.pathname = "/viewer";
-    return NextResponse.redirect(url);
+    return withRefreshedCookies(NextResponse.redirect(url), setCookieHeaders);
   }
 
   if (
@@ -82,7 +130,7 @@ export async function updateJwtSession(request: NextRequest) {
   ) {
     const url = request.nextUrl.clone();
     url.pathname = getHomeForRole(role);
-    return NextResponse.redirect(url);
+    return withRefreshedCookies(NextResponse.redirect(url), setCookieHeaders);
   }
 
   if (
@@ -93,7 +141,7 @@ export async function updateJwtSession(request: NextRequest) {
   ) {
     const url = request.nextUrl.clone();
     url.pathname = getHomeForRole(role);
-    return NextResponse.redirect(url);
+    return withRefreshedCookies(NextResponse.redirect(url), setCookieHeaders);
   }
 
   if (
@@ -109,5 +157,5 @@ export async function updateJwtSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  return response;
+  return withRefreshedCookies(NextResponse.next({ request }), setCookieHeaders);
 }

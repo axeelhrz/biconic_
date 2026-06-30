@@ -3,6 +3,7 @@ import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "crypto";
 import { DatabaseService } from "../database/database.service";
+import { getRefreshTokenDbExpiresAt } from "@/lib/auth/session-config";
 
 type ProfileRow = {
   id: string;
@@ -39,7 +40,7 @@ export class AuthService {
   private async issueRefreshToken(userId: string) {
     const raw = randomBytes(48).toString("hex");
     const tokenHash = this.hashRefreshToken(raw);
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const expiresAt = getRefreshTokenDbExpiresAt();
     await this.db.query(
       `INSERT INTO public.refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
       [userId, tokenHash, expiresAt.toISOString()]
