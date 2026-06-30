@@ -7,6 +7,7 @@ import {
   getLocalExcelAbsolutePath,
   hasLocalExcelFile,
 } from "@/lib/storage/excel-upload-storage";
+import { readCredentialsFromConnectionRow } from "@/lib/connection/connection-persistence";
 
 function getSql() {
   return postgres(getInternalDbUrl(), { max: 5 });
@@ -266,26 +267,15 @@ export async function getConnectionDetailFromDb(
 
   const sql = getSql();
   try {
-    const [row] = await sql<
-      {
-        id: string;
-        name: string;
-        type: string;
-        client_id: string | null;
-        config: Record<string, unknown> | null;
-        storage_object_path: string | null;
-        updated_at: string;
-        original_file_name: string | null;
-      }[]
-    >`
-      SELECT id, name, type, client_id, config, storage_object_path, updated_at, original_file_name
+    const [row] = await sql<Record<string, unknown>[]>`
+      SELECT *
       FROM public.connections
       WHERE id = ${connectionId}
       LIMIT 1
     `;
     if (!row) return null;
 
-    const cfg = row.config ?? {};
+    const creds = readCredentialsFromConnectionRow(row);
     const isExcel = row.type === "excel_file" || row.type === "excel";
 
     const [meta] = await sql<
@@ -309,28 +299,20 @@ export async function getConnectionDetailFromDb(
       : null;
 
     return {
-      id: row.id,
-      name: row.name,
-      type: row.type,
-      client_id: row.client_id,
-      db_host:
-        (typeof cfg.db_host === "string" ? cfg.db_host : null) ?? null,
-      db_name:
-        (typeof cfg.db_name === "string" ? cfg.db_name : null) ?? null,
-      db_user:
-        (typeof cfg.db_user === "string" ? cfg.db_user : null) ?? null,
-      db_port:
-        typeof cfg.db_port === "number"
-          ? cfg.db_port
-          : typeof cfg.db_port === "string"
-            ? parseInt(cfg.db_port, 10) || null
-            : null,
+      id: String(row.id),
+      name: String(row.name ?? ""),
+      type: String(row.type ?? ""),
+      client_id: (row.client_id as string | null) ?? null,
+      db_host: creds.host || null,
+      db_name: creds.database || null,
+      db_user: creds.user || null,
+      db_port: Number.isFinite(creds.port) ? creds.port : null,
       connection_tables: connectionTables,
-      updated_at: row.updated_at,
+      updated_at: String(row.updated_at ?? ""),
       original_file_name:
-        row.original_file_name ??
+        (row.original_file_name as string | null) ??
         (isExcel && row.storage_object_path
-          ? row.storage_object_path.split("/").pop() ?? null
+          ? String(row.storage_object_path).split("/").pop() ?? null
           : null),
       import_status: meta?.import_status ?? null,
       total_rows: meta?.total_rows ?? null,

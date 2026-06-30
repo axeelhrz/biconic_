@@ -27,6 +27,7 @@ import {
 import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT, ETL_PREVIEW_MAX_WHEN_UNLIMITED } from "@/lib/etl/limits";
 import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { connectionsSelectColumns } from "@/lib/db/connections-query";
+import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
 
 // Reuse types from run/route.ts (duplicated here for independence)
 type FilterCondition = {
@@ -306,10 +307,12 @@ export async function POST(req: NextRequest) {
         if (!leftTable || !rightTable) throw new Error("UNION: ambas fuentes deben tener tabla.");
 
         const connCols = connectionsSelectColumns();
-        const { data: leftConn } = await supabaseService.from("connections").select(connCols).eq("id", left.connectionId).single();
-        const { data: rightConn } = await supabaseService.from("connections").select(connCols).eq("id", right.connectionId).single();
-        if (!leftConn) throw new Error(`Conexión izquierda ${left.connectionId} no encontrada.`);
-        if (!rightConn) throw new Error(`Conexión derecha ${right.connectionId} no encontrada.`);
+        const { data: leftConnRaw } = await supabaseService.from("connections").select(connCols).eq("id", left.connectionId).single();
+        const { data: rightConnRaw } = await supabaseService.from("connections").select(connCols).eq("id", right.connectionId).single();
+        if (!leftConnRaw) throw new Error(`Conexión izquierda ${left.connectionId} no encontrada.`);
+        if (!rightConnRaw) throw new Error(`Conexión derecha ${right.connectionId} no encontrada.`);
+        const leftConn = hydrateConnectionRow(leftConnRaw as Record<string, unknown>);
+        const rightConn = hydrateConnectionRow(rightConnRaw as Record<string, unknown>);
 
         const buildPgUrl = (conn: { db_host?: string | null; db_user?: string | null; db_port?: number | null; db_name?: string | null; db_password_encrypted?: string | null }) => {
           if (!conn.db_host || !conn.db_user || !conn.db_name) throw new Error("Conexión sin host, usuario o base de datos.");
@@ -642,19 +645,21 @@ export async function POST(req: NextRequest) {
           const primaryConnId = joinConf.connectionId;
           const secondaryConnId = joinConf.secondaryConnectionId;
 
-          const { data: conn1 } = await supabaseService
+          const { data: conn1Raw } = await supabaseService
             .from("connections")
             .select(connectionsSelectColumns())
             .eq("id", primaryConnId)
             .single();
 
-          const { data: conn2 } = await supabaseService
+          const { data: conn2Raw } = await supabaseService
             .from("connections")
             .select(connectionsSelectColumns())
             .eq("id", secondaryConnId || "")
             .single();
 
-          if (!conn1 || !conn2) return;
+          if (!conn1Raw || !conn2Raw) return;
+          const conn1 = hydrateConnectionRow(conn1Raw as Record<string, unknown>);
+          const conn2 = hydrateConnectionRow(conn2Raw as Record<string, unknown>);
 
           const conn1Type = (conn1.type || "").toLowerCase();
           const conn2Type = (conn2.type || "").toLowerCase();
@@ -985,6 +990,7 @@ export async function POST(req: NextRequest) {
           }
           if (connError) console.error("[Preview] Connection fetch error:", connError);
           if (!conn) throw new Error(`Conexión no encontrada: ${connectionIdStr}`);
+          conn = hydrateConnectionRow(conn);
 
         let dbUrl: string;
         let tableToQuery = body.filter?.table;
