@@ -32,6 +32,10 @@ import { safeJsonResponse } from "@/lib/safe-json-response";
 import { deriveColumnTypesFromSample } from "@/lib/derive-column-types";
 import { mergeScheduleIntoGuidedConfig } from "@/lib/etl/schedule";
 import EtlScheduleSettings from "@/components/etl/EtlScheduleSettings";
+import {
+  parseDateLike,
+  dateSlashOrderForNamedColumn,
+} from "@/lib/dashboard/dateFormatting";
 
 const STEPS = [
   { id: "conexion", label: "Conexión", icon: Link2 },
@@ -560,16 +564,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return dataTypeToLabel((col as { inferredType?: string; dataType?: string })?.inferredType ?? (col as { dataType?: string })?.dataType);
   }, [columnDisplay, selectedTableInfo?.columns, inferredTypesFromPreview]);
 
-  /** Para fechas ISO en UTC (ej. 2025-10-01T00:00:00.000Z) usa componentes UTC para mostrar la fecha de calendario correcta (1/10, no 30/09 en UTC-3). */
-  const dateComponentsForPreview = (date: Date, val: unknown): { d: number; m: number; y: number; monthIndex: number } => {
-    const isIsoDateOnly =
-      typeof val === "string" &&
-      /^\d{4}-\d{2}-\d{2}/.test(val.trim()) &&
-      (val.length === 10 || /T00:00:00(\.0*)?Z?$/i.test(val.trim()));
-    if (isIsoDateOnly) {
-      return { d: date.getUTCDate(), m: date.getUTCMonth() + 1, y: date.getUTCFullYear(), monthIndex: date.getUTCMonth() };
+  /** Componentes de calendario para mostrar una fecha parseada (UTC para strings; local para Date nativo). */
+  const calendarPartsForValue = (date: Date, raw: unknown): { d: number; m: number; y: number; monthIndex: number } => {
+    if (raw instanceof Date) {
+      return { d: date.getDate(), m: date.getMonth() + 1, y: date.getFullYear(), monthIndex: date.getMonth() };
     }
-    return { d: date.getDate(), m: date.getMonth() + 1, y: date.getFullYear(), monthIndex: date.getMonth() };
+    return { d: date.getUTCDate(), m: date.getUTCMonth() + 1, y: date.getUTCFullYear(), monthIndex: date.getUTCMonth() };
   };
 
   /** Formatea un valor de celda para la vista previa según tipo y formato de la columna. */
@@ -578,20 +578,24 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     const format = disp?.format?.trim();
     const tipo = getColumnType(key);
     if (value === null || value === undefined) return "";
-    if (tipo === "Fecha" && format) {
-      let date: Date | null = null;
-      if (value instanceof Date) date = value;
-      else if (typeof value === "number") date = value > 1e10 ? new Date(value) : new Date(1899, 11, 30 + (value | 0));
-      else if (typeof value === "string") date = new Date(value);
-      if (date && !isNaN(date.getTime())) {
-        const { d, m, y, monthIndex } = dateComponentsForPreview(date, value);
+    if (tipo === "Fecha") {
+      const effectiveFormat = format || "DD/MM/YYYY";
+      const parseOpts = { slashDateOrder: dateSlashOrderForNamedColumn(columnDisplay, key) };
+      const date =
+        value instanceof Date
+          ? Number.isNaN(value.getTime())
+            ? null
+            : value
+          : parseDateLike(value, parseOpts);
+      if (date && !Number.isNaN(date.getTime())) {
+        const { d, m, y, monthIndex } = calendarPartsForValue(date, value);
         const pad = (n: number) => String(n).padStart(2, "0");
         const months = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-        if (format === "DD/MM/YYYY") return `${pad(d)}/${pad(m)}/${y}`;
-        if (format === "MM/DD/YYYY") return `${pad(m)}/${pad(d)}/${y}`;
-        if (format === "YYYY-MM-DD") return `${y}-${pad(m)}-${pad(d)}`;
-        if (format === "DD-MM-YYYY") return `${pad(d)}-${pad(m)}-${y}`;
-        if (format === "DD MMM YYYY") return `${pad(d)} ${months[monthIndex]} ${y}`;
+        if (effectiveFormat === "DD/MM/YYYY") return `${pad(d)}/${pad(m)}/${y}`;
+        if (effectiveFormat === "MM/DD/YYYY") return `${pad(m)}/${pad(d)}/${y}`;
+        if (effectiveFormat === "YYYY-MM-DD") return `${y}-${pad(m)}-${pad(d)}`;
+        if (effectiveFormat === "DD-MM-YYYY") return `${pad(d)}-${pad(m)}-${y}`;
+        if (effectiveFormat === "DD MMM YYYY") return `${pad(d)} ${months[monthIndex]} ${y}`;
       }
     }
     if (tipo === "Número" && (typeof value === "number" || (typeof value === "string" && /^-?\d+([.,]\d+)?$/.test(String(value).trim())))) {
@@ -2454,7 +2458,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             <td className="py-1 px-2">
                               <Select
                                 value={tipo}
-                                onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), type: v as "Fecha" | "Número" | "Texto" } }))}
+                                onChange={(v: string) =>
+                                  setColumnDisplay((prev) => ({
+                                    ...prev,
+                                    [c.name]: {
+                                      ...(prev[c.name] ?? { label: "", format: "" }),
+                                      type: v as "Fecha" | "Número" | "Texto",
+                                      format:
+                                        v === "Fecha" && !(prev[c.name]?.format?.trim())
+                                          ? "DD/MM/YYYY"
+                                          : (prev[c.name]?.format ?? ""),
+                                    },
+                                  }))
+                                }
                                 options={TIPO_OPTIONS}
                                 placeholder="Tipo"
                                 className="min-w-[100px]"

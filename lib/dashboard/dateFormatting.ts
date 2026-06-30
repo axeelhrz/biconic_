@@ -11,6 +11,20 @@ function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
 
+const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const PLAUSIBLE_DATE_YEAR_MIN = 1970;
+const PLAUSIBLE_DATE_YEAR_MAX = 2040;
+
+function parseExcelSerialDays(n: number): Date | null {
+  if (!Number.isFinite(n) || n <= 0 || n >= 1e7) return null;
+  const dt = new Date(EXCEL_EPOCH_MS + n * MS_PER_DAY);
+  if (Number.isNaN(dt.getTime())) return null;
+  const y = dt.getUTCFullYear();
+  if (y < PLAUSIBLE_DATE_YEAR_MIN || y > PLAUSIBLE_DATE_YEAR_MAX) return null;
+  return dt;
+}
+
 function safeDateFromParts(year: number, month1: number, day: number): Date | null {
   if (!Number.isFinite(year) || !Number.isFinite(month1) || !Number.isFinite(day)) return null;
   if (month1 < 1 || month1 > 12 || day < 1 || day > 31) return null;
@@ -59,8 +73,19 @@ export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): D
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return null;
-    const dt = new Date(value > 1e12 ? value : value * 1000);
-    return Number.isNaN(dt.getTime()) ? null : dt;
+    if (value > 1e12) {
+      const dt = new Date(value);
+      return Number.isNaN(dt.getTime()) ? null : dt;
+    }
+    if (value > 1e9 && value < 1e10) {
+      const dt = new Date(value * 1000);
+      if (Number.isNaN(dt.getTime())) return null;
+      const y = dt.getUTCFullYear();
+      return y >= PLAUSIBLE_DATE_YEAR_MIN && y <= PLAUSIBLE_DATE_YEAR_MAX ? dt : null;
+    }
+    const excel = parseExcelSerialDays(value);
+    if (excel) return excel;
+    return null;
   }
   if (typeof value !== "string") return null;
   const raw = value.trim();
@@ -90,8 +115,8 @@ export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): D
     return safeDateFromParts(year, month, 1);
   }
 
-  // d/m/y o m/d/y con año de 4 dígitos
-  const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  // d/m/y o m/d/y con año de 4 dígitos (barras o puntos, común en Firebird / Excel regional)
+  const slash = raw.match(/^(\d{1,2})[\/\.](\d{1,2})[\/\.](\d{4})$/);
   if (slash) {
     const a = Number(slash[1]);
     const b = Number(slash[2]);

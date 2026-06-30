@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import { parseDateLike } from "@/lib/dashboard/dateFormatting";
 
 // ===================================================================
 // TIPOS Y DEFINICIONES (Copiados/Adaptados de run/route.ts)
@@ -106,8 +107,7 @@ export function parseDateWithPattern(value: string, pattern?: string): Date | nu
   const s = (value ?? "").toString().trim();
   if (!s) return null;
   if (!pattern) {
-    const d = new Date(s);
-    return isNaN(d.getTime()) ? null : d;
+    return parseDateLike(s, { slashDateOrder: "DMY" });
   }
   const { regex, groups } = buildRegexFromPattern(pattern);
   const m = s.match(regex);
@@ -209,7 +209,7 @@ function inferSingleColumnType(values: any[]): CastTargetType {
       if (n % 1 !== 0) allInteger = false;
     }
     const str = String(v).trim();
-    if (DATE_PATTERNS.some((p) => p.test(str)) || !isNaN(Date.parse(str)))
+    if (parseDateLike(v, { slashDateOrder: "DMY" }) || DATE_PATTERNS.some((p) => p.test(str)))
       dateLike++;
   }
   if (allBoolean && values.length > 0) return "boolean";

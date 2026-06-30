@@ -3,6 +3,8 @@
  * Útil cuando el esquema de BD devuelve todo como texto (p. ej. Excel, CSV en etl_output).
  */
 
+import { parseDateLike } from "@/lib/dashboard/dateFormatting";
+
 export type InferredColumnType = "Fecha" | "Número" | "Texto";
 
 function isNumericLike(v: unknown): boolean {
@@ -18,49 +20,12 @@ function isNumericLike(v: unknown): boolean {
   return /^-?\d+(?:\.\d+)?$/.test(sanitized);
 }
 
-const EXCEL_EPOCH_MS = new Date(1899, 11, 30).getTime();
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-const PLAUSIBLE_DATE_YEAR_MIN = 1970;
-const PLAUSIBLE_DATE_YEAR_MAX = 2040;
-
 function isDateLike(v: unknown): boolean {
   if (v == null) return false;
-  if (v instanceof Date && !isNaN((v as Date).getTime())) return true;
-  if (typeof v === "number") {
-    if (v > 1e10) {
-      const y = new Date(v).getUTCFullYear();
-      return y >= PLAUSIBLE_DATE_YEAR_MIN && y <= PLAUSIBLE_DATE_YEAR_MAX;
-    }
-    if (v > 1e9 && v < 1e10) {
-      const y = new Date(v * 1000).getUTCFullYear();
-      return y >= PLAUSIBLE_DATE_YEAR_MIN && y <= PLAUSIBLE_DATE_YEAR_MAX;
-    }
-    if (v > 0 && v < 1e7) {
-      const y = new Date(EXCEL_EPOCH_MS + v * MS_PER_DAY).getUTCFullYear();
-      return y >= PLAUSIBLE_DATE_YEAR_MIN && y <= PLAUSIBLE_DATE_YEAR_MAX;
-    }
-  }
-  if (typeof v !== "string") return false;
-  const s = String(v).trim();
-  if (!s) return false;
-  // Códigos/IDs numéricos (solo dígitos y más de 4 caracteres) no son fechas
-  if (/^\d{5,}$/.test(s)) return false;
-  // Solo considerar fecha si el string parece una fecha (evita "RIO NORTE 1", "CBA SUR", etc.)
-  const looksLikeDateString =
-    /^\d/.test(s) ||
-    /^\d{4}-\d{2}-\d{2}/.test(s) ||
-    /^\d{1,2}[\/\-\.]\d{1,2}/.test(s);
-  if (!looksLikeDateString) return false;
-  if (!isNaN(Date.parse(s))) return true;
-  const ddmmyy = /^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/;
-  const m = s.match(ddmmyy);
-  if (m) {
-    const d = parseInt(m[1]!, 10);
-    const M = parseInt(m[2]!, 10) - 1;
-    const y = parseInt(m[3]!, 10);
-    const yr = y < 100 ? 2000 + y : y;
-    const dt = new Date(yr, M, d);
-    if (!isNaN(dt.getTime()) && dt.getDate() === d && dt.getMonth() === M) return true;
+  if (parseDateLike(v, { slashDateOrder: "DMY" })) return true;
+  if (typeof v === "string") {
+    const s = String(v).trim();
+    if (/^\d{5,}$/.test(s)) return false;
   }
   return false;
 }
