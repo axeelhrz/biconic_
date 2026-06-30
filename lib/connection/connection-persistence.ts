@@ -34,24 +34,35 @@ export function clearConnectionsSchemaCache() {
   cachedColumns = null;
 }
 
-/** Promueve credenciales de `config` JSONB a campos `db_*` de nivel superior. */
-export function hydrateConnectionRow<T extends Record<string, unknown>>(
-  row: T
-): T & {
+export type HydratedConnectionRow = Record<string, unknown> & {
+  id?: string;
+  type?: string;
   db_host: string | null;
   db_name: string | null;
   db_user: string | null;
   db_port: number | null;
   db_password_encrypted: string | null;
-} {
+  db_password_secret_id: string | null;
+};
+
+/** Promueve credenciales de `config` JSONB a campos `db_*` de nivel superior. */
+export function hydrateConnectionRow(
+  row: Record<string, unknown>
+): HydratedConnectionRow {
   const creds = readCredentialsFromConnectionRow(row);
   return {
     ...row,
+    id: row.id != null ? String(row.id) : undefined,
+    type: row.type != null ? String(row.type) : undefined,
     db_host: creds.host || null,
     db_name: creds.database || null,
     db_user: creds.user || null,
     db_port: Number.isFinite(creds.port) ? creds.port : null,
     db_password_encrypted: creds.passwordEncrypted,
+    db_password_secret_id:
+      row.db_password_secret_id != null
+        ? String(row.db_password_secret_id)
+        : null,
   };
 }
 
