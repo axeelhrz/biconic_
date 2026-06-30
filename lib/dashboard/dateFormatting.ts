@@ -15,13 +15,15 @@ const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const PLAUSIBLE_DATE_YEAR_MIN = 1970;
 const PLAUSIBLE_DATE_YEAR_MAX = 2040;
+const EXCEL_SERIAL_YEAR_MIN = 1900;
+const EXCEL_SERIAL_YEAR_MAX = 2100;
 
 function parseExcelSerialDays(n: number): Date | null {
   if (!Number.isFinite(n) || n <= 0 || n >= 1e7) return null;
   const dt = new Date(EXCEL_EPOCH_MS + n * MS_PER_DAY);
   if (Number.isNaN(dt.getTime())) return null;
   const y = dt.getUTCFullYear();
-  if (y < PLAUSIBLE_DATE_YEAR_MIN || y > PLAUSIBLE_DATE_YEAR_MAX) return null;
+  if (y < EXCEL_SERIAL_YEAR_MIN || y > EXCEL_SERIAL_YEAR_MAX) return null;
   return dt;
 }
 
@@ -68,28 +70,36 @@ function parseAmbiguousSlashDate(a: number, b: number, year: number, order: Date
   return safeDateFromParts(year, b, a);
 }
 
+function parseNumericToken(n: number): Date | null {
+  if (!Number.isFinite(n)) return null;
+  if (n > 1e12) {
+    const dt = new Date(n);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
+  if (n > 1e9 && n < 1e10) {
+    const dt = new Date(n * 1000);
+    if (Number.isNaN(dt.getTime())) return null;
+    const y = dt.getUTCFullYear();
+    return y >= PLAUSIBLE_DATE_YEAR_MIN && y <= PLAUSIBLE_DATE_YEAR_MAX ? dt : null;
+  }
+  return parseExcelSerialDays(n);
+}
+
 export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): Date | null {
   const slashOrder: DateSlashOrder = options?.slashDateOrder === "MDY" ? "MDY" : "DMY";
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) return null;
-    if (value > 1e12) {
-      const dt = new Date(value);
-      return Number.isNaN(dt.getTime()) ? null : dt;
-    }
-    if (value > 1e9 && value < 1e10) {
-      const dt = new Date(value * 1000);
-      if (Number.isNaN(dt.getTime())) return null;
-      const y = dt.getUTCFullYear();
-      return y >= PLAUSIBLE_DATE_YEAR_MIN && y <= PLAUSIBLE_DATE_YEAR_MAX ? dt : null;
-    }
-    const excel = parseExcelSerialDays(value);
-    if (excel) return excel;
-    return null;
+    return parseNumericToken(value);
   }
   if (typeof value !== "string") return null;
   const raw = value.trim();
   if (!raw) return null;
+
+  // Serial Excel / epoch como texto ("46113") — evita new Date("46113") → año 46113
+  const numericString = raw.match(/^(\d+(?:\.\d+)?)$/);
+  if (numericString) {
+    return parseNumericToken(Number(numericString[1]));
+  }
 
   // MM/yyyy (mes inequívoco)
   const my = raw.match(/^(\d{1,2})\/(\d{4})$/);

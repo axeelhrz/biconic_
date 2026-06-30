@@ -22,12 +22,7 @@ function isNumericLike(v: unknown): boolean {
 
 function isDateLike(v: unknown): boolean {
   if (v == null) return false;
-  if (parseDateLike(v, { slashDateOrder: "DMY" })) return true;
-  if (typeof v === "string") {
-    const s = String(v).trim();
-    if (/^\d{5,}$/.test(s)) return false;
-  }
-  return false;
+  return parseDateLike(v, { slashDateOrder: "DMY" }) != null;
 }
 
 /** Número que representa mes (1-12). */

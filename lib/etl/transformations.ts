@@ -542,18 +542,16 @@ export function applyCastConversions(
             break;
           }
           case "date": {
-            const d = parseDateWithPattern(
-              String(v ?? ""),
-              cv.inputFormat || undefined
-            );
+            const d = cv.inputFormat
+              ? parseDateWithPattern(String(v ?? ""), cv.inputFormat)
+              : parseDateLike(v);
             out[key] = d ? `${d.toISOString().slice(0, 10)}` : null;
             break;
           }
           case "datetime": {
-            const d = parseDateWithPattern(
-              String(v ?? ""),
-              cv.inputFormat || undefined
-            );
+            const d = cv.inputFormat
+              ? parseDateWithPattern(String(v ?? ""), cv.inputFormat)
+              : parseDateLike(v);
             out[key] = d ? d.toISOString() : null;
             break;
           }
