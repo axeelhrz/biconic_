@@ -8,6 +8,9 @@ import { randomUUID } from "crypto";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 import { buildDateFilterWhereFragmentPg, buildDateFilterWhereFragmentFirebird, type DateFilterSpec } from "@/lib/sql/helpers";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { connectionsSelectColumns } from "@/lib/db/connections-query";
+import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
 
 // --- TIPOS DE DATOS ---
 type FilterCondition = {
@@ -671,30 +674,51 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const uniqueConnectionIds = [...new Set(allConnectionIds)];
 
       const supabaseService = createServiceRoleClient();
+      const connSelect = connectionsSelectColumns();
+      const useServiceDirect = isInternalEtlRun || shouldUseOwnBackend();
+
       const connectionPromises = uniqueConnectionIds.map(async (id) => {
         const idStr = String(id);
-        if (isInternalEtlRun) {
+        if (useServiceDirect) {
           const svcRes = await supabaseService
             .from("connections")
-            .select("*, db_password_secret_id")
+            .select(connSelect)
             .eq("id", idStr)
             .single();
-          return { data: svcRes.data, error: svcRes.error };
+          return {
+            id: idStr,
+            data: svcRes.data
+              ? hydrateConnectionRow(svcRes.data as Record<string, unknown>)
+              : null,
+            error: svcRes.error,
+          };
         }
         const ownRes = await supabase
           .from("connections")
-          .select("*, db_password_secret_id")
+          .select(connSelect)
           .eq("id", idStr)
           .eq("user_id", currentUser.id)
           .single();
-        if (ownRes.data) return ownRes;
-        // Fallback: algunos flujos usan conexiones compartidas/no-propias.
+        if (ownRes.data) {
+          return {
+            id: idStr,
+            data: hydrateConnectionRow(ownRes.data as Record<string, unknown>),
+            error: null,
+          };
+        }
+        // Fallback: conexiones compartidas o creadas por otro usuario (p. ej. admin).
         const svcRes = await supabaseService
           .from("connections")
-          .select("*, db_password_secret_id")
+          .select(connSelect)
           .eq("id", idStr)
           .single();
-        return { data: svcRes.data, error: svcRes.error } as typeof ownRes;
+        return {
+          id: idStr,
+          data: svcRes.data
+            ? hydrateConnectionRow(svcRes.data as Record<string, unknown>)
+            : null,
+          error: svcRes.error ?? ownRes.error,
+        };
       });
 
       const connectionResults = await Promise.all(connectionPromises);
@@ -702,6 +726,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       for (const result of connectionResults) {
         if (result.error || !result.data) {
           log("Error: No se pudo cargar una de las conexiones.", {
+            connectionId: result.id,
             error: result.error,
           });
           return NextResponse.json(
