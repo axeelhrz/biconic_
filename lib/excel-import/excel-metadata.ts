@@ -14,8 +14,45 @@ export type ExcelColumnMeta = {
 
 export type ExcelDataTableMetaRow = {
   physical_table_name?: string | null;
+  physical_schema_name?: string | null;
   table_name?: string | null;
 };
+
+export function normalizeExcelDataTableRows(data: unknown): ExcelDataTableMetaRow[] {
+  if (Array.isArray(data)) return data as ExcelDataTableMetaRow[];
+  if (data && typeof data === "object") return [data as ExcelDataTableMetaRow];
+  return [];
+}
+
+export function resolveExcelPhysicalTableForConnection(
+  connectionId: string,
+  selection: string | null | undefined,
+  rows: ExcelDataTableMetaRow[]
+): string {
+  const withPhysical = rows
+    .map((r) => r.physical_table_name?.trim())
+    .filter((p): p is string => !!p);
+  if (!withPhysical.length) {
+    throw new Error(`Sin tablas importadas para la conexión Excel ${connectionId}`);
+  }
+  const selected = (selection || "").trim();
+  if (selected) {
+    const physical = resolveExcelPhysicalTableFromSelection(selected, rows);
+    if (physical?.trim()) return physical.trim();
+    throw new Error(`No se encontró la hoja/tabla Excel: ${selected}`);
+  }
+  return withPhysical[0]!;
+}
+
+export function resolveExcelQualifiedTableFromRows(
+  connectionId: string,
+  selection: string | null | undefined,
+  rows: ExcelDataTableMetaRow[],
+  schema = EXCEL_PHYSICAL_SCHEMA
+): string {
+  const physical = resolveExcelPhysicalTableForConnection(connectionId, selection, rows);
+  return `${schema}.${physical}`;
+}
 
 export function resolveExcelPhysicalTableFromSelection(
   qualifiedTable: string,

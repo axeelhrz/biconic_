@@ -11,6 +11,10 @@ import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { connectionsSelectColumns } from "@/lib/db/connections-query";
 import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelQualifiedTableFromRows,
+} from "@/lib/excel-import/excel-metadata";
 
 // --- TIPOS DE DATOS ---
 type FilterCondition = {
@@ -1075,15 +1079,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               : `"${String(s).trim().replace(/"/g, '""')}"`;
           const resolvePhysicalIfExcel = async (conn: any, table: string) => {
             if (String(conn?.type || "").toLowerCase() !== "excel_file") return table;
-            const { data: meta, error: mErr } = await supabase
+            const { data: metaRows, error: mErr } = await supabase
               .from("data_tables")
-              .select("physical_schema_name, physical_table_name")
-              .eq("connection_id", String(conn.id))
-              .single();
-            if (mErr || !meta?.physical_table_name) {
+              .select("physical_schema_name, physical_table_name, table_name")
+              .eq("connection_id", String(conn.id));
+            if (mErr) {
               throw new Error(`Metadatos de tabla física no encontrados para conexión ${conn.id}`);
             }
-            return `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
+            const rows = normalizeExcelDataTableRows(metaRows);
+            if (!rows.length) {
+              throw new Error(`Metadatos de tabla física no encontrados para conexión ${conn.id}`);
+            }
+            return resolveExcelQualifiedTableFromRows(String(conn.id), table, rows);
           };
           const IN_KEYS_BATCH = Math.min(
             2500,
@@ -1663,30 +1670,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           await client.connect();
           log("Conexión a BD interna establecida.");
 
-          const resolvePhysical = async (connId: string | number) => {
-            const { data: meta, error: mErr } = await supabase
+          const resolvePhysical = async (connId: string | number, tableSelection?: string) => {
+            const { data: metaRows, error: mErr } = await supabase
               .from("data_tables")
-              .select("physical_schema_name, physical_table_name")
-              .eq("connection_id", String(connId))
-              .single();
-            if (mErr || !meta)
+              .select("physical_schema_name, physical_table_name, table_name")
+              .eq("connection_id", String(connId));
+            if (mErr) {
               throw new Error(
                 `Metadatos de tabla física no encontrados para conexión ${connId}`
               );
-            return `${meta.physical_schema_name || "data_warehouse"}.${
-              meta.physical_table_name
-            }`;
+            }
+            const rows = normalizeExcelDataTableRows(metaRows);
+            if (!rows.length) {
+              throw new Error(
+                `Metadatos de tabla física no encontrados para conexión ${connId}`
+              );
+            }
+            return resolveExcelQualifiedTableFromRows(String(connId), tableSelection, rows);
           };
 
           log("Resolviendo nombres de tablas físicas...");
-          const pPhysical = await resolvePhysical(primaryConnectionId!);
+          const pPhysical = await resolvePhysical(primaryConnectionId!, primaryTable);
           const jPhysicals = await Promise.all(
             joins.map((jn, idx) => {
               const secId = jn.secondaryConnectionId;
               if (secId == null || String(secId).trim() === "") {
                 throw new Error(`Join ${idx}: secondaryConnectionId inválido al resolver tablas físicas.`);
               }
-              return resolvePhysical(secId);
+              return resolvePhysical(secId, jn.secondaryTable);
             })
           );
           log("Nombres de tablas físicas resueltos.", {

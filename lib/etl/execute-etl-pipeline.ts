@@ -24,7 +24,11 @@ import {
 } from "@/lib/etl/transformations";
 import { ETL_MAX_ROWS_CEILING, ETL_JOIN_CHUNK_SIZE_DEFAULT } from "@/lib/etl/limits";
 import { updateEtlScheduleLastRunAt } from "@/lib/etl/schedule";
-import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelQualifiedTableFromRows,
+} from "@/lib/excel-import/excel-metadata";
 import {
   createEtlPipelineContext,
   type EtlPipelineContext,
@@ -782,9 +786,18 @@ export async function executeEtlPipeline(
           const { data: c } = await supabaseService.from("connections").select("*").eq("id", connId).single();
           if (!c) throw new Error(`Conexión ${connId} no encontrada.`);
           if (c.type === "excel_file") {
-            const { data: meta } = await supabaseService.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", connId).single();
-            if (!meta?.physical_table_name) throw new Error(`Sin tabla física para conexión Excel ${connId}.`);
-            return { table: `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`, conn: c, type: "excel" };
+            const { data: metaRows } = await supabaseService
+              .from("data_tables")
+              .select("physical_schema_name, physical_table_name, table_name")
+              .eq("connection_id", connId);
+            const rows = normalizeExcelDataTableRows(metaRows);
+            const table = resolveExcelQualifiedTableFromRows(
+              String(connId),
+              (filter?.table || "").trim() || undefined,
+              rows,
+              EXCEL_PHYSICAL_SCHEMA
+            );
+            return { table, conn: c, type: "excel" };
           }
           const t = (filter?.table || "").trim();
           if (!t) throw new Error(`UNION: la fuente debe tener tabla (filter.table) para conexión ${connId}.`);
@@ -1846,13 +1859,25 @@ export async function executeEtlPipeline(
                   const internalClient = new PgClient({ connectionString: getInternalDbUrl(), connectionTimeoutMillis: 15000, statement_timeout: 600000 });
                   await internalClient.connect();
                   try {
-                     const resolvePhysical = async (connId: string | number) => {
-                        const { data: meta } = await supabaseService.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", String(connId)).single();
-                        if (!meta) throw new Error("Metadatos no encontrados");
-                        return `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
+                     const resolvePhysical = async (connId: string | number, tableSelection?: string) => {
+                        const { data: metaRows } = await supabaseService
+                          .from("data_tables")
+                          .select("physical_schema_name, physical_table_name, table_name")
+                          .eq("connection_id", String(connId));
+                        const rows = normalizeExcelDataTableRows(metaRows);
+                        return resolveExcelQualifiedTableFromRows(
+                          String(connId),
+                          tableSelection,
+                          rows,
+                          EXCEL_PHYSICAL_SCHEMA
+                        );
                      };
-                     const pPhys = await resolvePhysical(star.primaryConnectionId);
-                     const jPhyss = await Promise.all((star.joins||[]).map((jn: any) => resolvePhysical(jn.secondaryConnectionId)));
+                     const pPhys = await resolvePhysical(star.primaryConnectionId, star.primaryTable);
+                     const jPhyss = await Promise.all(
+                       (star.joins || []).map((jn: any) =>
+                         resolvePhysical(jn.secondaryConnectionId, jn.secondaryTable)
+                       )
+                     );
                      const pQ = quoteQualified(pPhys);
                      const jQs = jPhyss.map(q => quoteQualified(q));
 
@@ -1996,9 +2021,17 @@ export async function executeEtlPipeline(
            // Simple Table Select
            let tableToQuery = body!.filter?.table;
            if (conn.type === "excel_file") {
-              const { data: meta } = await supabaseService.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", conn.id).single();
-              if (!meta || !meta.physical_table_name) throw new Error("Metadatos Excel no encontrados");
-              tableToQuery = `${meta.physical_schema_name || "excel_imports"}.${meta.physical_table_name}`;
+              const { data: metaRows } = await supabaseService
+                .from("data_tables")
+                .select("physical_schema_name, physical_table_name, table_name")
+                .eq("connection_id", conn.id);
+              const rows = normalizeExcelDataTableRows(metaRows);
+              tableToQuery = resolveExcelQualifiedTableFromRows(
+                String(conn.id),
+                (tableToQuery || "").trim() || undefined,
+                rows,
+                EXCEL_PHYSICAL_SCHEMA
+              );
            }
            if (!tableToQuery) throw new Error("Tabla de origen requerida.");
            

@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelPhysicalTableForConnection,
+} from "@/lib/excel-import/excel-metadata";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
@@ -370,14 +374,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // Resolver tabla primaria
         let primaryTableSQL = "";
         if (isExcel) {
-          const { data: meta } = await supabase
+          const { data: metaRows } = await supabase
             .from("data_tables")
-            .select("physical_table_name")
-            .eq("connection_id", String(join.primaryConnectionId))
-            .single();
-          if (!meta)
-            throw new Error("Metadatos de tabla primaria no encontrados");
-          primaryTableSQL = `"data_warehouse"."${meta.physical_table_name}"`;
+            .select("physical_table_name, table_name")
+            .eq("connection_id", String(join.primaryConnectionId));
+          const rows = normalizeExcelDataTableRows(metaRows);
+          if (!rows.length) throw new Error("Metadatos de tabla primaria no encontrados");
+          const physical = resolveExcelPhysicalTableForConnection(
+            String(join.primaryConnectionId),
+            join.primaryTable,
+            rows
+          );
+          primaryTableSQL = `"data_warehouse"."${physical}"`;
         } else {
           const [s, t] = join.primaryTable.split(".", 2);
           primaryTableSQL = s && t ? `"${s}"."${t}"` : `"${join.primaryTable}"`;
@@ -393,16 +401,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
           let secTableSQL = "";
           if (isExcel) {
-            const { data: meta } = await supabase
+            const { data: metaRows } = await supabase
               .from("data_tables")
-              .select("physical_table_name")
-              .eq("connection_id", String(j.secondaryConnectionId))
-              .single();
-            if (!meta)
+              .select("physical_table_name, table_name")
+              .eq("connection_id", String(j.secondaryConnectionId));
+            const rows = normalizeExcelDataTableRows(metaRows);
+            if (!rows.length) {
               throw new Error(
                 `Metadatos de tabla secundaria (join ${i}) no encontrados`
               );
-            secTableSQL = `"data_warehouse"."${meta.physical_table_name}"`;
+            }
+            const physical = resolveExcelPhysicalTableForConnection(
+              String(j.secondaryConnectionId),
+              j.secondaryTable,
+              rows
+            );
+            secTableSQL = `"data_warehouse"."${physical}"`;
           } else {
             const [s, t] = j.secondaryTable.split(".", 2);
             secTableSQL = s && t ? `"${s}"."${t}"` : `"${j.secondaryTable}"`;
@@ -513,20 +527,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // --- Rama EXCEL ---
     if (type === ("excel" as any)) {
-      const { data: meta, error: metaError } = await supabase
+      const { data: metaRows, error: metaError } = await supabase
         .from("data_tables")
-        .select("physical_table_name")
-        .eq("connection_id", String(connectionId))
-        .single();
-      if (metaError || !meta)
+        .select("physical_table_name, table_name")
+        .eq("connection_id", String(connectionId));
+      const rows = normalizeExcelDataTableRows(metaRows);
+      if (metaError || rows.length === 0) {
         return NextResponse.json(
           { ok: false, error: "Metadatos de Excel no encontrados" },
           { status: 404 }
         );
+      }
 
-      const tableNamePhysical =
-        (meta as any).physical_table_name ||
-        `import_${String(connectionId).replaceAll("-", "_")}`;
+      const tableNamePhysical = resolveExcelPhysicalTableForConnection(
+        String(connectionId),
+        table,
+        rows
+      );
       const dbUrl = getInternalDbUrl();
       if (!dbUrl)
         return NextResponse.json(

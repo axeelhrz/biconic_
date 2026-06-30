@@ -4,6 +4,10 @@ import { createServiceRoleClient } from "@/lib/supabase/service";
 import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelPhysicalTableForConnection,
+} from "@/lib/excel-import/excel-metadata";
 import { Client as PgClient } from "pg";
 import mysql from "mysql2/promise";
 import { quoteIdent, quoteQualified } from "@/lib/sql/helpers";
@@ -60,19 +64,23 @@ export async function POST(req: NextRequest) {
 
     const type = (conn as any).type;
     if (type === "excel_file" || type === "excel") {
-      const { data: meta } = await dbClient
+      const { data: metaRows } = await dbClient
         .from("data_tables")
-        .select("physical_schema_name, physical_table_name")
-        .eq("connection_id", String(connectionId))
-        .maybeSingle();
-      if (!meta?.physical_table_name) {
+        .select("physical_schema_name, physical_table_name, table_name")
+        .eq("connection_id", String(connectionId));
+      const rows = normalizeExcelDataTableRows(metaRows);
+      if (!rows.length) {
         return NextResponse.json(
           { ok: false, error: "Metadatos de Excel no encontrados" },
           { status: 404 }
         );
       }
       const schema = EXCEL_PHYSICAL_SCHEMA;
-      const table = (meta as { physical_table_name: string }).physical_table_name;
+      const table = resolveExcelPhysicalTableForConnection(
+        String(connectionId),
+        tableQualified,
+        rows
+      );
       const client = new PgClient({
         connectionString: getInternalDbUrl(),
         ssl: false,

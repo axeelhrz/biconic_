@@ -26,6 +26,10 @@ import {
 } from "@/lib/etl/transformations";
 import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT, ETL_PREVIEW_MAX_WHEN_UNLIMITED } from "@/lib/etl/limits";
 import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelQualifiedTableFromRows,
+} from "@/lib/excel-import/excel-metadata";
 import { connectionsSelectColumns } from "@/lib/db/connections-query";
 import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
 
@@ -296,9 +300,17 @@ export async function POST(req: NextRequest) {
           const { data: c } = await supabaseAdmin.from("connections").select("*").eq("id", connId).single();
           if (!c) throw new Error(`Conexión ${connId} no encontrada.`);
           if (c.type === "excel_file") {
-            const { data: meta } = await supabaseAdmin.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", connId).single();
-            if (!meta?.physical_table_name) throw new Error(`Sin tabla física para conexión Excel ${connId}.`);
-            return `${EXCEL_PHYSICAL_SCHEMA}.${meta.physical_table_name}`;
+            const { data: metaRows } = await supabaseAdmin
+              .from("data_tables")
+              .select("physical_schema_name, physical_table_name, table_name")
+              .eq("connection_id", connId);
+            const rows = normalizeExcelDataTableRows(metaRows);
+            return resolveExcelQualifiedTableFromRows(
+              String(connId),
+              (f?.table || "").trim() || undefined,
+              rows,
+              EXCEL_PHYSICAL_SCHEMA
+            );
           }
           return (f?.table || "").trim() || "";
         };
@@ -997,19 +1009,21 @@ export async function POST(req: NextRequest) {
 
         if (String(conn.type ?? "") === "excel_file") {
             console.log("[Preview] Detected Excel connection. Fetching metadata...");
-            // Lógica para Excel (similar a run/route.ts)
-            const { data: meta } = await supabaseAdmin
+            const selectedExcelTable = (tableToQuery || body.filter?.table || "").trim();
+            const { data: metaRows } = await supabaseAdmin
               .from("data_tables")
-              .select("physical_schema_name, physical_table_name")
-              .eq("connection_id", String(conn.id ?? ""))
-              .single();
-            
-            console.log("[Preview] Excel metadata:", meta);
-
-            if (!meta || !meta.physical_table_name) {
-                 throw new Error(`No se encontraron metadatos de tabla física para la conexión de Excel ID ${conn.id}.`);
+              .select("physical_schema_name, physical_table_name, table_name")
+              .eq("connection_id", String(conn.id ?? ""));
+            const rows = normalizeExcelDataTableRows(metaRows);
+            if (!rows.length) {
+              throw new Error(`No se encontraron metadatos de tabla física para la conexión de Excel ID ${conn.id}.`);
             }
-            tableToQuery = `${EXCEL_PHYSICAL_SCHEMA}.${meta.physical_table_name}`;
+            tableToQuery = resolveExcelQualifiedTableFromRows(
+              String(conn.id ?? ""),
+              selectedExcelTable || undefined,
+              rows,
+              EXCEL_PHYSICAL_SCHEMA
+            );
             console.log("[Preview] Table to query:", tableToQuery);
             dbUrl = getInternalDbUrl();
 

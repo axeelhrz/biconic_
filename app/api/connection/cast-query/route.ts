@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelPhysicalTableForConnection,
+} from "@/lib/excel-import/excel-metadata";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
@@ -339,20 +343,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // Excel branch using internal Postgres DW
     if (type === ("excel" as any)) {
-      const { data: meta, error: metaError } = await supabase
+      const { data: metaRows, error: metaError } = await supabase
         .from("data_tables")
-        .select("physical_table_name")
-        .eq("connection_id", String(connectionId))
-        .single();
-      if (metaError || !meta) {
+        .select("physical_table_name, table_name")
+        .eq("connection_id", String(connectionId));
+      const rows = normalizeExcelDataTableRows(metaRows);
+      if (metaError || rows.length === 0) {
         return NextResponse.json(
           { ok: false, error: "Metadatos de Excel no encontrados" },
           { status: 404 }
         );
       }
-      const tableNamePhysical =
-        (meta as any).physical_table_name ||
-        `import_${String(connectionId).replaceAll("-", "_")}`;
+      const tableNamePhysical = resolveExcelPhysicalTableForConnection(
+        String(connectionId),
+        table,
+        rows
+      );
       const dbUrl = getInternalDbUrl();
       if (!dbUrl) {
         return NextResponse.json(

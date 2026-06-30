@@ -6,7 +6,10 @@ import { createServiceRoleClient } from "@/lib/supabase/service";
 import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
-import { resolveExcelTableName } from "@/lib/excel-import/excel-metadata";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelPhysicalTableForConnection,
+} from "@/lib/excel-import/excel-metadata";
 import { resolveConnectionType } from "@/lib/connection/resolve-connection-type";
 import { readCredentialsFromConnectionRow } from "@/lib/connection/connection-persistence";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
@@ -275,20 +278,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
     // Manejar consultas Excel consultando data_warehouse.{physical_table_name}
     if (type === "excel") {
-      const { data: meta, error: metaError } = await dbClient
+      const { data: metaRows, error: metaError } = await dbClient
         .from("data_tables")
-        .select("physical_table_name")
-        .eq("connection_id", String(connectionId))
-        .maybeSingle();
-      if (metaError || !meta) {
+        .select("physical_table_name, table_name")
+        .eq("connection_id", String(connectionId));
+      const rows = normalizeExcelDataTableRows(metaRows);
+      if (metaError || rows.length === 0) {
         return NextResponse.json(
           { ok: false, error: "Metadatos de Excel no encontrados" },
           { status: 404 }
         );
       }
-      const tableNamePhysical = resolveExcelTableName(
+      const tableNamePhysical = resolveExcelPhysicalTableForConnection(
         String(connectionId),
-        meta as { physical_table_name?: string | null }
+        table,
+        rows
       );
 
       const client = new PgClient({
