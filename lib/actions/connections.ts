@@ -82,9 +82,35 @@ export async function getConnections(options?: GetConnectionsOptions): Promise<C
     .in("connection_id", ids);
 
   const metaByConnId = new Map<string, DataTableMetaRow>();
+  const importPriority = (status?: string) => {
+    switch (status) {
+      case "failed":
+      case "error":
+        return 5;
+      case "processing":
+      case "downloading_file":
+      case "reading_workbook":
+      case "creating_table":
+      case "inserting_rows":
+      case "pending":
+        return 4;
+      case "completed":
+      case "success":
+        return 1;
+      default:
+        return 2;
+    }
+  };
+
   if (metas) {
     (metas as DataTableMetaRow[]).forEach((m: any) => {
-      metaByConnId.set(m.connection_id, m);
+      const existing = metaByConnId.get(m.connection_id);
+      if (
+        !existing ||
+        importPriority(m.import_status) > importPriority(existing.import_status)
+      ) {
+        metaByConnId.set(m.connection_id, m);
+      }
     });
   }
 

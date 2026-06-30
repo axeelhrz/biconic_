@@ -17,7 +17,8 @@ interface ImportStatusData {
 }
 
 type ImportStatusProps = {
-  dataTableId: string;
+  dataTableId?: string;
+  connectionId?: string;
   onProcessFinished: (result: {
     status: "completed" | "failed";
     errorMessage?: string | null;
@@ -29,6 +30,7 @@ type ImportStatusProps = {
 
 export default function ImportStatus({
   dataTableId,
+  connectionId,
   onProcessFinished,
   compact = false,
   importStartedAt,
@@ -41,7 +43,7 @@ export default function ImportStatus({
   );
 
   useEffect(() => {
-    if (!dataTableId) return;
+    if (!dataTableId && !connectionId) return;
     startedAt.current = importStartedAt
       ? new Date(importStartedAt).getTime()
       : Date.now();
@@ -50,20 +52,21 @@ export default function ImportStatus({
       let data: ImportStatusData | null = null;
 
       if (isOwnBackendEnabled()) {
-        let res = await fetch(
-          `/api/process-excel/status?dataTableId=${encodeURIComponent(dataTableId)}`,
-          { credentials: "include" }
-        );
+        const statusQuery = connectionId
+          ? `connectionId=${encodeURIComponent(connectionId)}`
+          : `dataTableId=${encodeURIComponent(dataTableId!)}`;
+        let res = await fetch(`/api/process-excel/status?${statusQuery}`, {
+          credentials: "include",
+        });
         if (res.status === 401) {
           const refresh = await fetch("/api/auth/refresh", {
             method: "POST",
             credentials: "include",
           });
           if (refresh.ok) {
-            res = await fetch(
-              `/api/process-excel/status?dataTableId=${encodeURIComponent(dataTableId)}`,
-              { credentials: "include" }
-            );
+            res = await fetch(`/api/process-excel/status?${statusQuery}`, {
+              credentials: "include",
+            });
           }
         }
         if (!res.ok) {
@@ -71,7 +74,7 @@ export default function ImportStatus({
           return;
         }
         data = await safeJsonResponse<ImportStatusData>(res);
-      } else {
+      } else if (dataTableId) {
         const supabase = createClient();
         const { data: row, error } = await supabase
           .from("data_tables")
@@ -163,7 +166,7 @@ export default function ImportStatus({
     return () => {
       if (intervalId.current) clearInterval(intervalId.current);
     };
-  }, [dataTableId, onProcessFinished, compact, importStartedAt]);
+  }, [dataTableId, connectionId, onProcessFinished, compact, importStartedAt]);
 
   const getStatusMessage = () => {
     if (!status) return "Iniciando...";

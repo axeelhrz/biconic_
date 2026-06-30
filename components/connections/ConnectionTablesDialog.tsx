@@ -46,9 +46,9 @@ export default function ConnectionTablesDialog({
 
   const isExcel = (connectionType || "").toLowerCase().includes("excel");
 
-  // Cargar connection_tables actuales y todas las tablas de la base (metadata)
+  // Cargar connection_tables actuales y todas las tablas (metadata)
   useEffect(() => {
-    if (!open || !connectionId || isExcel) {
+    if (!open || !connectionId) {
       setAllTables([]);
       setSelectedKeys(new Set());
       setLoading(false);
@@ -56,41 +56,55 @@ export default function ConnectionTablesDialog({
     }
     let cancelled = false;
     setLoading(true);
-    const supabase = createClient();
-
-    const loadConnectionTables = supabase
-      .from("connections")
-      .select("connection_tables")
-      .eq("id", connectionId)
-      .single();
 
     const loadMetadata = fetch("/api/connection/metadata", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({ connectionId, discoverTables: true }),
-    }).then((r) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: TableRow[] }; error?: string }>(r));
+    }).then((r) =>
+      safeJsonResponse<{ ok?: boolean; metadata?: { tables?: TableRow[] }; error?: string }>(r)
+    );
 
-    Promise.all([loadConnectionTables, loadMetadata])
-      .then(([connRes, metaData]) => {
+    const loadConnectionTables = async (): Promise<string[]> => {
+      const res = await fetch(`/api/admin/connections/${connectionId}`, {
+        credentials: "include",
+      }).catch(() => null);
+      if (res?.ok) {
+        const data = await safeJsonResponse<{ connection_tables?: string[] | null }>(res);
+        if (Array.isArray(data.connection_tables)) return data.connection_tables;
+      }
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("connections")
+        .select("connection_tables")
+        .eq("id", connectionId)
+        .single();
+      return Array.isArray((data as { connection_tables?: string[] })?.connection_tables)
+        ? ((data as { connection_tables: string[] }).connection_tables)
+        : [];
+    };
+
+    Promise.all([loadConnectionTables(), loadMetadata])
+      .then(([current, metaData]) => {
         if (cancelled) return;
-        const current = Array.isArray((connRes.data as any)?.connection_tables)
-          ? ((connRes.data as any).connection_tables as string[])
-          : [];
         setSelectedKeys(new Set(current));
 
         if (metaData?.ok && Array.isArray(metaData.metadata?.tables) && metaData.metadata.tables.length > 0) {
           const list = (metaData.metadata.tables as TableRow[]).map((t) => ({
-            schema: t.schema || "PUBLIC",
+            schema: t.schema || "data_warehouse",
             name: t.name,
           }));
           setAllTables(list);
         } else {
           setAllTables([]);
           if (current.length > 0) {
-            setAllTables(current.map((s) => {
-              const parts = s.split(".");
-              return { schema: parts[0] || "PUBLIC", name: parts[1] || s };
-            }));
+            setAllTables(
+              current.map((s) => {
+                const parts = s.split(".");
+                return { schema: parts[0] || "data_warehouse", name: parts[1] || s };
+              })
+            );
           }
         }
       })
@@ -144,13 +158,17 @@ export default function ConnectionTablesDialog({
     if (!connectionId) return;
     setSaving(true);
     try {
-      const supabase = createClient();
       const lines = Array.from(selectedKeys);
-      const { error } = await supabase
-        .from("connections")
-        .update({ connection_tables: lines })
-        .eq("id", connectionId);
-      if (error) throw error;
+      const res = await fetch("/api/connection/update", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ connectionId, connection_tables: lines }),
+      });
+      const data = await safeJsonResponse<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || "No se pudo guardar");
+      }
       toast.success(
         lines.length > 0
           ? `${lines.length} tabla(s) guardada(s). El ETL usará solo estas tablas.`
@@ -158,8 +176,8 @@ export default function ConnectionTablesDialog({
       );
       onOpenChange(false);
       onSaved?.();
-    } catch (e: any) {
-      toast.error(e?.message || "No se pudo guardar");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "No se pudo guardar");
     } finally {
       setSaving(false);
     }
@@ -196,7 +214,11 @@ export default function ConnectionTablesDialog({
                   Tablas para ETL
                 </DialogTitle>
                 <DialogDescription className="mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>
-                  Definí qué tablas usar para &quot;{connectionTitle}&quot; ({connectionType}). Las seleccionadas aparecen arriba; las disponibles abajo. Solo las seleccionadas se verán en el ETL.
+                  Definí qué tablas usar para &quot;{connectionTitle}&quot; ({connectionType}).
+                  {isExcel
+                    ? " Cada hoja importada del Excel aparece como una tabla."
+                    : " Las seleccionadas aparecen arriba; las disponibles abajo."}{" "}
+                  Solo las seleccionadas se verán en el ETL.
                 </DialogDescription>
               </div>
             </div>

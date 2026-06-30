@@ -18,6 +18,12 @@ import { pipeline } from "stream/promises";
 import dns from "node:dns";
 import csvParser from "csv-parser"; // ⚡ NECESARIO: npm install csv-parser
 import * as XLSX from "xlsx";
+import {
+  ensureDataTablesForSheets,
+  excelConnectionTableKeys,
+  listSheetNamesFromBuffer,
+  loadWorkbookBufferForConnection,
+} from "@/lib/excel-import/excel-sheet-tables";
 
 // Forzar IPv4 para evitar ECONNRESET
 dns.setDefaultResultOrder("ipv4first");
@@ -692,7 +698,9 @@ async function processDataImport(
 
       const { data: tableState } = await supabaseAdmin
         .from("data_tables")
-        .select("import_status, columns, total_rows")
+        .select(
+          "import_status, columns, total_rows, physical_table_name, table_name"
+        )
         .eq("id", dataTableId)
         .single();
       if (!tableState) {
@@ -704,7 +712,9 @@ async function processDataImport(
         return;
       }
 
-      const tableNameEarly = `import_${connectionId.replaceAll("-", "_")}`;
+      const physicalTableName =
+        (tableState.physical_table_name as string | null | undefined)?.trim() ||
+        `import_${connectionId.replaceAll("-", "_")}`;
       if (forceReimport) {
         const useSslReset = !/localhost|127\.0\.0\.1/.test(dbUrl);
         const resetSql = postgres(dbUrl, {
@@ -714,7 +724,7 @@ async function processDataImport(
         });
         try {
           await resetSql.unsafe(
-            `TRUNCATE TABLE data_warehouse.${tableNameEarly}`
+            `TRUNCATE TABLE data_warehouse.${physicalTableName}`
           );
         } catch (truncateErr: any) {
           const msg = String(truncateErr?.message ?? "");
@@ -938,13 +948,12 @@ async function processDataImport(
     };
 
     const preWarnings: string[] = [];
-    let isAllSheets = selectedSheetToUse === "__ALL__";
-    if (isAllSheets && process.env.VERCEL) {
-      preWarnings.push(
-        "Importación de todas las hojas desactivada en producción (espacio en disco limitado). Se importará la primera hoja."
+    if (selectedSheetToUse === "__ALL__") {
+      throw new Error(
+        "La importación de todas las hojas debe orquestarse desde runProcessExcelImport."
       );
-      isAllSheets = false;
     }
+    const isAllSheets = false;
     const extLower = (preferredExtension || "").toLowerCase();
     const isXlsxLike = extLower === "xlsx" || extLower === "xlsm";
     const useLocalXlsxCopy = isXlsxLike && shouldUseLocalXlsxCopy(expectedFileSize);
@@ -979,7 +988,7 @@ async function processDataImport(
       .update({ import_status: "reading_workbook" })
       .eq("id", dataTableId);
 
-    const tableName = `import_${connectionId.replaceAll("-", "_")}`;
+    const tableName = physicalTableName;
     let headers: string[] = [];
     let headersSanitized: string[] = [];
     let inferredTypes: string[] = [];
@@ -1365,10 +1374,12 @@ async function processDataImport(
       .update({
         import_status: "completed",
         physical_schema_name: "data_warehouse",
+        physical_table_name: tableName,
+        table_name: finalSelectedSheet || tableState.table_name || tableName,
         columns: columnMetadata,
         total_rows: insertedRows,
-        error_message: warnings.length
-          ? `Advertencias:\n${warnings.join("\n")}`
+        error_message: [...preWarnings, ...warnings].length
+          ? `Advertencias:\n${[...preWarnings, ...warnings].join("\n")}`
           : null,
         updated_at: new Date().toISOString(),
       })
@@ -1428,6 +1439,136 @@ export type ProcessExcelImportInput = {
   cookieHeader?: string | null;
 };
 
+async function runAllSheetsExcelImport(
+  input: ProcessExcelImportInput,
+  sheetNames: string[],
+  supabaseAdmin: ReturnType<typeof createImportAdminClient>,
+  dbUrl: string,
+  useInternalStorage: boolean
+): Promise<void> {
+  const nonEmptySheets = sheetNames.filter(Boolean);
+  if (nonEmptySheets.length === 0) {
+    throw new Error("El archivo no contiene hojas legibles.");
+  }
+
+  if (nonEmptySheets.length === 1) {
+    if (!input.continuation) {
+      await supabaseAdmin
+        .from("data_tables")
+        .update({ import_status: "processing" })
+        .eq("id", input.dataTableId);
+    }
+    await processDataImport(
+      input.connectionId,
+      input.dataTableId,
+      supabaseAdmin,
+      dbUrl,
+      input.parseMode,
+      nonEmptySheets[0],
+      {
+        cookieHeader: input.cookieHeader,
+        internal: useInternalStorage,
+      },
+      Boolean(input.forceReimport)
+    );
+    return;
+  }
+
+  const mappings = await ensureDataTablesForSheets(
+    supabaseAdmin,
+    input.connectionId,
+    nonEmptySheets,
+    input.dataTableId
+  );
+
+  await supabaseAdmin
+    .from("connections")
+    .update({ connection_tables: excelConnectionTableKeys(mappings) })
+    .eq("id", input.connectionId);
+
+  const sheetWarnings: string[] = [];
+  let completedCount = 0;
+
+  for (const mapping of mappings) {
+    if (!input.continuation) {
+      await supabaseAdmin
+        .from("data_tables")
+        .update({ import_status: "processing", error_message: null })
+        .eq("id", mapping.dataTableId);
+    }
+
+    try {
+      await processDataImport(
+        input.connectionId,
+        mapping.dataTableId,
+        supabaseAdmin,
+        dbUrl,
+        input.parseMode,
+        mapping.sheetName,
+        {
+          cookieHeader: input.cookieHeader,
+          internal: useInternalStorage,
+        },
+        Boolean(input.forceReimport)
+      );
+
+      const { data: row } = await supabaseAdmin
+        .from("data_tables")
+        .select("import_status, error_message")
+        .eq("id", mapping.dataTableId)
+        .single();
+
+      if (row?.import_status === "completed") {
+        completedCount++;
+        if (row.error_message) {
+          sheetWarnings.push(`[${mapping.sheetName}] ${row.error_message}`);
+        }
+      } else if (row?.import_status === "failed") {
+        sheetWarnings.push(
+          `[${mapping.sheetName}] ${row.error_message ?? "Error desconocido"}`
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sheetWarnings.push(`[${mapping.sheetName}] ${msg}`);
+    }
+  }
+
+  if (completedCount === mappings.length) {
+    const summary =
+      sheetWarnings.length > 0
+        ? `Importadas ${completedCount} hojas con advertencias:\n${sheetWarnings.join("\n")}`
+        : `Importadas ${completedCount} hojas correctamente.`;
+    await supabaseAdmin
+      .from("data_tables")
+      .update({
+        import_status: "completed",
+        error_message: sheetWarnings.length ? summary : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", input.dataTableId);
+  } else if (completedCount > 0) {
+    await supabaseAdmin
+      .from("data_tables")
+      .update({
+        import_status: "failed",
+        error_message: `Se importaron ${completedCount} de ${mappings.length} hojas.\n${sheetWarnings.join("\n")}`,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", input.dataTableId);
+  } else {
+    await supabaseAdmin
+      .from("data_tables")
+      .update({
+        import_status: "failed",
+        error_message:
+          sheetWarnings.join("\n") || "No se pudo importar ninguna hoja.",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", input.dataTableId);
+  }
+}
+
 /** Ejecuta la importación Excel (usar en Railway o local; no en Vercel serverless). */
 export async function runProcessExcelImport(input: ProcessExcelImportInput): Promise<void> {
   const dbUrl = getImportDbUrl();
@@ -1441,6 +1582,51 @@ export async function runProcessExcelImport(input: ProcessExcelImportInput): Pro
     !input.cookieHeader ||
     Boolean(process.env.RAILWAY_ENVIRONMENT) ||
     Boolean(process.env.PROCESS_EXCEL_RUNNER_URL?.trim());
+
+  let selectedSheet = input.selectedSheet;
+
+  if (!input.continuation) {
+    const { data: connection } = await supabaseAdmin
+      .from("connections")
+      .select("storage_object_path, original_file_name")
+      .eq("id", input.connectionId)
+      .single();
+
+    if (connection?.storage_object_path) {
+      const buffer = await loadWorkbookBufferForConnection(
+        connection.storage_object_path as string,
+        (connection.original_file_name as string | null) ?? null,
+        {
+          cookieHeader: input.cookieHeader,
+          internal: useInternalStorage,
+        }
+      );
+      const sheetNames = listSheetNamesFromBuffer(
+        buffer,
+        connection.storage_object_path as string,
+        (connection.original_file_name as string | null) ?? null
+      );
+
+      const wantsAllSheets =
+        selectedSheet === "__ALL__" ||
+        (selectedSheet == null && sheetNames.length > 1);
+
+      if (wantsAllSheets && sheetNames.length > 1) {
+        await runAllSheetsExcelImport(
+          input,
+          sheetNames,
+          supabaseAdmin,
+          dbUrl,
+          useInternalStorage
+        );
+        return;
+      }
+
+      if (!selectedSheet && sheetNames.length === 1) {
+        selectedSheet = sheetNames[0];
+      }
+    }
+  }
 
   if (!input.continuation) {
     const { error } = await supabaseAdmin
@@ -1458,7 +1644,7 @@ export async function runProcessExcelImport(input: ProcessExcelImportInput): Pro
     supabaseAdmin,
     dbUrl,
     input.parseMode,
-    input.selectedSheet,
+    selectedSheet,
     {
       cookieHeader: input.cookieHeader,
       internal: useInternalStorage,

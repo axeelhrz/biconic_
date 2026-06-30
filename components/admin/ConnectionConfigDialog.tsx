@@ -57,6 +57,13 @@ type FormValues = {
   db_port: string;
 };
 
+type ExcelSheetRow = {
+  key: string;
+  label: string;
+  rows?: number | null;
+  status?: string | null;
+};
+
 type ClientOption = { id: string; company_name: string };
 
 const inputClass =
@@ -109,6 +116,7 @@ export default function ConnectionConfigDialog({
   const [error, setError] = useState<string | null>(null);
   const [tableSearch, setTableSearch] = useState("");
   const [clients, setClients] = useState<ClientOption[]>([]);
+  const [excelSheets, setExcelSheets] = useState<ExcelSheetRow[]>([]);
 
   const isView = mode === "view";
 
@@ -135,6 +143,7 @@ export default function ConnectionConfigDialog({
       setConn(null);
       setError(null);
       setTableSearch("");
+      setExcelSheets([]);
       return;
     }
     let cancelled = false;
@@ -180,7 +189,7 @@ export default function ConnectionConfigDialog({
     };
 
     Promise.all([loadConnection(), loadClients()])
-      .then(([row, clientRows]) => {
+      .then(async ([row, clientRows]) => {
         if (cancelled) return;
         setConn(row);
         setError(null);
@@ -194,6 +203,38 @@ export default function ConnectionConfigDialog({
           db_user: row.db_user ?? "",
           db_port: row.db_port != null ? String(row.db_port) : "",
         });
+
+        const rowIsExcel = row.type === "excel" || row.type === "excel_file";
+        if (rowIsExcel && connectionId) {
+          try {
+            const metaRes = await fetch("/api/connection/metadata", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ connectionId, discoverTables: true }),
+            });
+            const metaData = await safeJsonResponse<{
+              ok?: boolean;
+              metadata?: {
+                tables?: { schema: string; name: string; label?: string }[];
+              };
+            }>(metaRes);
+            if (!cancelled && metaData?.ok && Array.isArray(metaData.metadata?.tables)) {
+              setExcelSheets(
+                metaData.metadata.tables.map((t) => ({
+                  key: `${t.schema || "data_warehouse"}.${t.name}`,
+                  label: t.label || t.name,
+                }))
+              );
+            } else if (!cancelled) {
+              setExcelSheets([]);
+            }
+          } catch {
+            if (!cancelled) setExcelSheets([]);
+          }
+        } else if (!cancelled) {
+          setExcelSheets([]);
+        }
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -259,11 +300,28 @@ export default function ConnectionConfigDialog({
   };
 
   const isExcel = conn?.type === "excel" || conn?.type === "excel_file";
-  const tables = Array.isArray(conn?.connection_tables) ? conn.connection_tables : [];
+  const tables = isExcel
+    ? excelSheets.map((s) => s.key)
+    : Array.isArray(conn?.connection_tables)
+      ? conn.connection_tables
+      : [];
   const tableSearchLower = tableSearch.trim().toLowerCase();
   const filteredTables = tableSearchLower
     ? tables.filter((t) => String(t).toLowerCase().includes(tableSearchLower))
     : tables;
+  const filteredExcelSheets = tableSearchLower
+    ? excelSheets.filter(
+        (s) =>
+          s.key.toLowerCase().includes(tableSearchLower) ||
+          s.label.toLowerCase().includes(tableSearchLower)
+      )
+    : excelSheets;
+  const showTablesEditor =
+    isExcel ||
+    conn?.type === "firebird" ||
+    conn?.type === "mysql" ||
+    conn?.type === "postgres" ||
+    conn?.type === "postgresql";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -451,24 +509,8 @@ export default function ConnectionConfigDialog({
                 )}
               </div>
 
-              {/* Tabla importada (Excel) */}
-              {isExcel && tables.length > 0 && (
-                <div
-                  className="rounded-xl border p-4 mb-5"
-                  style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
-                >
-                  <h3 className="text-xs font-semibold uppercase tracking-wider mb-3 flex items-center gap-2" style={{ color: "var(--platform-fg-muted)" }}>
-                    <Table2 className="h-3.5 w-3.5" />
-                    Tabla disponible para ETL
-                  </h3>
-                  <p className="text-sm font-mono" style={{ color: "var(--platform-fg)" }}>
-                    {tables[0]}
-                  </p>
-                </div>
-              )}
-
               {/* Tablas para ETL */}
-              {(conn.type === "firebird" || conn.type === "mysql" || conn.type === "postgres" || conn.type === "postgresql") && (
+              {showTablesEditor && (
                 <div
                   className="rounded-xl border overflow-hidden"
                   style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
@@ -477,7 +519,7 @@ export default function ConnectionConfigDialog({
                     <div className="flex items-center gap-2">
                       <Table2 className="h-4 w-4" style={{ color: "var(--platform-accent)" }} />
                       <span className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>
-                        Tablas para ETL
+                        {isExcel ? "Hojas / tablas importadas" : "Tablas para ETL"}
                       </span>
                       {tables.length > 0 && (
                         <span
@@ -512,7 +554,7 @@ export default function ConnectionConfigDialog({
                       <div className="px-4 py-2 border-b" style={{ borderColor: "var(--platform-border)" }}>
                         <input
                           type="text"
-                          placeholder="Buscar tabla…"
+                          placeholder={isExcel ? "Buscar hoja o tabla…" : "Buscar tabla…"}
                           value={tableSearch}
                           onChange={(e) => setTableSearch(e.target.value)}
                           className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]/30"
@@ -527,7 +569,27 @@ export default function ConnectionConfigDialog({
                         className="max-h-[220px] overflow-y-auto py-1"
                         style={{ color: "var(--platform-fg-muted)" }}
                       >
-                        {filteredTables.length === 0 ? (
+                        {isExcel ? (
+                          filteredExcelSheets.length === 0 ? (
+                            <p className="px-4 py-6 text-center text-sm">Ninguna hoja coincide con la búsqueda.</p>
+                          ) : (
+                            <ul className="space-y-0">
+                              {filteredExcelSheets.map((sheet) => (
+                                <li
+                                  key={sheet.key}
+                                  className="px-4 py-2 transition-colors hover:bg-[var(--platform-surface-hover)]"
+                                >
+                                  <p className="text-sm font-medium truncate" style={{ color: "var(--platform-fg)" }} title={sheet.label}>
+                                    {sheet.label}
+                                  </p>
+                                  <p className="text-xs font-mono truncate" title={sheet.key}>
+                                    {sheet.key}
+                                  </p>
+                                </li>
+                              ))}
+                            </ul>
+                          )
+                        ) : filteredTables.length === 0 ? (
                           <p className="px-4 py-6 text-center text-sm">Ninguna tabla coincide con la búsqueda.</p>
                         ) : (
                           <ul className="space-y-0">
@@ -546,7 +608,9 @@ export default function ConnectionConfigDialog({
                     </>
                   ) : (
                     <p className="px-4 py-5 text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-                      Ninguna tabla seleccionada. En el ETL se listarán todas las disponibles. Usá &quot;Editar tablas&quot; para elegir cuáles incluir.
+                      {isExcel
+                        ? "Todavía no hay hojas importadas. Esperá a que termine la importación o volvé a subir el archivo."
+                        : 'Ninguna tabla seleccionada. En el ETL se listarán todas las disponibles. Usá "Editar tablas" para elegir cuáles incluir.'}
                     </p>
                   )}
                 </div>

@@ -403,7 +403,7 @@ export default function AdminNewConnectionDialog({
           }
         }
       } else if (!wantsAllSheets && fileExt !== "csv") {
-        selectedSheet = undefined;
+        selectedSheet = "__ALL__";
       }
 
       setCurrentImportId(dataTableId);
@@ -690,6 +690,7 @@ export default function AdminNewConnectionDialog({
           onExcelUpload={handleExcelUpload}
           isProcessing={isProcessing}
           currentImportId={currentImportId}
+          currentConnectionId={createdConnectionId}
           onProcessFinished={handleProcessFinished}
           onSubmit={handleSubmit}
           onTestConnection={handleTest}

@@ -362,10 +362,11 @@ export default function NewConnectionDialog({
           }
         }
       } else if (!wantsAllSheets && fileExt !== "csv") {
-        selectedSheet = undefined;
+        selectedSheet = "__ALL__";
       }
 
       setCurrentImportId(dataTableId);
+      setCreatedConnectionId(newConnectionId);
       setIsProcessing(true);
 
       const response = await fetch("/api/process-excel", {
@@ -617,6 +618,7 @@ export default function NewConnectionDialog({
           onExcelUpload={handleExcelUpload}
           isProcessing={isProcessing}
           currentImportId={currentImportId}
+          currentConnectionId={createdConnectionId}
           onProcessFinished={handleProcessFinished}
           onSubmit={handleSubmit}
           onTestConnection={handleTest}

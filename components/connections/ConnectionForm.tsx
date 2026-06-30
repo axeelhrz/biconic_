@@ -67,6 +67,7 @@ type ConnectionFormProps = {
   // Nuevas props para recibir el estado del proceso desde el diálogo padre
   isProcessing?: boolean;
   currentImportId?: string | null;
+  currentConnectionId?: string | null;
   onProcessFinished?: (result: {
     status: "completed" | "failed";
     errorMessage?: string | null;
@@ -88,6 +89,7 @@ export default function ConnectionForm({
   // Recibimos las nuevas props para controlar la UI
   isProcessing,
   currentImportId,
+  currentConnectionId,
   onProcessFinished,
   clientOptions,
   selectedClientId = "",
@@ -418,9 +420,10 @@ export default function ConnectionForm({
                   </div>
                 </div>
               )}
-              {isProcessing && currentImportId && onProcessFinished ? (
+              {isProcessing && (currentImportId || currentConnectionId) && onProcessFinished ? (
                 <ImportStatus
-                  dataTableId={currentImportId}
+                  dataTableId={currentImportId ?? undefined}
+                  connectionId={currentConnectionId ?? undefined}
                   onProcessFinished={onProcessFinished}
                 />
               ) : (
