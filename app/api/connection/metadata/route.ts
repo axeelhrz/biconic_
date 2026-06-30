@@ -6,7 +6,7 @@ import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { EXCEL_PHYSICAL_SCHEMA } from "@/lib/db/internal-db-url";
-import { buildExcelMetadataTables } from "@/lib/excel-import/excel-metadata";
+import { buildExcelMetadataTables, resolveExcelPhysicalTableFromSelection } from "@/lib/excel-import/excel-metadata";
 import { resolveConnectionType } from "@/lib/connection/resolve-connection-type";
 import {
   readConnectionTablesFromRow,
@@ -154,12 +154,39 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         fileName,
       });
 
+      if (connectionTables && connectionTables.length > 0 && !discoverTables) {
+        const allowed = new Set(
+          connectionTables.map((t: string) => String(t).trim().toLowerCase())
+        );
+        tables = tables.filter((t) => {
+          const qualified = `${t.schema}.${t.name}`.toLowerCase();
+          const bare = t.name.toLowerCase();
+          const label = (t.label || "").toLowerCase();
+          return (
+            allowed.has(qualified) ||
+            allowed.has(bare) ||
+            (label && allowed.has(label))
+          );
+        });
+      }
+
       if (typeof bodyTableName === "string" && bodyTableName.trim()) {
         const wanted = bodyTableName.trim().toLowerCase();
-        const match = tables.find(
-          (t) => `${t.schema}.${t.name}`.toLowerCase() === wanted
-        );
-        tables = match ? [match] : tables.filter((t: any) => t.name.toLowerCase() === wanted);
+        const wantedBare = wanted.includes(".")
+          ? wanted.split(".").slice(1).join(".")
+          : wanted;
+        const match =
+          tables.find((t) => `${t.schema}.${t.name}`.toLowerCase() === wanted) ??
+          tables.find((t) => t.name.toLowerCase() === wantedBare) ??
+          tables.find((t) => (t.label || "").toLowerCase() === wantedBare);
+        tables = match
+          ? [match]
+          : tables.filter(
+              (t) =>
+                t.name.toLowerCase() === wantedBare ||
+                `${t.schema}.${t.name}`.toLowerCase() === wanted ||
+                (t.label || "").toLowerCase() === wantedBare
+            );
       }
 
       const primary = rows[0] as { total_rows?: number | null; import_status?: string | null };

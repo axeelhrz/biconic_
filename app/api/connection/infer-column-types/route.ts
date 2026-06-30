@@ -7,7 +7,7 @@ import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { deriveColumnTypesFromSample } from "@/lib/derive-column-types";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
-import { resolveExcelTableName } from "@/lib/excel-import/excel-metadata";
+import { resolveExcelTableName, resolveExcelPhysicalTableFromSelection } from "@/lib/excel-import/excel-metadata";
 
 type Body = { connectionId: string | number; tableName?: string };
 
@@ -63,15 +63,42 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     let rows: Record<string, unknown>[] = [];
 
     if (type === "excel") {
-      const { data: meta, error: metaError } = await dbClient
+      const tableNameParam = (body.tableName ?? "").trim();
+      const { data: metaRows, error: metaError } = await dbClient
         .from("data_tables")
-        .select("physical_table_name")
-        .eq("connection_id", String(body.connectionId))
-        .maybeSingle();
-      if (metaError || !meta) {
-        return NextResponse.json({ ok: false, error: "Metadatos de Excel no encontrados" }, { status: 404 });
+        .select("physical_table_name, table_name")
+        .eq("connection_id", String(body.connectionId));
+
+      const metaTableRows = Array.isArray(metaRows)
+        ? metaRows
+        : metaRows
+          ? [metaRows]
+          : [];
+
+      if (metaError || metaTableRows.length === 0) {
+        return NextResponse.json(
+          { ok: false, error: "Metadatos de Excel no encontrados" },
+          { status: 404 }
+        );
       }
-      const tableName = resolveExcelTableName(String(body.connectionId), meta as { physical_table_name?: string | null });
+
+      const tableName = tableNameParam
+        ? resolveExcelPhysicalTableFromSelection(
+            tableNameParam,
+            metaTableRows as { physical_table_name?: string | null; table_name?: string | null }[]
+          )
+        : resolveExcelTableName(
+            String(body.connectionId),
+            metaTableRows[0] as { physical_table_name?: string | null }
+          );
+
+      if (!tableName) {
+        return NextResponse.json(
+          { ok: false, error: "No se pudo resolver la tabla de Excel" },
+          { status: 400 }
+        );
+      }
+
       const client = new PgClient({ connectionString: getInternalDbUrl(), ssl: false } as { connectionString: string; ssl: boolean });
       await client.connect();
       try {

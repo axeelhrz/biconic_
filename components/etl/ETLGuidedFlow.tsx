@@ -178,7 +178,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const router = useRouter();
   const [step, setStep] = useState<StepId>(initialStep);
   const [connectionId, setConnectionId] = useState<string | number | null>(null);
-  const [tables, setTables] = useState<{ schema: string; name: string; columns: { name: string }[] }[]>([]);
+  const [tables, setTables] = useState<{ schema: string; name: string; label?: string; columns: { name: string; label?: string }[] }[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
   /** Por cada columna: nombre para mostrar, formato y tipo (override manual). */
@@ -443,6 +443,36 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     });
   }, [initialGuidedConfig]);
 
+  const applyColumnLabelsToDisplay = useCallback(
+    (
+      columnRows: { name: string; label?: string; inferredType?: "Fecha" | "Número" | "Texto"; dataType?: string }[]
+    ) => {
+      setColumnDisplay((prev) => {
+        const next = { ...prev };
+        for (const col of columnRows) {
+          const displayLabel = col.label?.trim() || col.name;
+          const inferred =
+            col.inferredType ??
+            (col.dataType ? dataTypeToLabel(col.dataType) : undefined);
+          if (!next[col.name]) {
+            next[col.name] = {
+              label: displayLabel,
+              format: "",
+              type:
+                inferred === "Fecha" || inferred === "Número" || inferred === "Texto"
+                  ? inferred
+                  : undefined,
+            };
+          } else if (!next[col.name].label?.trim()) {
+            next[col.name] = { ...next[col.name], label: displayLabel };
+          }
+        }
+        return next;
+      });
+    },
+    []
+  );
+
   // Cargar tablas al elegir conexión
   useEffect(() => {
     if (!connectionId) {
@@ -456,7 +486,22 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       .then((res) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { schema: string; name: string; columns: { name: string }[] }[] }; error?: string }>(res))
       .then((data) => {
         if (cancelled || !data.ok || !data.metadata?.tables) return;
-        setTables(data.metadata.tables || []);
+        const loadedTables = (data.metadata.tables || []) as {
+          schema: string;
+          name: string;
+          label?: string;
+          columns: { name: string; label?: string }[];
+        }[];
+        setTables(loadedTables);
+        const initialColumns = loadedTables.flatMap((t) => t.columns ?? []);
+        if (initialColumns.length > 0) {
+          applyColumnLabelsToDisplay(
+            initialColumns.map((c) => ({
+              name: c.name,
+              label: c.label,
+            }))
+          );
+        }
         if (!skipClearSelectedTableRef.current) {
           setSelectedTable(null);
           setColumns([]);
@@ -473,7 +518,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return () => {
       cancelled = true;
     };
-  }, [connectionId]);
+  }, [connectionId, applyColumnLabelsToDisplay]);
 
   // Cargar columnas al elegir tabla (si la tabla viene con columnas vacías, pedirlas)
   const selectedTableInfo = tables.find(
@@ -590,6 +635,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   const hasColumns = (selectedTableInfo?.columns?.length ?? 0) > 0;
 
+  const getColumnDisplayLabel = useCallback(
+    (col: { name: string; label?: string }) =>
+      columnDisplay[col.name]?.label?.trim() || col.label?.trim() || col.name,
+    [columnDisplay]
+  );
+
   const loadColumnsForTable = useCallback(() => {
     if (!connectionId || !selectedTable) return;
     setLoadingColumns(selectedTable);
@@ -609,7 +660,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           return;
         }
         const cols = tableColumns.map((c: { name: string }) => c.name);
-        let columnsWithInferred = tableColumns as { name: string; dataType?: string; inferredType?: "Fecha" | "Número" | "Texto" }[];
+        let columnsWithInferred = tableColumns as {
+          name: string;
+          label?: string;
+          dataType?: string;
+          inferredType?: "Fecha" | "Número" | "Texto";
+        }[];
         try {
           const inferRes = await fetch("/api/connection/infer-column-types", {
             method: "POST",
@@ -638,9 +694,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           )
         );
         setColumns((prev) => (prev.length ? prev : cols));
+        applyColumnLabelsToDisplay(columnsWithInferred);
       })
       .finally(() => setLoadingColumns(null));
-  }, [connectionId, selectedTable]);
+  }, [connectionId, selectedTable, applyColumnLabelsToDisplay]);
 
   useEffect(() => {
     if (selectedTable && !hasColumns && !loadingColumns) loadColumnsForTable();
@@ -878,6 +935,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       const meta = selectedTableInfo?.columns?.find((c: { name: string }) => c.name === colName);
       return {
         name: colName,
+        label: (meta as { label?: string })?.label,
         dataType: (meta as { dataType?: string })?.dataType,
         inferredType: (meta as { inferredType?: string })?.inferredType,
       };
@@ -1680,7 +1738,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             color: active ? "var(--platform-accent)" : "var(--platform-fg-muted)",
                           }}
                         >
-                          {c.name}
+                          {getColumnDisplayLabel(c)}
                         </button>
                       );
                     })}
@@ -2371,8 +2429,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       </tr>
                     </thead>
                     <tbody>
-                      {finalColumnsForTypes.map((c: { name: string; dataType?: string; inferredType?: string }) => {
-                        const disp = columnDisplay[c.name] ?? { label: "", format: "" };
+                      {finalColumnsForTypes.map((c: { name: string; label?: string; dataType?: string; inferredType?: string }) => {
+                        const disp = columnDisplay[c.name] ?? {
+                          label: c.label?.trim() || "",
+                          format: "",
+                        };
                         const rowKeyNorm = c.name.replace(/\./g, "_").toLowerCase();
                         const fromPreview = inferredTypesFromPreview[rowKeyNorm];
                         const tipoInferido = dataTypeToLabel(fromPreview ?? (c as { inferredType?: string }).inferredType ?? c.dataType);
@@ -2382,7 +2443,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         const formatOptions = isDate ? DATE_FORMAT_OPTIONS : isNumber ? NUMBER_FORMAT_OPTIONS : TEXT_FORMAT_OPTIONS;
                         return (
                           <tr key={c.name} style={{ borderBottom: "1px solid var(--platform-border)" }}>
-                            <td className="py-2 px-3 font-mono text-xs" style={{ color: "var(--platform-fg)" }}>{c.name}</td>
+                            <td className="py-2 px-3 text-xs" style={{ color: "var(--platform-fg)" }}>
+                              <div className="font-medium">{getColumnDisplayLabel(c)}</div>
+                              {getColumnDisplayLabel(c) !== c.name && (
+                                <div className="font-mono text-[11px] mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>
+                                  {c.name}
+                                </div>
+                              )}
+                            </td>
                             <td className="py-1 px-2">
                               <Select
                                 value={tipo}
@@ -2397,7 +2465,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               <Input
                                 value={disp.label}
                                 onChange={(e) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), label: e.target.value } }))}
-                                placeholder={c.name.replace(/^(primary|join_\d+)\./, "")}
+                                placeholder={c.label?.trim() || c.name.replace(/^(primary|join_\d+)\./, "")}
                                 className="h-8 text-sm rounded-lg"
                                 style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
                               />
