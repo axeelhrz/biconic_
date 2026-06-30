@@ -59,17 +59,23 @@ const PROGRESS_UPDATE_INTERVAL = 2000; // Actualizar DB cada X filas
 const MAX_WARNINGS = 20;
 const CURSOR_SAVE_INTERVAL = 10000;
 const IMPORT_CURSOR_KEY = "__import_cursor_v1";
+/** Archivos .xlsx/.xlsm por debajo de este tamaño se leen con SheetJS (cabeceras fiables). */
+const SHEETJS_XLSX_MAX_BYTES = 120 * 1024 * 1024;
 const DEBUG_INGEST_URL =
   "http://127.0.0.1:7710/ingest/20cf47c8-0473-4ba0-9564-fc0b0bf73d37";
 const DEBUG_SESSION_ID = "ccff04";
 
 // --- UTILIDADES ---
-function normalizeHeaderLabel(value: unknown, index: number): string {
-  if (value === null || value === undefined) {
-    return `column_${index + 1}`;
+function extractTextFromExcelValue(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value.toISOString().split("T")[0];
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
   }
-  if (value instanceof Date) {
-    return value.toISOString().split("T")[0];
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === "[object Object]") return null;
+    return trimmed;
   }
   if (typeof value === "object") {
     const cell = value as Record<string, unknown>;
@@ -93,13 +99,12 @@ function normalizeHeaderLabel(value: unknown, index: number): string {
     if (typeof cell.hyperlink === "string" && cell.hyperlink.trim()) {
       return cell.hyperlink.trim();
     }
-    return `column_${index + 1}`;
   }
-  const text = String(value).trim();
-  if (!text || text === "[object Object]") {
-    return `column_${index + 1}`;
-  }
-  return text;
+  return null;
+}
+
+function normalizeHeaderLabel(value: unknown, index: number): string {
+  return extractTextFromExcelValue(value) ?? `column_${index + 1}`;
 }
 
 const slugifyColumnBase = (name: string) => {
@@ -112,6 +117,43 @@ const slugifyColumnBase = (name: string) => {
 };
 
 const sanitizeColumnName = (name: string) => `"${slugifyColumnBase(name)}"`;
+
+function looksLikeGenericExcelHeaders(headers: string[]): boolean {
+  if (headers.length === 0) return false;
+  const genericCount = headers.filter((header) =>
+    /^column_\d+$/i.test(header.trim())
+  ).length;
+  return genericCount >= Math.max(1, Math.ceil(headers.length * 0.5));
+}
+
+function readExcelHeaderLabelsFromPath(
+  filePath: string,
+  selectedSheet?: string,
+  selectedSheetIndex?: number
+): string[] | null {
+  try {
+    const workbook = XLSX.readFile(filePath, { cellDates: true, sheetRows: 1 });
+    const sheetName =
+      selectedSheet && workbook.SheetNames.includes(selectedSheet)
+        ? selectedSheet
+        : workbook.SheetNames[Math.max(0, (selectedSheetIndex ?? 1) - 1)] ??
+          workbook.SheetNames[0];
+    if (!sheetName || !workbook.Sheets[sheetName]) return null;
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+      header: 1,
+      defval: null,
+      raw: false,
+    }) as unknown[][];
+    const firstRow = rows[0];
+    if (!Array.isArray(firstRow)) return null;
+    const labels = firstRow.map((value, index) =>
+      normalizeHeaderLabel(value, index)
+    );
+    return looksLikeGenericExcelHeaders(labels) ? null : labels;
+  } catch {
+    return null;
+  }
+}
 
 /** Evita CREATE TABLE con columnas duplicadas (p. ej. varios [object Object] en Excel). */
 function buildUniqueSanitizedHeaders(values: unknown[]): string[] {
@@ -132,31 +174,10 @@ function coerceExcelCellValue(val: unknown): string | number | boolean | null {
   if (typeof val === "boolean" || typeof val === "number") return val;
   if (typeof val === "object") {
     const cell = val as Record<string, unknown>;
-    // Referencia sin resolver de ExcelJS streaming (sharedStrings: emit)
+    // Referencia sin resolver (no debería ocurrir con sharedStrings: cache).
     if ("sharedString" in cell) return null;
-    if (typeof cell.text === "string") {
-      const trimmed = cell.text.trim();
-      return trimmed === "" ? null : trimmed;
-    }
-    if (cell.result !== null && cell.result !== undefined && cell.result !== "") {
-      return coerceExcelCellValue(cell.result);
-    }
-    if (Array.isArray(cell.richText)) {
-      const text = cell.richText
-        .map((part) =>
-          part && typeof part === "object" && "text" in part
-            ? String((part as { text?: unknown }).text ?? "")
-            : ""
-        )
-        .join("")
-        .trim();
-      return text === "" ? null : text;
-    }
-    if (typeof cell.hyperlink === "string") {
-      const trimmed = cell.hyperlink.trim();
-      return trimmed === "" ? null : trimmed;
-    }
-    return null;
+    const text = extractTextFromExcelValue(val);
+    return text;
   }
   if (typeof val === "string") {
     const trimmed = val.trim();
@@ -592,11 +613,47 @@ async function* getRowGenerator(
     return;
   }
 
+  if (
+    (format === "xlsx" || format === "xlsm") &&
+    source.kind === "path"
+  ) {
+    const filePath = source.path;
+    let fileSize = 0;
+    try {
+      fileSize = fs.statSync(filePath).size;
+    } catch {
+      fileSize = 0;
+    }
+    if (fileSize > 0 && fileSize <= SHEETJS_XLSX_MAX_BYTES) {
+      console.log(
+        `[LOG] Modo: ${format.toUpperCase()} (SheetJS, ~${Math.round(fileSize / (1024 * 1024))} MB)`
+      );
+      const workbook = XLSX.readFile(filePath, { cellDates: true });
+
+      const sheetName =
+        selectedSheet && workbook.SheetNames.includes(selectedSheet)
+          ? selectedSheet
+          : workbook.SheetNames[
+              Math.max(0, (selectedSheetIndex ?? 1) - 1)
+            ] ?? workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(worksheet, {
+        header: 1,
+        defval: null,
+        raw: false,
+      }) as any[][];
+      for (const row of rows) {
+        yield Array.isArray(row) ? row : [];
+      }
+      return;
+    }
+  }
+
   console.log("[LOG] Modo: XLSX/XLSM Stream (ExcelJS)");
   const options: any = {
     entries: "emit",
-    // emit + coerceExcelCellValue: evita precargar sharedStrings (lento en archivos 200MB+).
-    sharedStrings: "emit",
+    // cache: resuelve shared strings (cabeceras legibles). emit dejaba { sharedString: N } → column_1.
+    sharedStrings: "cache",
     styles: "ignore",
     hyperlinks: "ignore",
   };
@@ -1151,7 +1208,24 @@ async function processDataImport(
 
         if (rowCount === 0) {
           headers = values.map((value, index) => normalizeHeaderLabel(value, index));
-          headersSanitized = buildUniqueSanitizedHeaders(values);
+          if (
+            looksLikeGenericExcelHeaders(headers) &&
+            importSource?.kind === "path" &&
+            (fileFormat === "xlsx" || fileFormat === "xlsm")
+          ) {
+            const recovered = readExcelHeaderLabelsFromPath(
+              importSource.path,
+              finalSelectedSheet,
+              finalSelectedSheetIndex
+            );
+            if (recovered?.length) {
+              console.log(
+                `[LOG] Cabeceras recuperadas con SheetJS (${recovered.length} columnas).`
+              );
+              headers = recovered;
+            }
+          }
+          headersSanitized = buildUniqueSanitizedHeaders(headers);
 
           const numCols = headers.length;
           if (numCols > 0) {
