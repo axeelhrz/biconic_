@@ -71,30 +71,15 @@ function fbOpts(conn: FirebirdConn) {
   };
 }
 
-async function queryFirebird(
-  opts: ReturnType<typeof fbOpts>,
-  sql: string
-): Promise<Record<string, any>[]> {
-  const Firebird = require("node-firebird");
-  return new Promise<Record<string, any>[]>((resolve, reject) => {
-    Firebird.attach(opts, (err: Error | null, db: any) => {
-      if (err) return reject(err);
-      db.query(sql, [], (qErr: Error | null, rows: any[]) => {
-        if (db?.detach) try { db.detach(() => {}); } catch (_) {}
-        if (qErr) return reject(qErr);
-        const normalized = (rows || []).map((row: Record<string, any>) => {
-          const out: Record<string, any> = {};
-          for (const k of Object.keys(row)) out[normalizeKey(k)] = row[k];
-          return out;
-        });
-        resolve(normalized);
-      });
-    });
-  });
-}
-
 /**
- * Lee una tabla Firebird en lotes y la vuelca a una tabla PostgreSQL temporal.
+ * Lee una tabla Firebird en un solo pase (cursor server-side vía `db.sequentially`,
+ * ver https://github.com/hgourvest/node-firebird/wiki/What-is-sequentially-selects)
+ * y la vuelca a una tabla PostgreSQL temporal en lotes.
+ *
+ * Antes se paginaba con `FIRST n SKIP offset`, que en Firebird re-escanea la tabla
+ * desde el inicio en cada lote (costo O(n²) en tablas grandes). `sequentially` abre
+ * un único cursor y transmite cada fila una sola vez.
+ *
  * Devuelve el nombre cualificado de la tabla creada y cantidad de filas.
  */
 export async function materializeFirebirdTable(
@@ -106,7 +91,8 @@ export async function materializeFirebirdTable(
   targetSchema: string,
   targetTable: string,
   signal?: { aborted: boolean },
-  sharedPgClient?: PgClient
+  sharedPgClient?: PgClient,
+  onProgress?: (rowsSoFar: number) => void
 ): Promise<MaterializeResult> {
   const qualifiedTable = `${targetSchema}."${targetTable}"`;
   const opts = fbOpts(conn);
@@ -134,66 +120,123 @@ export async function materializeFirebirdTable(
     await pgClient.query(`CREATE SCHEMA IF NOT EXISTS ${targetSchema}`).catch(() => {});
   }
 
-  let tableCreated = false;
-  let totalRows = 0;
+  const sql = `SELECT ${cols} FROM ${tablePart}${wherePart}`;
 
   try {
-    let offset = 0;
-    let effectiveFbBatch = FB_BATCH_SIZE;
-    let pgInsertBatch = PG_INSERT_BATCH;
+    const result = await new Promise<{ rowCount: number }>((resolve, reject) => {
+      const Firebird = require("node-firebird");
+      Firebird.attach(opts, (attachErr: Error | null, db: any) => {
+        if (attachErr) return reject(attachErr);
 
-    while (true) {
-      if (signal?.aborted) break;
+        let tableCreated = false;
+        let pgInsertBatch = PG_INSERT_BATCH;
+        let buffer: Record<string, any>[] = [];
+        let totalRows = 0;
+        let failed = false;
+        let insertChain: Promise<void> = Promise.resolve();
+        let lastProgressReport = 0;
 
-      const sql = offset > 0
-        ? `SELECT FIRST ${effectiveFbBatch} SKIP ${offset} ${cols} FROM ${tablePart}${wherePart} ORDER BY 1`
-        : `SELECT FIRST ${effectiveFbBatch} ${cols} FROM ${tablePart}${wherePart} ORDER BY 1`;
+        const detachSafely = () => {
+          try {
+            if (db?.detach) db.detach(() => {});
+          } catch {
+            /* ignore */
+          }
+        };
 
-      const rows = await queryFirebird(opts, sql);
-      if (rows.length === 0) break;
-
-      if (!tableCreated) {
-        const sample = rows[0];
-        const numCols = Object.keys(sample).length;
-        pgInsertBatch = Math.min(PG_INSERT_BATCH, Math.max(1, Math.floor(65000 / numCols)));
-        effectiveFbBatch = numCols > 100 ? 2000 : numCols > 50 ? 4000 : FB_BATCH_SIZE;
-        const colDefs = Object.keys(sample)
-          .map((k) => `"${k}" ${inferPgType(sample[k])}`)
-          .join(", ");
-        await pgClient.query(`DROP TABLE IF EXISTS ${qualifiedTable}`);
-        await pgClient.query(`CREATE TABLE ${qualifiedTable} (${colDefs})`);
-        tableCreated = true;
-      }
-
-      for (let i = 0; i < rows.length; i += pgInsertBatch) {
-        const chunk = rows.slice(i, i + pgInsertBatch);
-        if (chunk.length === 0) continue;
-        const keys = Object.keys(chunk[0]);
-        const colList = keys.map((k) => `"${k}"`).join(", ");
-        const values: unknown[] = [];
-        const placeholders = chunk.map((row, ri) => {
-          const ph = keys.map((k, ki) => {
-            values.push(sanitizeForPostgres(row[k]));
-            return `$${ri * keys.length + ki + 1}`;
+        const scheduleInsert = (rows: Record<string, any>[]) => {
+          insertChain = insertChain.then(async () => {
+            if (failed || rows.length === 0) return;
+            const keys = Object.keys(rows[0]);
+            const colList = keys.map((k) => `"${k}"`).join(", ");
+            const values: unknown[] = [];
+            const placeholders = rows.map((row, ri) => {
+              const ph = keys.map((k, ki) => {
+                values.push(sanitizeForPostgres(row[k]));
+                return `$${ri * keys.length + ki + 1}`;
+              });
+              return `(${ph.join(", ")})`;
+            });
+            await pgClient.query(
+              `INSERT INTO ${qualifiedTable} (${colList}) VALUES ${placeholders.join(", ")}`,
+              values
+            );
+          }).catch((e) => {
+            failed = true;
+            throw e;
           });
-          return `(${ph.join(", ")})`;
-        });
-        await pgClient.query(
-          `INSERT INTO ${qualifiedTable} (${colList}) VALUES ${placeholders.join(", ")}`,
-          values
-        );
-      }
+        };
 
-      totalRows += rows.length;
-      offset += rows.length;
-      if (rows.length < effectiveFbBatch) break;
+        const onRow = (row: Record<string, any>) => {
+          if (failed) return;
+          if (signal?.aborted) {
+            failed = true;
+            return;
+          }
+          const normalized: Record<string, any> = {};
+          for (const k of Object.keys(row)) normalized[normalizeKey(k)] = row[k];
+          totalRows++;
+
+          if (!tableCreated) {
+            tableCreated = true;
+            const numCols = Object.keys(normalized).length;
+            pgInsertBatch = Math.min(PG_INSERT_BATCH, Math.max(1, Math.floor(65000 / numCols)));
+            const colDefs = Object.keys(normalized)
+              .map((k) => `"${k}" ${inferPgType(normalized[k])}`)
+              .join(", ");
+            insertChain = insertChain
+              .then(async () => {
+                await pgClient.query(`DROP TABLE IF EXISTS ${qualifiedTable}`);
+                await pgClient.query(
+                  `CREATE TABLE ${qualifiedTable} (_biconic_rn BIGSERIAL PRIMARY KEY, ${colDefs})`
+                );
+              })
+              .catch((e) => {
+                failed = true;
+                throw e;
+              });
+          }
+
+          buffer.push(normalized);
+          if (buffer.length >= pgInsertBatch) {
+            const toFlush = buffer;
+            buffer = [];
+            scheduleInsert(toFlush);
+            if (onProgress && totalRows - lastProgressReport >= 25_000) {
+              lastProgressReport = totalRows;
+              onProgress(totalRows);
+            }
+          }
+        };
+
+        const onDone = (streamErr: Error | null) => {
+          detachSafely();
+          if (buffer.length > 0) {
+            const toFlush = buffer;
+            buffer = [];
+            scheduleInsert(toFlush);
+          }
+          insertChain
+            .then(() => {
+              if (streamErr) return reject(streamErr);
+              if (failed) return; // ya rechazado dentro del chain
+              resolve({ rowCount: totalRows });
+            })
+            .catch((e) => reject(e));
+        };
+
+        db.sequentially(sql, [], onRow, onDone);
+      });
+    });
+
+    if (result.rowCount > 0) {
+      console.log(`[materialize] ${qualifiedTable}: ${result.rowCount} filas volcadas.`);
+    } else {
+      // Tabla vacía: crear igual para que el JOIN posterior no falle por tabla inexistente.
+      await pgClient.query(`CREATE TABLE IF NOT EXISTS ${qualifiedTable} (_biconic_rn BIGSERIAL PRIMARY KEY, __empty text)`);
     }
 
-    if (tableCreated && totalRows > 0) {
-      console.log(`[materialize] ${qualifiedTable}: ${totalRows} filas volcadas.`);
-    }
-
-    return { qualifiedTable, rowCount: totalRows };
+    return { qualifiedTable, rowCount: result.rowCount };
   } catch (e) {
     await pgClient.query(`DROP TABLE IF EXISTS ${qualifiedTable}`).catch(() => {});
     throw e;
@@ -248,7 +291,7 @@ export async function materializePostgresTable(
     const rows = srcRes.rows || [];
 
     if (rows.length === 0) {
-      await destClient.query(`CREATE TABLE IF NOT EXISTS ${qualifiedTable} (__empty text)`);
+      await destClient.query(`CREATE TABLE IF NOT EXISTS ${qualifiedTable} (_biconic_rn BIGSERIAL PRIMARY KEY, __empty text)`);
       return { qualifiedTable, rowCount: 0 };
     }
 
@@ -259,7 +302,7 @@ export async function materializePostgresTable(
     const pgBatch = Math.min(PG_INSERT_BATCH, Math.max(1, Math.floor(65000 / numCols)));
     const colDefs = origKeys.map((k, i) => `"${keys[i]}" ${inferPgType(sampleRow[k])}`).join(", ");
     await destClient.query(`DROP TABLE IF EXISTS ${qualifiedTable}`);
-    await destClient.query(`CREATE TABLE ${qualifiedTable} (${colDefs})`);
+    await destClient.query(`CREATE TABLE ${qualifiedTable} (_biconic_rn BIGSERIAL PRIMARY KEY, ${colDefs})`);
 
     for (let i = 0; i < rows.length; i += pgBatch) {
       const chunk = rows.slice(i, i + pgBatch);

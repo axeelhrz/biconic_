@@ -787,7 +787,7 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                                     lastStarChunkSize = starChunkSize;
                                     if (starData?.materialized === true && !usingMaterialization) {
                                         usingMaterialization = true;
-                                        starChunkSize = Math.max(starChunkSize, Math.min(50_000, starChunkCap * 2));
+                                        starChunkSize = Math.max(starChunkSize, Math.min(JOIN_CHUNK_SIZE, 150_000));
                                         console.log("[ETL Run] Materialización detectada, subiendo chunk.", { runId, starChunkSize });
                                     }
                                     break;

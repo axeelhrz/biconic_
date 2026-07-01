@@ -1,19 +1,45 @@
 import "reflect-metadata";
 import { config } from "dotenv";
 import { resolve } from "path";
+import { existsSync } from "fs";
 
-try {
-  // Permite resolver @/* al importar lib/ desde dist en start:prod
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  require(resolve(__dirname, "../../register-paths.js"));
-} catch {
+/**
+ * Registra el alias "@/*" para que el código compartido con Next.js (imports
+ * "@/lib/..." / "@/app/...") resuelva en runtime. `tsx -r ./register-paths.js`
+ * ya lo hace en desarrollo (mapea a los .ts fuente en la raíz del repo); pero
+ * `node dist/backend/src/main.js` (start:prod) no pasa por ese flag, así que acá
+ * se registra apuntando al propio directorio compilado (dist/), que refleja la
+ * misma estructura (dist/lib, dist/app) que el código fuente (lib/, app/).
+ *
+ * Se busca subiendo directorios desde __dirname en vez de asumir una profundidad
+ * fija, porque el rootDir que infiere TypeScript (y por ende dist/) puede cambiar.
+ */
+function ensurePathAliasesRegistered(): void {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require(resolve(__dirname, "../register-paths.js"));
+    // Si algo ya registró el alias (p. ej. tsx -r ./register-paths.js en dev), no hacer nada más.
+    require.resolve("@/lib/etl/limits");
+    return;
   } catch {
-    /* register-paths no disponible */
+    /* no registrado todavía: seguir */
+  }
+  let dir = __dirname;
+  for (let i = 0; i < 6; i++) {
+    if (existsSync(resolve(dir, "lib")) && existsSync(resolve(dir, "app"))) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require("tsconfig-paths").register({ baseUrl: dir, paths: { "@/*": ["*"] } });
+      } catch {
+        /* tsconfig-paths no disponible */
+      }
+      return;
+    }
+    const parent = resolve(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
   }
 }
+ensurePathAliasesRegistered();
+
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 import cookieParser from "cookie-parser";

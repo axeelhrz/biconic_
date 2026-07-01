@@ -313,12 +313,19 @@ function isNullLike(value, patterns) {
 function getKeyInRow(row, colName) {
     if (colName in row)
         return colName;
+    const underscored = colName.replace(/\./g, "_");
+    if (underscored in row)
+        return underscored;
     const keys = Object.keys(row);
     const colLower = colName.toLowerCase();
     const exact = keys.find((k) => k.toLowerCase() === colLower);
     if (exact)
         return exact;
-    const withPrefix = keys.find((k) => k.toLowerCase().endsWith("_" + colLower) || k === colName.replace(/\./g, "_"));
+    const underscoredLower = underscored.toLowerCase();
+    const underscoredMatch = keys.find((k) => k.toLowerCase() === underscoredLower);
+    if (underscoredMatch)
+        return underscoredMatch;
+    const withPrefix = keys.find((k) => k.toLowerCase().endsWith("_" + colLower) || k === underscored);
     return withPrefix;
 }
 function applyTransforms(row, config) {

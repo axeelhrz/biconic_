@@ -785,13 +785,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             String(c?.db_name || "") === String(primaryConn?.db_name || "") &&
             String(c?.db_user || "") === String(primaryConn?.db_user || "")
         );
-      const useInMemoryStarJoin = hasFirebirdInChain || (!sameConnectionChain && !equivalentPostgresChain);
+      /** Todas las conexiones son archivos Excel (aunque tengan distinto connectionId): viven en la misma base interna, así que el JOIN nativo (rama dbType === "excel_file" más abajo) las soporta directamente sin pasar por la ruta lenta en memoria. */
+      const allExcelChain = [primaryConn, ...joinsConnections].every(
+        (c: any) => String(c?.type || "").toLowerCase() === "excel_file"
+      );
+      const useInMemoryStarJoin =
+        hasFirebirdInChain || (!sameConnectionChain && !equivalentPostgresChain && !allExcelChain);
 
       log("Decisión de estrategia de JOIN star.", {
         dbType,
         hasFirebirdInChain,
         sameConnectionChain,
         equivalentPostgresChain,
+        allExcelChain,
         useInMemoryStarJoin,
       });
 
@@ -844,7 +850,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 const materializeOne = async (conn: any, table: string, cols: string[] | undefined, df: DateFilterSpec | undefined, tblName: string) => {
                   const connType = String(conn?.type || "").toLowerCase();
                   if (connType === "firebird") {
-                    return materializeFirebirdTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, undefined, matClient!);
+                    return materializeFirebirdTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, undefined, matClient!, (rowsSoFar) => {
+                      log(`Materializando ${tblName}: ${rowsSoFar.toLocaleString("es-AR")} filas copiadas…`);
+                    });
                   }
                   return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, matClient!);
                 };
@@ -872,9 +880,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const pQualified = tempTables[0];
               const jQualified = tempTables.slice(1);
 
+              /** Toda tabla materializada trae _biconic_rn BIGSERIAL PRIMARY KEY; se excluye del wildcard y se usa como keyset de paginación. */
+              const isInternalRnCol = (c: string) => c.toLowerCase() === "_biconic_rn";
+              /** ETL run y preview multi-chunk siempre mandan _materializationPrefix y tratan offset/nextSourceOffset como cursor opaco; las vistas de paginación por página del editor no lo envían. */
+              const useKeysetPaging = !!externalPrefix;
+
               let resolvedPrimaryCols = primaryColumns && primaryColumns.length > 0 ? primaryColumns : [];
               if (resolvedPrimaryCols.length === 0) {
-                try { resolvedPrimaryCols = await getTableColumnsPg(matClient, `${reqSuffix}_primary`, "etl_temp"); } catch (_) {}
+                try {
+                  resolvedPrimaryCols = (await getTableColumnsPg(matClient, `${reqSuffix}_primary`, "etl_temp")).filter(
+                    (c) => !isInternalRnCol(c)
+                  );
+                } catch (_) {}
               }
               const selectParts: string[] = [];
               const normalizeKey = (k: string) => String(k || "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
@@ -890,7 +907,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 const jn = joins[idx];
                 let secCols = jn.secondaryColumns && jn.secondaryColumns.length > 0 ? jn.secondaryColumns : [];
                 if (secCols.length === 0) {
-                  try { secCols = await getTableColumnsPg(matClient, `${reqSuffix}_join_${idx}`, "etl_temp"); } catch (_) {}
+                  try {
+                    secCols = (await getTableColumnsPg(matClient, `${reqSuffix}_join_${idx}`, "etl_temp")).filter(
+                      (c) => !isInternalRnCol(c)
+                    );
+                  } catch (_) {}
                 }
                 if (secCols.length > 0) {
                   secCols.forEach((col) => {
@@ -901,7 +922,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                   selectParts.push(`j${idx}.*`);
                 }
               }
+              if (useKeysetPaging) {
+                selectParts.push(`p."_biconic_rn" AS "__biconic_cursor"`);
+              }
 
+              const indexCandidates: { table: string; column: string }[] = [];
               let fromJoin = `FROM ${pQualified} AS p`;
               joins.forEach((jn, idx) => {
                 const jt = (jn.joinType || "INNER").toUpperCase();
@@ -909,6 +934,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 if (pairs.length === 0) throw new Error(`Join ${idx}: se requiere al menos una condición de enlace.`);
                 const onClauses = pairs.map(({ leftColumn: pc, rightColumn: sc }) => {
                   let leftAlias = "p";
+                  let leftTable = pQualified;
                   let leftCol = (pc || "").trim();
                   if (leftCol.includes(".")) {
                     if (/^primary\./i.test(leftCol)) {
@@ -919,6 +945,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                         const i = Number(m[1]);
                         if (!Number.isNaN(i) && i >= 0 && i < idx) {
                           leftAlias = `j${i}`;
+                          leftTable = jQualified[i];
                           leftCol = normalizeKey(m[2].trim());
                         }
                       }
@@ -926,10 +953,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                   } else {
                     leftCol = normalizeKey(leftCol);
                   }
-                  return `${leftAlias}."${leftCol}" = j${idx}."${normalizeKey((sc || "").trim())}"`;
+                  const rightCol = normalizeKey((sc || "").trim());
+                  indexCandidates.push({ table: leftTable, column: leftCol });
+                  indexCandidates.push({ table: jQualified[idx], column: rightCol });
+                  return `${leftAlias}."${leftCol}" = j${idx}."${rightCol}"`;
                 });
                 fromJoin += ` ${jt} JOIN ${jQualified[idx]} AS j${idx} ON ${onClauses.join(" AND ")}`;
               });
+
+              // Índices sobre las columnas de unión: solo la primera vez que se materializan las tablas (se reutilizan en chunks siguientes). Sin esto el JOIN puede degradar a nested-loop en tablas grandes.
+              if (!tablesAlreadyExist && indexCandidates.length > 0) {
+                const seenIndexKeys = new Set<string>();
+                for (const { table, column } of indexCandidates) {
+                  const dedupeKey = `${table}:::${column}`;
+                  if (seenIndexKeys.has(dedupeKey)) continue;
+                  seenIndexKeys.add(dedupeKey);
+                  const idxName = `idx_${reqSuffix}_${column}`.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 63);
+                  try {
+                    await matClient.query(`CREATE INDEX IF NOT EXISTS "${idxName}" ON ${table} ("${column}")`);
+                  } catch (idxErr) {
+                    log("No se pudo crear índice de JOIN (se continúa sin él).", {
+                      table,
+                      column,
+                      error: idxErr instanceof Error ? idxErr.message : String(idxErr),
+                    });
+                  }
+                }
+              }
 
               const normalizeColRefForMat = (col: string): string => {
                 const m = col.match(/^(primary\.|join_\d+\.)?(.+)$/i);
@@ -947,31 +997,61 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const normalizedConditions = normalizeStarConditions(matConditions, joins.length);
               const { clause: condClause, params: condParams } = buildWhereClausePgStar(normalizedConditions, joins.length);
               const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(matDateFilter, condParams.length + 1, "p.", joins.length);
-              const mergedClause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
-              const mergedParams = [...condParams, ...dfParams];
+              const baseClause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
+              const baseParams = [...condParams, ...dfParams];
 
-              const stableOrderBy = resolvedPrimaryCols.length > 0
-                ? `ORDER BY ${resolvedPrimaryCols.map((c: any) => `p."${normalizeKey(c)}"`).join(", ")}`
-                : "ORDER BY 1";
               const effectiveLimit = limit ?? 50;
               const effectiveOffset = offset ?? 0;
-              const sql = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause} ${stableOrderBy} LIMIT $${mergedParams.length + 1} OFFSET $${mergedParams.length + 2}`;
-              log("Ejecutando JOIN nativo tras materialización.", { sql: sql.slice(0, 500), paramsLen: mergedParams.length + 2 });
+              let mergedClause = baseClause;
+              let mergedParams = [...baseParams];
+              let stableOrderBy: string;
+              let sqlParams: unknown[];
+              let sql: string;
+              if (useKeysetPaging) {
+                // Keyset por _biconic_rn: evita el costo creciente de OFFSET al pedir lotes sucesivos del mismo JOIN materializado.
+                mergedClause = mergedClause
+                  ? `${mergedClause} AND p."_biconic_rn" > $${mergedParams.length + 1}`
+                  : `WHERE p."_biconic_rn" > $${mergedParams.length + 1}`;
+                mergedParams = [...mergedParams, effectiveOffset];
+                stableOrderBy = `ORDER BY p."_biconic_rn"`;
+                sql = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause} ${stableOrderBy} LIMIT $${mergedParams.length + 1}`;
+                sqlParams = [...mergedParams, effectiveLimit];
+              } else {
+                stableOrderBy = resolvedPrimaryCols.length > 0
+                  ? `ORDER BY ${resolvedPrimaryCols.map((c: any) => `p."${normalizeKey(c)}"`).join(", ")}`
+                  : "ORDER BY 1";
+                sql = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause} ${stableOrderBy} LIMIT $${mergedParams.length + 1} OFFSET $${mergedParams.length + 2}`;
+                sqlParams = [...mergedParams, effectiveLimit, effectiveOffset];
+              }
+              log("Ejecutando JOIN nativo tras materialización.", { sql: sql.slice(0, 500), useKeysetPaging, paramsLen: sqlParams.length });
 
-              const resDb = await matClient.query(sql, [...mergedParams, effectiveLimit, effectiveOffset]);
+              const resDb = await matClient.query(sql, sqlParams);
               log(`JOIN nativo ejecutado: ${resDb.rowCount} filas.`);
 
               let totalOut: number | undefined = undefined;
               if (count) {
-                const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${mergedClause}`;
-                const cntRes = await matClient.query(countSql, mergedParams);
+                // El COUNT usa el clause sin el filtro de keyset, para reflejar el total real de filas que matchean.
+                const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${baseClause}`;
+                const cntRes = await matClient.query(countSql, baseParams);
                 totalOut = cntRes.rows?.[0]?.c ?? 0;
               }
 
-              const rowsOut = resDb.rows || [];
+              let rowsOut = resDb.rows || [];
+              let nextCursor = effectiveOffset;
+              if (useKeysetPaging) {
+                rowsOut = rowsOut.map((r: Record<string, unknown>) => {
+                  const cursorVal = r.__biconic_cursor;
+                  if (typeof cursorVal === "number") nextCursor = cursorVal;
+                  else if (typeof cursorVal === "string" && cursorVal.trim() !== "") nextCursor = Number(cursorVal);
+                  const { __biconic_cursor, ...rest } = r;
+                  return rest;
+                });
+              }
               const jsonPayload: Record<string, unknown> = { ok: true, rows: rowsOut, total: totalOut };
               jsonPayload.sourceExhausted = rowsOut.length < effectiveLimit;
-              jsonPayload.nextSourceOffset = effectiveOffset + rowsOut.length;
+              jsonPayload.nextSourceOffset = useKeysetPaging
+                ? (rowsOut.length > 0 ? nextCursor : effectiveOffset)
+                : effectiveOffset + rowsOut.length;
               jsonPayload.materialized = true;
 
               await matClient.end().catch(() => {});
@@ -1720,11 +1800,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             quoteQualified(q, "postgres")
           );
 
+          /** Toda tabla de data_warehouse trae _import_id BIGSERIAL PRIMARY KEY (proceso de importación de Excel); se usa como keyset para paginar sin OFFSET y se excluye del wildcard de columnas de salida. */
+          const isInternalImportIdCol = (c: string) => c.toLowerCase() === "_import_id";
+          /** Reutilizamos materializationPrefix como señal de que el llamador trata offset/nextSourceOffset como cursor opaco (ETL run y preview multi-chunk); las vistas de paginación por página del editor no lo envían y siguen con LIMIT/OFFSET clásico. */
+          const useKeysetPaging = !!(body as { _materializationPrefix?: string })._materializationPrefix;
+
           const selectParts: string[] = [];
           let primaryCols = primaryColumns && primaryColumns.length > 0 ? primaryColumns : [];
           if (primaryCols.length === 0) {
             try {
-              primaryCols = await getTableColumnsPg(client, pPhysical, "data_warehouse");
+              primaryCols = (await getTableColumnsPg(client, pPhysical, "data_warehouse")).filter(
+                (c) => !isInternalImportIdCol(c)
+              );
             } catch (e) {
               log("No se pudieron obtener columnas de la tabla principal, usando p.*", e instanceof Error ? { message: e.message } : { error: String(e) });
             }
@@ -1744,7 +1831,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             let secCols = jn.secondaryColumns && jn.secondaryColumns.length > 0 ? jn.secondaryColumns : [];
             if (secCols.length === 0 && jPhysicals[idx]) {
               try {
-                secCols = await getTableColumnsPg(client, jPhysicals[idx] as string, "data_warehouse");
+                secCols = (await getTableColumnsPg(client, jPhysicals[idx] as string, "data_warehouse")).filter(
+                  (c) => !isInternalImportIdCol(c)
+                );
               } catch (e) {
                 log(`No se pudieron obtener columnas del join ${idx}, usando j${idx}.*`, e instanceof Error ? { message: e.message } : { error: String(e) });
               }
@@ -1759,6 +1848,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                 )
               );
             else selectParts.push(`j${idx}.*`);
+          }
+          if (useKeysetPaging) {
+            selectParts.push(`p."_import_id" AS "__biconic_cursor"`);
           }
 
           let fromJoin = `FROM ${pQualified} AS p`;
@@ -1811,22 +1903,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             "p.",
             joins.length
           );
-          const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
+          const effectiveLimit = limit ?? 50;
+          const effectiveOffset = offset ?? 0;
+          let mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
           const mergedParams = [...params, ...dfParams];
-          const stableOrderBy = primaryCols.length > 0
-            ? `ORDER BY ${primaryCols.map((c: any) => `p.${quoteIdent(c, "postgres")}`).join(", ")}`
-            : "ORDER BY 1";
-          const sql = `SELECT ${selectParts.join(
-            ", "
-          )} ${fromJoin} ${mergedClause} ${stableOrderBy} LIMIT $${mergedParams.length + 1} OFFSET $${
-            mergedParams.length + 2
-          }`;
-          log("Ejecutando consulta JOIN de Excel:", {
-            sql,
-            params: [...mergedParams, limit, offset],
-          });
+          let stableOrderBy: string;
+          let sql: string;
+          let sqlParams: unknown[];
+          if (useKeysetPaging) {
+            // Paginación por keyset: evita el costo creciente de OFFSET al recorrer lotes sucesivos del mismo JOIN.
+            mergedClause = mergedClause
+              ? `${mergedClause} AND p."_import_id" > $${mergedParams.length + 1}`
+              : `WHERE p."_import_id" > $${mergedParams.length + 1}`;
+            mergedParams.push(effectiveOffset);
+            stableOrderBy = `ORDER BY p."_import_id"`;
+            sql = `SELECT ${selectParts.join(", ")} ${fromJoin} ${mergedClause} ${stableOrderBy} LIMIT $${mergedParams.length + 1}`;
+            sqlParams = [...mergedParams, effectiveLimit];
+          } else {
+            stableOrderBy = primaryCols.length > 0
+              ? `ORDER BY ${primaryCols.map((c: any) => `p.${quoteIdent(c, "postgres")}`).join(", ")}`
+              : "ORDER BY 1";
+            sql = `SELECT ${selectParts.join(
+              ", "
+            )} ${fromJoin} ${mergedClause} ${stableOrderBy} LIMIT $${mergedParams.length + 1} OFFSET $${
+              mergedParams.length + 2
+            }`;
+            sqlParams = [...mergedParams, effectiveLimit, effectiveOffset];
+          }
+          log("Ejecutando consulta JOIN de Excel:", { sql, useKeysetPaging, params: sqlParams });
 
-          const resDb = await client.query(sql, [...mergedParams, limit, offset]);
+          const resDb = await client.query(sql, sqlParams);
           log(
             `Consulta de Excel ejecutada, ${resDb.rowCount} filas obtenidas.`
           );
@@ -1839,29 +1945,44 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
           let totalOut: number | undefined = undefined;
           if (count) {
+            // El COUNT usa el clause original (sin el filtro de keyset) para reflejar el total real de filas que matchean.
+            const countClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
             if (countMode === "exact") {
-              const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${mergedClause}`;
+              const countSql = `SELECT COUNT(*)::int as c ${fromJoin} ${countClause}`;
               log("Ejecutando consulta de conteo de Excel:", {
                 sql: countSql,
-                params: mergedParams,
+                params: [...params, ...dfParams],
               });
-              const cntRes = await client.query(countSql, mergedParams);
+              const cntRes = await client.query(countSql, [...params, ...dfParams]);
               totalOut = cntRes.rows?.[0]?.c ?? 0;
               log(`Conteo de Excel ejecutado, total: ${totalOut}.`);
             } else {
               const rowsLen = resDb.rows?.length ?? 0;
-              totalOut = rowsLen < (limit ?? 0) ? (offset ?? 0) + rowsLen : undefined;
+              totalOut = rowsLen < effectiveLimit ? effectiveOffset + rowsLen : undefined;
             }
           }
-          const rowsOut = resDb.rows || [];
+          let rowsOut = resDb.rows || [];
+          let nextCursor = effectiveOffset;
+          if (useKeysetPaging) {
+            rowsOut = rowsOut.map((r: Record<string, unknown>) => {
+              const cursorVal = r.__biconic_cursor;
+              if (typeof cursorVal === "number") nextCursor = cursorVal;
+              else if (typeof cursorVal === "string" && cursorVal.trim() !== "") nextCursor = Number(cursorVal);
+              const { __biconic_cursor, ...rest } = r;
+              return rest;
+            });
+          }
           const jsonPayload: Record<string, unknown> = {
             ok: true,
             rows: rowsOut,
             total: totalOut,
           };
-          if ((body as { fromEtlRun?: boolean }).fromEtlRun === true) {
-            jsonPayload.sourceExhausted = rowsOut.length < (limit ?? 50);
-            jsonPayload.nextSourceOffset = (offset ?? 0) + rowsOut.length;
+          if (useKeysetPaging) {
+            jsonPayload.sourceExhausted = rowsOut.length < effectiveLimit;
+            jsonPayload.nextSourceOffset = rowsOut.length > 0 ? nextCursor : effectiveOffset;
+          } else if ((body as { fromEtlRun?: boolean }).fromEtlRun === true) {
+            jsonPayload.sourceExhausted = rowsOut.length < effectiveLimit;
+            jsonPayload.nextSourceOffset = effectiveOffset + rowsOut.length;
           }
           return NextResponse.json(jsonPayload);
         } catch (e: any) {

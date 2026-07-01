@@ -6,16 +6,31 @@ Object.defineProperty(exports, "__esModule", { value: true });
 require("reflect-metadata");
 const dotenv_1 = require("dotenv");
 const path_1 = require("path");
-try {
-    require((0, path_1.resolve)(__dirname, "../../register-paths.js"));
-}
-catch {
+const fs_1 = require("fs");
+function ensurePathAliasesRegistered() {
     try {
-        require((0, path_1.resolve)(__dirname, "../register-paths.js"));
+        require.resolve("@/lib/etl/limits");
+        return;
     }
     catch {
     }
+    let dir = __dirname;
+    for (let i = 0; i < 6; i++) {
+        if ((0, fs_1.existsSync)((0, path_1.resolve)(dir, "lib")) && (0, fs_1.existsSync)((0, path_1.resolve)(dir, "app"))) {
+            try {
+                require("tsconfig-paths").register({ baseUrl: dir, paths: { "@/*": ["*"] } });
+            }
+            catch {
+            }
+            return;
+        }
+        const parent = (0, path_1.resolve)(dir, "..");
+        if (parent === dir)
+            break;
+        dir = parent;
+    }
 }
+ensurePathAliasesRegistered();
 const core_1 = require("@nestjs/core");
 const common_1 = require("@nestjs/common");
 const cookie_parser_1 = __importDefault(require("cookie-parser"));

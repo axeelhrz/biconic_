@@ -1071,7 +1071,8 @@ export async function executeEtlPipeline(
                 lastStarChunkSize = starChunkSize;
                 if ((starData as any)?.materialized === true && !usingMaterialization) {
                   usingMaterialization = true;
-                  starChunkSize = Math.max(starChunkSize, Math.min(50_000, starChunkCap * 2));
+                  // Con keyset pagination + índices en etl_temp, cada lote es barato independientemente de cuántas filas ya se leyeron: se puede usar un lote grande sin miedo a timeouts.
+                  starChunkSize = Math.max(starChunkSize, Math.min(JOIN_CHUNK_SIZE, 150_000));
                   console.log("[ETL Run] Materialización detectada, subiendo chunk.", { runId, starChunkSize });
                 }
                 break;
