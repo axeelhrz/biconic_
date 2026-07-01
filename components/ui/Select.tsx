@@ -11,7 +11,9 @@ const PANEL_MAX_HEIGHT = 260;
 const PANEL_MIN_WIDTH = 280;
 const PANEL_MAX_WIDTH = 640;
 
-function computePanelLayout(rect: DOMRect | null, options: SelectOption[]) {
+type PanelAnchorRect = Pick<DOMRect, "top" | "left" | "width" | "height">;
+
+function computePanelLayout(rect: PanelAnchorRect | null, options: SelectOption[]) {
   if (typeof window === "undefined" || !rect) {
     return { width: PANEL_MIN_WIDTH, left: 0 };
   }
@@ -98,7 +100,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
     };
 
     const buttonRef = React.useRef<HTMLButtonElement | null>(null);
-    const [anchorRect, setAnchorRect] = React.useState<{ top: number; left: number; width: number; height: number } | null>(null);
+    const [anchorRect, setAnchorRect] = React.useState<PanelAnchorRect | null>(null);
     const [listboxOpen, setListboxOpen] = React.useState(false);
     const [searchQuery, setSearchQuery] = React.useState("");
 
