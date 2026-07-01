@@ -112,6 +112,31 @@ function buildPreviewColumnPlan(
   return plan;
 }
 
+/** Valores únicos de una columna en filas de vista previa (respeta primary.* / join_N.*). */
+function extractDistinctValuesForColumn(
+  rows: Record<string, unknown>[],
+  column: string,
+): string[] {
+  if (!rows.length || !column.trim()) return [];
+  const rowKeys = Object.keys(rows[0]);
+  const dataKey = resolvePreviewRowDataKey(column, rowKeys);
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const row of rows) {
+    const key = Object.keys(row).find((k) => k.toLowerCase() === dataKey.toLowerCase()) ?? dataKey;
+    const v = row[key];
+    if (v != null && v !== "") {
+      const s = String(v);
+      if (!seen.has(s)) {
+        seen.add(s);
+        values.push(s);
+      }
+    }
+  }
+  values.sort((a, b) => a.localeCompare(b, "es"));
+  return values;
+}
+
 type StepId = (typeof STEPS)[number]["id"];
 
 /** Mapea data_type de BD o tipo inferido a etiqueta legible para la UI. */
@@ -354,11 +379,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const previewRowsFilteredByExcluded = useMemo(() => {
     if (!previewRows || previewRows.length === 0) return previewRows ?? [];
     if (excludedValues.length === 0) return previewRows;
+    const rowKeys = Object.keys(previewRows[0] as Record<string, unknown>);
     return previewRows.filter((row) => {
       const r = row as Record<string, unknown>;
       for (const { column, excluded } of excludedValues) {
         if (excluded.length === 0) continue;
-        const key = Object.keys(r).find((k) => k.toLowerCase() === column.toLowerCase()) ?? column;
+        const dataKey = resolvePreviewRowDataKey(column, rowKeys);
+        const key = Object.keys(r).find((k) => k.toLowerCase() === dataKey.toLowerCase()) ?? dataKey;
         const val = String(r[key] ?? "").trim();
         if (excluded.some((ex) => String(ex).trim() === val)) return false;
       }
@@ -749,24 +776,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (normalized) setSelectedTable(`${normalized.schema}.${normalized.name}`);
   }, [tables, selectedTable, selectedTableInfo]);
 
-  // Cargar valores distintos automáticamente al seleccionar la columna en "Excluir filas"
-  useEffect(() => {
-    if (!distinctColumn || !connectionId || !selectedTable) return;
-    setLoadingDistinct(true);
-    setDistinctValuesList([]);
-    fetch("/api/connection/distinct-values", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ connectionId, table: selectedTable, column: distinctColumn }),
-    })
-      .then((res) => safeJsonResponse(res))
-      .then((data) => {
-        if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
-        else if (data?.error) toast.error(data.error);
-      })
-      .catch(() => toast.error("Error al cargar valores"))
-      .finally(() => setLoadingDistinct(false));
-  }, [distinctColumn, connectionId, selectedTable]);
+  // Cargar valores distintos: ver implementación tras finalColumnsForTypes (usa vista previa con JOIN/UNION).
 
   const hasColumns = (selectedTableInfo?.columns?.length ?? 0) > 0;
 
@@ -1145,6 +1155,106 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (columns.length === 0) return [];
     return finalColumnsForTypes.map((c) => c.name);
   }, [columns.length, finalColumnsForTypes]);
+
+  /** Columnas disponibles para «Excluir filas»: solo las seleccionadas + las del JOIN (no toda la tabla). */
+  const excludeRowsColumnOptions = useMemo(() => {
+    if (columns.length === 0) return [];
+    return finalColumnsForTypes.map((col) => {
+      const name = col.name;
+      if (/^primary\./i.test(name)) {
+        return { value: name, label: `Principal · ${name.replace(/^primary\./i, "")}` };
+      }
+      const joinMatch = name.match(/^join_(\d+)\.(.*)$/i);
+      if (joinMatch) {
+        const joinIdx = parseInt(joinMatch[1], 10);
+        const colName = joinMatch[2];
+        const joinItem = effectiveJoinItemsForOptions[joinIdx];
+        const tableLabel = joinItem?.table?.split(".").pop() || `Join ${joinIdx}`;
+        return { value: name, label: `${tableLabel} · ${colName}` };
+      }
+      const displayLabel = columnDisplay[name]?.label?.trim() || (col as { label?: string }).label?.trim();
+      return { value: name, label: displayLabel || name };
+    });
+  }, [columns.length, finalColumnsForTypes, effectiveJoinItemsForOptions, columnDisplay]);
+
+  const needsPreviewForDistinctValues = useMemo(() => {
+    const hasJoin =
+      useJoin &&
+      (joinItems.length > 0 ||
+        !!(joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn));
+    const hasUnion = useUnion && unionRightItems.length > 0;
+    return hasJoin || hasUnion || (distinctColumn != null && /^(primary|join_\d+)\./i.test(distinctColumn));
+  }, [
+    useJoin,
+    joinItems.length,
+    joinSecondaryConnectionId,
+    joinSecondaryTable,
+    joinLeftColumn,
+    joinRightColumn,
+    useUnion,
+    unionRightItems.length,
+    distinctColumn,
+  ]);
+
+  useEffect(() => {
+    if (!distinctColumn) return;
+    const stillValid = excludeRowsColumnOptions.some((o) => o.value === distinctColumn);
+    if (!stillValid) {
+      setDistinctColumn(null);
+      setDistinctValuesList([]);
+      setDistinctSearch("");
+    }
+  }, [distinctColumn, excludeRowsColumnOptions]);
+
+  useEffect(() => {
+    if (!distinctColumn || !connectionId || !selectedTable) return;
+    setDistinctValuesList([]);
+
+    if (previewRows && previewRows.length > 0) {
+      setDistinctValuesList(extractDistinctValuesForColumn(previewRows as Record<string, unknown>[], distinctColumn));
+      setLoadingDistinct(false);
+      return;
+    }
+
+    if (previewLoading) {
+      setLoadingDistinct(true);
+      return;
+    }
+
+    if (needsPreviewForDistinctValues) {
+      setLoadingDistinct(false);
+      if (previewError) {
+        toast.error(previewError);
+      }
+      return;
+    }
+
+    const bareColumn = distinctColumn.includes(".")
+      ? distinctColumn.replace(/^primary\./i, "").split(".").pop() ?? distinctColumn
+      : distinctColumn;
+
+    setLoadingDistinct(true);
+    fetch("/api/connection/distinct-values", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionId, table: selectedTable, column: bareColumn }),
+    })
+      .then((res) => safeJsonResponse(res))
+      .then((data) => {
+        if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
+        else if (data?.error) toast.error(data.error);
+      })
+      .catch(() => toast.error("Error al cargar valores"))
+      .finally(() => setLoadingDistinct(false));
+  }, [
+    distinctColumn,
+    connectionId,
+    selectedTable,
+    previewRows,
+    previewLoading,
+    previewError,
+    needsPreviewForDistinctValues,
+  ]);
 
   // Sugerir tipo y formato (moneda, %, fecha) al entrar en Columnas y tipos o cuando llega la vista previa.
   useEffect(() => {
@@ -2029,7 +2139,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
                     <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna de fecha</Label>
-                    <div className="min-w-[180px]">
+                    <div className="flex-1 min-w-[220px] max-w-full">
                       <Select
                         value={
                           (dateFilterColumn && effectiveJoinItemsForOptions.length > 0 && !/^(primary|join_\d+)\./i.test(dateFilterColumn))
@@ -2039,6 +2149,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         onChange={(v: string) => setDateFilterColumn(v || null)}
                         options={leftColumnOptionsForNextJoin}
                         placeholder="Elegir columna"
+                        searchable
+                        searchPlaceholder="Buscar columna…"
                       />
                     </div>
                   </div>
@@ -2163,8 +2275,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <div className="space-y-4 pt-2">
                       <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                         <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Agregar tabla a apilar</Label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                          <div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-end">
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
                             <Select
                               value={unionRightConnectionId != null ? String(unionRightConnectionId) : ""}
@@ -2174,9 +2286,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
                               }))}
                               placeholder="Elegir conexión"
+                              searchable
+                              searchPlaceholder="Buscar conexión…"
                             />
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
                             <Select
                               value={unionRightTable ?? ""}
@@ -2188,7 +2302,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               disabled={!unionRightConnectionId || loadingUnionMeta}
                             />
                           </div>
-                          <div className="sm:col-span-2 lg:col-span-1 flex items-end">
+                          <div className="md:col-span-2 xl:col-span-1 flex items-end">
                             <Button
                               type="button"
                               variant="outline"
@@ -2258,15 +2372,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 </div>
                                 <div className="flex flex-wrap gap-2 items-center">
                                   {(item.availableColumns ?? []).map((col) => (
-                                    <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                                    <label key={col.name} className="flex items-start gap-1 text-xs cursor-pointer max-w-full" style={{ color: "var(--platform-fg)" }}>
                                       <input
                                         type="checkbox"
+                                        className="mt-0.5 shrink-0"
                                         checked={item.columns.includes(col.name)}
                                         onChange={(e) => {
                                           setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: e.target.checked ? [...it.columns, col.name] : it.columns.filter((c) => c !== col.name) } : it));
                                         }}
                                       />
-                                      {col.name}
+                                      <span className="break-all">{col.name}</span>
                                     </label>
                                   ))}
                                 </div>
@@ -2303,8 +2418,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <div className="space-y-4 pt-2">
                       <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                         <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Tabla secundaria y tipo de JOIN</Label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                          <div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-end">
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
                             <Select
                               value={joinSecondaryConnectionId != null ? String(joinSecondaryConnectionId) : ""}
@@ -2319,9 +2434,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
                               }))}
                               placeholder="Elegir conexión"
+                              searchable
+                              searchPlaceholder="Buscar conexión…"
                             />
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
                             <Select
                               value={joinSecondaryTable ?? ""}
@@ -2348,23 +2465,27 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             />
                           </div>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                          <div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla principal</Label>
                             <Select
                               value={joinLeftColumn}
                               onChange={(v: string) => setJoinLeftColumn(v)}
                               options={leftColumnOptionsForNextJoin}
                               placeholder="Elegir columna"
+                              searchable
+                              searchPlaceholder="Buscar columna…"
                             />
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla secundaria</Label>
                             <Select
                               value={joinRightColumn}
                               onChange={(v: string) => setJoinRightColumn(v)}
                               options={joinRightColumns.map((c) => ({ value: c, label: c }))}
                               placeholder="Elegir columna"
+                              searchable
+                              searchPlaceholder="Buscar columna…"
                             />
                           </div>
                           <div className="lg:col-span-2 flex items-end">
@@ -2404,30 +2525,34 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tablas a combinar ({joinItems.length})</Label>
                             {joinItems.map((item, idx) => (
                               <div key={item.id} className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
-                                  <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{item.joinType} · {(item.conditions || []).map((c) => `${c.leftColumn || "?"} = ${c.rightColumn || "?"}`).join(", ")}</span>
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <span className="text-sm font-medium min-w-0 break-all" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
+                                  <span className="text-xs min-w-0 break-words" style={{ color: "var(--platform-fg-muted)" }}>{item.joinType} · {(item.conditions || []).map((c) => `${c.leftColumn || "?"} = ${c.rightColumn || "?"}`).join(", ")}</span>
                                   <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setJoinItems((prev) => prev.filter((_, i) => i !== idx))}>Quitar</button>
                                 </div>
                                 <div className="space-y-2">
                                   <div className="space-y-1.5">
                                     <span className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Condiciones de enlace (clave compuesta)</span>
                                     {(item.conditions || []).map((cond, condIdx) => (
-                                      <div key={condIdx} className="flex flex-wrap gap-2 items-center">
+                                      <div key={condIdx} className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr_auto] gap-2 items-center">
                                         <Select
                                           value={cond.leftColumn}
                                           onChange={(v: string) => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: (it.conditions || []).map((cc, ci) => ci === condIdx ? { ...cc, leftColumn: v } : cc) } : it))}
                                           options={leftColumnOptionsForNextJoin}
                                           placeholder="Col. principal"
-                                          className="min-w-[140px]"
+                                          className="min-w-0 w-full"
+                                          searchable
+                                          searchPlaceholder="Buscar columna…"
                                         />
-                                        <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>=</span>
+                                        <span className="text-xs text-center" style={{ color: "var(--platform-fg-muted)" }}>=</span>
                                         <Select
                                           value={cond.rightColumn}
                                           onChange={(v: string) => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: (it.conditions || []).map((cc, ci) => ci === condIdx ? { ...cc, rightColumn: v } : cc) } : it))}
                                           options={(item.availableColumns ?? []).map((c) => ({ value: c.name, label: c.name }))}
                                           placeholder="Col. secundaria"
-                                          className="min-w-[140px]"
+                                          className="min-w-0 w-full"
+                                          searchable
+                                          searchPlaceholder="Buscar columna…"
                                         />
                                         {(item.conditions?.length ?? 0) > 1 && (
                                           <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: (it.conditions || []).filter((_, ci) => ci !== condIdx) } : it))}>Quitar condición</button>
@@ -2461,15 +2586,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   </div>
                                   <div className="flex flex-wrap gap-2 items-center">
                                     {(item.availableColumns ?? []).map((col) => (
-                                      <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                                      <label key={col.name} className="flex items-start gap-1 text-xs cursor-pointer max-w-full" style={{ color: "var(--platform-fg)" }}>
                                         <input
                                           type="checkbox"
+                                          className="mt-0.5 shrink-0"
                                           checked={item.rightColumns.includes(col.name)}
                                           onChange={(e) => {
                                             setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: e.target.checked ? [...it.rightColumns, col.name] : it.rightColumns.filter((c) => c !== col.name) } : it));
                                           }}
                                         />
-                                        {col.name}
+                                        <span className="break-all">{col.name}</span>
                                       </label>
                                     ))}
                                   </div>
@@ -2491,7 +2617,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
                     <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>
-                    <div className="min-w-[180px]">
+                    <div className="flex-1 min-w-[220px] max-w-full">
                       <Select
                         value={distinctColumn ?? ""}
                         onChange={(v: string) => {
@@ -2500,8 +2626,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           setDistinctValuesList([]);
                           setDistinctSearch("");
                         }}
-                        options={(selectedTableInfo?.columns ?? []).map((col) => ({ value: col.name, label: col.name }))}
-                        placeholder="Elegir columna"
+                        options={excludeRowsColumnOptions}
+                        placeholder={columns.length === 0 ? "Seleccioná columnas arriba" : "Elegir columna"}
+                        disabled={columns.length === 0}
+                        searchable
+                        searchPlaceholder="Buscar columna…"
                       />
                     </div>
                     {loadingDistinct && distinctColumn && (
