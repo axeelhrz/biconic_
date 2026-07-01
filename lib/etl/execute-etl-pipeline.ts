@@ -34,6 +34,10 @@ import {
   type EtlPipelineContext,
 } from "@/lib/etl/etl-run-context";
 import { callJoinQueryForEtl } from "@/lib/connection/call-join-query-for-etl";
+import {
+  clearEtlRunProgressMessage,
+  reportEtlRunProgress,
+} from "@/lib/etl/run-progress";
 
 // ===================================================================
 // TIPOS Y DEFINICIONES
@@ -997,6 +1001,10 @@ export async function executeEtlPipeline(
             const matTempTables = [`etl_temp."${materializationPrefix}_primary"`];
             for (let mi = 0; mi < joinsCount; mi++) matTempTables.push(`etl_temp."${materializationPrefix}_join_${mi}"`);
             try {
+            await reportEtlRunProgress(supabaseAdmin, runId, {
+              message: `JOIN múltiple (${joinsCount} tablas): preparando datos. La primera etapa puede tardar varios minutos…`,
+              rowsProcessed: 0,
+            });
             while (true) {
               let starData: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number } = {};
               let currentChunkSize = starChunkSize;
@@ -1015,6 +1023,13 @@ export async function executeEtlPipeline(
                   _materializationPrefix: materializationPrefix,
                   _skipMaterializationCleanup: true,
                 };
+                await reportEtlRunProgress(supabaseAdmin, runId, {
+                  message:
+                    starOffset === 0
+                      ? `JOIN: materializando y leyendo primer lote (${joinsCount} tablas)…`
+                      : `JOIN: leyendo lote desde fila ${starOffset.toLocaleString("es-AR")}…`,
+                  rowsProcessed,
+                });
                 try {
                   starData = await callJoinQueryForEtl(joinQueryBody, ctx);
                 } catch (joinErr) {
@@ -2165,6 +2180,9 @@ export async function executeEtlPipeline(
           : rowsProcessed - lastLoggedRows >= interval;
       if (shouldUpdate) {
          try {
+            if (lastLoggedRows === 0) {
+              await clearEtlRunProgressMessage(supabaseAdmin, runId);
+            }
             await supabaseAdmin
               .from("etl_runs_log")
               .update({ rows_processed: rowsProcessed })
@@ -2226,6 +2244,7 @@ export async function executeEtlPipeline(
             status: "completed",
             completed_at: completedAt(),
             rows_processed: rowsProcessed,
+            error_message: null,
           })
           .eq("id", runId)
           .throwOnError(),

@@ -11,6 +11,8 @@ const common_1 = require("@nestjs/common");
 const bullmq_1 = require("@nestjs/bullmq");
 const database_module_1 = require("../database/database.module");
 const etl_controller_1 = require("./etl.controller");
+const etl_internal_controller_1 = require("./etl-internal.controller");
+const join_query_internal_controller_1 = require("./join-query-internal.controller");
 const etl_service_1 = require("./etl.service");
 const etl_constants_1 = require("./etl.constants");
 let EtlModule = class EtlModule {
@@ -22,7 +24,7 @@ exports.EtlModule = EtlModule = __decorate([
             database_module_1.DatabaseModule,
             bullmq_1.BullModule.registerQueue({ name: etl_constants_1.ETL_QUEUE }),
         ],
-        controllers: [etl_controller_1.EtlController],
+        controllers: [etl_controller_1.EtlController, etl_internal_controller_1.EtlInternalController, join_query_internal_controller_1.JoinQueryInternalController],
         providers: [etl_service_1.EtlService],
         exports: [etl_service_1.EtlService],
     })

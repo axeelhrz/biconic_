@@ -29,6 +29,9 @@ let AdminController = class AdminController {
     addMember(body, req) {
         return this.admin.addClientMember(req.user.app_role, body);
     }
+    createUser(body, req) {
+        return this.admin.createUser(req.user.app_role, body);
+    }
     listUsers(req) {
         return this.admin.listUsers(req.user.app_role);
     }
@@ -57,6 +60,14 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", void 0)
 ], AdminController.prototype, "addMember", null);
+__decorate([
+    (0, common_1.Post)("users"),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", void 0)
+], AdminController.prototype, "createUser", null);
 __decorate([
     (0, common_1.Get)("users"),
     __param(0, (0, common_1.Req)()),

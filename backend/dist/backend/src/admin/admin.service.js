@@ -103,6 +103,23 @@ let AdminService = class AdminService {
         return this.db.query(`SELECT id, email, full_name, avatar_url, app_role, created_at
        FROM public.profiles ORDER BY created_at DESC`);
     }
+    async createUser(appRole, payload) {
+        this.assertAdmin(appRole);
+        const email = payload.email.trim().toLowerCase();
+        const existing = await this.db.queryOne(`SELECT id FROM public.profiles WHERE lower(email) = lower($1)`, [email]);
+        if (existing) {
+            throw new common_1.ConflictException("El email ya está registrado");
+        }
+        const id = crypto.randomUUID();
+        const hash = await bcrypt.hash(payload.password, 12);
+        const role = payload.appRole ?? "VIEWER";
+        const user = await this.db.queryOne(`INSERT INTO public.profiles (id, email, full_name, password_hash, app_role)
+       VALUES ($1, $2, $3, $4, $5::public.app_role)
+       RETURNING id`, [id, email, payload.fullName ?? null, hash, role]);
+        if (!user)
+            throw new common_1.ConflictException("No se pudo crear el usuario");
+        return { userId: user.id };
+    }
 };
 exports.AdminService = AdminService;
 exports.AdminService = AdminService = __decorate([

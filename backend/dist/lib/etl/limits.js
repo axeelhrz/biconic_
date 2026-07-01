@@ -1,0 +1,10 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ETL_JOIN_CHUNK_SIZE_DEFAULT = exports.ETL_PREVIEW_MAX_WHEN_UNLIMITED = exports.ETL_PREVIEW_TABLE_LIMIT = exports.ETL_PREVIEW_JOIN_INSTANT_LIMIT = exports.ETL_PREVIEW_DEFAULT_LIMIT = exports.ETL_MAX_ROWS_CEILING = void 0;
+exports.ETL_MAX_ROWS_CEILING = 2_147_483_647;
+exports.ETL_PREVIEW_DEFAULT_LIMIT = 1000;
+exports.ETL_PREVIEW_JOIN_INSTANT_LIMIT = 50;
+exports.ETL_PREVIEW_TABLE_LIMIT = 500;
+exports.ETL_PREVIEW_MAX_WHEN_UNLIMITED = 50_000;
+exports.ETL_JOIN_CHUNK_SIZE_DEFAULT = 100_000;
+//# sourceMappingURL=limits.js.map

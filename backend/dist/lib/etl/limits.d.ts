@@ -1,0 +1,6 @@
+export declare const ETL_MAX_ROWS_CEILING = 2147483647;
+export declare const ETL_PREVIEW_DEFAULT_LIMIT = 1000;
+export declare const ETL_PREVIEW_JOIN_INSTANT_LIMIT = 50;
+export declare const ETL_PREVIEW_TABLE_LIMIT = 500;
+export declare const ETL_PREVIEW_MAX_WHEN_UNLIMITED = 50000;
+export declare const ETL_JOIN_CHUNK_SIZE_DEFAULT = 100000;

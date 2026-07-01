@@ -17,6 +17,7 @@ const connections_module_1 = require("./connections/connections.module");
 const etl_module_1 = require("./etl/etl.module");
 const storage_module_1 = require("./storage/storage.module");
 const admin_module_1 = require("./admin/admin.module");
+const excel_import_module_1 = require("./excel-import/excel-import.module");
 const health_controller_1 = require("./health.controller");
 let AppModule = class AppModule {
 };
@@ -37,6 +38,7 @@ exports.AppModule = AppModule = __decorate([
             etl_module_1.EtlModule,
             storage_module_1.StorageModule,
             admin_module_1.AdminModule,
+            excel_import_module_1.ExcelImportModule,
         ],
         controllers: [health_controller_1.HealthController],
     })

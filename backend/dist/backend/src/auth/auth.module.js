@@ -13,6 +13,7 @@ const passport_1 = require("@nestjs/passport");
 const auth_controller_1 = require("./auth.controller");
 const auth_service_1 = require("./auth.service");
 const jwt_strategy_1 = require("./jwt.strategy");
+const session_config_1 = require("../../../lib/auth/session-config");
 let AuthModule = class AuthModule {
 };
 exports.AuthModule = AuthModule;
@@ -23,7 +24,7 @@ exports.AuthModule = AuthModule = __decorate([
             jwt_1.JwtModule.register({
                 secret: process.env.JWT_SECRET ?? "dev-jwt-secret-change-me-32chars!!",
                 signOptions: {
-                    expiresIn: (process.env.JWT_ACCESS_EXPIRES ?? "15m"),
+                    expiresIn: (0, session_config_1.getAccessTokenExpires)(),
                 },
             }),
         ],

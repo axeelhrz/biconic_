@@ -24,4 +24,12 @@ export declare class AdminService {
         userId: string;
     }>;
     listUsers(appRole?: string): Promise<import("pg").QueryResultRow[]>;
+    createUser(appRole: string | undefined, payload: {
+        email: string;
+        password: string;
+        fullName?: string;
+        appRole?: string;
+    }): Promise<{
+        userId: string;
+    }>;
 }

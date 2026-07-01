@@ -1,6 +1,18 @@
 import type { EtlPipelineContext } from "@/lib/etl/etl-run-context";
 import type { JoinQueryEtlResult } from "@/lib/connection/join-query-internal";
 
+const JOIN_FETCH_TIMEOUT_MS =
+  Number(process.env.ETL_JOIN_TIMEOUT_MS) > 0
+    ? Number(process.env.ETL_JOIN_TIMEOUT_MS) + 60_000
+    : 650_000;
+
+function joinFetchSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal) {
+    return AbortSignal.timeout(JOIN_FETCH_TIMEOUT_MS);
+  }
+  return undefined;
+}
+
 function isBackendApiUrl(url: string): boolean {
   const normalized = url.replace(/\/$/, "");
   const candidates = [
@@ -16,6 +28,24 @@ function isBackendApiUrl(url: string): boolean {
   return candidates.some(
     (c) => normalized === c || normalized === c.replace(/\/v1$/, "")
   );
+}
+
+function isNextJsRuntime(): boolean {
+  return !!(process.env.NEXT_RUNTIME || process.env.VERCEL);
+}
+
+function isModuleLoadError(message: string): boolean {
+  return /Cannot find module|next\/server|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|No se pudo cargar join-query/i.test(
+    message
+  );
+}
+
+function formatFetchError(url: string, err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|ECONNRESET/i.test(msg)) {
+    return `${url}: no se pudo conectar (${msg}). ¿Está corriendo Next.js en esa URL?`;
+  }
+  return `${url}: ${msg}`;
 }
 
 /** Orígenes válidos de Next.js (no el API Nest en Railway). */
@@ -61,9 +91,81 @@ async function parseJoinResponse(
   }
 }
 
+async function tryJoinQueryInProcess(
+  body: Record<string, unknown>,
+  errors: string[]
+): Promise<JoinQueryEtlResult | null> {
+  try {
+    const { executeJoinQueryForEtlRun } = await import(
+      "@/lib/connection/join-query-internal"
+    );
+    const direct = await executeJoinQueryForEtlRun(body);
+    if (direct.ok) return direct;
+    throw new Error(direct.error || "JOIN múltiple falló");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (isModuleLoadError(msg)) {
+      errors.push(`in-process: ${msg}`);
+      return null;
+    }
+    throw e instanceof Error ? e : new Error(msg);
+  }
+}
+
+async function tryJoinQueryHttp(
+  body: Record<string, unknown>,
+  ctx: EtlPipelineContext,
+  errors: string[]
+): Promise<JoinQueryEtlResult | null> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(ctx.cookieHeader ? { Cookie: ctx.cookieHeader } : {}),
+    ...(ctx.internalEtlSecret ? { "x-internal-etl": ctx.internalEtlSecret } : {}),
+  };
+
+  const origins = resolveJoinQueryOrigins(ctx);
+  if (origins.length === 0) {
+    errors.push("http: sin orígenes Next configurados (NEXT_INTERNAL_URL)");
+    return null;
+  }
+
+  let lastBusinessError: string | null = null;
+
+  for (const origin of origins) {
+    const url = `${origin}/api/connection/join-query`;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: joinFetchSignal(),
+      });
+      const data = await parseJoinResponse(res);
+      if (data.ok) return data;
+      lastBusinessError = data.error || `estado ${res.status}`;
+      errors.push(`${url}: ${lastBusinessError}`);
+      if (res.status !== 404 && res.status !== 405 && res.status !== 503) {
+        throw new Error(lastBusinessError);
+      }
+    } catch (e) {
+      if (
+        e instanceof Error &&
+        lastBusinessError &&
+        e.message === lastBusinessError
+      ) {
+        throw e;
+      }
+      errors.push(formatFetchError(url, e));
+    }
+  }
+
+  return null;
+}
+
 /**
- * Ejecuta JOIN múltiple para el pipeline ETL sin depender de una sola URL.
- * Orden: in-process (Next) → Nest interno → HTTP a Next (Vercel/local).
+ * Ejecuta JOIN múltiple para el pipeline ETL.
+ * En Nest/Railway: HTTP a Next (Vercel o `npm run dev` local en :3000).
+ * En Vercel: in-process primero.
  */
 export async function callJoinQueryForEtl(
   joinQueryBody: Record<string, unknown>,
@@ -72,68 +174,30 @@ export async function callJoinQueryForEtl(
   const body = { ...joinQueryBody, fromEtlRun: true };
   const errors: string[] = [];
 
-  try {
-    const { executeJoinQueryForEtlRun } = await import(
-      "@/lib/connection/join-query-internal"
-    );
-    const direct = await executeJoinQueryForEtlRun(body);
-    if (direct.ok) return direct;
-    errors.push(`in-process: ${direct.error}`);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (!/Cannot find module|next\/server|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/i.test(msg)) {
-      errors.push(`in-process: ${msg}`);
-    }
+  const strategies: Array<
+    () => Promise<JoinQueryEtlResult | null>
+  > = isNextJsRuntime()
+    ? [
+        () => tryJoinQueryInProcess(body, errors),
+        () => tryJoinQueryHttp(body, ctx, errors),
+      ]
+    : [
+        () => tryJoinQueryHttp(body, ctx, errors),
+        () => tryJoinQueryInProcess(body, errors),
+      ];
+
+  for (const strategy of strategies) {
+    const result = await strategy();
+    if (result) return result;
   }
 
-  const runnerBase = ctx.etlRunnerBase.replace(/\/$/, "");
-  const internalNestUrl = `${runnerBase}/internal/connection/join-query`;
-  try {
-    const res = await fetch(internalNestUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(ctx.internalEtlSecret
-          ? { "x-internal-etl": ctx.internalEtlSecret }
-          : {}),
-      },
-      body: JSON.stringify(body),
-    });
-    const data = await parseJoinResponse(res);
-    if (data.ok) return data;
-    errors.push(`nestjs (${internalNestUrl}): ${data.error}`);
-  } catch (e) {
-    errors.push(
-      `nestjs (${internalNestUrl}): ${e instanceof Error ? e.message : String(e)}`
-    );
-  }
+  const localHint = isNextJsRuntime()
+    ? ""
+    : " En local, ejecutá Next en :3000 (`npm run dev`) y definí NEXT_INTERNAL_URL=http://localhost:3000.";
+  const prodHint =
+    " En Railway, configurá NEXT_INTERNAL_URL con la URL de Vercel.";
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(ctx.cookieHeader ? { Cookie: ctx.cookieHeader } : {}),
-    ...(ctx.internalEtlSecret ? { "x-internal-etl": ctx.internalEtlSecret } : {}),
-  };
-
-  for (const origin of resolveJoinQueryOrigins(ctx)) {
-    const url = `${origin}/api/connection/join-query`;
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-      });
-      const data = await parseJoinResponse(res);
-      if (data.ok) return data;
-      errors.push(`${url}: ${data.error}`);
-      if (res.status !== 404 && res.status !== 405 && res.status !== 503) break;
-    } catch (e) {
-      errors.push(`${url}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  const hint =
-    "En Railway configurá NEXT_INTERNAL_URL con la URL de Vercel. En local, ejecutá Next en :3000 y definí NEXT_INTERNAL_URL=http://localhost:3000.";
   throw new Error(
-    `Error ejecutando JOIN múltiple: ${errors[errors.length - 1] || "sin respuesta"}. ${hint} Intentos: ${errors.slice(0, 4).join(" | ")}`
+    `Error ejecutando JOIN múltiple: ${errors[errors.length - 1] || "sin respuesta"}.${localHint}${prodHint} Intentos: ${errors.slice(0, 5).join(" | ")}`
   );
 }

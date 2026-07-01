@@ -1,8 +1,15 @@
+import { JwtService } from "@nestjs/jwt";
 import type { Request } from "express";
 import { StorageService } from "./storage.service";
+type MulterUploadedFile = {
+    buffer: Buffer;
+    mimetype?: string;
+    size?: number;
+};
 export declare class StorageController {
     private readonly storage;
-    constructor(storage: StorageService);
+    private readonly jwt;
+    constructor(storage: StorageService, jwt: JwtService);
     uploadUrl(body: {
         key: string;
         contentType: string;
@@ -25,6 +32,11 @@ export declare class StorageController {
         url: string;
         key: string;
     }>;
+    directUpload(file: MulterUploadedFile | undefined, storagePath: string, connectionId: string, uploadToken: string | undefined): Promise<{
+        ok: boolean;
+        key: string;
+        bytesUploaded: number;
+    }>;
     processExcel(body: {
         connectionId: string;
         objectKey: string;
@@ -37,3 +49,4 @@ export declare class StorageController {
         status: string;
     }>;
 }
+export {};

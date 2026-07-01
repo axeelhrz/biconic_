@@ -16,6 +16,7 @@ exports.AuthController = void 0;
 const common_1 = require("@nestjs/common");
 const auth_service_1 = require("./auth.service");
 const jwt_auth_guard_1 = require("./jwt-auth.guard");
+const session_config_1 = require("../../../lib/auth/session-config");
 let AuthController = class AuthController {
     constructor(auth) {
         this.auth = auth;
@@ -26,14 +27,14 @@ let AuthController = class AuthController {
             httpOnly: true,
             secure,
             sameSite: "lax",
-            maxAge: 15 * 60 * 1000,
+            maxAge: (0, session_config_1.getAccessCookieMaxAgeMs)(),
             path: "/",
         });
         res.cookie("biconic_refresh", tokens.refreshToken, {
             httpOnly: true,
             secure,
             sameSite: "lax",
-            maxAge: 7 * 24 * 60 * 60 * 1000,
+            maxAge: (0, session_config_1.getRefreshCookieMaxAgeMs)(),
             path: "/",
         });
     }

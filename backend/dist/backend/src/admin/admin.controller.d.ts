@@ -35,6 +35,18 @@ export declare class AdminController {
     }): Promise<{
         userId: string;
     }>;
+    createUser(body: {
+        email: string;
+        password: string;
+        fullName?: string;
+        appRole?: string;
+    }, req: Request & {
+        user: {
+            app_role?: string;
+        };
+    }): Promise<{
+        userId: string;
+    }>;
     listUsers(req: Request & {
         user: {
             app_role?: string;

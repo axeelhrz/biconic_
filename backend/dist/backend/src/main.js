@@ -6,6 +6,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 require("reflect-metadata");
 const dotenv_1 = require("dotenv");
 const path_1 = require("path");
+try {
+    require((0, path_1.resolve)(__dirname, "../../register-paths.js"));
+}
+catch {
+    try {
+        require((0, path_1.resolve)(__dirname, "../register-paths.js"));
+    }
+    catch {
+    }
+}
 const core_1 = require("@nestjs/core");
 const common_1 = require("@nestjs/common");
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
@@ -28,6 +38,8 @@ async function bootstrap() {
     app.enableCors({
         origin: process.env.CORS_ORIGIN?.split(",") ?? ["http://localhost:3000"],
         credentials: true,
+        allowedHeaders: ["Content-Type", "Authorization", "X-Upload-Token", "x-upload-token"],
+        exposedHeaders: ["ETag"],
     });
     const port = Number(process.env.PORT ?? 4000);
     await app.listen(port);

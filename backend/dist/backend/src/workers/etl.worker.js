@@ -1,19 +1,32 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const bullmq_1 = require("bullmq");
+const http_1 = require("http");
 const pg_1 = require("pg");
 const etl_constants_1 = require("../etl/etl.constants");
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const databaseUrl = process.env.DATABASE_URL ??
     "postgres://biconic:biconic_dev_password@localhost:6432/biconic";
 const pool = new pg_1.Pool({ connectionString: databaseUrl, max: 5 });
+function getEtlRunnerBase() {
+    const explicit = process.env.PROCESS_EXCEL_RUNNER_URL?.trim().replace(/\/$/, "");
+    if (explicit)
+        return explicit;
+    const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
+    if (railwayDomain)
+        return `https://${railwayDomain}/v1`;
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL?.trim().replace(/\/$/, "");
+    if (apiUrl)
+        return apiUrl;
+    return "http://localhost:4000/v1";
+}
 async function processEtlRun(job) {
     const { runId, etlId } = job.data;
     await pool.query(`UPDATE public.etl_runs_log SET status = 'running' WHERE id = $1`, [runId]);
     try {
-        const nextUrl = process.env.NEXT_INTERNAL_URL ?? "http://localhost:3000";
+        const runnerBase = getEtlRunnerBase();
         const internalSecret = process.env.INTERNAL_ETL_SECRET ?? process.env.CRON_SECRET ?? "";
-        const res = await fetch(`${nextUrl}/api/etl/run`, {
+        const res = await fetch(`${runnerBase}/internal/etl/run-pipeline`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -61,5 +74,19 @@ worker.on("completed", (job) => {
 worker.on("failed", (job, err) => {
     console.error(`[etl-worker] failed ${job?.id}:`, err.message);
 });
-console.log("[etl-worker] started");
+console.log("[etl-worker] started, runner:", getEtlRunnerBase());
+const healthPort = Number(process.env.PORT ?? 0);
+if (Number.isFinite(healthPort) && healthPort > 0) {
+    (0, http_1.createServer)((req, res) => {
+        if (req.url === "/v1/health" || req.url === "/health") {
+            res.writeHead(200, { "content-type": "text/plain" });
+            res.end("ok");
+            return;
+        }
+        res.writeHead(404);
+        res.end();
+    }).listen(healthPort, () => {
+        console.log(`[etl-worker] healthcheck listening on :${healthPort}`);
+    });
+}
 //# sourceMappingURL=etl.worker.js.map

@@ -1,6 +1,19 @@
 import "reflect-metadata";
 import { config } from "dotenv";
 import { resolve } from "path";
+
+try {
+  // Permite resolver @/* al importar lib/ desde dist en start:prod
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require(resolve(__dirname, "../../register-paths.js"));
+} catch {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require(resolve(__dirname, "../register-paths.js"));
+  } catch {
+    /* register-paths no disponible */
+  }
+}
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 import cookieParser from "cookie-parser";

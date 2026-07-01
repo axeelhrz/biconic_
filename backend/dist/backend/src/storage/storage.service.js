@@ -34,6 +34,15 @@ let StorageService = class StorageService {
             },
         });
     }
+    async putObject(key, body, contentType) {
+        await this.s3.send(new client_s3_1.PutObjectCommand({
+            Bucket: this.bucket,
+            Key: key,
+            Body: body,
+            ...(contentType ? { ContentType: contentType } : {}),
+        }));
+        return { key, bucket: this.bucket };
+    }
     async getUploadUrl(key, _contentType) {
         const command = new client_s3_1.PutObjectCommand({
             Bucket: this.bucket,
@@ -49,6 +58,14 @@ let StorageService = class StorageService {
         });
         const url = await (0, s3_request_presigner_1.getSignedUrl)(this.s3, command, { expiresIn: 3600 });
         return { url, key };
+    }
+    async getObjectContentLength(key) {
+        const response = await this.s3.send(new client_s3_1.HeadObjectCommand({
+            Bucket: this.bucket,
+            Key: key,
+        }));
+        const len = Number(response.ContentLength ?? 0);
+        return Number.isFinite(len) && len > 0 ? len : null;
     }
     async enqueueExcelProcessing(payload) {
         const job = await this.excelQueue.add("import", payload, {

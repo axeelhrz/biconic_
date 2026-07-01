@@ -48,6 +48,7 @@ const jwt_1 = require("@nestjs/jwt");
 const bcrypt = __importStar(require("bcryptjs"));
 const crypto_1 = require("crypto");
 const database_service_1 = require("../database/database.service");
+const session_config_1 = require("../../../lib/auth/session-config");
 let AuthService = class AuthService {
     constructor(db, jwt) {
         this.db = db;
@@ -69,7 +70,7 @@ let AuthService = class AuthService {
     async issueRefreshToken(userId) {
         const raw = (0, crypto_1.randomBytes)(48).toString("hex");
         const tokenHash = this.hashRefreshToken(raw);
-        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        const expiresAt = (0, session_config_1.getRefreshTokenDbExpiresAt)();
         await this.db.query(`INSERT INTO public.refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`, [userId, tokenHash, expiresAt.toISOString()]);
         return raw;
     }

@@ -10,6 +10,23 @@ exports.formatAnalysisDateForChart = formatAnalysisDateForChart;
 function pad2(value) {
     return String(value).padStart(2, "0");
 }
+const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const PLAUSIBLE_DATE_YEAR_MIN = 1970;
+const PLAUSIBLE_DATE_YEAR_MAX = 2040;
+const EXCEL_SERIAL_YEAR_MIN = 1900;
+const EXCEL_SERIAL_YEAR_MAX = 2100;
+function parseExcelSerialDays(n) {
+    if (!Number.isFinite(n) || n <= 0 || n >= 1e7)
+        return null;
+    const dt = new Date(EXCEL_EPOCH_MS + n * MS_PER_DAY);
+    if (Number.isNaN(dt.getTime()))
+        return null;
+    const y = dt.getUTCFullYear();
+    if (y < EXCEL_SERIAL_YEAR_MIN || y > EXCEL_SERIAL_YEAR_MAX)
+        return null;
+    return dt;
+}
 function safeDateFromParts(year, month1, day) {
     if (!Number.isFinite(year) || !Number.isFinite(month1) || !Number.isFinite(day))
         return null;
@@ -47,21 +64,38 @@ function parseAmbiguousSlashDate(a, b, year, order) {
     }
     return safeDateFromParts(year, b, a);
 }
+function parseNumericToken(n) {
+    if (!Number.isFinite(n))
+        return null;
+    if (n > 1e12) {
+        const dt = new Date(n);
+        return Number.isNaN(dt.getTime()) ? null : dt;
+    }
+    if (n > 1e9 && n < 1e10) {
+        const dt = new Date(n * 1000);
+        if (Number.isNaN(dt.getTime()))
+            return null;
+        const y = dt.getUTCFullYear();
+        return y >= PLAUSIBLE_DATE_YEAR_MIN && y <= PLAUSIBLE_DATE_YEAR_MAX ? dt : null;
+    }
+    return parseExcelSerialDays(n);
+}
 function parseDateLike(value, options) {
     const slashOrder = options?.slashDateOrder === "MDY" ? "MDY" : "DMY";
     if (value instanceof Date)
         return Number.isNaN(value.getTime()) ? null : value;
     if (typeof value === "number") {
-        if (!Number.isFinite(value))
-            return null;
-        const dt = new Date(value > 1e12 ? value : value * 1000);
-        return Number.isNaN(dt.getTime()) ? null : dt;
+        return parseNumericToken(value);
     }
     if (typeof value !== "string")
         return null;
     const raw = value.trim();
     if (!raw)
         return null;
+    const numericString = raw.match(/^(\d+(?:\.\d+)?)$/);
+    if (numericString) {
+        return parseNumericToken(Number(numericString[1]));
+    }
     const my = raw.match(/^(\d{1,2})\/(\d{4})$/);
     if (my) {
         const month = Number(my[1]);
@@ -80,7 +114,7 @@ function parseDateLike(value, options) {
         const month = Number(ym[2]);
         return safeDateFromParts(year, month, 1);
     }
-    const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    const slash = raw.match(/^(\d{1,2})[\/\.](\d{1,2})[\/\.](\d{4})$/);
     if (slash) {
         const a = Number(slash[1]);
         const b = Number(slash[2]);

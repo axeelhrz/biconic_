@@ -24,6 +24,7 @@ import {
 import { AlertCircle, CheckCircle2, CircleDashed, Play, Trash2, X, XCircle, Loader2 } from "lucide-react";
 import { deleteMonitorRunsAdmin } from "@/app/admin/(main)/monitors/actions";
 import { toast } from "sonner";
+import { isEtlRunProgressMessage } from "@/lib/etl/run-progress";
 
 type LogEntry = {
   id: string;
@@ -55,6 +56,7 @@ export default function MonitorsTable({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [markingFailedId, setMarkingFailedId] = useState<string | null>(null);
   const [rerunningEtlId, setRerunningEtlId] = useState<string | null>(null);
+  const [clockTick, setClockTick] = useState(0);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -130,7 +132,11 @@ export default function MonitorsTable({
   useEffect(() => {
     if (!hasInProgress) return;
     const interval = setInterval(() => loadLogs(false), 5000);
-    return () => clearInterval(interval);
+    const clock = setInterval(() => setClockTick((t) => t + 1), 30000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(clock);
+    };
   }, [hasInProgress, loadLogs]);
 
   const filteredLogs = logs.filter((log: any) => {
@@ -423,12 +429,10 @@ export default function MonitorsTable({
                     style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
                     title={log.status === "completed" && log.rows_processed === 0 ? "0 registros. Revisá filtros (ej. filtro por fecha) si esperabas datos." : undefined}
                   >
-                    {log.rows_processed !== null
-                      ? log.rows_processed.toLocaleString()
-                      : "-"}
+                    {formatRowsCell(log)}
                   </TableCell>
-                  <TableCell className="text-sm truncate max-w-[200px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }} title={log.error_message || (log.status === "completed" && log.rows_processed === 0 ? "0 registros. Revisá filtros (ej. filtro por fecha) si esperabas datos." : "") || ""}>
-                    {log.error_message || (log.status === "completed" && log.rows_processed === 0 ? "0 registros. Revisá filtros (ej. fecha) si esperabas datos." : "-")}
+                  <TableCell className="text-sm truncate max-w-[280px]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }} title={formatDetailCell(log, true)}>
+                    {formatDetailCell(log, false, clockTick)}
                   </TableCell>
                   <TableCell style={{ borderColor: "var(--platform-border)" }}>
                     <div className="flex items-center gap-1">
@@ -479,6 +483,39 @@ export default function MonitorsTable({
       </div>
     </>
   );
+}
+
+function formatRunElapsedMinutes(startedAt: string): number {
+  return Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 60_000));
+}
+
+function formatRowsCell(log: LogEntry): string {
+  if (log.rows_processed !== null) return log.rows_processed.toLocaleString("es-AR");
+  if (log.status === "started" || log.status === "running") return "…";
+  return "—";
+}
+
+function formatDetailCell(log: LogEntry, forTitle: boolean, _clockTick = 0): string {
+  if (isEtlRunProgressMessage(log.error_message)) {
+    return log.error_message!.slice(2).trim();
+  }
+  if (log.error_message) return log.error_message;
+  if (log.status === "started" || log.status === "running") {
+    const min = formatRunElapsedMinutes(log.started_at);
+    if (min >= 10) {
+      return forTitle
+        ? `Lleva ${min} min en ejecución. Los JOIN con Firebird pueden tardar 15–40 min en la primera materialización.`
+        : `En ejecución (${min} min). JOIN grande: puede tardar bastante en la primera etapa.`;
+    }
+    if (min >= 2) {
+      return `En ejecución (${min} min)…`;
+    }
+    return "Iniciando…";
+  }
+  if (log.status === "completed" && log.rows_processed === 0) {
+    return "0 registros. Revisá filtros (ej. fecha) si esperabas datos.";
+  }
+  return "—";
 }
 
 function StatusBadge({ status }: { status: string }) {
