@@ -67,11 +67,16 @@ export function resolveExcelPhysicalTableFromSelection(
   for (const row of rows) {
     const physical = row.physical_table_name?.trim();
     const sheet = row.table_name?.trim();
+    const schema = String(row.physical_schema_name ?? EXCEL_PHYSICAL_SCHEMA)
+      .trim()
+      .toLowerCase();
     if (physical) {
       const physicalLower = physical.toLowerCase();
+      const qualified = `${schema}.${physicalLower}`;
       if (
         physicalLower === bare ||
         physicalLower === wanted ||
+        qualified === wanted ||
         wanted.endsWith(`.${physicalLower}`)
       ) {
         return physical;
@@ -82,7 +87,12 @@ export function resolveExcelPhysicalTableFromSelection(
     }
   }
 
-  return bare || null;
+  if (rows.length === 1) {
+    const only = rows[0]?.physical_table_name?.trim();
+    if (only && only.toLowerCase() === bare) return only;
+  }
+
+  return null;
 }
 
 export type ExcelDataTableRow = {

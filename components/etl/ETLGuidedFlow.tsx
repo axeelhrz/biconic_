@@ -497,18 +497,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           columns: { name: string; label?: string }[];
         }[];
         setTables(loadedTables);
-        const initialColumns = loadedTables.flatMap((t) => t.columns ?? []);
-        if (initialColumns.length > 0) {
-          applyColumnLabelsToDisplay(
-            initialColumns.map((c) => ({
-              name: c.name,
-              label: c.label,
-            }))
-          );
-        }
         if (!skipClearSelectedTableRef.current) {
           setSelectedTable(null);
           setColumns([]);
+          setColumnDisplay({});
         } else {
           skipClearSelectedTableRef.current = false;
         }
@@ -645,6 +637,23 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     [columnDisplay]
   );
 
+  const columnsLoadKeyRef = useRef<string>("");
+
+  const handleSelectedTableChange = useCallback((v: string) => {
+    const next = v.trim() || null;
+    columnsLoadKeyRef.current = "";
+    setSelectedTable(next);
+    setColumns([]);
+    setConditions([]);
+    setExcludedValues([]);
+    setDistinctColumn("");
+    setPreviewRows(null);
+    setPreviewError(null);
+    setPreviewRowsProcessed(null);
+    previewLoadedOnceRef.current = false;
+    didInferOnColumnasTiposRef.current = null;
+  }, []);
+
   const loadColumnsForTable = useCallback(() => {
     if (!connectionId || !selectedTable) return;
     setLoadingColumns(selectedTable);
@@ -658,8 +667,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         const tablesList = data.metadata.tables as { schema: string; name: string; columns?: { name: string; dataType?: string }[] }[];
         const match = tablesList.find((t: { schema: string; name: string }) => `${t.schema}.${t.name}` === selectedTable)
           ?? tablesList.find((t: { schema: string; name: string }) => `${t.schema}.${t.name}`.toLowerCase() === selectedTable.toLowerCase());
-        const tableColumns = match?.columns ?? data.metadata.tables[0]?.columns;
-        if (!tableColumns?.length) {
+        const tableColumns = match?.columns;
+        if (!match || !tableColumns?.length) {
           setLoadingColumns(null);
           return;
         }
@@ -697,15 +706,23 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               : t
           )
         );
-        setColumns((prev) => (prev.length ? prev : cols));
+        setColumns(cols);
         applyColumnLabelsToDisplay(columnsWithInferred);
       })
       .finally(() => setLoadingColumns(null));
   }, [connectionId, selectedTable, applyColumnLabelsToDisplay]);
 
   useEffect(() => {
-    if (selectedTable && !hasColumns && !loadingColumns) loadColumnsForTable();
-  }, [selectedTable, hasColumns, loadColumnsForTable, loadingColumns]);
+    if (!connectionId || !selectedTable) return;
+    const key = `${connectionId}::${selectedTable}`;
+    if (columnsLoadKeyRef.current === key) return;
+    columnsLoadKeyRef.current = key;
+    loadColumnsForTable();
+  }, [connectionId, selectedTable, loadColumnsForTable]);
+
+  useEffect(() => {
+    columnsLoadKeyRef.current = "";
+  }, [connectionId]);
 
   // Al entrar en "Columnas y tipos", inferir tipos desde los datos si hay columnas (por si se cargaron sin inferencia, p. ej. al editar ETL)
   const didInferOnColumnasTiposRef = useRef<{ connectionId: string | number; table: string } | null>(null);
@@ -1635,7 +1652,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   ) : (
                     <Select
                       value={selectedTable ?? ""}
-                      onChange={(v: string) => setSelectedTable(v || null)}
+                      onChange={handleSelectedTableChange}
                       options={tables.map((t) => ({
                         value: `${t.schema}.${t.name}`,
                         label: (t as { label?: string }).label ?? `${t.schema}.${t.name}`,
