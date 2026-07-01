@@ -356,15 +356,20 @@ function isNullLike(value: any, patterns: string[]): boolean {
   });
 }
 
-/** Resuelve el nombre de columna (payload) a la clave real en la fila (p. ej. primary_id, join_0_name o id en distinto casing). */
+/** Resuelve el nombre de columna (payload) a la clave real en la fila (p. ej. primary.col → primary_col, join_0.name → join_0_name). */
 function getKeyInRow(row: Record<string, any>, colName: string): string | undefined {
   if (colName in row) return colName;
+  const underscored = colName.replace(/\./g, "_");
+  if (underscored in row) return underscored;
   const keys = Object.keys(row);
   const colLower = colName.toLowerCase();
   const exact = keys.find((k) => k.toLowerCase() === colLower);
   if (exact) return exact;
+  const underscoredLower = underscored.toLowerCase();
+  const underscoredMatch = keys.find((k) => k.toLowerCase() === underscoredLower);
+  if (underscoredMatch) return underscoredMatch;
   const withPrefix = keys.find(
-    (k) => k.toLowerCase().endsWith("_" + colLower) || k === colName.replace(/\./g, "_")
+    (k) => k.toLowerCase().endsWith("_" + colLower) || k === underscored
   );
   return withPrefix;
 }

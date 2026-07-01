@@ -137,6 +137,62 @@ function extractDistinctValuesForColumn(
   return values;
 }
 
+type DistinctValueQuery = {
+  connectionId: string | number;
+  table: string;
+  column: string;
+};
+
+/** Orígenes en BD para valores distintos de «Excluir filas» (no vista previa). */
+function resolveDistinctValueQueries(
+  distinctColumn: string,
+  connectionId: string | number,
+  selectedTable: string,
+  effectiveJoinItems: Array<{ connectionId?: string | number; table: string }>,
+  unionRightItems: Array<{ connectionId: string | number; table: string; columns: string[] }>,
+  useUnion: boolean,
+): DistinctValueQuery[] {
+  const primaryMatch = distinctColumn.match(/^primary\.(.+)$/i);
+  if (primaryMatch) {
+    return [{ connectionId, table: selectedTable, column: primaryMatch[1] }];
+  }
+
+  const joinMatch = distinctColumn.match(/^join_(\d+)\.(.+)$/i);
+  if (joinMatch) {
+    const idx = parseInt(joinMatch[1], 10);
+    const item = effectiveJoinItems[idx];
+    if (item?.connectionId != null && item.table) {
+      return [{ connectionId: item.connectionId, table: item.table, column: joinMatch[2] }];
+    }
+    return [];
+  }
+
+  const bareColumn = distinctColumn.includes(".")
+    ? distinctColumn.split(".").pop() ?? distinctColumn
+    : distinctColumn;
+
+  if (useUnion && unionRightItems.length > 0) {
+    const queries: DistinctValueQuery[] = [
+      { connectionId, table: selectedTable, column: bareColumn },
+    ];
+    for (const item of unionRightItems) {
+      const hasCol = item.columns?.some(
+        (c) => c.toLowerCase() === bareColumn.toLowerCase()
+      );
+      if (hasCol) {
+        queries.push({
+          connectionId: item.connectionId,
+          table: item.table,
+          column: bareColumn,
+        });
+      }
+    }
+    return queries;
+  }
+
+  return [{ connectionId, table: selectedTable, column: bareColumn }];
+}
+
 type StepId = (typeof STEPS)[number]["id"];
 
 /** Mapea data_type de BD o tipo inferido a etiqueta legible para la UI. */
@@ -776,7 +832,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (normalized) setSelectedTable(`${normalized.schema}.${normalized.name}`);
   }, [tables, selectedTable, selectedTableInfo]);
 
-  // Cargar valores distintos: ver implementación tras finalColumnsForTypes (usa vista previa con JOIN/UNION).
+  // Cargar valores distintos desde la BD: ver useEffect tras datasetColumnOptions.
 
   const hasColumns = (selectedTableInfo?.columns?.length ?? 0) > 0;
 
@@ -1071,7 +1127,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       joinItems.length > 0
         ? joinItems
         : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
-          ? [{ id: "join_0", table: joinSecondaryTable, conditions: [{ leftColumn: joinLeftColumn, rightColumn: joinRightColumn }], rightColumns: joinRightColumns, availableColumns: joinRightTableInfo?.columns ?? [] }]
+          ? [{
+              id: "join_0",
+              connectionId: joinSecondaryConnectionId,
+              table: joinSecondaryTable,
+              joinType: "INNER" as const,
+              conditions: [{ leftColumn: joinLeftColumn, rightColumn: joinRightColumn }],
+              rightColumns: joinRightColumns,
+              availableColumns: joinRightTableInfo?.columns ?? [],
+            }]
           : [],
     [joinItems, joinSecondaryConnectionId, joinSecondaryTable, joinLeftColumn, joinRightColumn, joinRightColumns, joinRightTableInfo?.columns]
   );
@@ -1156,8 +1220,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return finalColumnsForTypes.map((c) => c.name);
   }, [columns.length, finalColumnsForTypes]);
 
-  /** Columnas disponibles para «Excluir filas»: solo las seleccionadas + las del JOIN (no toda la tabla). */
-  const excludeRowsColumnOptions = useMemo(() => {
+  /** Columnas del dataset final (principal + JOIN / sin prefijo sin JOIN), con etiquetas para selects. */
+  const datasetColumnOptions = useMemo(() => {
     if (columns.length === 0) return [];
     return finalColumnsForTypes.map((col) => {
       const name = col.name;
@@ -1177,83 +1241,120 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     });
   }, [columns.length, finalColumnsForTypes, effectiveJoinItemsForOptions, columnDisplay]);
 
-  const needsPreviewForDistinctValues = useMemo(() => {
-    const hasJoin =
-      useJoin &&
-      (joinItems.length > 0 ||
-        !!(joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn));
-    const hasUnion = useUnion && unionRightItems.length > 0;
-    return hasJoin || hasUnion || (distinctColumn != null && /^(primary|join_\d+)\./i.test(distinctColumn));
-  }, [
-    useJoin,
-    joinItems.length,
-    joinSecondaryConnectionId,
-    joinSecondaryTable,
-    joinLeftColumn,
-    joinRightColumn,
-    useUnion,
-    unionRightItems.length,
-    distinctColumn,
-  ]);
+  const datasetColumnKeys = useMemo(
+    () => datasetColumnOptions.map((o) => o.value),
+    [datasetColumnOptions]
+  );
+
+  const columnOptionLabel = useCallback(
+    (colKey: string) => datasetColumnOptions.find((o) => o.value === colKey)?.label ?? colKey,
+    [datasetColumnOptions]
+  );
+
+  /** Duplicados compuestos (≥2 columnas) en la vista previa del dataset. */
+  const dedupeValidation = useMemo(() => {
+    const cols = dedupe?.keyColumns ?? [];
+    if (cols.length < 2 || !previewRows?.length) return null;
+    const rowKeys = Object.keys(previewRows[0] as Record<string, unknown>);
+    const keys = previewRows.map((row) => {
+      const r = row as Record<string, unknown>;
+      return cols
+        .map((col) => {
+          const dataKey = resolvePreviewRowDataKey(col, rowKeys);
+          const key =
+            Object.keys(r).find((k) => k.toLowerCase() === dataKey.toLowerCase()) ?? dataKey;
+          return String(r[key] ?? "\x00");
+        })
+        .join("\x01");
+    });
+    const uniqueKeys = new Set(keys).size;
+    return {
+      duplicateRows: keys.length - uniqueKeys,
+      uniqueKeys,
+      totalRows: keys.length,
+    };
+  }, [dedupe?.keyColumns, previewRows]);
 
   useEffect(() => {
     if (!distinctColumn) return;
-    const stillValid = excludeRowsColumnOptions.some((o) => o.value === distinctColumn);
+    const stillValid = datasetColumnOptions.some((o) => o.value === distinctColumn);
     if (!stillValid) {
       setDistinctColumn(null);
       setDistinctValuesList([]);
       setDistinctSearch("");
     }
-  }, [distinctColumn, excludeRowsColumnOptions]);
+  }, [distinctColumn, datasetColumnOptions]);
 
   useEffect(() => {
     if (!distinctColumn || !connectionId || !selectedTable) return;
+
+    const queries = resolveDistinctValueQueries(
+      distinctColumn,
+      connectionId,
+      selectedTable,
+      effectiveJoinItemsForOptions,
+      unionRightItems,
+      useUnion
+    );
+
+    if (queries.length === 0) {
+      setDistinctValuesList([]);
+      setLoadingDistinct(false);
+      return;
+    }
+
+    let cancelled = false;
     setDistinctValuesList([]);
-
-    if (previewRows && previewRows.length > 0) {
-      setDistinctValuesList(extractDistinctValuesForColumn(previewRows as Record<string, unknown>[], distinctColumn));
-      setLoadingDistinct(false);
-      return;
-    }
-
-    if (previewLoading) {
-      setLoadingDistinct(true);
-      return;
-    }
-
-    if (needsPreviewForDistinctValues) {
-      setLoadingDistinct(false);
-      if (previewError) {
-        toast.error(previewError);
-      }
-      return;
-    }
-
-    const bareColumn = distinctColumn.includes(".")
-      ? distinctColumn.replace(/^primary\./i, "").split(".").pop() ?? distinctColumn
-      : distinctColumn;
-
     setLoadingDistinct(true);
-    fetch("/api/connection/distinct-values", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ connectionId, table: selectedTable, column: bareColumn }),
-    })
-      .then((res) => safeJsonResponse(res))
-      .then((data) => {
-        if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
-        else if (data?.error) toast.error(data.error);
+
+    Promise.all(
+      queries.map((q) =>
+        fetch("/api/connection/distinct-values", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            connectionId: q.connectionId,
+            table: q.table,
+            column: q.column,
+          }),
+        }).then((res) => safeJsonResponse(res))
+      )
+    )
+      .then((results) => {
+        if (cancelled) return;
+        const merged = new Set<string>();
+        const values: string[] = [];
+        for (const data of results) {
+          if (data.ok && Array.isArray(data.values)) {
+            for (const v of data.values) {
+              const s = String(v);
+              if (!merged.has(s)) {
+                merged.add(s);
+                values.push(s);
+              }
+            }
+          } else if (data?.error) {
+            toast.error(data.error);
+          }
+        }
+        values.sort((a, b) => a.localeCompare(b, "es"));
+        setDistinctValuesList(values);
       })
       .catch(() => toast.error("Error al cargar valores"))
-      .finally(() => setLoadingDistinct(false));
+      .finally(() => {
+        if (!cancelled) setLoadingDistinct(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     distinctColumn,
     connectionId,
     selectedTable,
-    previewRows,
-    previewLoading,
-    previewError,
-    needsPreviewForDistinctValues,
+    effectiveJoinItemsForOptions,
+    unionRightItems,
+    useUnion,
   ]);
 
   // Sugerir tipo y formato (moneda, %, fecha) al entrar en Columnas y tipos o cuando llega la vista previa.
@@ -2613,7 +2714,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
                   <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                    Elegí una columna; se cargarán automáticamente los valores. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado. Se aplica al final, después de UNION y JOIN.
+                    Elegí una columna; se cargarán los valores distintos desde la base de datos (hasta 500). Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado. Se aplica al final, después de UNION y JOIN.
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
                     <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>
@@ -2626,7 +2727,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           setDistinctValuesList([]);
                           setDistinctSearch("");
                         }}
-                        options={excludeRowsColumnOptions}
+                        options={datasetColumnOptions}
                         placeholder={columns.length === 0 ? "Seleccioná columnas arriba" : "Elegir columna"}
                         disabled={columns.length === 0}
                         searchable
@@ -2967,8 +3068,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               </p>
             </div>
             {(() => {
-              const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
-              if (effectiveColumns.length === 0) {
+              if (datasetColumnKeys.length === 0) {
                 return (
                   <div className="rounded-xl border p-6 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Sparkles className="h-10 w-10 mx-auto mb-3 opacity-50" style={{ color: "var(--platform-fg-muted)" }} />
@@ -3023,7 +3123,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   patterns: next.length ? next : defaultNullPatterns,
                                   action: nullCleanup?.action ?? "null",
                                   replacement: nullCleanup?.replacement,
-                                  columns: nullCleanup?.columns ?? effectiveColumns,
+                                  columns: nullCleanup?.columns ?? datasetColumnKeys,
                                 });
                               }}
                               className="rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors"
@@ -3062,7 +3162,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 patterns: [...patterns, v],
                                 action: nullCleanup?.action ?? "null",
                                 replacement: nullCleanup?.replacement,
-                                columns: nullCleanup?.columns ?? effectiveColumns,
+                                columns: nullCleanup?.columns ?? datasetColumnKeys,
                               });
                               setCustomNullValue("");
                             }
@@ -3088,7 +3188,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               patterns: [...patterns, v],
                               action: nullCleanup?.action ?? "null",
                               replacement: nullCleanup?.replacement,
-                              columns: nullCleanup?.columns ?? effectiveColumns,
+                              columns: nullCleanup?.columns ?? datasetColumnKeys,
                             });
                             setCustomNullValue("");
                           }}
@@ -3115,7 +3215,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                       patterns: patterns.length ? patterns : defaultNullPatterns,
                                       action: nullCleanup?.action ?? "null",
                                       replacement: nullCleanup?.replacement,
-                                      columns: nullCleanup?.columns ?? effectiveColumns,
+                                      columns: nullCleanup?.columns ?? datasetColumnKeys,
                                     });
                                   }}
                                   className="rounded-full p-0.5 hover:opacity-80"
@@ -3135,7 +3235,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <div className="min-w-[200px]">
                         <Select
                           value={nullCleanup?.action ?? "null"}
-                          onChange={(v: string) => setNullCleanup((prev) => prev ? { ...prev, action: v as "null" | "replace" } : { patterns: defaultNullPatterns, action: v as "null" | "replace", replacement: undefined, columns: effectiveColumns })}
+                          onChange={(v: string) => setNullCleanup((prev) => prev ? { ...prev, action: v as "null" | "replace" } : { patterns: defaultNullPatterns, action: v as "null" | "replace", replacement: undefined, columns: datasetColumnKeys })}
                           options={[
                             { value: "null", label: "Convertir a NULL" },
                             { value: "replace", label: "Reemplazar por valor" },
@@ -3167,7 +3267,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           patterns: nullCleanup?.patterns ?? defaultNullPatterns,
                           action: nullCleanup?.action ?? "null",
                           replacement: nullCleanup?.replacement,
-                          columns: effectiveColumns,
+                          columns: datasetColumnKeys,
                         })}
                       >
                         Activar en todas las columnas
@@ -3192,7 +3292,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   {/* Normalización de texto por columna */}
                   <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Normalización de texto por columna</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una operación por columna (opcional). Podés aplicar la misma operación a todas de una vez.</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una operación por columna del dataset (tabla principal y tablas del JOIN). Podés aplicar la misma operación a todas de una vez.</p>
                     <div className="flex flex-wrap items-end gap-2 p-3 rounded-xl border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                       <span className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Aplicar a todas las columnas:</span>
                       <div className="flex-1 min-w-[200px] max-w-[240px]">
@@ -3215,7 +3315,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           setCleanTransforms((prev) => {
                             const rest = prev.filter((x) => x.op === "replace");
                             return [
-                              ...effectiveColumns.map((col) =>
+                              ...datasetColumnKeys.map((col) =>
                                 bulkNormalizeOp === "replace"
                                   ? { column: col, op: "replace" as const, find: "", replaceWith: "" }
                                   : { column: col, op: bulkNormalizeOp }
@@ -3223,19 +3323,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               ...rest,
                             ];
                           });
-                          toast.success(`Aplicado a ${effectiveColumns.length} columnas`);
+                          toast.success(`Aplicado a ${datasetColumnKeys.length} columnas`);
                         }}
                       >
                         Aplicar a todas
                       </Button>
                     </div>
                     <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {effectiveColumns.map((colName) => {
+                      {datasetColumnKeys.map((colName) => {
                         const t = cleanTransforms.find((t) => t.column === colName);
                         const op = t?.op ?? "";
                         return (
                           <div key={colName} className="flex gap-2 items-center flex-wrap">
-                            <span className="text-sm w-32 truncate" style={{ color: "var(--platform-fg-muted)" }}>{colName}</span>
+                            <span className="text-sm w-40 truncate" title={columnOptionLabel(colName)} style={{ color: "var(--platform-fg-muted)" }}>{columnOptionLabel(colName)}</span>
                             <div className="flex-1 min-w-[180px]">
                               <Select
                                 value={op}
@@ -3304,7 +3404,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             <Select
                               value={fix.column}
                               onChange={(v: string) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, column: v }; return n; })}
-                              options={effectiveColumns.map((c) => ({ value: c, label: c }))}
+                              options={datasetColumnOptions}
                               placeholder="Columna"
                             />
                           </div>
@@ -3315,26 +3415,63 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         </div>
                       ))}
                     </div>
-                    <Button type="button" size="sm" variant="outline" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => setDataFixes((prev) => [...prev, { column: effectiveColumns[0] ?? "", find: "", replaceWith: "" }])}>
+                    <Button type="button" size="sm" variant="outline" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => setDataFixes((prev) => [...prev, { column: datasetColumnKeys[0] ?? "", find: "", replaceWith: "" }])}>
                       + Añadir corrección
                     </Button>
                   </div>
 
                   {/* Duplicados */}
-                  <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                  <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Duplicados</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas clave para identificar duplicados. Se conserva una fila por clave.</p>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Se agrupa por la combinación de valores de las columnas elegidas; si varias filas tienen la misma combinación, se mantiene solo la primera o la última según la opción seleccionada.</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                      Elegí dos columnas (o más) del dataset. Se detectan filas con la misma combinación de valores en todas las columnas elegidas; al ejecutar el ETL se conserva solo la primera o la última.
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna 1</Label>
+                        <Select
+                          value={dedupe?.keyColumns[0] ?? ""}
+                          onChange={(v: string) => {
+                            const rest = (dedupe?.keyColumns ?? []).slice(1).filter((c) => c !== v);
+                            setDedupe(v ? { keyColumns: [v, ...rest], keep: dedupe?.keep ?? "first" } : rest.length ? { keyColumns: rest, keep: dedupe?.keep ?? "first" } : null);
+                          }}
+                          options={datasetColumnOptions.filter((o) => o.value !== dedupe?.keyColumns[1])}
+                          placeholder="Elegir columna"
+                          searchable
+                          searchPlaceholder="Buscar columna…"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna 2</Label>
+                        <Select
+                          value={dedupe?.keyColumns[1] ?? ""}
+                          onChange={(v: string) => {
+                            const first = dedupe?.keyColumns[0];
+                            const extra = (dedupe?.keyColumns ?? []).slice(2).filter((c) => c !== v);
+                            const next = [first, v, ...extra].filter(Boolean) as string[];
+                            setDedupe(next.length ? { keyColumns: next, keep: dedupe?.keep ?? "first" } : null);
+                          }}
+                          options={datasetColumnOptions.filter((o) => o.value !== dedupe?.keyColumns[0])}
+                          placeholder="Elegir columna"
+                          searchable
+                          searchPlaceholder="Buscar columna…"
+                          disabled={!dedupe?.keyColumns[0]}
+                        />
+                      </div>
+                    </div>
                     <div className="flex flex-wrap gap-4 items-end">
                       <div className="min-w-[180px]">
                         <Select
                           value=""
                           onChange={(v: string) => {
-                            if (!v) return;
+                            if (!v || dedupe?.keyColumns.includes(v)) return;
                             setDedupe((prev) => ({ keyColumns: [...(prev?.keyColumns ?? []), v], keep: prev?.keep ?? "first" }));
                           }}
-                          options={effectiveColumns.filter((c) => !dedupe?.keyColumns.includes(c)).map((c) => ({ value: c, label: c }))}
-                          placeholder="Añadir columna clave"
+                          options={datasetColumnOptions.filter((o) => !(dedupe?.keyColumns ?? []).includes(o.value))}
+                          placeholder="Añadir otra columna (opcional)"
+                          searchable
+                          searchPlaceholder="Buscar columna…"
+                          disabled={(dedupe?.keyColumns.length ?? 0) < 2}
                         />
                       </div>
                       <div className="min-w-[160px]">
@@ -3346,6 +3483,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             { value: "last", label: "Mantener última" },
                           ]}
                           placeholder="Al duplicado"
+                          disabled={(dedupe?.keyColumns.length ?? 0) < 2}
                         />
                       </div>
                     </div>
@@ -3353,12 +3491,48 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <div className="flex flex-wrap gap-1">
                         {dedupe.keyColumns.map((col) => (
                           <span key={col} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg)" }}>
-                            {col}
-                            <button type="button" className="hover:opacity-70" onClick={() => setDedupe((prev) => prev ? { ...prev, keyColumns: prev.keyColumns.filter((c) => c !== col) } : null)}>×</button>
+                            {columnOptionLabel(col)}
+                            <button
+                              type="button"
+                              className="hover:opacity-70"
+                              onClick={() => {
+                                setDedupe((prev) => {
+                                  if (!prev) return null;
+                                  const nextCols = prev.keyColumns.filter((c) => c !== col);
+                                  return nextCols.length ? { ...prev, keyColumns: nextCols } : null;
+                                });
+                              }}
+                            >
+                              ×
+                            </button>
                           </span>
                         ))}
                       </div>
                     ) : null}
+                    {(dedupe?.keyColumns.length ?? 0) >= 2 && (
+                      <div
+                        className="rounded-lg border px-3 py-2 text-xs"
+                        style={{
+                          borderColor: dedupeValidation?.duplicateRows
+                            ? "var(--platform-error, #dc2626)"
+                            : "var(--platform-border)",
+                          background: "var(--platform-surface)",
+                          color: "var(--platform-fg-muted)",
+                        }}
+                      >
+                        {!previewRows?.length ? (
+                          <span>Volvé al paso anterior y cargá la vista previa para analizar duplicados en el dataset (incluye columnas del JOIN).</span>
+                        ) : dedupeValidation && dedupeValidation.duplicateRows > 0 ? (
+                          <span style={{ color: "var(--platform-error, #dc2626)" }}>
+                            Se detectaron <strong>{dedupeValidation.duplicateRows}</strong> fila(s) duplicada(s) con la combinación elegida en la vista previa ({dedupeValidation.uniqueKeys} claves únicas en {dedupeValidation.totalRows} filas).
+                          </span>
+                        ) : dedupeValidation ? (
+                          <span style={{ color: "var(--platform-fg)" }}>
+                            Sin duplicados en la vista previa para esa combinación ({dedupeValidation.totalRows} filas, {dedupeValidation.uniqueKeys} claves únicas).
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
