@@ -1024,14 +1024,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               ? Math.min(limit ?? capByJoins, ETL_MAX_ROWS_CEILING)
               : capByJoins;
           const requestedRows = limit ?? 50;
-          let sourceLimit = Math.min(
-            ETL_MAX_ROWS_CEILING,
-            Math.max(requestedRows * 8, 500),
-            effectiveCap
-          );
+          const previewFast = (body as { previewFast?: boolean }).previewFast === true;
+          let sourceLimit = isPreviewMode
+            ? Math.min(
+                ETL_MAX_ROWS_CEILING,
+                previewFast
+                  ? Math.min(Math.max(requestedRows * 3, 60), 200)
+                  : Math.max(requestedRows * 8, 500),
+                effectiveCap
+              )
+            : Math.min(
+                ETL_MAX_ROWS_CEILING,
+                Math.max(requestedRows * 8, 500),
+                effectiveCap
+              );
           if (isPreviewMode && envSourceLimitMax <= 0) {
-            const previewRequestScanCap =
-              joinsCount >= 10 ? 1_800
+            const previewRequestScanCap = previewFast
+              ? Math.min(250, Math.max(requestedRows * 4, 80))
+              : joinsCount >= 10 ? 1_800
               : joinsCount >= 8 ? 2_000
               : joinsCount >= 6 ? 2_500
               : joinsCount >= 4 ? 3_500

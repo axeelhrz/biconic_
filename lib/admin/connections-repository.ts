@@ -7,7 +7,7 @@ import {
   getLocalExcelAbsolutePath,
   hasLocalExcelFile,
 } from "@/lib/storage/excel-upload-storage";
-import { readCredentialsFromConnectionRow } from "@/lib/connection/connection-persistence";
+import { readCredentialsFromConnectionRow, readConnectionTablesFromRow } from "@/lib/connection/connection-persistence";
 
 function getSql() {
   return postgres(getInternalDbUrl(), { max: 5 });
@@ -278,7 +278,7 @@ export async function getConnectionDetailFromDb(
     const creds = readCredentialsFromConnectionRow(row);
     const isExcel = row.type === "excel_file" || row.type === "excel";
 
-    const [meta] = await sql<
+    const metaRows = await sql<
       {
         import_status: string | null;
         total_rows: number | null;
@@ -289,14 +289,24 @@ export async function getConnectionDetailFromDb(
       SELECT import_status, total_rows, physical_table_name, physical_schema_name
       FROM public.data_tables
       WHERE connection_id = ${connectionId}
-      ORDER BY updated_at DESC NULLS LAST
-      LIMIT 1
+      ORDER BY table_name NULLS LAST, updated_at ASC
     `;
 
+    const meta = metaRows.length > 0 ? metaRows[metaRows.length - 1] : null;
+
+    let connectionTables = readConnectionTablesFromRow(row);
+    if (isExcel && (!connectionTables || connectionTables.length === 0)) {
+      connectionTables = metaRows
+        .map((m) => {
+          const schema = (m.physical_schema_name || "data_warehouse").trim();
+          const table = (m.physical_table_name || "").trim();
+          return table ? `${schema}.${table}` : null;
+        })
+        .filter((t): t is string => Boolean(t));
+      if (connectionTables.length === 0) connectionTables = null;
+    }
+
     const physicalTable = meta?.physical_table_name ?? null;
-    const connectionTables = physicalTable
-      ? [`data_warehouse.${physicalTable}`]
-      : null;
 
     return {
       id: String(row.id),

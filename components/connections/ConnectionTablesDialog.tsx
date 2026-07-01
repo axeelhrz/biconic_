@@ -67,34 +67,48 @@ export default function ConnectionTablesDialog({
     );
 
     const loadConnectionTables = async (): Promise<string[]> => {
-      const res = await fetch(`/api/admin/connections/${connectionId}`, {
-        credentials: "include",
-      }).catch(() => null);
+      const res = await fetch(
+        `/api/connection/connection-tables?connectionId=${encodeURIComponent(String(connectionId))}`,
+        { credentials: "include" }
+      ).catch(() => null);
       if (res?.ok) {
-        const data = await safeJsonResponse<{ connection_tables?: string[] | null }>(res);
-        if (Array.isArray(data.connection_tables)) return data.connection_tables;
+        const data = await safeJsonResponse<{ ok?: boolean; connection_tables?: string[] }>(res);
+        if (data.ok && Array.isArray(data.connection_tables)) return data.connection_tables;
       }
       const supabase = createClient();
       const { data } = await supabase
         .from("connections")
-        .select("connection_tables")
+        .select("connection_tables, config")
         .eq("id", connectionId)
         .single();
-      return Array.isArray((data as { connection_tables?: string[] })?.connection_tables)
-        ? ((data as { connection_tables: string[] }).connection_tables)
-        : [];
+      if (!data) return [];
+      const row = data as { connection_tables?: string[]; config?: { connection_tables?: string[] } };
+      if (Array.isArray(row.connection_tables)) return row.connection_tables;
+      if (Array.isArray(row.config?.connection_tables)) return row.config.connection_tables;
+      return [];
     };
 
     Promise.all([loadConnectionTables(), loadMetadata])
       .then(([current, metaData]) => {
         if (cancelled) return;
-        setSelectedKeys(new Set(current));
+        const normalizedCurrent = current.map((s) => s.trim()).filter(Boolean);
+        setSelectedKeys(new Set(normalizedCurrent));
 
         if (metaData?.ok && Array.isArray(metaData.metadata?.tables) && metaData.metadata.tables.length > 0) {
           const list = (metaData.metadata.tables as TableRow[]).map((t) => ({
             schema: t.schema || "data_warehouse",
             name: t.name,
           }));
+          const listKeys = new Set(list.map((t) => tableKey(t)));
+          for (const key of normalizedCurrent) {
+            if (!listKeys.has(key)) {
+              const parts = key.split(".");
+              list.push({
+                schema: parts[0] || "data_warehouse",
+                name: parts.slice(1).join(".") || key,
+              });
+            }
+          }
           setAllTables(list);
         } else {
           setAllTables([]);
@@ -165,13 +179,15 @@ export default function ConnectionTablesDialog({
         credentials: "include",
         body: JSON.stringify({ connectionId, connection_tables: lines }),
       });
-      const data = await safeJsonResponse<{ ok?: boolean; error?: string }>(res);
+      const data = await safeJsonResponse<{ ok?: boolean; error?: string; connection_tables?: string[] }>(res);
       if (!res.ok || data.ok === false) {
         throw new Error(data.error || "No se pudo guardar");
       }
+      const saved = Array.isArray(data.connection_tables) ? data.connection_tables : lines;
+      setSelectedKeys(new Set(saved));
       toast.success(
-        lines.length > 0
-          ? `${lines.length} tabla(s) guardada(s). El ETL usará solo estas tablas.`
+        saved.length > 0
+          ? `${saved.length} tabla(s) guardada(s). El ETL usará solo estas tablas.`
           : "Lista vacía. El ETL listará todas las tablas disponibles."
       );
       onOpenChange(false);

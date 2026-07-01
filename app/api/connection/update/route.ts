@@ -86,7 +86,21 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
     }
 
-    return NextResponse.json({ ok: true });
+    const savedTables = Array.isArray(connection_tables)
+      ? connection_tables.map((t: unknown) => String(t).trim()).filter(Boolean)
+      : (updateRow.connection_tables as string[] | undefined) ??
+        (
+          updateRow.config &&
+          typeof updateRow.config === "object" &&
+          Array.isArray((updateRow.config as { connection_tables?: string[] }).connection_tables)
+            ? (updateRow.config as { connection_tables: string[] }).connection_tables
+            : undefined
+        );
+
+    return NextResponse.json({
+      ok: true,
+      connection_tables: savedTables ?? [],
+    });
   } catch (err: unknown) {
     return NextResponse.json(
       {

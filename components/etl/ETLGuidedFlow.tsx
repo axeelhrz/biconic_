@@ -29,8 +29,20 @@ import { Connection as ServerConnection } from "@/components/connections/Connect
 import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { deriveColumnTypesFromSample } from "@/lib/derive-column-types";
+import {
+  deriveColumnMetadataFromSample,
+  inferColumnMetadata,
+  inferFormatForColumn,
+  mergeColumnInferredFormat,
+  mergeColumnInferredType,
+  type InferredColumnFormat,
+  type InferredColumnType,
+} from "@/lib/derive-column-types";
 import { mergeScheduleIntoGuidedConfig } from "@/lib/etl/schedule";
+import {
+  ETL_PREVIEW_JOIN_INSTANT_LIMIT,
+  ETL_PREVIEW_TABLE_LIMIT,
+} from "@/lib/etl/limits";
 import EtlScheduleSettings from "@/components/etl/EtlScheduleSettings";
 import {
   parseDateLike,
@@ -46,6 +58,59 @@ const STEPS = [
   { id: "destino", label: "Destino", icon: Table },
   { id: "ejecutar", label: "Ejecutar", icon: Play },
 ] as const;
+
+/** Convierte refs del guiado (primary.col, join_0.col) a claves de fila (primary_col, join_0_col). */
+function configColToPreviewRowKey(configKey: string): string {
+  return (configKey || "")
+    .trim()
+    .replace(/^primary\./i, "primary_")
+    .replace(/^join_(\d+)\./i, (_, d) => `join_${parseInt(d, 10)}_`);
+}
+
+function resolvePreviewRowDataKey(configOrRowKey: string, rowKeys: string[]): string {
+  if (rowKeys.includes(configOrRowKey)) return configOrRowKey;
+  const byCi = rowKeys.find((r) => r.toLowerCase() === configOrRowKey.toLowerCase());
+  if (byCi) return byCi;
+  const guess = configColToPreviewRowKey(configOrRowKey);
+  const byGuess = rowKeys.find((r) => r.toLowerCase() === guess.toLowerCase());
+  if (byGuess) return byGuess;
+  const bare = configOrRowKey.includes(".") ? configOrRowKey.split(".").slice(1).join(".") : configOrRowKey;
+  const byBare = rowKeys.find((r) => r.toLowerCase() === bare.toLowerCase());
+  return byBare ?? guess;
+}
+
+function sortPreviewRowKeys(keys: string[]): string[] {
+  const rank = (k: string): [number, number, string] => {
+    const pm = k.match(/^primary_(.*)$/i);
+    if (pm) return [0, 0, pm[1]];
+    const jm = k.match(/^join_(\d+)_(.*)$/i);
+    if (jm) return [1, parseInt(jm[1], 10), jm[2]];
+    return [2, 0, k];
+  };
+  return [...keys].sort((a, b) => {
+    const [ga, ia, na] = rank(a);
+    const [gb, ib, nb] = rank(b);
+    if (ga !== gb) return ga - gb;
+    if (ia !== ib) return ia - ib;
+    return na.localeCompare(nb);
+  });
+}
+
+function buildPreviewColumnPlan(
+  configKeys: string[],
+  rowKeys: string[],
+): { configKey: string; dataKey: string }[] {
+  const plan: { configKey: string; dataKey: string }[] = [];
+  const used = new Set<string>();
+  for (const configKey of configKeys) {
+    const dataKey = resolvePreviewRowDataKey(configKey, rowKeys);
+    const actual = rowKeys.find((r) => r.toLowerCase() === dataKey.toLowerCase());
+    if (!actual || used.has(actual.toLowerCase())) continue;
+    used.add(actual.toLowerCase());
+    plan.push({ configKey, dataKey: actual });
+  }
+  return plan;
+}
 
 type StepId = (typeof STEPS)[number]["id"];
 
@@ -280,6 +345,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewSortKey, setPreviewSortKey] = useState<string | null>(null);
   const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
   const [previewUnlimited, setPreviewUnlimited] = useState(false);
+  const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewLoadedOnceRef = useRef<boolean>(false);
@@ -317,13 +383,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     });
   }, [previewRowsFilteredByExcluded, previewSortKey, previewSortDir]);
 
-  /** Tipos inferidos desde la vista previa (para columnas join que la BD devuelve como texto). */
-  const inferredTypesFromPreview = useMemo(() => {
-    if (!previewRows?.length) return {} as Record<string, "Fecha" | "Número" | "Texto">;
-    const derived = deriveColumnTypesFromSample(previewRows as Record<string, unknown>[]);
-    const byNormalized: Record<string, "Fecha" | "Número" | "Texto"> = {};
-    for (const [key, type] of Object.entries(derived)) {
-      byNormalized[key.toLowerCase()] = type as "Fecha" | "Número" | "Texto";
+  /** Tipos y formatos inferidos desde la vista previa (join, Excel como texto, etc.). */
+  const inferredMetadataFromPreview = useMemo(() => {
+    if (!previewRows?.length) return {} as Record<string, { type: InferredColumnType; format?: InferredColumnFormat }>;
+    const derived = deriveColumnMetadataFromSample(previewRows as Record<string, unknown>[]);
+    const byNormalized: Record<string, { type: InferredColumnType; format?: InferredColumnFormat }> = {};
+    for (const [key, meta] of Object.entries(derived)) {
+      byNormalized[key.toLowerCase()] = meta;
     }
     return byNormalized;
   }, [previewRows]);
@@ -449,26 +515,44 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   const applyColumnLabelsToDisplay = useCallback(
     (
-      columnRows: { name: string; label?: string; inferredType?: "Fecha" | "Número" | "Texto"; dataType?: string }[]
+      columnRows: {
+        name: string;
+        label?: string;
+        inferredType?: "Fecha" | "Número" | "Texto";
+        inferredFormat?: string;
+        dataType?: string;
+      }[]
     ) => {
       setColumnDisplay((prev) => {
         const next = { ...prev };
         for (const col of columnRows) {
           const displayLabel = col.label?.trim() || col.name;
-          const inferred =
-            col.inferredType ??
-            (col.dataType ? dataTypeToLabel(col.dataType) : undefined);
+          const meta = inferColumnMetadata({
+            columnName: col.name,
+            schemaDataType: col.dataType,
+            sampleInferred: col.inferredType,
+          });
+          const inferredType = meta.type;
+          const inferredFormat =
+            col.inferredFormat?.trim() ||
+            meta.format ||
+            inferFormatForColumn(col.name, inferredType);
           if (!next[col.name]) {
             next[col.name] = {
               label: displayLabel,
-              format: "",
-              type:
-                inferred === "Fecha" || inferred === "Número" || inferred === "Texto"
-                  ? inferred
-                  : undefined,
+              format: inferredFormat,
+              type: inferredType,
             };
-          } else if (!next[col.name].label?.trim()) {
-            next[col.name] = { ...next[col.name], label: displayLabel };
+          } else {
+            if (!next[col.name].label?.trim()) {
+              next[col.name] = { ...next[col.name], label: displayLabel };
+            }
+            if (!next[col.name].type) {
+              next[col.name] = { ...next[col.name], type: inferredType };
+            }
+            if (!next[col.name].format?.trim()) {
+              next[col.name] = { ...next[col.name], format: inferredFormat };
+            }
           }
         }
         return next;
@@ -540,6 +624,58 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return found ?? previewKey;
   }, [columnDisplay]);
 
+  const resolveInferredType = useCallback(
+    (columnName: string, schemaDataType?: string, sampleInferred?: InferredColumnType): InferredColumnType =>
+      mergeColumnInferredType({ columnName, schemaDataType, sampleInferred }),
+    [],
+  );
+
+  const previewInferredForColumn = useCallback(
+    (columnName: string): InferredColumnType | undefined => {
+      const norm = columnName.replace(/\./g, "_").toLowerCase();
+      return (
+        inferredMetadataFromPreview[norm]?.type ??
+        inferredMetadataFromPreview[columnName.toLowerCase()]?.type
+      );
+    },
+    [inferredMetadataFromPreview],
+  );
+
+  const previewFormatForColumn = useCallback(
+    (columnName: string, type: InferredColumnType): InferredColumnFormat => {
+      const norm = columnName.replace(/\./g, "_").toLowerCase();
+      const fromPreview =
+        inferredMetadataFromPreview[norm]?.format ??
+        inferredMetadataFromPreview[columnName.toLowerCase()]?.format;
+      return mergeColumnInferredFormat({
+        columnName,
+        type,
+        sampleFormat: fromPreview,
+      });
+    },
+    [inferredMetadataFromPreview],
+  );
+
+  const resolveInferredMetadata = useCallback(
+    (columnName: string, schemaDataType?: string): { type: InferredColumnType; format: InferredColumnFormat } => {
+      const sampleType = previewInferredForColumn(columnName);
+      const meta = inferColumnMetadata({
+        columnName,
+        schemaDataType,
+        sampleInferred: sampleType,
+      });
+      return {
+        type: meta.type,
+        format: mergeColumnInferredFormat({
+          columnName,
+          type: meta.type,
+          sampleFormat: meta.format,
+        }),
+      };
+    },
+    [previewInferredForColumn],
+  );
+
   /** Tipo efectivo por columna (override manual o inferido) para formatear la vista previa. */
   const getColumnType = useCallback((key: string): "Fecha" | "Número" | "Texto" => {
     const disp = columnDisplay[key];
@@ -548,13 +684,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     const displayKeyByNorm = Object.keys(columnDisplay).find((k) => k.replace(/\./g, "_").toLowerCase() === keyLower);
     if (displayKeyByNorm && (columnDisplay[displayKeyByNorm] as { type?: string })?.type)
       return (columnDisplay[displayKeyByNorm] as { type: "Fecha" | "Número" | "Texto" }).type;
-    if (/^primary_/i.test(key) || /^join_\d+_/i.test(key)) {
-      const fromPreview = inferredTypesFromPreview[keyLower];
-      if (fromPreview) return fromPreview;
-    }
-    const col = selectedTableInfo?.columns?.find((c: { name: string }) => c.name.toLowerCase() === keyLower);
-    return dataTypeToLabel((col as { inferredType?: string; dataType?: string })?.inferredType ?? (col as { dataType?: string })?.dataType);
-  }, [columnDisplay, selectedTableInfo?.columns, inferredTypesFromPreview]);
+    const bareName = key.replace(/^(primary|join_\d+)[._]/i, "");
+    const col = selectedTableInfo?.columns?.find(
+      (c: { name: string }) => c.name.toLowerCase() === keyLower || c.name.toLowerCase() === bareName.toLowerCase(),
+    );
+    return resolveInferredType(
+      key,
+      (col as { dataType?: string })?.dataType,
+      previewInferredForColumn(key),
+    );
+  }, [columnDisplay, selectedTableInfo?.columns, previewInferredForColumn, resolveInferredType]);
 
   /** Componentes de calendario para mostrar una fecha parseada (UTC para strings; local para Date nativo). */
   const calendarPartsForValue = (date: Date, raw: unknown): { d: number; m: number; y: number; monthIndex: number } => {
@@ -567,8 +706,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   /** Formatea un valor de celda para la vista previa según tipo y formato de la columna. */
   const formatPreviewCell = useCallback((key: string, value: unknown): string => {
     const disp = columnDisplay[key];
-    const format = disp?.format?.trim();
     const tipo = getColumnType(key);
+    const format = disp?.format?.trim() || previewFormatForColumn(key, tipo);
     if (value === null || value === undefined) return "";
     if (tipo === "Fecha") {
       const effectiveFormat = format || "DD/MM/YYYY";
@@ -599,7 +738,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       }
     }
     return String(value);
-  }, [columnDisplay, getColumnType]);
+  }, [columnDisplay, getColumnType, previewFormatForColumn]);
 
   // Normalizar selectedTable cuando viene de config guardada: si la lista de tablas usa otro casing (ej. public.clientes vs PUBLIC.CLIENTES), usar la clave real para que el <select> muestre la tabla y selectedTableInfo exista
   useEffect(() => {
@@ -690,10 +829,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
             const getInferred = (colName: string) =>
               ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
-            columnsWithInferred = tableColumns.map((c: { name: string; dataType?: string }) => ({
-              ...c,
-              inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
-            }));
+            columnsWithInferred = tableColumns.map((c: { name: string; dataType?: string }) => {
+              const meta = inferColumnMetadata({
+                columnName: c.name,
+                schemaDataType: c.dataType,
+                sampleInferred: getInferred(c.name),
+              });
+              return {
+                ...c,
+                inferredType: meta.type,
+                inferredFormat: meta.format,
+              };
+            });
           }
         } catch (err) {
           console.warn("[ETL] Inferencia de tipos fallida:", err);
@@ -710,7 +857,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         applyColumnLabelsToDisplay(columnsWithInferred);
       })
       .finally(() => setLoadingColumns(null));
-  }, [connectionId, selectedTable, applyColumnLabelsToDisplay]);
+  }, [connectionId, selectedTable, applyColumnLabelsToDisplay, resolveInferredType]);
 
   useEffect(() => {
     if (!connectionId || !selectedTable) return;
@@ -753,10 +900,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
         const getInferred = (colName: string) =>
           ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
-        const columnsWithInferred = tableColumns.map((c) => ({
-          ...c,
-          inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
-        }));
+        const columnsWithInferred = tableColumns.map((c) => {
+          const meta = inferColumnMetadata({
+            columnName: c.name,
+            schemaDataType: c.dataType,
+            sampleInferred: getInferred(c.name),
+          });
+          return {
+            ...c,
+            inferredType: meta.type,
+            inferredFormat: meta.format,
+          };
+        });
         setTables((prev) =>
           prev.map((t) =>
             `${t.schema}.${t.name}` === selectedTable ? { ...t, columns: columnsWithInferred } : t
@@ -765,7 +920,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       })
       .catch((err) => console.warn("[ETL] Inferencia de tipos al entrar al paso:", err))
       .finally(() => setInferringTypes(false));
-  }, [step, connectionId, selectedTable, selectedTableInfo?.columns, selectedTableInfo?.columns?.length]);
+  }, [step, connectionId, selectedTable, selectedTableInfo?.columns, selectedTableInfo?.columns?.length, resolveInferredType]);
 
   // Reset transformación al cambiar conexión o tabla (no cuando acabamos de restaurar desde config)
   useEffect(() => {
@@ -810,9 +965,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (item.availableColumns?.length) return;
       try {
         const res = await fetchMetadata(item.connectionId, item.table);
-        const data = await safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { columns?: { name: string }[] }[] }; error?: string }>(res);
-        const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
-        let availableColumns: { name: string; inferredType?: string; dataType?: string }[] = colNames.map((n: string) => ({ name: n }));
+        const data = await safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { columns?: { name: string; dataType?: string }[] }[] }; error?: string }>(res);
+        const metaCols = data?.metadata?.tables?.[0]?.columns ?? [];
+        let availableColumns: { name: string; inferredType?: string; dataType?: string }[] = metaCols.map(
+          (c: { name: string; dataType?: string }) => ({ name: c.name, dataType: c.dataType }),
+        );
         try {
           const inferRes = await fetch("/api/connection/infer-column-types", {
             method: "POST",
@@ -824,10 +981,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             const ct = inferData.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
             const getInferred = (colName: string) =>
               ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
-            availableColumns = colNames.map((n: string) => ({
-              name: n,
-              inferredType: getInferred(n) ?? undefined,
-            }));
+            availableColumns = metaCols.map((c: { name: string; dataType?: string }) => {
+              const meta = inferColumnMetadata({
+                columnName: c.name,
+                schemaDataType: c.dataType,
+                sampleInferred: getInferred(c.name),
+              });
+              return {
+                name: c.name,
+                dataType: c.dataType,
+                inferredType: meta.type,
+                inferredFormat: meta.format,
+              };
+            });
           }
         } catch {
           // keep availableColumns with names only
@@ -973,6 +1139,54 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     joinType,
     joinRightTableInfo?.columns,
   ]);
+
+  /** Orden estable de columnas en vista previa (primary.* luego join_N.*), alineado con el payload del ETL. */
+  const previewColumnConfigKeys = useMemo(() => {
+    if (columns.length === 0) return [];
+    return finalColumnsForTypes.map((c) => c.name);
+  }, [columns.length, finalColumnsForTypes]);
+
+  // Sugerir tipo y formato (moneda, %, fecha) al entrar en Columnas y tipos o cuando llega la vista previa.
+  useEffect(() => {
+    if (step !== "columnas_tipos" || finalColumnsForTypes.length === 0) return;
+    setColumnDisplay((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const c of finalColumnsForTypes) {
+        const meta = resolveInferredMetadata(c.name, c.dataType);
+        const labelFallback = c.name.replace(/^(primary|join_\d+)\./, "");
+        const existing = next[c.name];
+        if (!existing) {
+          next[c.name] = {
+            label: labelFallback,
+            type: meta.type,
+            format: meta.format,
+          };
+          changed = true;
+          continue;
+        }
+        const patch = { ...existing };
+        let colChanged = false;
+        if (!existing.type) {
+          patch.type = meta.type;
+          colChanged = true;
+        }
+        if (!existing.format?.trim()) {
+          patch.format = meta.format;
+          colChanged = true;
+        }
+        if (!existing.label?.trim()) {
+          patch.label = labelFallback;
+          colChanged = true;
+        }
+        if (colChanged) {
+          next[c.name] = patch;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [step, finalColumnsForTypes, resolveInferredMetadata, previewRows?.length]);
 
   useEffect(() => {
     if (!joinSecondaryTable || !joinSecondaryConnectionId) {
@@ -1198,7 +1412,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     dateFilterExactDatesText,
   ]);
 
-  /** Preview y run comparten el mismo contrato base (buildGuidedConfigBody: filter con dateFilter, conditions, join). Diferencias: preview usa limit 1000 o unlimited y no envía end; run envía end y waitForCompletion. */
+  /** Preview síncrono (rápido) salvo con «Sin límite»; JOIN usa pocas filas y una sola consulta. */
   const fetchPreview = useCallback(() => {
     const body = buildGuidedConfigBody();
     if (!body || !connectionId || !selectedTable) {
@@ -1213,15 +1427,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       previewPollTimeoutRef.current = null;
     }
     previewAbortRef.current = new AbortController();
-    previewLoadedOnceRef.current = false;
     setPreviewLoading(true);
     setPreviewError(null);
     const previewBody = { ...body } as Record<string, unknown>;
     delete previewBody.end;
+    const hasJoin = Boolean(previewBody.join);
     if (previewUnlimited) {
       previewBody.unlimited = true;
     } else {
-      previewBody.limit = 1000;
+      previewBody.limit = hasJoin ? ETL_PREVIEW_JOIN_INSTANT_LIMIT : ETL_PREVIEW_TABLE_LIMIT;
+      previewBody.previewFast = true;
     }
     if (previewBody.union && typeof previewBody.union === "object" && Array.isArray((previewBody.union as { rights?: unknown[] }).rights)) {
       const u = previewBody.union as { left: unknown; rights: unknown[]; unionAll?: boolean };
@@ -1232,76 +1447,112 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       new Promise<void>((resolve) => {
         previewPollTimeoutRef.current = setTimeout(() => resolve(), ms);
       });
+
+    const runSyncPreview = async () => {
+      const res = await fetch("/api/etl/run-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(previewBody),
+        signal,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let errMsg = `Error del servidor (${res.status})`;
+        try {
+          const j = JSON.parse(text) as { error?: string };
+          if (j?.error && typeof j.error === "string") errMsg = j.error;
+        } catch {
+          if (text?.trim()) errMsg = text.trim().slice(0, 200);
+        }
+        throw new Error(errMsg);
+      }
+      const data = await safeJsonResponse(res) as {
+        ok?: boolean;
+        previewRows?: Record<string, unknown>[];
+        rowsProcessed?: number;
+        error?: string;
+      };
+      if (!data?.ok) throw new Error(data?.error || "Error al cargar vista previa");
+      const rows = Array.isArray(data.previewRows) ? data.previewRows : [];
+      previewLoadedOnceRef.current = true;
+      setPreviewRows(rows);
+      setPreviewRowsProcessed(data.rowsProcessed ?? rows.length);
+      setPreviewError(null);
+    };
+
     (async () => {
       try {
-        const startRes = await fetch("/api/etl/run-preview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...previewBody, asyncPreviewAction: "start" }),
-          signal,
-        });
-        if (!startRes.ok) {
-          const text = await startRes.text();
-          let errMsg = `Error del servidor (${startRes.status})`;
-          try {
-            const j = JSON.parse(text) as { error?: string };
-            if (j?.error && typeof j.error === "string") errMsg = j.error;
-          } catch {
-            if (text?.trim()) errMsg = text.trim().slice(0, 200);
+        if (previewUnlimited) {
+          const startRes = await fetch("/api/etl/run-preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...previewBody, asyncPreviewAction: "start" }),
+            signal,
+          });
+          if (!startRes.ok) {
+            const text = await startRes.text();
+            let errMsg = `Error del servidor (${startRes.status})`;
+            try {
+              const j = JSON.parse(text) as { error?: string };
+              if (j?.error && typeof j.error === "string") errMsg = j.error;
+            } catch {
+              if (text?.trim()) errMsg = text.trim().slice(0, 200);
+            }
+            throw new Error(errMsg);
           }
-          throw new Error(errMsg);
-        }
-        const startData = await safeJsonResponse(startRes) as { ok?: boolean; previewJobId?: string; error?: string };
-        if (!startData?.ok || !startData?.previewJobId) {
-          throw new Error(startData?.error || "No se pudo iniciar la vista previa asíncrona.");
-        }
-        const previewJobId = startData.previewJobId;
-        const startedAt = Date.now();
-        while (true) {
-          if (signal.aborted) return;
-          const statusRes = await fetch(`/api/etl/run-preview/status?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
-          const statusData = await safeJsonResponse(statusRes) as {
-            ok?: boolean;
-            status?: string;
-            rowsProcessed?: number;
-            rowsSample?: Record<string, unknown>[];
-            error?: string;
-          };
-          if (!statusRes.ok || !statusData?.ok) {
-            throw new Error(statusData?.error || `Error consultando estado (${statusRes.status})`);
+          const startData = await safeJsonResponse(startRes) as { ok?: boolean; previewJobId?: string; error?: string };
+          if (!startData?.ok || !startData?.previewJobId) {
+            throw new Error(startData?.error || "No se pudo iniciar la vista previa asíncrona.");
           }
-          if (Array.isArray(statusData.rowsSample)) {
-            previewLoadedOnceRef.current = true;
-            setPreviewRows(statusData.rowsSample);
-            setPreviewRowsProcessed(statusData.rowsProcessed ?? statusData.rowsSample.length);
-            setPreviewError(null);
-          }
-          if (statusData.status === "failed") {
-            throw new Error(statusData.error || "La vista previa asíncrona falló.");
-          }
-          if (statusData.status === "completed") {
-            const resultRes = await fetch(`/api/etl/run-preview/result?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
-            const resultData = await safeJsonResponse(resultRes) as {
+          const previewJobId = startData.previewJobId;
+          const startedAt = Date.now();
+          while (true) {
+            if (signal.aborted) return;
+            const statusRes = await fetch(`/api/etl/run-preview/status?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
+            const statusData = await safeJsonResponse(statusRes) as {
               ok?: boolean;
-              previewRows?: Record<string, unknown>[];
+              status?: string;
               rowsProcessed?: number;
+              rowsSample?: Record<string, unknown>[];
               error?: string;
             };
-            if (!resultRes.ok || !resultData?.ok) {
-              throw new Error(resultData?.error || `Error obteniendo resultado (${resultRes.status})`);
+            if (!statusRes.ok || !statusData?.ok) {
+              throw new Error(statusData?.error || `Error consultando estado (${statusRes.status})`);
             }
-            const rows = Array.isArray(resultData.previewRows) ? resultData.previewRows : [];
-            previewLoadedOnceRef.current = true;
-            setPreviewRows(rows);
-            setPreviewRowsProcessed(resultData.rowsProcessed ?? rows.length);
-            setPreviewError(null);
-            break;
+            if (Array.isArray(statusData.rowsSample) && statusData.rowsSample.length > 0) {
+              previewLoadedOnceRef.current = true;
+              setPreviewRows(statusData.rowsSample);
+              setPreviewRowsProcessed(statusData.rowsProcessed ?? statusData.rowsSample.length);
+              setPreviewError(null);
+            }
+            if (statusData.status === "failed") {
+              throw new Error(statusData.error || "La vista previa asíncrona falló.");
+            }
+            if (statusData.status === "completed") {
+              const resultRes = await fetch(`/api/etl/run-preview/result?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
+              const resultData = await safeJsonResponse(resultRes) as {
+                ok?: boolean;
+                previewRows?: Record<string, unknown>[];
+                rowsProcessed?: number;
+                error?: string;
+              };
+              if (!resultRes.ok || !resultData?.ok) {
+                throw new Error(resultData?.error || `Error obteniendo resultado (${resultRes.status})`);
+              }
+              const rows = Array.isArray(resultData.previewRows) ? resultData.previewRows : [];
+              previewLoadedOnceRef.current = true;
+              setPreviewRows(rows);
+              setPreviewRowsProcessed(resultData.rowsProcessed ?? rows.length);
+              setPreviewError(null);
+              break;
+            }
+            if (Date.now() - startedAt > 15 * 60 * 1000) {
+              throw new Error("La vista previa tardó demasiado. Ajustá filtros o cantidad de joins.");
+            }
+            await sleep(300);
           }
-          // Evita polling infinito en jobs colgados.
-          if (Date.now() - startedAt > 15 * 60 * 1000) {
-            throw new Error("La vista previa tardó demasiado. Ajustá filtros o cantidad de joins.");
-          }
-          await sleep(1200);
+        } else {
+          await runSyncPreview();
         }
       } catch (e: unknown) {
         if ((e as { name?: string }).name === "AbortError") return;
@@ -1326,8 +1577,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   fetchPreviewRef.current = fetchPreview;
 
   useEffect(() => {
-    const t = setTimeout(() => fetchPreview(), 0);
-    return () => clearTimeout(t);
+    if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current);
+    const delay = useJoin ? 300 : 0;
+    previewDebounceRef.current = setTimeout(() => fetchPreview(), delay);
+    return () => {
+      if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current);
+    };
   }, [
     fetchPreview,
     step,
@@ -2390,10 +2645,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         const getInferred = (colName: string) =>
                           ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
                         const tableColumns = selectedTableInfo.columns as { name: string; dataType?: string; inferredType?: string }[];
-                        const columnsWithInferred = tableColumns.map((c) => ({
-                          ...c,
-                          inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
-                        }));
+                        const columnsWithInferred = tableColumns.map((c) => {
+                          const meta = inferColumnMetadata({
+                            columnName: c.name,
+                            schemaDataType: c.dataType,
+                            sampleInferred: getInferred(c.name),
+                          });
+                          return { ...c, inferredType: meta.type, inferredFormat: meta.format };
+                        });
                         setTables((prev) =>
                           prev.map((t) =>
                             `${t.schema}.${t.name}` === selectedTable ? { ...t, columns: columnsWithInferred } : t
@@ -2411,7 +2670,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             const ct = r.inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
                             const getInferred = (colName: string) =>
                               ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
-                            const cols = (it.availableColumns ?? []).map((ac) => ({ ...ac, inferredType: getInferred(ac.name) ?? ac.inferredType }));
+                            const cols = (it.availableColumns ?? []).map((ac) => {
+                              const meta = inferColumnMetadata({
+                                columnName: ac.name,
+                                schemaDataType: ac.dataType,
+                                sampleInferred: getInferred(ac.name),
+                              });
+                              return { ...ac, inferredType: meta.type, inferredFormat: meta.format };
+                            });
                             return { ...it, availableColumns: cols.length ? cols : it.availableColumns };
                           })
                         );
@@ -2455,10 +2721,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           label: c.label?.trim() || "",
                           format: "",
                         };
-                        const rowKeyNorm = c.name.replace(/\./g, "_").toLowerCase();
-                        const fromPreview = inferredTypesFromPreview[rowKeyNorm];
-                        const tipoInferido = dataTypeToLabel(fromPreview ?? (c as { inferredType?: string }).inferredType ?? c.dataType);
+                        const inferredMeta = resolveInferredMetadata(c.name, c.dataType);
+                        const tipoInferido = inferredMeta.type;
+                        const formatoInferido = inferredMeta.format;
                         const tipo = (disp.type as "Fecha" | "Número" | "Texto") ?? tipoInferido;
+                        const formatoEfectivo =
+                          disp.format?.trim() ||
+                          formatoInferido ||
+                          (tipo === "Fecha" ? "DD/MM/YYYY" : tipo === "Número" ? "number" : "");
                         const isDate = tipo === "Fecha";
                         const isNumber = tipo === "Número";
                         const formatOptions = isDate ? DATE_FORMAT_OPTIONS : isNumber ? NUMBER_FORMAT_OPTIONS : TEXT_FORMAT_OPTIONS;
@@ -2482,9 +2752,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                       ...(prev[c.name] ?? { label: "", format: "" }),
                                       type: v as "Fecha" | "Número" | "Texto",
                                       format:
-                                        v === "Fecha" && !(prev[c.name]?.format?.trim())
+                                        v === "Fecha"
                                           ? "DD/MM/YYYY"
-                                          : (prev[c.name]?.format ?? ""),
+                                          : v === "Número"
+                                            ? (prev[c.name]?.format?.trim() || inferFormatForColumn(c.name, "Número"))
+                                            : "",
                                     },
                                   }))
                                 }
@@ -2505,7 +2777,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             </td>
                             <td className="py-1 px-2">
                               <Select
-                                value={disp.format}
+                                value={formatoEfectivo}
                                 onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), format: v, type: (prev[c.name] as { type?: "Fecha" | "Número" | "Texto" })?.type } }))}
                                 options={formatOptions}
                                 placeholder="Formato"
@@ -3311,7 +3583,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <div className="font-medium" style={{ color: "var(--platform-fg)" }}>Filas mostradas: {previewLoading ? "…" : (previewRows != null ? String(previewDisplayRows.length) : "—")}</div>
                       <div className="font-medium" style={{ color: "var(--platform-fg)" }}>Total obtenido: {previewLoading ? "…" : previewError ? "Error al cargar" : (previewRows != null ? (previewRowsProcessed ?? previewRows.length) : "—")}</div>
                       {!previewLoading && previewRows != null && previewRows.length > 0 && (
-                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Mostrando hasta 1.000 filas (vista previa).</p>
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                          {useJoin
+                            ? `Muestra rápida: hasta ${ETL_PREVIEW_JOIN_INSTANT_LIMIT} filas del JOIN.`
+                            : `Mostrando hasta ${ETL_PREVIEW_TABLE_LIMIT} filas (vista previa).`}
+                          {previewUnlimited ? " Modo sin límite: carga en segundo plano." : ""}
+                        </p>
                       )}
                     </dd>
                   </div>
@@ -3327,32 +3604,23 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               )}
               {!previewError && previewRows && previewRows.length > 0 && (() => {
                 const rowKeys = Object.keys(previewRows[0] as Record<string, unknown>);
-                const keyByLower: Record<string, string> = Object.fromEntries(rowKeys.map((k: string) => [k.toLowerCase(), k]));
-                /** Alinea refs del guiado (primary.col, join_0.col) con claves de fila (primary_col, join_0_col). */
-                const configColToRowKeyGuess = (c: string) =>
-                  (c || "")
-                    .trim()
-                    .replace(/^primary\./i, "primary_")
-                    .replace(/^join_(\d+)\./i, (_, d) => `join_${parseInt(d, 10)}_`);
-                const mapped =
-                  columns.length > 0
-                    ? columns.map((c: string) => {
-                        if (keyByLower[c.toLowerCase()] != null) return keyByLower[c.toLowerCase()];
-                        const guess = configColToRowKeyGuess(c);
-                        if (keyByLower[guess.toLowerCase()] != null) return keyByLower[guess.toLowerCase()];
-                        return c;
-                      })
+                const columnPlan =
+                  previewColumnConfigKeys.length > 0
+                    ? buildPreviewColumnPlan(previewColumnConfigKeys, rowKeys)
                     : [];
-                const displayKeys = mapped.filter((k: string) => rowKeys.includes(k) || rowKeys.some((r: string) => r.toLowerCase() === k.toLowerCase()));
-                const keysToShow = columns.length > 0 ? (displayKeys.length > 0 ? displayKeys : rowKeys) : [];
-                /** Clave real en el objeto fila (evita celdas vacías si displayKeys quedó con primary.col pero el JSON trae primary_col). */
-                const resolveRowDataKey = (k: string): string => {
-                  if (rowKeys.includes(k)) return k;
-                  const byCi = rowKeys.find((r) => r.toLowerCase() === k.toLowerCase());
-                  if (byCi) return byCi;
-                  const g = configColToRowKeyGuess(k);
-                  const byGuess = rowKeys.find((r) => r.toLowerCase() === g.toLowerCase());
-                  return byGuess ?? k;
+                const keysToShow =
+                  columnPlan.length > 0
+                    ? columnPlan
+                    : previewColumnConfigKeys.length === 0
+                      ? []
+                      : sortPreviewRowKeys(rowKeys).map((dataKey) => ({ configKey: dataKey, dataKey }));
+                const previewHeaderLabel = (configKey: string, dataKey: string): string => {
+                  const fromConfig = columnDisplay[getColumnDisplayKey(configKey)]?.label?.trim();
+                  if (fromConfig) return fromConfig;
+                  const fromData = columnDisplay[getColumnDisplayKey(dataKey)]?.label?.trim();
+                  if (fromData) return fromData;
+                  const bare = configKey.includes(".") ? configKey.split(".").slice(1).join(".") : configKey;
+                  return bare.replace(/^(primary|join_\d+)_/i, "");
                 };
                 const showNoColumnsMessage = columns.length === 0;
                 return (
@@ -3367,10 +3635,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         <table className="w-full text-sm border-collapse" style={{ color: "var(--platform-fg)" }}>
                           <thead>
                             <tr style={{ background: "var(--platform-bg-elevated)", borderBottom: "1px solid var(--platform-border)" }}>
-                              {keysToShow.map((key: string) => {
-                                const dataKey = resolveRowDataKey(key);
-                                const displayKey = getColumnDisplayKey(dataKey);
-                                return (
+                              {keysToShow.map(({ configKey, dataKey }) => (
                                 <th
                                   key={dataKey}
                                   role="columnheader"
@@ -3379,7 +3644,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   onClick={() => handlePreviewSort(dataKey)}
                                 >
                                   <span className="inline-flex items-center gap-1">
-                                    {(columnDisplay[displayKey]?.label?.trim() || key)}
+                                    {previewHeaderLabel(configKey, dataKey)}
                                     {previewSortKey === dataKey ? (
                                       previewSortDir === "asc" ? (
                                         <ArrowUp className="h-3.5 w-3.5 opacity-80" />
@@ -3391,16 +3656,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                     )}
                                   </span>
                                 </th>
-                              ); })}
+                              ))}
                             </tr>
                           </thead>
                           <tbody>
                             {previewDisplayRows.map((row, idx) => (
                               <tr key={idx} className="border-b border-b-[var(--platform-border)] hover:bg-[var(--platform-surface-hover)]">
-                                {keysToShow.map((key: string) => {
-                                  const dataKey = resolveRowDataKey(key);
+                                {keysToShow.map(({ configKey, dataKey }) => {
                                   const raw = (row as Record<string, unknown>)[dataKey];
-                                  const displayKey = getColumnDisplayKey(dataKey);
+                                  const displayKey = getColumnDisplayKey(configKey) !== configKey ? getColumnDisplayKey(configKey) : getColumnDisplayKey(dataKey);
                                   const formatted = formatPreviewCell(displayKey, raw);
                                   return (
                                     <td key={dataKey} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={formatted}>

@@ -10,6 +10,12 @@ export const ETL_MAX_ROWS_CEILING = 2_147_483_647;
 /** Límite por defecto para vista previa de datos en UI (run-preview). Evita timeouts en tablas grandes. */
 export const ETL_PREVIEW_DEFAULT_LIMIT = 1000;
 
+/** Vista previa instantánea con JOIN: pocas filas, una sola consulta. */
+export const ETL_PREVIEW_JOIN_INSTANT_LIMIT = 50;
+
+/** Vista previa sin JOIN (tabla simple): equilibrio velocidad / muestra. */
+export const ETL_PREVIEW_TABLE_LIMIT = 500;
+
 /**
  * Techo máximo de filas en vista previa cuando el usuario marca "Sin límite de filas".
  * Evita FUNCTION_INVOCATION_TIMEOUT en serverless; el ETL de ejecución real puede usar ETL_MAX_ROWS_CEILING.

@@ -155,6 +155,7 @@ type RunBody = {
   inferTypes?: boolean;
   limit?: number;
   unlimited?: boolean;
+  previewFast?: boolean;
   asyncPreviewAction?: "start" | "execute";
   previewJobId?: string;
 };
@@ -569,6 +570,65 @@ export async function POST(req: NextRequest) {
               body?.unlimited === true ? 1_500 : effectiveLimit,
               effectiveLimit
             );
+            const fastJoinPreview = body?.unlimited !== true;
+
+            const runJoinQueryOnce = async (
+              limit: number,
+              offset: number,
+              matPrefix?: string,
+            ): Promise<{ rows: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number }> => {
+              const joinQueryBody: Record<string, unknown> = {
+                primaryConnectionId: starJoin.primaryConnectionId,
+                primaryTable: starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "",
+                joins: joinsWithCols,
+                conditions: body.filter?.conditions || [],
+                dateFilter: body.filter?.dateFilter ?? undefined,
+                primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
+                limit,
+                offset,
+                previewFast: fastJoinPreview,
+              };
+              if (matPrefix) {
+                joinQueryBody._materializationPrefix = matPrefix;
+                joinQueryBody._skipMaterializationCleanup = true;
+              }
+              const res = await fetch(`${origin}/api/connection/join-query`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
+                body: JSON.stringify(joinQueryBody),
+              });
+              const text = await res.text();
+              let data: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number };
+              try {
+                data = text ? JSON.parse(text) : {};
+              } catch {
+                throw new Error(
+                  `El servidor de JOIN devolvió una respuesta no JSON. Detalle: ${(text || "").slice(0, 300)}`
+                );
+              }
+              if (!res.ok || !data?.ok) {
+                const detail = (data?.error && String(data.error).trim()) || `Error del servidor (${res.status})`;
+                throw new Error(`Error en JOIN múltiple: ${detail}`);
+              }
+              if (!Array.isArray(data.rows)) {
+                throw new Error("Error en JOIN múltiple: la respuesta no incluyó filas válidas.");
+              }
+              return {
+                rows: data.rows,
+                sourceExhausted: data.sourceExhausted,
+                nextSourceOffset: data.nextSourceOffset,
+              };
+            };
+
+            if (fastJoinPreview) {
+              const data = await runJoinQueryOnce(previewTargetRows, 0);
+              yield {
+                rows: data.rows.slice(0, previewTargetRows),
+                query: `Star JOIN (vista instantánea · ${Math.min(data.rows.length, previewTargetRows)} filas)`,
+              };
+              return;
+            }
+
             const microChunkSize = Math.min(
               previewTargetRows,
               joinsCount >= 10 ? 250
@@ -591,39 +651,7 @@ export async function POST(req: NextRequest) {
             try {
             while (accumulatedRows.length < previewTargetRows) {
               const chunkSize = Math.min(previewTargetRows - accumulatedRows.length, microChunkSize);
-              const joinQueryBody: Record<string, unknown> = {
-                primaryConnectionId: starJoin.primaryConnectionId,
-                primaryTable: starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "",
-                joins: joinsWithCols,
-                conditions: body.filter?.conditions || [],
-                dateFilter: body.filter?.dateFilter ?? undefined,
-                primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
-                limit: chunkSize,
-                offset: starOffset,
-                _materializationPrefix: matPrefix,
-                _skipMaterializationCleanup: true,
-              };
-              const res = await fetch(`${origin}/api/connection/join-query`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
-                body: JSON.stringify(joinQueryBody),
-              });
-              const text = await res.text();
-              let data: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number };
-              try {
-                data = text ? JSON.parse(text) : {};
-              } catch {
-                throw new Error(
-                  `El servidor de JOIN devolvió una respuesta no JSON. Detalle: ${(text || "").slice(0, 300)}`
-                );
-              }
-              if (!res.ok || !data?.ok) {
-                const detail = (data?.error && String(data.error).trim()) || `Error del servidor (${res.status})`;
-                throw new Error(`Error en JOIN múltiple: ${detail}`);
-              }
-              if (!Array.isArray(data.rows)) {
-                throw new Error("Error en JOIN múltiple: la respuesta no incluyó filas válidas.");
-              }
+              const data = await runJoinQueryOnce(chunkSize, starOffset, matPrefix);
               if (data.rows.length > 0) accumulatedRows.push(...data.rows);
               const sourceExhausted = data.sourceExhausted === true;
               const nextSourceOffset = typeof data.nextSourceOffset === "number"
