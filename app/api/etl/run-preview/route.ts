@@ -571,6 +571,10 @@ export async function POST(req: NextRequest) {
               effectiveLimit
             );
             const fastJoinPreview = body?.unlimited !== true;
+            const starJoinPrimaryTable =
+              starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "";
+            const starJoinConditions = body.filter?.conditions || [];
+            const starJoinDateFilter = body.filter?.dateFilter ?? undefined;
 
             const runJoinQueryOnce = async (
               limit: number,
@@ -579,10 +583,10 @@ export async function POST(req: NextRequest) {
             ): Promise<{ rows: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number }> => {
               const joinQueryBody: Record<string, unknown> = {
                 primaryConnectionId: starJoin.primaryConnectionId,
-                primaryTable: starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "",
+                primaryTable: starJoinPrimaryTable,
                 joins: joinsWithCols,
-                conditions: body.filter?.conditions || [],
-                dateFilter: body.filter?.dateFilter ?? undefined,
+                conditions: starJoinConditions,
+                dateFilter: starJoinDateFilter,
                 primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
                 limit,
                 offset,
