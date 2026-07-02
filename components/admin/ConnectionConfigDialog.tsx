@@ -16,6 +16,7 @@ import { Select, type SelectOption } from "@/components/ui/Select";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { Table2, Database, Server, User, Hash, FileText, Loader2, Pencil, Building2 } from "lucide-react";
+import ConnectionScheduleSettings from "@/components/connections/ConnectionScheduleSettings";
 
 const CONNECTION_TYPE_OPTIONS: SelectOption[] = [
   { value: "mysql", label: "MySQL" },
@@ -614,6 +615,13 @@ export default function ConnectionConfigDialog({
                     </p>
                   )}
                 </div>
+              )}
+
+              {connectionId && (
+                <ConnectionScheduleSettings
+                  connectionId={connectionId}
+                  connectionType={conn.type}
+                />
               )}
 
               <p className="mt-4 text-xs" style={{ color: "var(--platform-muted)" }}>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { shouldUseOwnBackend, proxyToBackend } from "@/lib/api/backend-proxy";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { runScheduledConnections } from "@/lib/connection/run-scheduled-connections";
 import {
   ACTIVE_RUN_GUARD_MINUTES,
   getIntervalMs,
@@ -141,8 +142,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });
   }
   try {
-    const result = await runScheduled();
-    return NextResponse.json(result);
+    const cronSecret = process.env.ETL_SCHEDULER_SECRET || process.env.CRON_SECRET || "";
+    const [etlResult, connectionsResult] = await Promise.all([
+      runScheduled(),
+      cronSecret ? runScheduledConnections(cronSecret) : Promise.resolve(null),
+    ]);
+    return NextResponse.json({
+      ...etlResult,
+      connections: connectionsResult,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error en run-scheduled";
     console.error("[run-scheduled]", message, err);
@@ -160,8 +168,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });
   }
   try {
-    const result = await runScheduled();
-    return NextResponse.json(result);
+    const cronSecret = process.env.ETL_SCHEDULER_SECRET || process.env.CRON_SECRET || "";
+    const [etlResult, connectionsResult] = await Promise.all([
+      runScheduled(),
+      cronSecret ? runScheduledConnections(cronSecret) : Promise.resolve(null),
+    ]);
+    return NextResponse.json({
+      ...etlResult,
+      connections: connectionsResult,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error en run-scheduled";
     console.error("[run-scheduled]", message, err);

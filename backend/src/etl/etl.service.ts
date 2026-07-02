@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
 import { v4 as uuidv4 } from "uuid";
+import { runScheduledConnections } from "@/lib/connection/run-scheduled-connections";
 import { DatabaseService } from "../database/database.service";
 import { ETL_QUEUE } from "./etl.constants";
 
@@ -94,6 +95,7 @@ export class EtlService {
       });
       jobs.push(result);
     }
-    return { enqueued: jobs.length, jobs };
+    const connections = await runScheduledConnections(secret);
+    return { enqueued: jobs.length, jobs, connections };
   }
 }
