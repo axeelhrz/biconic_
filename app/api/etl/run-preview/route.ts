@@ -32,6 +32,7 @@ import {
 } from "@/lib/excel-import/excel-metadata";
 import { connectionsSelectColumns } from "@/lib/db/connections-query";
 import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
+import { resolveFirebirdAttachOptions } from "@/lib/connection/resolve-firebird-connection";
 
 // Reuse types from run/route.ts (duplicated here for independence)
 type FilterCondition = {
@@ -386,16 +387,11 @@ export async function POST(req: NextRequest) {
         };
 
         const runOneFirebird = async (
-          conn: { db_host?: string | null; db_port?: number | null; db_name?: string | null; db_user?: string | null; db_password_encrypted?: string | null },
+          conn: Record<string, unknown>,
           src: typeof left,
           tableQ: string
         ): Promise<Record<string, any>[]> => {
-          let password = (conn as any).db_password_encrypted
-            ? decryptConnectionPassword((conn as any).db_password_encrypted)
-            : (conn as any).db_password ?? "";
-          if (!password) password = process.env.FLEXXUS_PASSWORD ?? process.env.DB_PASSWORD_PLACEHOLDER ?? "";
-          const fbUser = (conn as any).db_user ?? "";
-          if (!fbUser) return Promise.reject(new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión."));
+          const fbOpts = resolveFirebirdAttachOptions(hydrateConnectionRow(conn));
           const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(String(s).trim()) ? String(s).trim().toUpperCase() : `"${String(s).trim().replace(/"/g, '""')}"`);
           const tablePart = tableQ.includes(".")
             ? (tableQ.split(".").pop() || tableQ.trim()).trim().toUpperCase()
@@ -428,20 +424,12 @@ export async function POST(req: NextRequest) {
           }
           const limit = effectiveLimit;
           const Firebird = require("node-firebird");
-          const opts = {
-            host: conn.db_host || "localhost",
-            port: conn.db_port ? Number(conn.db_port) : 15421,
-            database: conn.db_name,
-            user: fbUser,
-            password: password || "",
-            lowercase_keys: false,
-          };
           const PREVIEW_FIREBIRD_TIMEOUT_MS = 25000;
           return new Promise<Record<string, any>[]>((resolve, reject) => {
             const timeoutId = setTimeout(() => {
               reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s)."));
             }, PREVIEW_FIREBIRD_TIMEOUT_MS);
-            Firebird.attach(opts, (err: Error | null, db: any) => {
+            Firebird.attach(fbOpts, (err: Error | null, db: any) => {
               if (err) {
                 clearTimeout(timeoutId);
                 return reject(err);
@@ -805,7 +793,7 @@ export async function POST(req: NextRequest) {
                   clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
                 }
                 const Firebird = require("node-firebird");
-                const opts = { host: conn.db_host || "localhost", port: conn.db_port ?? 15421, database: conn.db_name, user: fbUser, password: password || "", lowercase_keys: false };
+                const opts = resolveFirebirdAttachOptions(conn);
                 return new Promise((resolve, reject) => {
                   const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
                   Firebird.attach(opts, (err: Error | null, db: any) => {
@@ -1112,20 +1100,11 @@ export async function POST(req: NextRequest) {
             }
             const limit = effectiveLimit;
             const Firebird = require("node-firebird");
-            const fbUser = String((conn as any).db_user ?? "").trim();
-            if (!fbUser) throw new Error("La conexión Firebird no tiene usuario definido. Revisá que la conexión tenga usuario guardado. Si la creaste con usuario y contraseña, asegurate de que ENCRYPTION_KEY en el servidor sea la misma que cuando se creó.");
-            const opts = {
-              host: conn.db_host || "localhost",
-              port: conn.db_port ? Number(conn.db_port) : 15421,
-              database: conn.db_name,
-              user: fbUser,
-              password: password || "",
-              lowercase_keys: false,
-            };
+            const fbOpts = resolveFirebirdAttachOptions(conn);
             const baseQuery = `SELECT FIRST ${limit} ${colsFirebird} FROM ${tablePart} ${clauseInlined}`.trim();
             const rows = await new Promise<Record<string, any>[]>((resolve, reject) => {
               const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
-              Firebird.attach(opts, (err: Error | null, db: any) => {
+              Firebird.attach(fbOpts, (err: Error | null, db: any) => {
                 if (err) { clearTimeout(t); return reject(err); }
                 db.query(baseQuery, [], (qerr: Error | null, r: any[]) => {
                   clearTimeout(t);

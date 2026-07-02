@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
+import {
+  formatFirebirdConnectError,
+  resolveFirebirdAttachOptions,
+} from "@/lib/connection/resolve-firebird-connection";
+import { connectionsSelectColumns } from "@/lib/db/connections-query";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
 import {
@@ -46,23 +52,20 @@ export async function POST(req: NextRequest) {
     }
 
     const dbClient = shouldUseOwnBackend() ? createServiceRoleClient() : supabase;
-    const { data: conn, error: connError } = await dbClient
+    const { data: connRaw, error: connError } = await dbClient
       .from("connections")
-      .select(
-        shouldUseOwnBackend()
-          ? "*"
-          : "id, user_id, type, db_host, db_name, db_user, db_port, db_password_encrypted"
-      )
+      .select(connectionsSelectColumns())
       .eq("id", String(connectionId))
       .maybeSingle();
-    if (connError || !conn) {
+    if (connError || !connRaw) {
       return NextResponse.json(
         { ok: false, error: connError?.message || "Conexión no encontrada" },
         { status: 404 }
       );
     }
 
-    const type = (conn as any).type;
+    const conn = hydrateConnectionRow(connRaw as Record<string, unknown>);
+    const type = conn.type;
     if (type === "excel_file" || type === "excel") {
       const { data: metaRows } = await dbClient
         .from("data_tables")
@@ -99,14 +102,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (type === "postgres" || type === "postgresql") {
-      const password = (conn as any).db_password_encrypted
-        ? decryptConnectionPassword((conn as any).db_password_encrypted)
+      const password = conn.db_password_encrypted
+        ? decryptConnectionPassword(conn.db_password_encrypted)
         : undefined;
       const client = new PgClient({
-        host: (conn as any).db_host,
-        user: (conn as any).db_user,
-        database: (conn as any).db_name,
-        port: (conn as any).db_port ?? 5432,
+        host: conn.db_host ?? undefined,
+        user: conn.db_user ?? undefined,
+        database: conn.db_name ?? undefined,
+        port: conn.db_port ?? 5432,
         password,
       });
       await client.connect();
@@ -123,19 +126,19 @@ export async function POST(req: NextRequest) {
     }
 
     if (type === "mysql") {
-      const password = (conn as any).db_password_encrypted
-        ? decryptConnectionPassword((conn as any).db_password_encrypted)
-        : (conn as any).db_password ?? "";
+      const password = conn.db_password_encrypted
+        ? decryptConnectionPassword(conn.db_password_encrypted)
+        : "";
       const parts = tableQualified.trim().split(".", 2);
-      const schema = parts.length > 1 ? parts[0].trim() : (conn as any).db_name;
+      const schema = parts.length > 1 ? parts[0].trim() : (conn.db_name ?? "");
       const tableName = parts.length > 1 ? parts[1].trim() : parts[0].trim();
       const fullTable = `${safeIdentMySQL(schema)}.${safeIdentMySQL(tableName)}`;
       const col = safeIdentMySQL(columnName.trim());
       const connection = await mysql.createConnection({
-        host: (conn as any).db_host,
-        user: (conn as any).db_user,
-        database: (conn as any).db_name,
-        port: (conn as any).db_port ?? 3306,
+        host: conn.db_host ?? undefined,
+        user: conn.db_user ?? undefined,
+        database: conn.db_name ?? undefined,
+        port: conn.db_port ?? 3306,
         password: password || "",
       });
       try {
@@ -150,9 +153,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (type === "firebird") {
-      const password = (conn as any).db_password_encrypted
-        ? decryptConnectionPassword((conn as any).db_password_encrypted)
-        : (conn as any).db_password ?? process.env.FLEXXUS_PASSWORD ?? "";
+      let fbOpts: ReturnType<typeof resolveFirebirdAttachOptions>;
+      try {
+        fbOpts = resolveFirebirdAttachOptions(conn);
+      } catch (cfgErr) {
+        const msg = cfgErr instanceof Error ? cfgErr.message : String(cfgErr);
+        return NextResponse.json({ ok: false, error: msg }, { status: 400 });
+      }
       const Firebird = require("node-firebird");
       // Firebird: SELECT * para evitar -206 (Column unknown) por nombre/casing distinto; extraemos valores distintos en JS
       const tableNameOnly = tableQualified.trim().includes(".")
@@ -161,17 +168,17 @@ export async function POST(req: NextRequest) {
       const relationName = /^[A-Z0-9_]+$/i.test(tableNameOnly) ? tableNameOnly.toUpperCase() : `"${tableNameOnly.replace(/"/g, '""')}"`;
       const sql = `SELECT FIRST ${MAX_VALUES} * FROM ${relationName}`;
       return await new Promise<NextResponse>((resolve) => {
-        const opts = {
-          host: (conn as any).db_host || "localhost",
-          port: (conn as any).db_port ? Number((conn as any).db_port) : 15421,
-          database: (conn as any).db_name,
-          user: (conn as any).db_user,
-          password: password || "",
-          lowercase_keys: false,
-        };
-        Firebird.attach(opts, (errAttach: Error | null, db: any) => {
+        Firebird.attach(fbOpts, (errAttach: Error | null, db: any) => {
           if (errAttach) {
-            resolve(NextResponse.json({ ok: false, error: errAttach.message }, { status: 400 }));
+            resolve(
+              NextResponse.json(
+                {
+                  ok: false,
+                  error: formatFirebirdConnectError(errAttach, fbOpts.host),
+                },
+                { status: 400 }
+              )
+            );
             return;
           }
           db.query(sql, [], (errQ: Error | null, rows: any[]) => {

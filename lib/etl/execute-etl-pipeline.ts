@@ -1,5 +1,7 @@
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
+import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
+import { resolveFirebirdAttachOptions } from "@/lib/connection/resolve-firebird-connection";
 import { v4 as uuidv4 } from "uuid";
 import { Client as PgClient } from "pg";
 import postgres from "postgres"; // Used only for DDL and inserts with postgres.js
@@ -950,13 +952,15 @@ export async function executeEtlPipeline(
         .eq("id", String(primaryConnId))
         .single();
       if (!conn) throw new Error(`Conexión ${primaryConnId} no encontrada.`);
+      const hydratedConn = hydrateConnectionRow(conn as Record<string, unknown>);
 
       // Firebird: tabla simple o JOIN en memoria (soporta Firebird + Firebird/Postgres)
-      if (conn.type === "firebird") {
+      if (hydratedConn.type === "firebird") {
         const password =
-          (conn as any).db_password_encrypted
-            ? decryptConnectionPassword((conn as any).db_password_encrypted)
-            : (conn as any).db_password ?? "";
+          hydratedConn.db_password_encrypted
+            ? decryptConnectionPassword(hydratedConn.db_password_encrypted)
+            : "";
+        const fbOpts = resolveFirebirdAttachOptions(hydratedConn);
         const safePart = (s: string) => /^[A-Z0-9_]+$/i.test(s) ? s.toUpperCase() : `"${s.replace(/"/g, '""')}"`;
         const normalizeRow = (row: Record<string, any>) => {
           const out: Record<string, any> = {};
@@ -1147,6 +1151,7 @@ export async function executeEtlPipeline(
 
           const { data: conn2 } = await supabaseService.from("connections").select("*").eq("id", secondaryConnId).single();
           if (!conn2) throw new Error(`Conexión secundaria ${secondaryConnId} no encontrada.`);
+          const hydratedConn2 = hydrateConnectionRow(conn2 as Record<string, unknown>);
 
           const selectedCols = (body!.filter?.columns || []) as string[];
           const leftColumns = selectedCols.filter((c: string) => /^primary\./i.test(c)).map((c: string) => c.replace(/^primary\./i, "").trim());
@@ -1164,14 +1169,6 @@ export async function executeEtlPipeline(
           const rightDateFilter = isDateFilterOnRight && rawDateCol ? { ...dateFilter, column: rawDateCol.replace(/^join_\d+\.\s*/i, "").trim() } : undefined;
 
           const Firebird = require("node-firebird");
-          const fbOpts = {
-            host: conn.db_host || "localhost",
-            port: conn.db_port ? Number(conn.db_port) : 15421,
-            database: conn.db_name,
-            user: conn.db_user,
-            password: password || "",
-            lowercase_keys: false,
-          };
           const escapeFb = (v: any): string => {
             if (v == null) return "NULL";
             if (typeof v === "boolean") return v ? "1" : "0";
@@ -1224,7 +1221,7 @@ export async function executeEtlPipeline(
 
           const isSameFirebirdConnection =
             String(primaryConnId) === String(secondaryConnId) &&
-            String((conn2 as any).type || "").toLowerCase() === "firebird";
+            String(hydratedConn2.type || "").toLowerCase() === "firebird";
           const canUseNativeJoin = isSameFirebirdConnection && leftColumns.length > 0 && rightColumns.length > 0;
 
           if (canUseNativeJoin) {
@@ -1315,9 +1312,8 @@ export async function executeEtlPipeline(
               const { clause: rDfClause, params: rDfParams } = buildDateFilterWhereFragmentFirebird(rightDateFilter);
               const mergedRightClause = rDfClause ? (rClause ? `${rClause} AND ${rDfClause}` : `WHERE ${rDfClause}`) : rClause;
               const mergedRightParams = [...rParams, ...rDfParams];
-              if (String((conn2 as any).type || "").toLowerCase() === "firebird") {
-                const pwd2 = (conn2 as any).db_password_encrypted ? decryptConnectionPassword((conn2 as any).db_password_encrypted) : (conn2 as any).db_password ?? "";
-                const opts2 = { host: conn2.db_host || "localhost", port: conn2.db_port ? Number(conn2.db_port) : 15421, database: conn2.db_name, user: conn2.db_user, password: pwd2 || "", lowercase_keys: false };
+              if (String(hydratedConn2.type || "").toLowerCase() === "firebird") {
+                const opts2 = resolveFirebirdAttachOptions(hydratedConn2);
                 return new Promise((resolve, reject) => {
                   Firebird.attach(opts2, (err: Error | null, db2: any) => {
                     if (err) return reject(err);
@@ -1370,9 +1366,8 @@ export async function executeEtlPipeline(
               let sql = `SELECT FIRST ${ETL_MAX_ROWS_CEILING} ${rightColumns.length ? rightColumns.map((c: any) => safePart(c)).join(", ") : "*"} FROM ${rightTablePart} ${mergedRightClause0}`.trim();
               sql = inlineClauseParams(sql, mergedRightParams0);
               sql = sql + extraWhere;
-              if (String((conn2 as any).type || "").toLowerCase() === "firebird") {
-                const pwd2 = (conn2 as any).db_password_encrypted ? decryptConnectionPassword((conn2 as any).db_password_encrypted) : (conn2 as any).db_password ?? "";
-                const opts2 = { host: conn2.db_host || "localhost", port: conn2.db_port ? Number(conn2.db_port) : 15421, database: conn2.db_name, user: conn2.db_user, password: pwd2 || "", lowercase_keys: false };
+              if (String(hydratedConn2.type || "").toLowerCase() === "firebird") {
+                const opts2 = resolveFirebirdAttachOptions(hydratedConn2);
                 const rows = await new Promise<Record<string, any>[]>((resolve, reject) => {
                   Firebird.attach(opts2, (err: Error | null, db2: any) => {
                     if (err) return reject(err);
@@ -1509,21 +1504,13 @@ export async function executeEtlPipeline(
         const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
         const mergedParams = [...params, ...dfParams];
         const Firebird = require("node-firebird");
-        const opts = {
-          host: conn.db_host || "localhost",
-          port: conn.db_port ? Number(conn.db_port) : 15421,
-          database: conn.db_name,
-          user: conn.db_user,
-          password: password || "",
-          lowercase_keys: false,
-        };
         let offset = 0;
         let db: any = null;
         try {
           db = await withRetry(
             () =>
               new Promise<any>((resolve, reject) => {
-                Firebird.attach(opts, (err: Error | null, connection: any) => {
+                Firebird.attach(fbOpts, (err: Error | null, connection: any) => {
                   if (err) reject(err);
                   else resolve(connection);
                 });
