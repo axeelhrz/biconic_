@@ -17,7 +17,7 @@ export type MaterializeResult = {
 };
 export declare function materializeFirebirdTable(conn: FirebirdConn, table: string, columns: string[] | undefined, dateFilter: DateFilterSpec | undefined, pgUrl: string, targetSchema: string, targetTable: string, signal?: {
     aborted: boolean;
-}, sharedPgClient?: PgClient, onProgress?: (rowsSoFar: number) => void): Promise<MaterializeResult>;
+}, sharedPgClient?: PgClient, onProgress?: (rowsSoFar: number) => void, maxRows?: number): Promise<MaterializeResult>;
 export declare function materializePostgresTable(conn: {
     db_host?: string | null;
     db_port?: number | null;
@@ -27,6 +27,6 @@ export declare function materializePostgresTable(conn: {
     db_password_encrypted?: string | null;
     db_password_secret_id?: string | null;
     type?: string;
-}, table: string, columns: string[] | undefined, dateFilter: DateFilterSpec | undefined, pgUrl: string, targetSchema: string, targetTable: string, sharedPgClient?: PgClient): Promise<MaterializeResult>;
+}, table: string, columns: string[] | undefined, dateFilter: DateFilterSpec | undefined, pgUrl: string, targetSchema: string, targetTable: string, sharedPgClient?: PgClient, maxRows?: number): Promise<MaterializeResult>;
 export declare function cleanupTempTables(pgUrl: string, tables: string[]): Promise<void>;
 export {};

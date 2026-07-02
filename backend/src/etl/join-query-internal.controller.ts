@@ -5,6 +5,8 @@ import {
   Post,
   UnauthorizedException,
 } from "@nestjs/common";
+import { callJoinQueryForEtl } from "@/lib/connection/call-join-query-for-etl";
+import { createEtlPipelineContext } from "@/lib/etl/etl-run-context";
 
 @Controller("internal/connection")
 export class JoinQueryInternalController {
@@ -20,11 +22,14 @@ export class JoinQueryInternalController {
       throw new UnauthorizedException("No autorizado");
     }
 
+    const ctx = createEtlPipelineContext({
+      internalEtlSecret: internalSecret ?? expected ?? "",
+    });
+
     try {
-      const { executeJoinQueryForEtlRun } = await import(
-        "@/lib/connection/join-query-internal"
-      );
-      const result = await executeJoinQueryForEtlRun(body);
+      // En Railway no ejecutar join-query in-process: importa rutas Next y puede
+      // tumbar el contenedor (OOM). callJoinQueryForEtl prioriza HTTP a Vercel.
+      const result = await callJoinQueryForEtl(body, ctx);
       if (!result.ok) {
         return { ok: false, error: result.error || "JOIN falló" };
       }
@@ -33,7 +38,7 @@ export class JoinQueryInternalController {
       const message = err instanceof Error ? err.message : String(err);
       return {
         ok: false,
-        error: `JOIN interno no disponible en este servicio (${message}). Configurá NEXT_INTERNAL_URL con la URL de la app Next.js (Vercel).`,
+        error: `JOIN no disponible (${message}). Configurá NEXT_INTERNAL_URL con la URL de Vercel.`,
       };
     }
   }

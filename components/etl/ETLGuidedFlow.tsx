@@ -3890,7 +3890,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           {useJoin
                             ? `Muestra rápida: hasta ${ETL_PREVIEW_JOIN_INSTANT_LIMIT} filas del JOIN.`
                             : `Mostrando hasta ${ETL_PREVIEW_TABLE_LIMIT} filas (vista previa).`}
-                          {previewUnlimited ? " Modo sin límite: carga en segundo plano." : ""}
+                          {previewUnlimited ? " Modo sin límite: muestra hasta 50.000 filas (muestra acotada por tabla en JOIN Firebird)." : ""}
                         </p>
                       )}
                     </dd>

@@ -5,7 +5,11 @@ import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { randomUUID } from "crypto";
-import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
+import {
+  ETL_MAX_ROWS_CEILING,
+  ETL_PREVIEW_MATERIALIZE_FAST_MAX_ROWS_PER_TABLE,
+  ETL_PREVIEW_MATERIALIZE_MAX_ROWS_PER_TABLE,
+} from "@/lib/etl/limits";
 import { buildDateFilterWhereFragmentPg, buildDateFilterWhereFragmentFirebird, type DateFilterSpec } from "@/lib/sql/helpers";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { shouldUseOwnBackend } from "@/lib/api/backend-config";
@@ -816,6 +820,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               const { materializeFirebirdTable, materializePostgresTable, cleanupTempTables } = await import("@/lib/etl/materialize-firebird");
               const reqSuffix = externalPrefix || randomUUID().replace(/-/g, "").slice(0, 12);
               const fromEtlRun = (body as { fromEtlRun?: boolean }).fromEtlRun === true;
+              const isPreviewMaterialize = !fromEtlRun;
+              const previewFastMat = (body as { previewFast?: boolean }).previewFast === true;
+              const materializeMaxRows = isPreviewMaterialize
+                ? previewFastMat
+                  ? ETL_PREVIEW_MATERIALIZE_FAST_MAX_ROWS_PER_TABLE
+                  : ETL_PREVIEW_MATERIALIZE_MAX_ROWS_PER_TABLE
+                : undefined;
+              if (materializeMaxRows) {
+                log("Vista previa: materialización acotada por tabla.", { materializeMaxRows });
+              }
 
               matClient = new PgClient({ connectionString: pgUrl, connectionTimeoutMillis: 15000, statement_timeout: Math.max(120000, JOIN_INTERNAL_TIMEOUT_MS) });
               await matClient.connect();
@@ -852,9 +866,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                   if (connType === "firebird") {
                     return materializeFirebirdTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, undefined, matClient!, (rowsSoFar) => {
                       log(`Materializando ${tblName}: ${rowsSoFar.toLocaleString("es-AR")} filas copiadas…`);
-                    });
+                    }, materializeMaxRows);
                   }
-                  return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, matClient!);
+                  return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, matClient!, materializeMaxRows);
                 };
 
                 const matResults: { qualifiedTable: string; rowCount: number }[] = [];

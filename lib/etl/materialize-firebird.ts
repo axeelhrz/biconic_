@@ -92,7 +92,8 @@ export async function materializeFirebirdTable(
   targetTable: string,
   signal?: { aborted: boolean },
   sharedPgClient?: PgClient,
-  onProgress?: (rowsSoFar: number) => void
+  onProgress?: (rowsSoFar: number) => void,
+  maxRows?: number
 ): Promise<MaterializeResult> {
   const qualifiedTable = `${targetSchema}."${targetTable}"`;
   const opts = fbOpts(conn);
@@ -120,7 +121,9 @@ export async function materializeFirebirdTable(
     await pgClient.query(`CREATE SCHEMA IF NOT EXISTS ${targetSchema}`).catch(() => {});
   }
 
-  const sql = `SELECT ${cols} FROM ${tablePart}${wherePart}`;
+  const firstClause =
+    maxRows != null && maxRows > 0 ? `FIRST ${Math.floor(maxRows)} ` : "";
+  const sql = `SELECT ${firstClause}${cols} FROM ${tablePart}${wherePart}`;
 
   try {
     const result = await new Promise<{ rowCount: number }>((resolve, reject) => {
@@ -257,7 +260,8 @@ export async function materializePostgresTable(
   pgUrl: string,
   targetSchema: string,
   targetTable: string,
-  sharedPgClient?: PgClient
+  sharedPgClient?: PgClient,
+  maxRows?: number
 ): Promise<MaterializeResult> {
   const qualifiedTable = `${targetSchema}."${targetTable}"`;
   const { buildDateFilterWhereFragmentPg } = await import("@/lib/sql/helpers");
@@ -286,7 +290,9 @@ export async function materializePostgresTable(
     const cols = columns?.length ? columns.map((c) => `"${c}"`).join(", ") : "*";
     const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, 1, "");
     const where = dfClause ? ` WHERE ${dfClause}` : "";
-    const srcSql = `SELECT ${cols} FROM ${table.includes(".") ? table.split(".").map(p => `"${p}"`).join(".") : `"${table}"`}${where}`;
+    const limitClause =
+      maxRows != null && maxRows > 0 ? ` LIMIT ${Math.floor(maxRows)}` : "";
+    const srcSql = `SELECT ${cols} FROM ${table.includes(".") ? table.split(".").map(p => `"${p}"`).join(".") : `"${table}"`}${where}${limitClause}`;
     const srcRes = await srcClient.query(srcSql, dfParams);
     const rows = srcRes.rows || [];
 

@@ -644,6 +644,16 @@ async function POST(req) {
                                 const { materializeFirebirdTable, materializePostgresTable, cleanupTempTables } = await Promise.resolve().then(() => __importStar(require("@/lib/etl/materialize-firebird")));
                                 const reqSuffix = externalPrefix || (0, crypto_1.randomUUID)().replace(/-/g, "").slice(0, 12);
                                 const fromEtlRun = body.fromEtlRun === true;
+                                const isPreviewMaterialize = !fromEtlRun;
+                                const previewFastMat = body.previewFast === true;
+                                const materializeMaxRows = isPreviewMaterialize
+                                    ? previewFastMat
+                                        ? limits_1.ETL_PREVIEW_MATERIALIZE_FAST_MAX_ROWS_PER_TABLE
+                                        : limits_1.ETL_PREVIEW_MATERIALIZE_MAX_ROWS_PER_TABLE
+                                    : undefined;
+                                if (materializeMaxRows) {
+                                    log("Vista previa: materialización acotada por tabla.", { materializeMaxRows });
+                                }
                                 matClient = new pg_1.Client({ connectionString: pgUrl, connectionTimeoutMillis: 15000, statement_timeout: Math.max(120000, JOIN_INTERNAL_TIMEOUT_MS) });
                                 await matClient.connect();
                                 let tablesAlreadyExist = false;
@@ -677,9 +687,9 @@ async function POST(req) {
                                         if (connType === "firebird") {
                                             return materializeFirebirdTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, undefined, matClient, (rowsSoFar) => {
                                                 log(`Materializando ${tblName}: ${rowsSoFar.toLocaleString("es-AR")} filas copiadas…`);
-                                            });
+                                            }, materializeMaxRows);
                                         }
-                                        return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, matClient);
+                                        return materializePostgresTable(conn, table, cols, df, pgUrl, "etl_temp", tblName, matClient, materializeMaxRows);
                                     };
                                     const matResults = [];
                                     log("Materializando tabla primary...");

@@ -91,7 +91,7 @@ function fbOpts(conn) {
         lowercase_keys: false,
     };
 }
-async function materializeFirebirdTable(conn, table, columns, dateFilter, pgUrl, targetSchema, targetTable, signal, sharedPgClient, onProgress) {
+async function materializeFirebirdTable(conn, table, columns, dateFilter, pgUrl, targetSchema, targetTable, signal, sharedPgClient, onProgress, maxRows) {
     const qualifiedTable = `${targetSchema}."${targetTable}"`;
     const opts = fbOpts(conn);
     const tablePart = table.includes(".")
@@ -115,7 +115,8 @@ async function materializeFirebirdTable(conn, table, columns, dateFilter, pgUrl,
         await pgClient.connect();
         await pgClient.query(`CREATE SCHEMA IF NOT EXISTS ${targetSchema}`).catch(() => { });
     }
-    const sql = `SELECT ${cols} FROM ${tablePart}${wherePart}`;
+    const firstClause = maxRows != null && maxRows > 0 ? `FIRST ${Math.floor(maxRows)} ` : "";
+    const sql = `SELECT ${firstClause}${cols} FROM ${tablePart}${wherePart}`;
     try {
         const result = await new Promise((resolve, reject) => {
             const Firebird = require("node-firebird");
@@ -233,7 +234,7 @@ async function materializeFirebirdTable(conn, table, columns, dateFilter, pgUrl,
             await pgClient.end().catch(() => { });
     }
 }
-async function materializePostgresTable(conn, table, columns, dateFilter, pgUrl, targetSchema, targetTable, sharedPgClient) {
+async function materializePostgresTable(conn, table, columns, dateFilter, pgUrl, targetSchema, targetTable, sharedPgClient, maxRows) {
     const qualifiedTable = `${targetSchema}."${targetTable}"`;
     const { buildDateFilterWhereFragmentPg } = await Promise.resolve().then(() => __importStar(require("@/lib/sql/helpers")));
     let srcPassword = conn.db_password_encrypted
@@ -257,7 +258,8 @@ async function materializePostgresTable(conn, table, columns, dateFilter, pgUrl,
         const cols = columns?.length ? columns.map((c) => `"${c}"`).join(", ") : "*";
         const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilter, 1, "");
         const where = dfClause ? ` WHERE ${dfClause}` : "";
-        const srcSql = `SELECT ${cols} FROM ${table.includes(".") ? table.split(".").map(p => `"${p}"`).join(".") : `"${table}"`}${where}`;
+        const limitClause = maxRows != null && maxRows > 0 ? ` LIMIT ${Math.floor(maxRows)}` : "";
+        const srcSql = `SELECT ${cols} FROM ${table.includes(".") ? table.split(".").map(p => `"${p}"`).join(".") : `"${table}"`}${where}${limitClause}`;
         const srcRes = await srcClient.query(srcSql, dfParams);
         const rows = srcRes.rows || [];
         if (rows.length === 0) {

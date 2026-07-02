@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 
+const PREVIEW_STALE_MS = 20 * 60 * 1000;
+
 export async function GET(req: NextRequest) {
   try {
     const previewJobId = (req.nextUrl.searchParams.get("previewJobId") || "").trim();
@@ -24,6 +26,35 @@ export async function GET(req: NextRequest) {
 
     if (error || !data) {
       return NextResponse.json({ ok: false, error: "Job de preview no encontrado" }, { status: 404 });
+    }
+
+    if (data.status === "started" || data.status === "running") {
+      const anchor = data.started_at || data.created_at;
+      if (anchor && Date.now() - new Date(anchor).getTime() > PREVIEW_STALE_MS) {
+        const staleMsg =
+          "La vista previa tardó demasiado y se canceló. Probá sin «Sin límite de filas» o con filtros más acotados.";
+        await (service as any)
+          .from("etl_preview_jobs")
+          .update({
+            status: "failed",
+            completed_at: new Date().toISOString(),
+            error_message: staleMsg,
+          })
+          .eq("id", previewJobId);
+        return NextResponse.json({
+          ok: true,
+          previewJobId: data.id,
+          status: "failed",
+          rowsProcessed: data.rows_processed ?? 0,
+          rowsSample: Array.isArray(data.rows_sample) ? data.rows_sample : [],
+          sourceOffset: data.source_offset ?? 0,
+          sourceExhausted: data.source_exhausted === true,
+          error: staleMsg,
+          createdAt: data.created_at,
+          startedAt: data.started_at,
+          completedAt: new Date().toISOString(),
+        });
+      }
     }
 
     return NextResponse.json({

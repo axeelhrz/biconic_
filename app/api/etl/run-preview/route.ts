@@ -567,10 +567,12 @@ export async function POST(req: NextRequest) {
             const cookieHeader = req.headers.get("cookie");
             const joinsCount = joinsWithCols.length;
             const previewTargetRows = Math.min(
-              body?.unlimited === true ? 1_500 : effectiveLimit,
-              effectiveLimit
+              body?.unlimited === true ? ETL_PREVIEW_MAX_WHEN_UNLIMITED : effectiveLimit,
+              body?.unlimited === true ? ETL_PREVIEW_MAX_WHEN_UNLIMITED : effectiveLimit
             );
-            const fastJoinPreview = body?.unlimited !== true;
+            // Siempre previewFast en vista previa: la materialización acota filas por tabla
+            // (ETL_PREVIEW_MATERIALIZE_* en join-query) y evita copiar tablas Firebird enteras.
+            const fastJoinPreview = true;
             const starJoinPrimaryTable =
               starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "";
             const starJoinConditions = body.filter?.conditions || [];
@@ -628,11 +630,12 @@ export async function POST(req: NextRequest) {
               const data = await runJoinQueryOnce(previewTargetRows, 0);
               yield {
                 rows: data.rows.slice(0, previewTargetRows),
-                query: `Star JOIN (vista instantánea · ${Math.min(data.rows.length, previewTargetRows)} filas)`,
+                query: `Star JOIN (vista previa · ${Math.min(data.rows.length, previewTargetRows)} filas)`,
               };
               return;
             }
 
+            // Rama legacy multi-chunk (ya no se alcanza con fastJoinPreview=true).
             const microChunkSize = Math.min(
               previewTargetRows,
               joinsCount >= 10 ? 250

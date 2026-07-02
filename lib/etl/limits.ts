@@ -23,6 +23,15 @@ export const ETL_PREVIEW_TABLE_LIMIT = 500;
 export const ETL_PREVIEW_MAX_WHEN_UNLIMITED = 50_000;
 
 /**
+ * Máximo de filas por tabla al materializar Firebird/Postgres solo para vista previa.
+ * El ETL real (fromEtlRun) no aplica este tope y copia la tabla completa.
+ */
+export const ETL_PREVIEW_MATERIALIZE_MAX_ROWS_PER_TABLE = 3_000;
+
+/** Tope más bajo para vista previa instantánea (previewFast). */
+export const ETL_PREVIEW_MATERIALIZE_FAST_MAX_ROWS_PER_TABLE = 1_500;
+
+/**
  * Tamaño máximo de lote (techo) al paginar join-query desde el ETL run.
  * Con 3+ JOINs el run usa lotes pequeños por petición para no superar el timeout de la ruta (~295s); subir ETL_JOIN_CHUNK_SIZE solo sube el techo en 1–2 JOINs.
  */
