@@ -59,6 +59,40 @@ const STEPS = [
   { id: "ejecutar", label: "Ejecutar", icon: Play },
 ] as const;
 
+function normalizeConfigColumnKey(configKey: string): string {
+  const k = (configKey || "").trim();
+  const wronglyPrefixed = k.match(/^primary\.(join_\d+\..+)$/i);
+  if (wronglyPrefixed) return wronglyPrefixed[1];
+  return k;
+}
+
+function parseFilterColumnsFromGuidedConfig(cols: string[]): {
+  primaryCols: string[];
+  joinColsByIdx: Record<number, string[]>;
+  legacyUnprefixed: string[];
+} {
+  const primaryCols: string[] = [];
+  const joinColsByIdx: Record<number, string[]> = {};
+  const legacyUnprefixed: string[] = [];
+  for (const raw of cols) {
+    const c = (raw || "").trim();
+    if (!c) continue;
+    if (/^primary\./i.test(c)) {
+      primaryCols.push(c.replace(/^primary\./i, ""));
+    } else if (/^join_\d+\./i.test(c)) {
+      const m = c.match(/^join_(\d+)\.(.*)$/i);
+      if (m) {
+        const idx = parseInt(m[1], 10);
+        if (!joinColsByIdx[idx]) joinColsByIdx[idx] = [];
+        joinColsByIdx[idx].push(m[2]);
+      }
+    } else {
+      legacyUnprefixed.push(c);
+    }
+  }
+  return { primaryCols, joinColsByIdx, legacyUnprefixed };
+}
+
 /** Convierte refs del guiado (primary.col, join_0.col) a claves de fila (primary_col, join_0_col). */
 function configColToPreviewRowKey(configKey: string): string {
   return (configKey || "")
@@ -102,7 +136,8 @@ function buildPreviewColumnPlan(
 ): { configKey: string; dataKey: string }[] {
   const plan: { configKey: string; dataKey: string }[] = [];
   const used = new Set<string>();
-  for (const configKey of configKeys) {
+  for (const rawKey of configKeys) {
+    const configKey = normalizeConfigColumnKey(rawKey);
     const dataKey = resolvePreviewRowDataKey(configKey, rowKeys);
     const actual = rowKeys.find((r) => r.toLowerCase() === dataKey.toLowerCase());
     if (!actual || used.has(actual.toLowerCase())) continue;
@@ -503,9 +538,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setSelectedTable(String(filter.table).trim());
     }
     const cols = filter?.columns;
-    if (Array.isArray(cols) && cols.length > 0) {
-      const primaryCols = cols.filter((c: string) => c.startsWith("primary.")).map((c: string) => c.replace(/^primary\./, ""));
-      setColumns(primaryCols.length > 0 ? primaryCols : cols);
+    const parsedCols = Array.isArray(cols) && cols.length > 0 ? parseFilterColumnsFromGuidedConfig(cols) : null;
+    if (parsedCols) {
+      const { primaryCols, joinColsByIdx, legacyUnprefixed } = parsedCols;
+      const hasJoinRefs = Object.keys(joinColsByIdx).length > 0;
+      if (primaryCols.length > 0) {
+        setColumns(primaryCols);
+      } else if (!hasJoinRefs && legacyUnprefixed.length > 0) {
+        setColumns(legacyUnprefixed);
+      }
+      // Si el config guardado solo trae join_N.*, no contaminar `columns` con esas refs.
+      if (hasJoinRefs) {
+        (cfg as { __parsedJoinColsByIdx?: Record<number, string[]> }).__parsedJoinColsByIdx = joinColsByIdx;
+      }
     }
     const conds = filter?.conditions ?? [];
     const notInConds = conds.filter((c: { operator?: string }) => c.operator === "not in");
@@ -554,6 +599,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       })));
     }
     const join = cfg.join;
+    const parsedJoinColsByIdx = (cfg as { __parsedJoinColsByIdx?: Record<number, string[]> }).__parsedJoinColsByIdx;
     if (join?.joins?.length) {
       setUseJoin(true);
       type JoinItem = { id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[]; conditions?: Array<{ primaryColumn: string; secondaryColumn: string }> };
@@ -563,13 +609,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           : (j.primaryColumn != null || j.secondaryColumn != null)
             ? [{ leftColumn: j.primaryColumn ?? "", rightColumn: j.secondaryColumn ?? "" }]
             : [{ leftColumn: "", rightColumn: "" }];
+        const fromFilter = parsedJoinColsByIdx?.[i];
         return {
           id: j.id ?? `join_${i}_${Date.now()}`,
           connectionId: j.secondaryConnectionId ?? "",
           table: j.secondaryTable ?? "",
           joinType: (j.joinType ?? "INNER") as "INNER" | "LEFT" | "RIGHT" | "FULL",
           conditions,
-          rightColumns: j.secondaryColumns ?? [],
+          rightColumns: fromFilter?.length ? fromFilter : (j.secondaryColumns ?? []),
         };
       }));
     }
@@ -1163,7 +1210,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   /** Columnas finales del dataset (tras selección, UNION y JOIN). Refleja exactamente la estructura que se guardará. */
   const finalColumnsForTypes = useMemo(() => {
-    const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
+    const rawEffective =
+      columns.length > 0
+        ? columns
+        : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
+    const effectiveColumns = rawEffective
+      .map((colName: string) => colName.replace(/^primary\./i, "").trim())
+      .filter((colName: string) => colName.length > 0 && !/^join_\d+\./i.test(colName));
     const effectiveJoinItems =
       joinItems.length > 0
         ? joinItems
@@ -1216,9 +1269,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   /** Orden estable de columnas en vista previa (primary.* luego join_N.*), alineado con el payload del ETL. */
   const previewColumnConfigKeys = useMemo(() => {
-    if (columns.length === 0) return [];
     return finalColumnsForTypes.map((c) => c.name);
-  }, [columns.length, finalColumnsForTypes]);
+  }, [finalColumnsForTypes]);
 
   /** Columnas del dataset final (principal + JOIN / sin prefijo sin JOIN), con etiquetas para selects. */
   const datasetColumnOptions = useMemo(() => {
@@ -1461,7 +1513,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   /** Construye el objeto guided_config (connectionId, filter, union, join, clean, end) para guardar o ejecutar. Permite parcial (solo conexión) para que al guardar quede algo persistido. */
   const buildGuidedConfigBody = useCallback((): Record<string, unknown> | null => {
     if (!connectionId) return null;
-    const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
+    const rawEffectiveColumns =
+      columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
+    const effectiveColumns = rawEffectiveColumns
+      .map((c) => c.replace(/^primary\./i, "").trim())
+      .filter((c) => c.length > 0 && !/^join_\d+\./i.test(c));
     const filterConditions = allFilterConditions();
     const cleanConfig = buildCleanConfig();
     const tableName = selectedTable || undefined;
@@ -3825,9 +3881,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Columnas</dt>
                     <dd className="font-medium" style={{ color: "var(--platform-fg)" }}>
                       {connectionId && selectedTable
-                        ? columns.length > 0
-                          ? `${columns.length} columna${columns.length !== 1 ? "s" : ""}`
-                          : "Todas"
+                        ? finalColumnsForTypes.length > 0
+                          ? `${finalColumnsForTypes.length} columna${finalColumnsForTypes.length !== 1 ? "s" : ""}`
+                          : columns.length > 0
+                            ? `${columns.length} columna${columns.length !== 1 ? "s" : ""}`
+                            : "Todas"
                         : "—"}
                     </dd>
                   </div>
@@ -3888,7 +3946,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       {!previewLoading && previewRows != null && previewRows.length > 0 && (
                         <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
                           {useJoin
-                            ? `Muestra rápida: hasta ${ETL_PREVIEW_JOIN_INSTANT_LIMIT} filas del JOIN.`
+                            ? `Muestra rápida: hasta ${ETL_PREVIEW_JOIN_INSTANT_LIMIT} filas del JOIN (principal + tablas unidas).`
                             : `Mostrando hasta ${ETL_PREVIEW_TABLE_LIMIT} filas (vista previa).`}
                           {previewUnlimited ? " Modo sin límite: muestra hasta 50.000 filas (muestra acotada por tabla en JOIN Firebird)." : ""}
                         </p>
@@ -3918,11 +3976,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       ? []
                       : sortPreviewRowKeys(rowKeys).map((dataKey) => ({ configKey: dataKey, dataKey }));
                 const previewHeaderLabel = (configKey: string, dataKey: string): string => {
-                  const fromConfig = columnDisplay[getColumnDisplayKey(configKey)]?.label?.trim();
+                  const normalized = normalizeConfigColumnKey(configKey);
+                  const fromOption = columnOptionLabel(normalized);
+                  if (fromOption && fromOption !== normalized) return fromOption;
+                  const fromConfig = columnDisplay[getColumnDisplayKey(normalized)]?.label?.trim();
                   if (fromConfig) return fromConfig;
                   const fromData = columnDisplay[getColumnDisplayKey(dataKey)]?.label?.trim();
                   if (fromData) return fromData;
-                  const bare = configKey.includes(".") ? configKey.split(".").slice(1).join(".") : configKey;
+                  const bare = normalized.includes(".") ? normalized.split(".").slice(1).join(".") : normalized;
                   return bare.replace(/^(primary|join_\d+)_/i, "");
                 };
                 const showNoColumnsMessage = columns.length === 0;
