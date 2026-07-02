@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import postgres from "postgres";
+import postgres, { type JSONValue } from "postgres";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { getServerAuthUser } from "@/lib/supabase/server-backend";
 import {
@@ -114,7 +114,7 @@ export async function POST(
 
       await sql`
         UPDATE public.connections
-        SET config = ${sql.json(mergedConfig)}, updated_at = now()
+        SET config = ${sql.json(mergedConfig as JSONValue)}, updated_at = now()
         WHERE id = ${id}
       `;
 

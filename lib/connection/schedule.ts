@@ -1,4 +1,4 @@
-import postgres from "postgres";
+import postgres, { type JSONValue } from "postgres";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import {
   ETL_SCHEDULE_FREQUENCIES,
@@ -64,7 +64,7 @@ export async function updateConnectionScheduleLastRunAt(
     };
     await sql`
       UPDATE public.connections
-      SET config = ${sql.json(updatedConfig)}, updated_at = now()
+      SET config = ${sql.json(updatedConfig as JSONValue)}, updated_at = now()
       WHERE id = ${connectionId}
     `;
   } finally {
