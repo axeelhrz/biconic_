@@ -229,6 +229,63 @@ function inferPostgresType(value: any): string {
   return "TEXT";
 }
 
+/** primary.col / join_N.col → primary_col / join_n_col (misma convención que el JOIN y la vista previa). */
+function configColumnRefToRowKey(ref: string): string {
+  const r = (ref || "").trim();
+  if (!r) return r;
+  const mapped = r
+    .replace(/^primary\./i, "primary_")
+    .replace(/^join_(\d+)\./i, (_, d) => `join_${parseInt(d, 10)}_`);
+  return mapped.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+}
+
+/** Columnas destino esperadas a partir de filter.columns y join.joins[].secondaryColumns. */
+function resolveEtlOutputColumnKeys(body: RunBody): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  const addKey = (rowKey: string) => {
+    const k = rowKey.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    keys.push(k);
+  };
+
+  const filterCols = Array.isArray(body.filter?.columns) ? (body.filter!.columns as string[]) : [];
+  const joinRaw = body.join as unknown as { joins?: Array<{ secondaryColumns?: string[] }> } | undefined;
+  const joins = Array.isArray(joinRaw?.joins) ? joinRaw!.joins! : [];
+
+  for (const raw of filterCols) {
+    const trimmed = (raw || "").trim();
+    if (!trimmed) continue;
+    const wildcard = trimmed.match(/^join_(\d+)\.\*$/i);
+    if (wildcard) {
+      const idx = Number(wildcard[1]);
+      const sec = joins[idx]?.secondaryColumns;
+      if (Array.isArray(sec)) {
+        for (const c of sec) {
+          if (c?.trim()) addKey(configColumnRefToRowKey(`join_${idx}.${c.trim()}`));
+        }
+      }
+      continue;
+    }
+    if (/^(primary\.|join_\d+\.)/i.test(trimmed)) {
+      addKey(configColumnRefToRowKey(trimmed));
+    } else {
+      addKey(configColumnRefToRowKey(`primary.${trimmed}`));
+    }
+  }
+
+  for (let idx = 0; idx < joins.length; idx++) {
+    const sec = joins[idx]?.secondaryColumns;
+    if (!Array.isArray(sec)) continue;
+    for (const c of sec) {
+      if (c?.trim()) addKey(configColumnRefToRowKey(`join_${idx}.${c.trim()}`));
+    }
+  }
+
+  return keys;
+}
+
 function pgCastExpr(columnIdentifier: string, targetType: CastTargetType) {
   const col = columnIdentifier;
   const sanitized = `NULLIF(
@@ -625,10 +682,13 @@ export async function executeEtlPipeline(
           }
         }
 
-        // Base schema: from body.filter.columns when present (so all selected columns exist even if first row has nulls)
+        // Base schema: filter.columns + join.secondaryColumns (incluye join_N.* expandido)
         const filterColumns = body!.filter?.columns as string[] | undefined;
+        const resolvedFromConfig = resolveEtlOutputColumnKeys(body!);
         const explicitColumnNames: string[] =
-          filterColumns && filterColumns.length > 0
+          resolvedFromConfig.length > 0
+            ? resolvedFromConfig
+            : filterColumns && filterColumns.length > 0
             ? filterColumns.map((c: any) => toSaneKey(c))
             : firstRow
             ? Object.keys(firstRow).map((k: any) => toSaneKey(k))
@@ -736,6 +796,46 @@ export async function executeEtlPipeline(
       }
 
       // --- INSERT TO DB ---
+      const ensureTableColumns = async (batchRows: Record<string, any>[]) => {
+        if (!tableCreated || isPreview || batchRows.length === 0) return;
+        const existing = new Set((tableColumnNames || []).map((c) => c.toLowerCase()));
+        const needed = new Set<string>();
+        for (const row of batchRows) {
+          if (!row || typeof row !== "object") continue;
+          for (const key of Object.keys(row)) {
+            const saneKey = key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+            if (saneKey && !existing.has(saneKey)) needed.add(saneKey);
+          }
+        }
+        if (needed.size === 0) return;
+        const sample = batchRows.find((r) => r && typeof r === "object") || {};
+        const added: string[] = [];
+        for (const col of needed) {
+          let inferred = "TEXT";
+          for (const row of batchRows) {
+            if (!row || typeof row !== "object") continue;
+            const rawKey = Object.keys(row).find(
+              (k) => k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() === col
+            );
+            if (rawKey !== undefined) {
+              inferred = inferPostgresType(row[rawKey]);
+              break;
+            }
+          }
+          await sqlPersistent.unsafe(
+            `ALTER TABLE etl_output."${newTableName}" ADD COLUMN IF NOT EXISTS "${col}" ${inferred}`
+          );
+          added.push(col);
+          existing.add(col);
+        }
+        if (added.length > 0) {
+          tableColumnNames = [...(tableColumnNames || []), ...added];
+          console.log(`[Background] Columnas añadidas a etl_output.${newTableName}:`, added);
+        }
+      };
+
+      await ensureTableColumns(batch);
+
       const allowedKeys = tableColumnNames && tableColumnNames.length > 0
         ? new Set(tableColumnNames.map((c: any) => c.toLowerCase()))
         : null;
@@ -977,12 +1077,22 @@ export async function executeEtlPipeline(
             const primaryColumns = selectedCols
               .filter((c: string) => /^primary\./i.test(c))
               .map((c: string) => c.replace(/^primary\./i, "").trim());
-            const joinsWithCols = (joinObj.joins || []).map((jn: any, idx: number) => ({
-              ...jn,
-              secondaryColumns: selectedCols
+            const joinsWithCols = (joinObj.joins || []).map((jn: any, idx: number) => {
+              const fromFilter = selectedCols
                 .filter((c: string) => new RegExp(`^join_${idx}\\.`, "i").test(c))
-                .map((c: string) => c.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim()),
-            }));
+                .map((c: string) => c.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim())
+                .filter((c: string) => c && c !== "*");
+              const hasWildcard = selectedCols.some((c: string) =>
+                new RegExp(`^join_${idx}\\.\\*$`, "i").test((c || "").trim())
+              );
+              const fromJoin =
+                Array.isArray(jn.secondaryColumns) && jn.secondaryColumns.length > 0
+                  ? jn.secondaryColumns
+                  : [];
+              const secondaryColumns =
+                fromFilter.length > 0 ? fromFilter : fromJoin.length > 0 ? fromJoin : hasWildcard ? [] : [];
+              return { ...jn, secondaryColumns };
+            });
             const joinsCount = (joinObj.joins || []).length;
             // Lotes por petición: con muchos JOINs el costo crece fuerte; lotes chicos evitan timeout (~295s) y el run encadena más vueltas.
             const starChunkCap =
