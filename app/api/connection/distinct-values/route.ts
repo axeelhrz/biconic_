@@ -18,7 +18,41 @@ import { Client as PgClient } from "pg";
 import mysql from "mysql2/promise";
 import { quoteIdent, quoteQualified } from "@/lib/sql/helpers";
 
-const MAX_VALUES = 500;
+/** Sin tope por defecto; opcional ETL_DISTINCT_VALUES_MAX en servidor para acotar cardinalidad extrema. */
+const DISTINCT_VALUES_CAP =
+  Number(process.env.ETL_DISTINCT_VALUES_MAX) > 0
+    ? Math.floor(Number(process.env.ETL_DISTINCT_VALUES_MAX))
+    : null;
+
+function pgLimitSuffix(): string {
+  return DISTINCT_VALUES_CAP ? ` LIMIT ${DISTINCT_VALUES_CAP}` : "";
+}
+
+function fbFirstClause(): string {
+  return DISTINCT_VALUES_CAP ? `FIRST ${DISTINCT_VALUES_CAP} ` : "";
+}
+
+function mysqlLimitSuffix(): string {
+  return DISTINCT_VALUES_CAP ? ` LIMIT ${DISTINCT_VALUES_CAP}` : "";
+}
+
+function firebirdTablePart(tableQualified: string): string {
+  const tableNameOnly = tableQualified.trim().includes(".")
+    ? tableQualified.trim().split(".").pop()!.trim()
+    : tableQualified.trim();
+  return /^[A-Z0-9_]+$/i.test(tableNameOnly)
+    ? tableNameOnly.toUpperCase()
+    : `"${tableNameOnly.replace(/"/g, '""')}"`;
+}
+
+function firebirdColumnPart(columnName: string): string {
+  const bare = columnName.trim().replace(/^[^.]*\./, "");
+  return /^[A-Z0-9_]+$/i.test(bare) ? bare.toUpperCase() : `"${bare.replace(/"/g, '""')}"`;
+}
+
+function sortDistinctValues(values: string[]): string[] {
+  return [...values].sort((a, b) => a.localeCompare(b, "es"));
+}
 
 function safeIdentMySQL(name: string): string {
   return "`" + String(name).replace(/`/g, "``") + "`";
@@ -27,6 +61,9 @@ function safeIdentMySQL(name: string): string {
 function safeIdentFirebird(name: string): string {
   return '"' + String(name).replace(/"/g, '""') + '"';
 }
+
+/** Consultas DISTINCT en tablas grandes pueden tardar; Railway/Vercel Pro permiten más tiempo. */
+export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   try {
@@ -92,10 +129,12 @@ export async function POST(req: NextRequest) {
       try {
         const col = quoteIdent(columnName.trim(), "postgres");
         const qual = `"${schema.replace(/"/g, '""')}"."${table.replace(/"/g, '""')}"`;
-        const sql = `SELECT DISTINCT ${col} AS value FROM ${qual} WHERE ${col} IS NOT NULL ORDER BY ${col} LIMIT ${MAX_VALUES}`;
+        const sql = `SELECT DISTINCT ${col} AS value FROM ${qual} WHERE ${col} IS NOT NULL ORDER BY ${col}${pgLimitSuffix()}`;
         const res = await client.query(sql);
-        const values = (res.rows || []).map((r: any) => r.value != null ? String(r.value) : "");
-        return NextResponse.json({ ok: true, values });
+        const values = sortDistinctValues(
+          (res.rows || []).map((r: { value?: unknown }) => (r.value != null ? String(r.value) : "")).filter(Boolean)
+        );
+        return NextResponse.json({ ok: true, values, total: values.length, capped: !!DISTINCT_VALUES_CAP });
       } finally {
         await client.end();
       }
@@ -116,10 +155,12 @@ export async function POST(req: NextRequest) {
       try {
         const qual = quoteQualified(tableQualified.trim(), "postgres");
         const col = quoteIdent(columnName.trim(), "postgres");
-        const sql = `SELECT DISTINCT ${col} AS value FROM ${qual} WHERE ${col} IS NOT NULL ORDER BY ${col} LIMIT ${MAX_VALUES}`;
+        const sql = `SELECT DISTINCT ${col} AS value FROM ${qual} WHERE ${col} IS NOT NULL ORDER BY ${col}${pgLimitSuffix()}`;
         const res = await client.query(sql);
-        const values = (res.rows || []).map((r: any) => r.value != null ? String(r.value) : "");
-        return NextResponse.json({ ok: true, values });
+        const values = sortDistinctValues(
+          (res.rows || []).map((r: { value?: unknown }) => (r.value != null ? String(r.value) : "")).filter(Boolean)
+        );
+        return NextResponse.json({ ok: true, values, total: values.length, capped: !!DISTINCT_VALUES_CAP });
       } finally {
         await client.end();
       }
@@ -143,10 +184,12 @@ export async function POST(req: NextRequest) {
       });
       try {
         const [rows] = await connection.execute(
-          `SELECT DISTINCT ${col} AS value FROM ${fullTable} WHERE ${col} IS NOT NULL ORDER BY ${col} LIMIT ${MAX_VALUES}`
+          `SELECT DISTINCT ${col} AS value FROM ${fullTable} WHERE ${col} IS NOT NULL ORDER BY ${col}${mysqlLimitSuffix()}`
         );
-        const values = (Array.isArray(rows) ? rows : []).map((r: any) => r?.value != null ? String(r.value) : "");
-        return NextResponse.json({ ok: true, values });
+        const values = sortDistinctValues(
+          (Array.isArray(rows) ? rows : []).map((r: { value?: unknown }) => (r?.value != null ? String(r.value) : "")).filter(Boolean)
+        );
+        return NextResponse.json({ ok: true, values, total: values.length, capped: !!DISTINCT_VALUES_CAP });
       } finally {
         await connection.end();
       }
@@ -161,53 +204,86 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: msg }, { status: 400 });
       }
       const Firebird = require("node-firebird");
-      // Firebird: SELECT * para evitar -206 (Column unknown) por nombre/casing distinto; extraemos valores distintos en JS
-      const tableNameOnly = tableQualified.trim().includes(".")
-        ? tableQualified.trim().split(".").pop()!.trim()
-        : tableQualified.trim();
-      const relationName = /^[A-Z0-9_]+$/i.test(tableNameOnly) ? tableNameOnly.toUpperCase() : `"${tableNameOnly.replace(/"/g, '""')}"`;
-      const sql = `SELECT FIRST ${MAX_VALUES} * FROM ${relationName}`;
-      return await new Promise<NextResponse>((resolve) => {
-        Firebird.attach(fbOpts, (errAttach: Error | null, db: any) => {
-          if (errAttach) {
-            resolve(
-              NextResponse.json(
-                {
-                  ok: false,
-                  error: formatFirebirdConnectError(errAttach, fbOpts.host),
-                },
-                { status: 400 }
-              )
-            );
-            return;
-          }
-          db.query(sql, [], (errQ: Error | null, rows: any[]) => {
-            if (db?.detach) db.detach(() => {});
-            if (errQ) {
-              resolve(NextResponse.json({ ok: false, error: errQ.message }, { status: 400 }));
-              return;
-            }
-            const rawRows = rows || [];
-            const colLower = columnName.trim().toLowerCase().replace(/^[^.]*\./, "");
-            const key = rawRows[0] && typeof rawRows[0] === "object"
-              ? Object.keys(rawRows[0]).find((k) => k.toLowerCase() === colLower) ?? columnName.trim()
-              : columnName.trim();
-            const seen = new Set<string>();
-            const values: string[] = [];
-            for (const r of rawRows) {
-              const v = r && typeof r === "object" ? (r[key] ?? r[colLower]) : null;
-              if (v != null && v !== "") {
-                const s = String(v);
-                if (!seen.has(s)) {
-                  seen.add(s);
-                  values.push(s);
-                }
-              }
-            }
-            values.sort((a, b) => a.localeCompare(b, "es"));
-            resolve(NextResponse.json({ ok: true, values }));
+      const relationName = firebirdTablePart(tableQualified);
+      const bareCol = columnName.trim().replace(/^[^.]*\./, "");
+      const colCandidates = Array.from(
+        new Set([firebirdColumnPart(columnName), safeIdentFirebird(bareCol), bareCol.toUpperCase()])
+      );
+
+      const queryFb = (sql: string): Promise<Record<string, unknown>[]> =>
+        new Promise((resolve, reject) => {
+          Firebird.attach(fbOpts, (errAttach: Error | null, db: { query: Function; detach?: Function }) => {
+            if (errAttach) return reject(errAttach);
+            db.query(sql, [], (errQ: Error | null, rows: Record<string, unknown>[]) => {
+              if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+              if (errQ) return reject(errQ);
+              resolve(rows || []);
+            });
           });
         });
+
+      let distinctValues: string[] | null = null;
+      for (const fbCol of colCandidates) {
+        const sql = `SELECT ${fbFirstClause()}DISTINCT ${fbCol} AS value FROM ${relationName} WHERE ${fbCol} IS NOT NULL ORDER BY ${fbCol}`;
+        try {
+          const rows = await queryFb(sql);
+          distinctValues = rows
+            .map((r) => {
+              const v = r.value ?? r.VALUE;
+              return v != null && v !== "" ? String(v) : "";
+            })
+            .filter(Boolean);
+          break;
+        } catch {
+          /* probar siguiente variante de nombre de columna */
+        }
+      }
+
+      if (distinctValues == null) {
+        const seen = new Set<string>();
+        distinctValues = [];
+        const pageSize = DISTINCT_VALUES_CAP ?? 50_000;
+        const fbCol = colCandidates[0];
+        let skip = 0;
+        for (;;) {
+          const sql =
+            skip > 0
+              ? `SELECT FIRST ${pageSize} SKIP ${skip} ${fbCol} FROM ${relationName} WHERE ${fbCol} IS NOT NULL`
+              : `SELECT FIRST ${pageSize} ${fbCol} FROM ${relationName} WHERE ${fbCol} IS NOT NULL`;
+          let rows: Record<string, unknown>[];
+          try {
+            rows = await queryFb(sql);
+          } catch (scanErr) {
+            const msg = scanErr instanceof Error ? scanErr.message : String(scanErr);
+            return NextResponse.json(
+              { ok: false, error: formatFirebirdConnectError(scanErr, fbOpts.host) || msg },
+              { status: 400 }
+            );
+          }
+          if (rows.length === 0) break;
+          for (const r of rows) {
+            const key = Object.keys(r).find((k) => k.toLowerCase() === bareCol.toLowerCase()) ?? Object.keys(r)[0];
+            const v = key ? r[key] : null;
+            if (v != null && v !== "") {
+              const s = String(v);
+              if (!seen.has(s)) {
+                seen.add(s);
+                distinctValues.push(s);
+              }
+            }
+          }
+          if (DISTINCT_VALUES_CAP && distinctValues.length >= DISTINCT_VALUES_CAP) break;
+          if (rows.length < pageSize) break;
+          skip += pageSize;
+        }
+      }
+
+      const values = sortDistinctValues(distinctValues);
+      return NextResponse.json({
+        ok: true,
+        values,
+        total: values.length,
+        capped: !!DISTINCT_VALUES_CAP,
       });
     }
 

@@ -2770,7 +2770,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
                   <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                    Elegí una columna; se cargarán los valores distintos desde la base de datos (hasta 500). Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado. Se aplica al final, después de UNION y JOIN.
+                    Elegí una columna; se cargarán todos los valores distintos desde la base de datos. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado. Se aplica al final, después de UNION y JOIN.
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
                     <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>
@@ -2791,7 +2791,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       />
                     </div>
                     {loadingDistinct && distinctColumn && (
-                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores…</span>
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores distintos…</span>
+                    )}
+                    {!loadingDistinct && distinctValuesList.length > 0 && distinctColumn && (
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+                        {distinctValuesList.length.toLocaleString("es-AR")} valor(es) distintos
+                      </span>
                     )}
                   </div>
                   {distinctValuesList.length > 0 && distinctColumn && (
@@ -2804,7 +2809,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         className="w-full rounded-lg border px-3 py-2 text-sm"
                         style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
                       />
-                      <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
+                      <div className="max-h-72 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
                         {distinctValuesList
                           .filter((v) => !distinctSearch.trim() || String(v).toLowerCase().includes(distinctSearch.trim().toLowerCase()))
                           .map((val) => {
