@@ -39,6 +39,7 @@ exports.cleanupTempTables = cleanupTempTables;
 const pg_1 = require("pg");
 const helpers_1 = require("../sql/helpers");
 const connection_secret_1 = require("../connection-secret");
+const resolve_firebird_connection_1 = require("../connection/resolve-firebird-connection");
 const FB_BATCH_SIZE = 8_000;
 const PG_INSERT_BATCH = 2_000;
 const firebirdSafePart = (s) => /^[A-Z0-9_]+$/i.test(String(s).trim())
@@ -73,23 +74,8 @@ function inferPgType(value) {
     }
     return "TEXT";
 }
-function resolveFirebirdPassword(conn) {
-    let pwd = conn.db_password_encrypted
-        ? (0, connection_secret_1.decryptConnectionPassword)(conn.db_password_encrypted)
-        : conn.db_password ?? "";
-    if (!pwd)
-        pwd = process.env.FLEXXUS_PASSWORD || process.env.DB_PASSWORD_PLACEHOLDER || "";
-    return pwd;
-}
 function fbOpts(conn) {
-    return {
-        host: conn.db_host || "localhost",
-        port: conn.db_port ? Number(conn.db_port) : 15421,
-        database: conn.db_name,
-        user: conn.db_user,
-        password: resolveFirebirdPassword(conn),
-        lowercase_keys: false,
-    };
+    return (0, resolve_firebird_connection_1.resolveFirebirdAttachOptions)(conn);
 }
 async function materializeFirebirdTable(conn, table, columns, dateFilter, pgUrl, targetSchema, targetTable, signal, sharedPgClient, onProgress, maxRows) {
     const qualifiedTable = `${targetSchema}."${targetTable}"`;

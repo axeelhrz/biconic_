@@ -39,20 +39,29 @@ function hydrateConnectionRow(row) {
     };
 }
 function readCredentialsFromConnectionRow(row) {
-    const cfg = row.config && typeof row.config === "object" && !Array.isArray(row.config)
-        ? row.config
+    let cfgRaw = row.config;
+    if (typeof cfgRaw === "string") {
+        try {
+            cfgRaw = JSON.parse(cfgRaw);
+        }
+        catch {
+            cfgRaw = {};
+        }
+    }
+    const cfg = cfgRaw && typeof cfgRaw === "object" && !Array.isArray(cfgRaw)
+        ? cfgRaw
         : {};
-    const portRaw = row.db_port ?? cfg.db_port;
+    const portRaw = row.db_port ?? cfg.db_port ?? cfg.port;
     const port = typeof portRaw === "number"
         ? portRaw
         : portRaw != null && String(portRaw).trim() !== ""
             ? Number(portRaw)
             : NaN;
     return {
-        host: String(row.db_host ?? cfg.db_host ?? "").trim(),
-        database: String(row.db_name ?? cfg.db_name ?? "").trim(),
-        user: String(row.db_user ?? cfg.db_user ?? "").trim(),
-        port: Number.isFinite(port) ? port : 5432,
+        host: String(row.db_host ?? cfg.db_host ?? cfg.host ?? "").trim(),
+        database: String(row.db_name ?? cfg.db_name ?? cfg.database ?? "").trim(),
+        user: String(row.db_user ?? cfg.db_user ?? cfg.user ?? "").trim(),
+        port: Number.isFinite(port) ? port : NaN,
         passwordEncrypted: row.db_password_encrypted ??
             cfg.db_password_encrypted ??
             null,

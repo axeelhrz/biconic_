@@ -15,6 +15,7 @@ import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { connectionsSelectColumns } from "@/lib/db/connections-query";
 import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
+import { resolveFirebirdAttachOptions } from "@/lib/connection/resolve-firebird-connection";
 import {
   normalizeExcelDataTableRows,
   resolveExcelQualifiedTableFromRows,
@@ -1213,21 +1214,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             const filterByKeys = options?.filterByKeys;
             if (cType === "firebird") {
               const Firebird = require("node-firebird");
-              let pwd =
-                (conn as any).db_password_encrypted
-                  ? decryptConnectionPassword((conn as any).db_password_encrypted)
-                  : (conn as any).db_password ?? "";
-              if (!pwd) {
-                pwd = (await getPasswordFromSecret((conn as any).db_password_secret_id)) || "";
-              }
-              const opts = {
-                host: conn.db_host || "localhost",
-                port: conn.db_port ? Number(conn.db_port) : 15421,
-                database: conn.db_name,
-                user: conn.db_user,
-                password: pwd || process.env.FLEXXUS_PASSWORD || process.env.DB_PASSWORD_PLACEHOLDER || "",
-                lowercase_keys: false,
-              };
+              const opts = resolveFirebirdAttachOptions(
+                hydrateConnectionRow(conn as Record<string, unknown>)
+              );
               const tablePart = resolvedTable.includes(".")
                 ? (resolvedTable.split(".").pop() || resolvedTable).trim().toUpperCase()
                 : firebirdSafePart(resolvedTable);

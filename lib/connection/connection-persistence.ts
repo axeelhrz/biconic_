@@ -69,11 +69,19 @@ export function hydrateConnectionRow(
 export function readCredentialsFromConnectionRow(
   row: Record<string, unknown>
 ): ConnectionCredentials & { passwordEncrypted: string | null } {
+  let cfgRaw = row.config;
+  if (typeof cfgRaw === "string") {
+    try {
+      cfgRaw = JSON.parse(cfgRaw) as Record<string, unknown>;
+    } catch {
+      cfgRaw = {};
+    }
+  }
   const cfg =
-    row.config && typeof row.config === "object" && !Array.isArray(row.config)
-      ? (row.config as Record<string, unknown>)
+    cfgRaw && typeof cfgRaw === "object" && !Array.isArray(cfgRaw)
+      ? (cfgRaw as Record<string, unknown>)
       : {};
-  const portRaw = row.db_port ?? cfg.db_port;
+  const portRaw = row.db_port ?? cfg.db_port ?? cfg.port;
   const port =
     typeof portRaw === "number"
       ? portRaw
@@ -82,10 +90,10 @@ export function readCredentialsFromConnectionRow(
         : NaN;
 
   return {
-    host: String(row.db_host ?? cfg.db_host ?? "").trim(),
-    database: String(row.db_name ?? cfg.db_name ?? "").trim(),
-    user: String(row.db_user ?? cfg.db_user ?? "").trim(),
-    port: Number.isFinite(port) ? port : 5432,
+    host: String(row.db_host ?? cfg.db_host ?? cfg.host ?? "").trim(),
+    database: String(row.db_name ?? cfg.db_name ?? cfg.database ?? "").trim(),
+    user: String(row.db_user ?? cfg.db_user ?? cfg.user ?? "").trim(),
+    port: Number.isFinite(port) ? port : NaN,
     passwordEncrypted:
       (row.db_password_encrypted as string | null | undefined) ??
       (cfg.db_password_encrypted as string | null | undefined) ??

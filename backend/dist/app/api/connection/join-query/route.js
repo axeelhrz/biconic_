@@ -47,10 +47,10 @@ const service_1 = require("../../../../lib/supabase/service");
 const crypto_1 = require("crypto");
 const limits_1 = require("../../../../lib/etl/limits");
 const helpers_1 = require("../../../../lib/sql/helpers");
-const connection_secret_1 = require("../../../../lib/connection-secret");
 const backend_config_1 = require("../../../../lib/api/backend-config");
 const connections_query_1 = require("../../../../lib/db/connections-query");
 const connection_persistence_1 = require("../../../../lib/connection/connection-persistence");
+const resolve_firebird_connection_1 = require("../../../../lib/connection/resolve-firebird-connection");
 const excel_metadata_1 = require("../../../../lib/excel-import/excel-metadata");
 function normalizeFilterColumnRef(ref) {
     const r = (ref || "").trim();
@@ -1009,20 +1009,7 @@ async function POST(req) {
                             const filterByKeys = options?.filterByKeys;
                             if (cType === "firebird") {
                                 const Firebird = require("node-firebird");
-                                let pwd = conn.db_password_encrypted
-                                    ? (0, connection_secret_1.decryptConnectionPassword)(conn.db_password_encrypted)
-                                    : conn.db_password ?? "";
-                                if (!pwd) {
-                                    pwd = (await getPasswordFromSecret(conn.db_password_secret_id)) || "";
-                                }
-                                const opts = {
-                                    host: conn.db_host || "localhost",
-                                    port: conn.db_port ? Number(conn.db_port) : 15421,
-                                    database: conn.db_name,
-                                    user: conn.db_user,
-                                    password: pwd || process.env.FLEXXUS_PASSWORD || process.env.DB_PASSWORD_PLACEHOLDER || "",
-                                    lowercase_keys: false,
-                                };
+                                const opts = (0, resolve_firebird_connection_1.resolveFirebirdAttachOptions)((0, connection_persistence_1.hydrateConnectionRow)(conn));
                                 const tablePart = resolvedTable.includes(".")
                                     ? (resolvedTable.split(".").pop() || resolvedTable).trim().toUpperCase()
                                     : firebirdSafePart(resolvedTable);

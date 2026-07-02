@@ -12,6 +12,7 @@ import {
   readConnectionTablesFromRow,
   readCredentialsFromConnectionRow,
 } from "@/lib/connection/connection-persistence";
+import { connectionsSelectColumns } from "@/lib/db/connections-query";
 
 type ConnectionBody = {
   type?: "mysql" | "postgres" | "postgresql" | "excel" | "firebird";
@@ -63,12 +64,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // If connectionId is provided, load credentials from Supabase to avoid exposing them client-side
     if (connectionId != null) {
-      const connSelect = shouldUseOwnBackend()
-        ? "*"
-        : "id, user_id, type, db_host, db_name, db_user, db_port, original_file_name, db_password_encrypted, connection_tables";
       const { data: connRow, error: connError } = await dbClient
         .from("connections")
-        .select(connSelect)
+        .select(connectionsSelectColumns())
         .eq("id", String(connectionId))
         .maybeSingle();
       if (connError || !connRow) {
