@@ -1002,7 +1002,7 @@ export async function executeEtlPipeline(
             for (let mi = 0; mi < joinsCount; mi++) matTempTables.push(`etl_temp."${materializationPrefix}_join_${mi}"`);
             try {
             await reportEtlRunProgress(supabaseAdmin, runId, {
-              message: `JOIN múltiple (${joinsCount} tablas): preparando datos. La primera etapa puede tardar varios minutos…`,
+              message: `JOIN múltiple (${joinsCount} tablas): leyendo datos por lotes…`,
               rowsProcessed: 0,
             });
             while (true) {
@@ -1026,7 +1026,7 @@ export async function executeEtlPipeline(
                 await reportEtlRunProgress(supabaseAdmin, runId, {
                   message:
                     starOffset === 0
-                      ? `JOIN: materializando y leyendo primer lote (${joinsCount} tablas)…`
+                      ? `JOIN: leyendo primer lote (${joinsCount} tablas)…`
                       : `JOIN: leyendo lote desde fila ${starOffset.toLocaleString("es-AR")}…`,
                   rowsProcessed,
                 });

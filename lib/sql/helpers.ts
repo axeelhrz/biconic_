@@ -347,6 +347,114 @@ export function buildWhereClauseFirebird(conds: FilterCondition[] = []) {
   return { clause: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
 }
 
+/** Star schema WHERE (primary./join_i.) for Firebird with table aliases p / jN. */
+export function buildWhereClauseFirebirdStar(
+  conds: FilterCondition[] = [],
+  joinsCount: number,
+  strictPrefixed = false
+) {
+  const params: any[] = [];
+  const parts = conds.map((c) => {
+    const raw = c.column || "";
+    const mPrimary = raw.match(/^primary\.(.+)$/i);
+    const mJoin = raw.match(/^join_(\d+)\.(.+)$/i);
+    let col: string;
+    if (mPrimary) col = `p.${firebirdQuotedIdent(mPrimary[1])}`;
+    else if (mJoin) {
+      const idx = Number(mJoin[1]);
+      const name = mJoin[2];
+      if (!Number.isNaN(idx) && idx >= 0 && idx < joinsCount)
+        col = `j${idx}.${firebirdQuotedIdent(name)}`;
+      else col = firebirdQuotedIdent(raw);
+    } else {
+      if (strictPrefixed) {
+        throw new Error(
+          `Filtro '${raw}' sin prefijo en JOIN. Use primary.<col> o join_n.<col>.`
+        );
+      }
+      col = firebirdQuotedIdent(raw);
+    }
+    switch (c.operator) {
+      case "is null":
+        return `${col} IS NULL`;
+      case "is not null":
+        return `${col} IS NOT NULL`;
+      case "contains":
+        params.push(`%${c.value ?? ""}%`);
+        return `${col} CONTAINING ?`;
+      case "startsWith":
+        params.push(`${c.value ?? ""}%`);
+        return `${col} LIKE ?`;
+      case "endsWith":
+        params.push(`%${c.value ?? ""}`);
+        return `${col} LIKE ?`;
+      case "in": {
+        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const qs = list.map(() => "?");
+        params.push(...list);
+        return `${col} IN (${qs.join(", ")})`;
+      }
+      case "not in": {
+        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const qs = list.map(() => "?");
+        params.push(...list);
+        return `${col} NOT IN (${qs.join(", ")})`;
+      }
+      default:
+        params.push(c.value ?? null);
+        return `${col} ${c.operator} ?`;
+    }
+  });
+  return { clause: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
+}
+
+/** Date filter for star JOIN on Firebird (primary./join_N. column refs). */
+export function buildDateFilterWhereFragmentFirebirdStar(
+  dateFilter: DateFilterSpec | undefined | null,
+  joinsCount: number
+): { clause: string; params: any[] } {
+  const params: any[] = [];
+  if (!dateFilter) return { clause: "", params };
+  const rawColumn = (dateFilter.column ?? "").trim();
+  if (!rawColumn) return { clause: "", params };
+
+  let col: string;
+  if (/^primary\./i.test(rawColumn)) {
+    col = `p.${firebirdQuotedIdent(rawColumn.replace(/^primary\./i, "").trim())}`;
+  } else {
+    const m = rawColumn.match(/^join_(\d+)\.(.+)$/i);
+    if (m) {
+      const i = Number(m[1]);
+      const name = m[2].trim();
+      if (!Number.isNaN(i) && i >= 0 && i < joinsCount)
+        col = `j${i}.${firebirdQuotedIdent(name)}`;
+      else col = firebirdQuotedIdent(rawColumn);
+    } else {
+      col = `p.${firebirdQuotedIdent(rawColumn)}`;
+    }
+  }
+
+  const dayExpr = firebirdDateDayExpr(col);
+  const years = Array.isArray(dateFilter.years) ? dateFilter.years.map((y) => Number(y)).filter((n) => !Number.isNaN(n)) : [];
+  const months = Array.isArray(dateFilter.months) ? dateFilter.months.map((m) => Number(m)).filter((n) => !Number.isNaN(n)) : [];
+  const exactDates = Array.isArray(dateFilter.exactDates) ? dateFilter.exactDates.filter((d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) : [];
+  const parts: string[] = [];
+  if (years.length) {
+    parts.push(`EXTRACT(YEAR FROM ${dayExpr}) IN (${years.map(() => "?").join(", ")})`);
+    years.forEach((y) => params.push(y));
+  }
+  if (months.length) {
+    parts.push(`EXTRACT(MONTH FROM ${dayExpr}) IN (${months.map(() => "?").join(", ")})`);
+    months.forEach((m) => params.push(m));
+  }
+  if (exactDates.length) {
+    parts.push(`${dayExpr} IN (${exactDates.map(() => "?").join(", ")})`);
+    exactDates.forEach((d) => params.push(d.trim()));
+  }
+  if (parts.length === 0) return { clause: "", params };
+  return { clause: parts.join(" AND "), params };
+}
+
 // Star schema WHERE (primary./join_i.) for Postgres
 export function buildWhereClausePgStar(
   conds: FilterCondition[] = [],
