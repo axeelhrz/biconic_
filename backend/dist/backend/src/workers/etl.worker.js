@@ -20,6 +20,30 @@ function getEtlRunnerBase() {
         return apiUrl;
     return "http://localhost:4000/v1";
 }
+const ETL_RUN_POLL_INTERVAL_MS = Number(process.env.ETL_RUN_POLL_INTERVAL_MS) > 0
+    ? Number(process.env.ETL_RUN_POLL_INTERVAL_MS)
+    : 5_000;
+const ETL_RUN_MAX_WAIT_MS = Number(process.env.ETL_RUN_MAX_WAIT_MS) > 0
+    ? Number(process.env.ETL_RUN_MAX_WAIT_MS)
+    : 2 * 60 * 60 * 1000;
+async function waitForRunCompletion(runId) {
+    const startedAt = Date.now();
+    while (true) {
+        const { rows } = await pool.query(`SELECT status, rows_processed, error_message FROM public.etl_runs_log WHERE id = $1`, [runId]);
+        const row = rows[0];
+        if (row && row.status !== "started" && row.status !== "running") {
+            return {
+                status: row.status,
+                rowsProcessed: row.rows_processed ?? null,
+                errorMessage: row.error_message ?? null,
+            };
+        }
+        if (Date.now() - startedAt > ETL_RUN_MAX_WAIT_MS) {
+            throw new Error(`El worker dejó de esperar el run ${runId} tras superar el tiempo máximo (${Math.round(ETL_RUN_MAX_WAIT_MS / 60000)} min); el pipeline puede seguir corriendo del lado del servidor.`);
+        }
+        await new Promise((r) => setTimeout(r, ETL_RUN_POLL_INTERVAL_MS));
+    }
+}
 async function processEtlRun(job) {
     const { runId, etlId } = job.data;
     await pool.query(`UPDATE public.etl_runs_log SET status = 'running' WHERE id = $1`, [runId]);
@@ -38,29 +62,26 @@ async function processEtlRun(job) {
                 runId,
                 userId: job.data.userId,
                 asyncWorker: true,
-                waitForCompletion: true,
+                waitForCompletion: false,
             }),
+            signal: typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout(30_000) : undefined,
         });
         if (!res.ok) {
             const text = await res.text();
-            throw new Error(`ETL run failed: ${res.status} ${text.slice(0, 500)}`);
+            throw new Error(`ETL run no pudo iniciarse: ${res.status} ${text.slice(0, 500)}`);
         }
-        const result = (await res.json().catch(() => ({})));
-        const rowsProcessed = typeof result?.rowsProcessed === "number" ? result.rowsProcessed : null;
-        if (rowsProcessed != null) {
-            await pool.query(`UPDATE public.etl_runs_log
-         SET rows_processed = COALESCE(rows_processed, $2),
-             status = CASE WHEN status IN ('started', 'running') THEN 'completed' ELSE status END,
-             completed_at = COALESCE(completed_at, now())
-         WHERE id = $1`, [runId, rowsProcessed]);
+        await res.text().catch(() => { });
+        const final = await waitForRunCompletion(runId);
+        if (final.status === "failed") {
+            throw new Error(final.errorMessage || "ETL run failed");
         }
-        return result;
+        return { rowsProcessed: final.rowsProcessed };
     }
     catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         await pool.query(`UPDATE public.etl_runs_log
-       SET status = 'failed', error_message = $2, completed_at = now()
-       WHERE id = $1`, [runId, message.slice(0, 2000)]);
+       SET status = 'failed', error_message = $2, completed_at = COALESCE(completed_at, now())
+       WHERE id = $1 AND status IN ('started', 'running')`, [runId, message.slice(0, 2000)]);
         throw err;
     }
 }

@@ -20,6 +20,50 @@ function getEtlRunnerBase(): string {
   return "http://localhost:4000/v1";
 }
 
+const ETL_RUN_POLL_INTERVAL_MS =
+  Number(process.env.ETL_RUN_POLL_INTERVAL_MS) > 0
+    ? Number(process.env.ETL_RUN_POLL_INTERVAL_MS)
+    : 5_000;
+const ETL_RUN_MAX_WAIT_MS =
+  Number(process.env.ETL_RUN_MAX_WAIT_MS) > 0
+    ? Number(process.env.ETL_RUN_MAX_WAIT_MS)
+    : 2 * 60 * 60 * 1000; // 2h: tope defensivo, no debería alcanzarse en runs normales
+
+/**
+ * Espera a que el run termine consultando la base directamente (el worker ya tiene
+ * su propia conexión a Postgres), en vez de mantener abierta la conexión HTTP hacia
+ * /internal/etl/run-pipeline. Runs largos (JOIN múltiple) tardan varios minutos y el
+ * borde/proxy público de Railway corta conexiones inactivas mucho antes, devolviendo
+ * "502 upstream error" aunque el pipeline sigue corriendo del otro lado.
+ */
+async function waitForRunCompletion(
+  runId: string
+): Promise<{ status: string; rowsProcessed: number | null; errorMessage: string | null }> {
+  const startedAt = Date.now();
+  while (true) {
+    const { rows } = await pool.query(
+      `SELECT status, rows_processed, error_message FROM public.etl_runs_log WHERE id = $1`,
+      [runId]
+    );
+    const row = rows[0] as
+      | { status: string; rows_processed: number | null; error_message: string | null }
+      | undefined;
+    if (row && row.status !== "started" && row.status !== "running") {
+      return {
+        status: row.status,
+        rowsProcessed: row.rows_processed ?? null,
+        errorMessage: row.error_message ?? null,
+      };
+    }
+    if (Date.now() - startedAt > ETL_RUN_MAX_WAIT_MS) {
+      throw new Error(
+        `El worker dejó de esperar el run ${runId} tras superar el tiempo máximo (${Math.round(ETL_RUN_MAX_WAIT_MS / 60000)} min); el pipeline puede seguir corriendo del lado del servidor.`
+      );
+    }
+    await new Promise((r) => setTimeout(r, ETL_RUN_POLL_INTERVAL_MS));
+  }
+}
+
 async function processEtlRun(job: {
   data: { runId: string; etlId: string; userId: string; body: Record<string, unknown> };
 }) {
@@ -33,6 +77,9 @@ async function processEtlRun(job: {
     const runnerBase = getEtlRunnerBase();
     const internalSecret =
       process.env.INTERNAL_ETL_SECRET ?? process.env.CRON_SECRET ?? "";
+    // waitForCompletion: false → la API dispara el pipeline en background y responde
+    // casi al instante. Así esta llamada nunca queda abierta el tiempo suficiente
+    // como para que un proxy intermedio la corte; el progreso real se sigue por DB.
     const res = await fetch(`${runnerBase}/internal/etl/run-pipeline`, {
       method: "POST",
       headers: {
@@ -45,35 +92,28 @@ async function processEtlRun(job: {
         runId,
         userId: job.data.userId,
         asyncWorker: true,
-        waitForCompletion: true,
+        waitForCompletion: false,
       }),
+      signal: typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout(30_000) : undefined,
     });
 
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`ETL run failed: ${res.status} ${text.slice(0, 500)}`);
+      throw new Error(`ETL run no pudo iniciarse: ${res.status} ${text.slice(0, 500)}`);
     }
+    await res.text().catch(() => {});
 
-    const result = (await res.json().catch(() => ({}))) as { rowsProcessed?: number };
-    const rowsProcessed =
-      typeof result?.rowsProcessed === "number" ? result.rowsProcessed : null;
-    if (rowsProcessed != null) {
-      await pool.query(
-        `UPDATE public.etl_runs_log
-         SET rows_processed = COALESCE(rows_processed, $2),
-             status = CASE WHEN status IN ('started', 'running') THEN 'completed' ELSE status END,
-             completed_at = COALESCE(completed_at, now())
-         WHERE id = $1`,
-        [runId, rowsProcessed]
-      );
+    const final = await waitForRunCompletion(runId);
+    if (final.status === "failed") {
+      throw new Error(final.errorMessage || "ETL run failed");
     }
-    return result;
+    return { rowsProcessed: final.rowsProcessed };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await pool.query(
       `UPDATE public.etl_runs_log
-       SET status = 'failed', error_message = $2, completed_at = now()
-       WHERE id = $1`,
+       SET status = 'failed', error_message = $2, completed_at = COALESCE(completed_at, now())
+       WHERE id = $1 AND status IN ('started', 'running')`,
       [runId, message.slice(0, 2000)]
     );
     throw err;
