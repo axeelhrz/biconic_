@@ -1094,6 +1094,60 @@ export async function executeEtlPipeline(
               return { ...jn, secondaryColumns };
             });
             const joinsCount = (joinObj.joins || []).length;
+
+            // --- FAST PATH: streaming nativo Firebird (misma conexión, un solo pase) ---
+            // La paginación FIRST/SKIP re-ejecuta el JOIN completo (con ORDER BY) en cada
+            // lote: costo O(n²) en fuentes grandes (780k filas ≈ 30 min). Con un cursor
+            // server-side (`sequentially`) el JOIN se ejecuta una sola vez y las filas
+            // fluyen directo al pipeline. Solo aplica sin offset de reanudación, porque
+            // el stream no puede saltar filas de forma determinista.
+            const allJoinsSameFirebirdConn =
+              (joinObj.joins || []).every(
+                (jn: any) =>
+                  String(jn?.secondaryConnectionId ?? "") === String(primaryConnId)
+              );
+            const resumeOffsetForStar = Math.max(0, Number((body as any)?._resumeStartOffset || 0));
+            if (allJoinsSameFirebirdConn && resumeOffsetForStar === 0) {
+              const { streamFirebirdStarJoin } = await import("@/lib/etl/firebird-star-stream");
+              await reportEtlRunProgress(supabaseAdmin, runId, {
+                message: `JOIN múltiple (${joinsCount} tablas): streaming nativo Firebird…`,
+                rowsProcessed: 0,
+              });
+              let streamedRows = 0;
+              try {
+                for await (const batch of streamFirebirdStarJoin({
+                  attachOptions: fbOpts as unknown as Record<string, unknown>,
+                  primaryTable: joinObj.primaryTable || (body!.filter?.table || "").trim(),
+                  primaryColumns,
+                  joins: joinsWithCols,
+                  conditions: (body!.filter?.conditions || []) as any,
+                  dateFilter: body!.filter?.dateFilter ?? undefined,
+                  onProgress: (rowsSoFar) => {
+                    reportEtlRunProgress(supabaseAdmin, runId, {
+                      message: `JOIN streaming: ${rowsSoFar.toLocaleString("es-AR")} filas leídas…`,
+                      rowsProcessed: rowsSoFar,
+                    }).catch(() => {});
+                  },
+                })) {
+                  streamedRows += batch.length;
+                  yield batch;
+                }
+                console.log("[ETL Run] JOIN streaming Firebird completado.", { runId, streamedRows });
+                return;
+              } catch (streamErr) {
+                if (streamedRows > 0) {
+                  // Ya se entregaron filas: no se puede recomenzar por otra vía sin duplicar.
+                  throw streamErr instanceof Error
+                    ? streamErr
+                    : new Error(String(streamErr));
+                }
+                console.warn(
+                  "[ETL Run] JOIN streaming Firebird falló antes de entregar filas; usando ruta por lotes.",
+                  { runId, error: streamErr instanceof Error ? streamErr.message : String(streamErr) }
+                );
+              }
+            }
+
             // Lotes por petición: con muchos JOINs el costo crece fuerte; lotes chicos evitan timeout (~295s) y el run encadena más vueltas.
             const starChunkCap =
               joinsCount >= 10 ? 15_000
