@@ -520,6 +520,66 @@ type DatasetRelation = {
   joinType: "INNER" | "LEFT";
 };
 
+type ParsedDatasetConfig = {
+  grainOption: string;
+  grainCustomColumns: string[];
+  datasetHasTime: boolean;
+  timeColumn: string;
+  periodicity: string;
+  periodicityOverrides: Record<string, string>;
+  columnRoles: Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>;
+  datasetRelations: DatasetRelation[];
+  derivedColumns: DerivedColumn[];
+};
+
+/** Valores iniciales del wizard de Dataset desde la config guardada (edición); defaults si no hay config (creación). */
+function parseInitialDatasetConfig(cfg: Record<string, unknown> | null | undefined): ParsedDatasetConfig {
+  const out: ParsedDatasetConfig = {
+    grainOption: "",
+    grainCustomColumns: [],
+    datasetHasTime: true,
+    timeColumn: "",
+    periodicity: "Diaria",
+    periodicityOverrides: {},
+    columnRoles: {},
+    datasetRelations: [],
+    derivedColumns: [],
+  };
+  if (!cfg || typeof cfg !== "object") return out;
+  if (typeof cfg.grainOption === "string") out.grainOption = cfg.grainOption;
+  if (Array.isArray(cfg.grainCustomColumns)) out.grainCustomColumns = cfg.grainCustomColumns as string[];
+  if (typeof cfg.datasetHasTime === "boolean") out.datasetHasTime = cfg.datasetHasTime;
+  if (typeof cfg.timeColumn === "string") out.timeColumn = cfg.timeColumn;
+  if (typeof cfg.periodicity === "string" && cfg.periodicity) out.periodicity = cfg.periodicity;
+  if (cfg.periodicityOverrides != null && typeof cfg.periodicityOverrides === "object") {
+    out.periodicityOverrides = cfg.periodicityOverrides as Record<string, string>;
+  }
+  if (cfg.columnRoles && typeof cfg.columnRoles === "object") {
+    out.columnRoles = cfg.columnRoles as ParsedDatasetConfig["columnRoles"];
+  }
+  if (Array.isArray(cfg.datasetRelations)) out.datasetRelations = cfg.datasetRelations as DatasetRelation[];
+  const derivedRaw = (cfg as { derivedColumns?: unknown; derived_columns?: unknown }).derivedColumns
+    ?? (cfg as { derived_columns?: unknown }).derived_columns;
+  if (Array.isArray(derivedRaw)) {
+    out.derivedColumns = derivedRaw
+      .filter((d) => d && typeof d === "object")
+      .map((d) => {
+        const obj = d as Record<string, unknown>;
+        const name = typeof obj.name === "string" ? obj.name : "";
+        const expression = typeof obj.expression === "string" ? obj.expression : "";
+        const defaultAggregation =
+          typeof obj.defaultAggregation === "string"
+            ? obj.defaultAggregation
+            : typeof obj.default_aggregation === "string"
+              ? obj.default_aggregation
+              : "SUM";
+        return { name, expression, defaultAggregation };
+      })
+      .filter((d) => d.name && d.expression);
+  }
+  return out;
+}
+
 export type EtlMetricsClientProps = {
   etlId: string;
   etlTitle: string;
@@ -578,15 +638,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [wizard, setWizard] = useState<"A" | "B" | "C" | "D">(hideDatasetTab ? "B" : "A");
   const [wizardStep, setWizardStep] = useState(0);
   const [rawTableData, setRawTableData] = useState<Record<string, unknown>[]>([]);
-  const [datasetHasTime, setDatasetHasTime] = useState(true);
-  const [timeColumn, setTimeColumn] = useState("");
-  const [periodicity, setPeriodicity] = useState("Diaria");
+  /** Config inicial parseada una sola vez al montar (edición de dataset); el remonte por key garantiza frescura. */
+  const [initialParsedConfig] = useState<ParsedDatasetConfig>(() => parseInitialDatasetConfig(initialDatasetConfig));
+  const [datasetHasTime, setDatasetHasTime] = useState(initialParsedConfig.datasetHasTime);
+  const [timeColumn, setTimeColumn] = useState(initialParsedConfig.timeColumn);
+  const [periodicity, setPeriodicity] = useState(initialParsedConfig.periodicity);
   /** Sobrescrituras de periodicidad por columna (editable en paso Tiempo); se persisten en layout. */
-  const [periodicityOverrides, setPeriodicityOverrides] = useState<Record<string, string>>({});
-  const [grainOption, setGrainOption] = useState<string>("");
+  const [periodicityOverrides, setPeriodicityOverrides] = useState<Record<string, string>>(initialParsedConfig.periodicityOverrides);
+  const [grainOption, setGrainOption] = useState<string>(initialParsedConfig.grainOption);
   /** Columnas elegidas cuando el grain es "Personalizado" (clave única = concatenación de estas columnas). */
-  const [grainCustomColumns, setGrainCustomColumns] = useState<string[]>([]);
-  const [columnRoles, setColumnRoles] = useState<Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>>({});
+  const [grainCustomColumns, setGrainCustomColumns] = useState<string[]>(initialParsedConfig.grainCustomColumns);
+  const [columnRoles, setColumnRoles] = useState<Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>>(initialParsedConfig.columnRoles);
   const [, setCalcType] = useState<"simple" | "count" | "ratio" | "formula">("formula");
   const [metricAdditivity, setMetricAdditivity] = useState<"additive" | "semi" | "non">("additive");
   const [analysisTimeRange, setAnalysisTimeRange] = useState("0");
@@ -749,7 +811,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [filterListSearch, setFilterListSearch] = useState("");
   /** Nivel de jerarquía de fecha por filtro (id del filtro → day|month|quarter|semester|year). */
   const [filterDateLevel, setFilterDateLevel] = useState<Record<string, string>>({});
-  const [datasetRelations, setDatasetRelations] = useState<DatasetRelation[]>([]);
+  const [datasetRelations, setDatasetRelations] = useState<DatasetRelation[]>(initialParsedConfig.datasetRelations);
   const [relationFormConnectionId, setRelationFormConnectionId] = useState("");
   const [relationFormTableKey, setRelationFormTableKey] = useState("");
   const [relationFormThisColumn, setRelationFormThisColumn] = useState("");
@@ -765,7 +827,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [creatingColumn, setCreatingColumn] = useState(false);
   const [formulasHelpOpen, setFormulasHelpOpen] = useState(false);
   /** Columnas calculadas (ej. factura = CANTIDAD * PRECIO_UNITARIO); se guardan en dataset y aparecen como medidas. */
-  const [derivedColumns, setDerivedColumns] = useState<DerivedColumn[]>([]);
+  const [derivedColumns, setDerivedColumns] = useState<DerivedColumn[]>(initialParsedConfig.derivedColumns);
   const [deleteTarget, setDeleteTarget] = useState<{ type: "metric"; id: string; name: string } | { type: "derived"; name: string } | null>(null);
   /** Evita que el paso Mapeo conserve ejes de un gráfico anterior cuando cambia el tipo o la selección de métricas del análisis. */
   const lastChartTypeForMappingRef = useRef<string | null>(null);
@@ -996,8 +1058,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
   const datasetConfigHydratedRef = useRef(false);
   useEffect(() => {
-    if (hideDatasetTab) return;
-    if (datasetOnly && !propDatasetId) return;
+    // En el modal de /admin/datasets (datasetOnly) la fuente de verdad es initialDatasetConfig (ya aplicada como estado inicial).
+    if (hideDatasetTab || datasetOnly) return;
     const cfg = data?.datasetConfig;
     if (!cfg || typeof cfg !== "object") return;
     if (!datasetConfigHydratedRef.current) {
@@ -1012,48 +1074,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
     }
     if (Array.isArray((cfg as { derivedColumns?: DerivedColumn[] }).derivedColumns)) setDerivedColumns((cfg as { derivedColumns: DerivedColumn[] }).derivedColumns);
-  }, [data?.datasetConfig, hideDatasetTab, datasetOnly, propDatasetId]);
-
-  const datasetOnlyInitialConfigHydratedRef = useRef(false);
-  useEffect(() => {
-    if (!datasetOnly || !propDatasetId || !initialDatasetConfig || typeof initialDatasetConfig !== "object") return;
-    if (datasetOnlyInitialConfigHydratedRef.current) return;
-    datasetOnlyInitialConfigHydratedRef.current = true;
-
-    const cfgObj = initialDatasetConfig;
-    if (typeof cfgObj.grainOption === "string") setGrainOption(cfgObj.grainOption as string);
-    if (Array.isArray(cfgObj.grainCustomColumns)) setGrainCustomColumns(cfgObj.grainCustomColumns as string[]);
-    if (typeof cfgObj.datasetHasTime === "boolean") setDatasetHasTime(cfgObj.datasetHasTime);
-    if (typeof cfgObj.timeColumn === "string") setTimeColumn(cfgObj.timeColumn as string);
-    if (typeof cfgObj.periodicity === "string") setPeriodicity(cfgObj.periodicity as string);
-    if (cfgObj.periodicityOverrides != null && typeof cfgObj.periodicityOverrides === "object") {
-      setPeriodicityOverrides(cfgObj.periodicityOverrides as Record<string, string>);
-    }
-    if (cfgObj.columnRoles && typeof cfgObj.columnRoles === "object") {
-      setColumnRoles(cfgObj.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>);
-    }
-    if (Array.isArray(cfgObj.datasetRelations)) setDatasetRelations(cfgObj.datasetRelations as DatasetRelation[]);
-
-    const derivedRaw = cfgObj.derivedColumns ?? cfgObj.derived_columns;
-    if (Array.isArray(derivedRaw)) {
-      const nextDerived: DerivedColumn[] = derivedRaw
-        .filter((d) => d && typeof d === "object")
-        .map((d) => {
-          const obj = d as Record<string, unknown>;
-          const name = typeof obj.name === "string" ? obj.name : "";
-          const expression = typeof obj.expression === "string" ? obj.expression : "";
-          const defaultAggregation =
-            typeof obj.defaultAggregation === "string"
-              ? obj.defaultAggregation
-              : typeof obj.default_aggregation === "string"
-                ? obj.default_aggregation
-                : "SUM";
-          return { name, expression, defaultAggregation };
-        })
-        .filter((d) => d.name && d.expression);
-      setDerivedColumns(nextDerived);
-    }
-  }, [datasetOnly, propDatasetId, initialDatasetConfig]);
+  }, [data?.datasetConfig, hideDatasetTab, datasetOnly]);
 
   /** Construye el objeto completo de configuración del dataset desde el estado actual (para persistir y reutilizar). */
   const buildFullDatasetConfig = useCallback((): Record<string, unknown> => {

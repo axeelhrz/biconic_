@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, Search, Database, Loader2, ChevronRight, Pencil, BarChart3, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -149,14 +149,20 @@ export default function AdminDatasetsPage() {
     }
   };
 
-  /** Autoabrir modal cuando se llega con ?etlId=... (ej. desde Métricas "Configurar dataset"). */
+  /** Autoabrir modal cuando se llega con ?etlId=... (ej. desde Métricas "Configurar dataset").
+   *  Espera a que cargue la lista para abrir en edición si el ETL ya tiene dataset, y limpia el
+   *  parámetro de la URL para que cerrar el modal no lo vuelva a abrir. */
   function AutoOpenWizardBySearchParams() {
     const searchParams = useSearchParams();
+    const router = useRouter();
 
     useEffect(() => {
       const etlIdFromUrl = searchParams.get("etlId");
-      if (!etlIdFromUrl || wizardEtlId || autoOpenedEtlIdRef.current === etlIdFromUrl) return;
+      if (!etlIdFromUrl || wizardEtlId || loading) return;
+      if (autoOpenedEtlIdRef.current === etlIdFromUrl) return;
       autoOpenedEtlIdRef.current = etlIdFromUrl;
+      router.replace("/admin/datasets");
+      // La lista viene ordenada por updated_at DESC: find devuelve el dataset más reciente del ETL.
       const dsFromList = datasets.find((d) => d.etl_id === etlIdFromUrl);
       if (dsFromList) {
         openEditDataset(dsFromList);
@@ -178,7 +184,7 @@ export default function AdminDatasetsPage() {
           .catch(() => toast.error("Error al cargar el wizard del dataset"))
           .finally(() => setWizardLoading(false));
       }
-    }, [searchParams, openEditDataset, wizardEtlId, datasets]);
+    }, [searchParams, router, openEditDataset, wizardEtlId, loading, datasets]);
 
     return null;
   }
