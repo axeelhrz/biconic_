@@ -120,6 +120,7 @@ export async function PUT(
         : undefined;
     const datasetName = typeof body.datasetName === "string" ? body.datasetName.trim() || null : undefined;
     const datasetId = typeof body.datasetId === "string" ? body.datasetId.trim() || null : null;
+    const createDataset = body.createDataset === true;
     const linkedDashboardId = typeof body.dashboardId === "string" ? body.dashboardId : undefined;
     const dashboardFilters = body.dashboardFilters !== undefined && Array.isArray(body.dashboardFilters) ? body.dashboardFilters : undefined;
     const savedAnalyses = body.savedAnalyses !== undefined && Array.isArray(body.savedAnalyses) ? body.savedAnalyses : undefined;
@@ -193,21 +194,49 @@ export async function PUT(
             savedDatasetId = datasetId;
           }
         } else {
-          const { data: inserted, error: datasetError } = await adminClient
+          // Sin datasetId: solo crear un dataset nuevo si se pidió explícitamente (wizard de /admin/datasets).
+          // Para llamadas legacy (guardar métrica/columna sin datasetId): actualizar el único dataset del ETL si existe;
+          // con varios datasets no se toca la tabla (evita duplicados fantasma y pisar el dataset equivocado).
+          const { data: existingRows } = await adminClient
             .from("dataset")
-            .insert({
-              etl_id: etlId,
-              config: configJson,
-              updated_at: now,
-              name: datasetName ?? null,
-            })
             .select("id")
-            .single();
-          if (datasetError) {
-            console.error("[metrics] Error al insertar dataset:", datasetError.message);
-            datasetListUpdated = false;
-          } else {
-            savedDatasetId = (inserted as { id: string }).id;
+            .eq("etl_id", etlId)
+            .order("updated_at", { ascending: false })
+            .limit(2);
+          const existingList = Array.isArray(existingRows) ? existingRows : [];
+          if (createDataset || existingList.length === 0) {
+            const { data: inserted, error: datasetError } = await adminClient
+              .from("dataset")
+              .insert({
+                etl_id: etlId,
+                config: configJson,
+                updated_at: now,
+                name: datasetName ?? null,
+              })
+              .select("id")
+              .single();
+            if (datasetError) {
+              console.error("[metrics] Error al insertar dataset:", datasetError.message);
+              datasetListUpdated = false;
+            } else {
+              savedDatasetId = (inserted as { id: string }).id;
+            }
+          } else if (existingList.length === 1) {
+            const soleId = (existingList[0] as { id: string }).id;
+            const { error: datasetError } = await adminClient
+              .from("dataset")
+              .update({
+                config: configJson,
+                updated_at: now,
+                ...(datasetName !== undefined && { name: datasetName }),
+              })
+              .eq("id", soleId);
+            if (datasetError) {
+              console.error("[metrics] Error al actualizar dataset único:", datasetError.message);
+              datasetListUpdated = false;
+            } else {
+              savedDatasetId = soleId;
+            }
           }
         }
       } catch (datasetErr) {

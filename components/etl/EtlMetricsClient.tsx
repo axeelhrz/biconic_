@@ -1102,6 +1102,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         body: JSON.stringify({
           datasetConfig,
           ...(propDatasetId && { datasetId: propDatasetId }),
+          // Solo el wizard de /admin/datasets crea datasets nuevos explícitamente.
+          ...(!propDatasetId && embeddedInDatasetsModal && { createDataset: true }),
           ...(datasetName.trim() && { datasetName: datasetName.trim() }),
         }),
       });
@@ -1131,7 +1133,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     } finally {
       setSavingDatasetConfig(false);
     }
-  }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName, onDatasetSaved, propDatasetId]);
+  }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName, onDatasetSaved, propDatasetId, embeddedInDatasetsModal]);
 
   const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
 
@@ -1313,6 +1315,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const currentDataset = hideDatasetTab
     ? (selectedDatasetId ? datasetsList.find((d) => d.id === selectedDatasetId) : datasetsList.find((d) => d.etl_id === etlId)) ?? null
     : null;
+  /** Dataset activo para persistir configuración (evita crear datasets duplicados al guardar métricas/columnas). */
+  const activeDatasetIdForSave = hideDatasetTab ? (currentDataset?.id ?? null) : propDatasetId;
 
   const datasetConfigHydratedDatasetIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -1330,7 +1334,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     if (typeof cfgObj.grainOption === "string") setGrainOption(cfgObj.grainOption as string);
     if (Array.isArray(cfgObj.grainCustomColumns)) setGrainCustomColumns(cfgObj.grainCustomColumns as string[]);
     if (typeof cfgObj.datasetHasTime === "boolean") setDatasetHasTime(cfgObj.datasetHasTime);
-    if (typeof cfgObj.timeColumn === "string") setTimeColumn(cfgObj.timeColumn);
+    // No pisar la columna de tiempo si hay una métrica/análisis abierto en edición (openEdit/loadSavedAnalysis ya la setearon).
+    if (typeof cfgObj.timeColumn === "string" && !(showForm && (editingId || editingSavedAnalysisId))) setTimeColumn(cfgObj.timeColumn);
     if (typeof cfgObj.periodicity === "string") setPeriodicity(cfgObj.periodicity);
     if (cfgObj.periodicityOverrides != null && typeof cfgObj.periodicityOverrides === "object") {
       setPeriodicityOverrides(cfgObj.periodicityOverrides as Record<string, string>);
@@ -1646,10 +1651,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setAnalysisSelectedMetricIds([]);
     setFormulaFromSavedMetricIds([]);
     setFormulaFromReuseExpr("metric_0 / NULLIF(metric_1, 0)");
-    setMetricNameToSave("");
+    setMetricNameToSave(saved.name || "");
     setAnalysisNameToSave("");
     const cfg = saved.aggregationConfig as SavedMetricAggregationConfig | undefined;
-    setFormChartType((cfg as { chartType?: string })?.chartType ?? (saved as { chartType?: string }).chartType ?? "bar");
+    const savedChartType = (cfg as { chartType?: string })?.chartType ?? (saved as { chartType?: string }).chartType ?? "bar";
+    setFormChartType(savedChartType);
+    // Al entrar al paso Mapeo en edición, no tratar el tipo cargado como "cambio de gráfico" (evita pisar el mapeo guardado).
+    lastChartTypeForMappingRef.current = savedChartType;
     if (cfg) {
       const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter((d): d is string => typeof d === "string" && d !== "");
       setFormDimensions(dims.length > 0 ? dims : []);
@@ -1837,6 +1845,22 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setGeoComponentOverrides(coerceGeoComponentOverrides((cfg as { geoComponentOverrides?: unknown }).geoComponentOverrides) ?? {});
       setGeoOverridesByXLabel(coerceGeoOverridesByXLabel((cfg as { geoOverridesByXLabel?: unknown }).geoOverridesByXLabel) ?? {});
       setEtlGeoXLabelDrafts({});
+      // Restaurar el modo "Reutilizar métricas existentes (ratio)": selecciones y fórmula guardadas.
+      if ((cfg as { ratioReuseMode?: boolean }).ratioReuseMode === true) {
+        const metricsList = (cfg.metrics ?? []) as AggregationMetricEdit[];
+        const formulaMetric = [...metricsList].reverse().find((m) => String(m.func ?? "").trim().toUpperCase() === "FORMULA");
+        if (formulaMetric && typeof (formulaMetric as { formula?: string }).formula === "string" && (formulaMetric as { formula?: string }).formula!.trim()) {
+          setFormulaFromReuseExpr((formulaMetric as { formula: string }).formula.trim());
+        }
+        const baseIds = metricsList
+          .filter((m) => String(m.func ?? "").trim().toUpperCase() !== "FORMULA")
+          .map((m) => {
+            const alias = String((m as { alias?: string }).alias ?? "").trim().toLowerCase();
+            return savedMetrics.find((s) => (s.name || "").trim().toLowerCase() === alias)?.id;
+          })
+          .filter((x): x is string => typeof x === "string" && x !== "");
+        if (baseIds.length >= 2) setFormulaFromSavedMetricIds(baseIds);
+      }
       const first = (cfg.metrics ?? [saved.metric])[0];
       setFormMetric(first ? { ...first, id: first.id || `m-${Date.now()}` } : { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" });
     } else {
@@ -2406,20 +2430,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
   const chartAutoSelectedRef = useRef(false);
   useEffect(() => {
-    if (editingId) return;
+    if (editingId || editingSavedAnalysisId) return;
     if (wizard === "D" && wizardStep === 0 && !chartAutoSelectedRef.current) {
       chartAutoSelectedRef.current = true;
       setFormChartType(suggestedChartType);
     }
     if (wizard !== "D") chartAutoSelectedRef.current = false;
-  }, [wizard, wizardStep, suggestedChartType, editingId]);
+  }, [wizard, wizardStep, suggestedChartType, editingId, editingSavedAnalysisId]);
 
   useEffect(() => {
-    if (editingId) return;
+    if (editingId || editingSavedAnalysisId) return;
     if (wizard !== "D" || wizardStep !== 0) return;
     const { hasGeo } = chartTypeRestrictions;
     if (formChartType === "map" && !hasGeo) setFormChartType(suggestedChartType);
-  }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType, editingId]);
+  }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType, editingId, editingSavedAnalysisId]);
 
   const previewPipelineWidget = useMemo<BuildChartConfigWidget>(() => {
     const metrics = effectiveFormMetrics.map((m, idx) => ({
@@ -3632,6 +3656,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         body: JSON.stringify({
           savedMetrics: next,
           datasetConfig: datasetConfigToSave,
+          ...(activeDatasetIdForSave && { datasetId: activeDatasetIdForSave }),
           ...(targetDashboardId ? { dashboardId: targetDashboardId } : linkedDashboardId ? { dashboardId: linkedDashboardId } : {}),
         }),
       });
@@ -3707,7 +3732,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ savedMetrics: savedMetrics, datasetConfig: datasetConfigToSave }),
+        body: JSON.stringify({
+          savedMetrics: savedMetrics,
+          datasetConfig: datasetConfigToSave,
+          ...(activeDatasetIdForSave && { datasetId: activeDatasetIdForSave }),
+        }),
       });
       const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
@@ -4241,7 +4270,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           ? (a.dimensions as string[])
           : [a.dimension, a.dimension2].filter((d): d is string => typeof d === "string" && d !== "");
       setFormDimensions(dims);
-      setFormChartType(typeof a.chartType === "string" && a.chartType ? a.chartType : "bar");
+      const savedAnalysisChartType = typeof a.chartType === "string" && a.chartType ? a.chartType : "bar";
+      setFormChartType(savedAnalysisChartType);
       setChartXAxis(typeof a.chartXAxis === "string" ? a.chartXAxis : "");
       setChartYAxes(Array.isArray(a.chartYAxes) ? (a.chartYAxes as string[]) : []);
       setChartSeriesField(typeof a.chartSeriesField === "string" ? a.chartSeriesField : "");
@@ -4359,7 +4389,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setGeoOverridesByXLabel(coerceGeoOverridesByXLabel((a as { geoOverridesByXLabel?: unknown }).geoOverridesByXLabel) ?? {});
       setEtlGeoXLabelDrafts({});
       prevAnalysisSelectionSigRef.current = [...(Array.isArray(a.metricIds) ? (a.metricIds as string[]) : [])].sort().join("|");
-      lastChartTypeForMappingRef.current = null;
+      // No tratar el tipo cargado como "cambio de gráfico" al entrar a Mapeo (evita pisar el mapeo guardado).
+      lastChartTypeForMappingRef.current = savedAnalysisChartType;
       setWizard("D");
       setWizardStep(0);
       setShowForm(true);
@@ -4418,13 +4449,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ savedMetrics: savedMetrics, datasetConfig: datasetConfigToSave }),
-      });
-      const json = await safeJsonResponse(res);
-      if (!res.ok || !json.ok) {
-        toast.error(json.error ?? "Error al eliminar la columna calculada");
-        return;
-      }
+          body: JSON.stringify({
+            savedMetrics: savedMetrics,
+            datasetConfig: datasetConfigToSave,
+            ...(activeDatasetIdForSave && { datasetId: activeDatasetIdForSave }),
+          }),
+        });
+        const json = await safeJsonResponse(res);
+        if (!res.ok || !json.ok) {
+          toast.error(json.error ?? "Error al eliminar la columna calculada");
+          return;
+        }
       setDerivedColumns(nextDerived);
       setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfigToSave } : null));
       toast.success("Columna calculada eliminada");
