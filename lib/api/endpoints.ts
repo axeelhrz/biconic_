@@ -6,8 +6,22 @@ const backendBase = () =>
     ""
   );
 
-/** Rutas de datos: backend directo en cutover, proxy Next.js en modo dual. */
+const PROXY_ENDPOINTS = {
+  aggregateData: "/api/dashboard/aggregate-data",
+  distinctValues: "/api/dashboard/distinct-values",
+  rawData: "/api/dashboard/raw-data",
+  etlRun: "/api/etl/run",
+  etlRunStatus: (runId: string) => `/api/etl/run-preview/status?runId=${runId}`,
+  connections: "/api/connection/create",
+  storageUploadUrl: "/api/upload-excel",
+} as const;
+
+/** Rutas de datos: en el navegador siempre proxy Next.js (cookies same-origin); en servidor, backend directo si USE_OWN_BACKEND. */
 export function getDataEndpoints() {
+  if (typeof window !== "undefined") {
+    return PROXY_ENDPOINTS;
+  }
+
   if (isOwnBackendEnabled()) {
     const base = backendBase();
     return {
@@ -20,15 +34,7 @@ export function getDataEndpoints() {
       storageUploadUrl: `${base}/storage/upload-url`,
     };
   }
-  return {
-    aggregateData: "/api/dashboard/aggregate-data",
-    distinctValues: "/api/dashboard/distinct-values",
-    rawData: "/api/dashboard/raw-data",
-    etlRun: "/api/etl/run",
-    etlRunStatus: (runId: string) => `/api/etl/run-preview/status?runId=${runId}`,
-    connections: "/api/connection/create",
-    storageUploadUrl: "/api/upload-excel",
-  };
+  return PROXY_ENDPOINTS;
 }
 
 export async function postAggregateData(

@@ -2053,7 +2053,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setPreviewData(null);
     try {
       type MetricsDataRes = { data?: { schema?: string; tableName?: string; datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation?: string }[]; derived_columns?: { name: string; expression: string; default_aggregation?: string }[] } } };
-      const metricsRes = await fetch(`/api/etl/${etlId}/metrics-data`);
+      const activeDatasetId = hideDatasetTab ? selectedDatasetId : propDatasetId;
+      let metricsDataUrl = `/api/etl/${etlId}/metrics-data?sampleRows=500`;
+      if (activeDatasetId) metricsDataUrl += `&datasetId=${encodeURIComponent(activeDatasetId)}`;
+      const metricsRes = await fetch(metricsDataUrl);
       const metricsJson = await safeJsonResponse<MetricsDataRes>(metricsRes);
       const freshSchema = metricsJson?.data?.schema;
       const freshTableName = metricsJson?.data?.tableName;
@@ -2264,7 +2267,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       });
       const json = await safeJsonResponse(res);
       if (!res.ok) {
-        const msg = (json?.error ?? "Error al cargar previsualización") as string;
+        const errBody = json as { error?: string; message?: string | string[] };
+        const msg =
+          typeof errBody?.error === "string"
+            ? errBody.error
+            : typeof errBody?.message === "string"
+              ? errBody.message
+              : Array.isArray(errBody?.message)
+                ? errBody.message.join(", ")
+                : "Error al cargar previsualización";
         toast.error(msg);
         return;
       }
@@ -2281,6 +2292,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     }
   }, [
     etlId,
+    hideDatasetTab,
+    selectedDatasetId,
+    propDatasetId,
     tableNameForPreview,
     formDimensions,
     effectiveFormMetrics,
