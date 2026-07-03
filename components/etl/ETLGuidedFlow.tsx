@@ -28,6 +28,7 @@ import {
 import { Connection as ServerConnection } from "@/components/connections/ConnectionsCard";
 import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { ETL_DISTINCT_VALUES_MAX_DEFAULT } from "@/lib/etl/limits";
 import {
   deriveColumnMetadataFromSample,
