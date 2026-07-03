@@ -1256,7 +1256,7 @@ export async function runAggregateData(
       let userMsg = "Error al ejecutar la agregación: " + msg;
       if (/function\s+(sum|avg)\s*\(\s*text\s*\)\s+does\s+not\s+exist/i.test(msg)) {
         userMsg +=
-          " Si la métrica usa IFS con comillas (etiquetas de texto), el agregado SUM/AVG se reemplaza por MAX automáticamente; si ves este error, probá elegir MAX o MIN en la métrica, o definí la categoría como columna calculada.";
+          " Si la métrica usa IFS con comillas, CONCAT u otras fórmulas de texto, el agregado SUM/AVG se reemplaza por MAX automáticamente; si ves este error, probá elegir MAX o MIN en la métrica, o definí la categoría como columna calculada.";
       }
       if (/column\s+["']?(\w+)["']?\s+does not exist/i.test(msg)) {
         const colMatch = msg.match(/column\s+["']?(\w+)["']?\s+does not exist/i);

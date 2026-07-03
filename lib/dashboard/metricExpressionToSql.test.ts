@@ -3,6 +3,7 @@ import { coerceArithmeticOperandsToNumeric } from "@/lib/dashboard/coerceNumeric
 import {
   coerceAggFuncForTextOnlyIFS,
   expressionToSql,
+  expressionYieldsText,
   ifsYieldsOnlyTextLiterals,
   resolveFieldToSql,
   type DerivedColumnRef,
@@ -122,5 +123,21 @@ describe("coerceAggFuncForTextOnlyIFS", () => {
 
   it("no altera SUM si IFS mezcla números en ramas", () => {
     expect(coerceAggFuncForTextOnlyIFS("SUM", "IFS(a;1;b;2;0)")).toBe("SUM");
+  });
+
+  it("convierte SUM en MAX para CONCAT y CONCATENATE", () => {
+    expect(coerceAggFuncForTextOnlyIFS("SUM", 'CONCAT(tipo,"-",numero)')).toBe("MAX");
+    expect(coerceAggFuncForTextOnlyIFS("AVG", "CONCATENATE(tipo;numero)")).toBe("MAX");
+  });
+
+  it("convierte SUM en MAX para IF con ramas de texto vía CONCAT", () => {
+    const expr = 'IF(es_nuevo=1;CONCAT(tipo,"-",numero);CONCAT(tipo,numero))';
+    expect(expressionYieldsText(expr)).toBe(true);
+    expect(coerceAggFuncForTextOnlyIFS("SUM", expr)).toBe("MAX");
+  });
+
+  it("no altera SUM para expresiones numéricas", () => {
+    expect(expressionYieldsText("preciocompra * cantidad")).toBe(false);
+    expect(coerceAggFuncForTextOnlyIFS("SUM", "preciocompra * cantidad")).toBe("SUM");
   });
 });

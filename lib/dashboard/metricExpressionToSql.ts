@@ -126,15 +126,84 @@ export function ifsYieldsOnlyTextLiterals(expression: string): boolean {
   return true;
 }
 
+/** Funciones cuya salida en SQL es texto (CONCAT, UPPER, etc.). */
+const TEXT_YIELDING_FUNCS = [
+  "CONCAT",
+  "CONCATENATE",
+  "UPPER",
+  "LOWER",
+  "TRIM",
+  "LEFT",
+  "RIGHT",
+  "SUBSTRING",
+  "MID",
+  "TEXT",
+  "PROPER",
+  "REPLACE",
+  "SUBSTITUTE",
+  "REPT",
+] as const;
+
+function isWholeFunctionCall(expression: string, fnNames: readonly string[]): boolean {
+  const s = expression.replace(/\s+/g, " ").trim().replace(/;/g, ",");
+  if (!s) return false;
+  for (const fn of fnNames) {
+    const re = new RegExp(`^\\s*${fn}\\s*\\(`, "i");
+    if (!re.test(s)) continue;
+    const open = s.search(/\(/);
+    const extracted = extractParenContent(s, open);
+    if (extracted && s.slice(extracted.endIndex + 1).trim() === "") return true;
+  }
+  return false;
+}
+
+function ifYieldsOnlyTextLiterals(expression: string): boolean {
+  let s = (expression || "").replace(/\s+/g, " ").trim().replace(/;/g, ",");
+  if (!s || /^\s*IFS\s*\(/i.test(s)) return false;
+  const ifStart = s.search(/\bIF\s*\(/i);
+  if (ifStart === -1 || ifStart !== 0) return false;
+  const open = s.indexOf("(", ifStart);
+  const extracted = extractParenContent(s, open);
+  if (!extracted) return false;
+  if (s.slice(extracted.endIndex + 1).trim()) return false;
+  const args = splitArgs(extracted.inner);
+  if (args.length !== 3) return false;
+  return isSpreadsheetQuotedString(args[1]!) && isSpreadsheetQuotedString(args[2]!);
+}
+
 /**
- * SUM/AVG sobre una expresión que es solo `IFS(...)` con ramas entre comillas (tipo texto en SQL)
- * no es válido en Postgres. Para etiquetas por grupo se usa `MAX` (si el grupo tiene un solo valor
- * de etiqueta, MAX y MIN coinciden con ese valor).
+ * True si la expresión (estilo hoja de cálculo) produce texto en SQL: IFS/IF con ramas literales,
+ * CONCAT/CONCATENATE, funciones de texto, o IF cuyas ramas también producen texto.
+ */
+export function expressionYieldsText(expression: string): boolean {
+  if (!expression?.trim()) return false;
+  if (ifsYieldsOnlyTextLiterals(expression)) return true;
+  if (ifYieldsOnlyTextLiterals(expression)) return true;
+
+  const s = expression.replace(/\s+/g, " ").trim().replace(/;/g, ",");
+  if (/^('[^']*'|"[^"]*")$/.test(s)) return true;
+  if (isWholeFunctionCall(s, TEXT_YIELDING_FUNCS)) return true;
+
+  if (/^\s*IF\s*\(/i.test(s) && !/^\s*IFS\s*\(/i.test(s)) {
+    const open = s.indexOf("(");
+    const extracted = extractParenContent(s, open);
+    if (extracted && s.slice(extracted.endIndex + 1).trim() === "") {
+      const args = splitArgs(extracted.inner);
+      if (args.length === 3 && expressionYieldsText(args[1]!) && expressionYieldsText(args[2]!)) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * SUM/AVG sobre expresiones de tipo texto (IFS con comillas, CONCAT, etc.) no es válido en Postgres.
+ * Para etiquetas por grupo se usa `MAX` (si el grupo tiene un solo valor, MAX y MIN coinciden).
  */
 export function coerceAggFuncForTextOnlyIFS(func: string, expression: string): string {
   const f = (func || "SUM").toString().toUpperCase().trim();
   if (!expression.trim()) return f;
-  if ((f === "SUM" || f === "AVG") && ifsYieldsOnlyTextLiterals(expression)) return "MAX";
+  if ((f === "SUM" || f === "AVG") && expressionYieldsText(expression)) return "MAX";
   return f;
 }
 
