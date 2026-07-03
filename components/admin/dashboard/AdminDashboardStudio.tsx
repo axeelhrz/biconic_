@@ -563,19 +563,22 @@ export function AdminDashboardStudio({
       ? `Creado ${new Date(createdAt).toLocaleDateString("es-AR")}`
       : undefined;
 
-  // Cargar layout desde DB
+  // Cargar layout vía API Next (mismo origen); el shim browser a /v1/dashboards falla en producción.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const supabase = createClient();
-        const { data, error } = await supabase
-          .from("dashboard")
-          .select("layout, global_filters_config")
-          .eq("id", dashboardId)
-          .maybeSingle();
-        if (error) throw error;
-        if (!data || cancelled) return;
+        const res = await fetch(`/api/dashboard/${dashboardId}/layout`, { credentials: "include" });
+        const json = await safeJsonResponse<{
+          ok?: boolean;
+          error?: string;
+          data?: { layout?: unknown; global_filters_config?: GlobalFilter[] };
+        }>(res);
+        if (!res.ok || !json.ok) {
+          throw new Error(json.error || "No se pudo cargar el dashboard");
+        }
+        const data = json.data;
+        if (cancelled || !data) return;
         const rawLayout = (data as {
           layout?: {
             widgets?: unknown[];
@@ -646,7 +649,9 @@ export function AdminDashboardStudio({
           setLayoutLoaded(true);
         }
       } catch (e) {
-        if (!cancelled) toast.error("No se pudo cargar el dashboard");
+        if (!cancelled) {
+          toast.error(e instanceof Error ? e.message : "No se pudo cargar el dashboard");
+        }
       }
       loadedOnce.current = true;
     };
@@ -656,7 +661,11 @@ export function AdminDashboardStudio({
 
   // Cargar métricas reutilizables y columnas derivadas de los ETLs del dashboard (solo tras cargar layout)
   useEffect(() => {
-    if (!layoutLoaded || !etlData || etlLoading || etlMetricsMergedRef.current) return;
+    if (!layoutLoaded || etlLoading || etlMetricsMergedRef.current) return;
+    if (!etlData) {
+      if (etlError) setEtlSidecarReady(true);
+      return;
+    }
     const etlIds = new Set<string>();
     if (etlData.etl?.id) etlIds.add(etlData.etl.id);
     etlData.dataSources?.forEach((s) => etlIds.add(s.etlId));
@@ -703,7 +712,7 @@ export function AdminDashboardStudio({
     return () => {
       cancelled = true;
     };
-  }, [layoutLoaded, etlData, etlLoading]);
+  }, [layoutLoaded, etlData, etlLoading, etlError]);
 
   const saveDashboard = useCallback(async (overrides?: { widgets?: StudioWidget[]; silent?: boolean }) => {
     setIsSaving(true);
@@ -2345,6 +2354,18 @@ export function AdminDashboardStudio({
           onRun={runAllMetrics}
           hideRunButton
         />
+      )}
+      {!embeddedPreview && !etlLoading && etlError && (
+        <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-amber-500/40 bg-amber-500/10">
+          <span className="text-xs text-amber-900 dark:text-amber-100">{etlError}</span>
+          <button
+            type="button"
+            onClick={() => void refetchEtlData()}
+            className="shrink-0 text-xs font-semibold text-amber-900 underline dark:text-amber-100"
+          >
+            Reintentar
+          </button>
+        </div>
       )}
       {!embeddedPreview && etlData?.etl?.id && widgetsForCurrentPage.length > 0 && (
         <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-accent-dim)]/50">
