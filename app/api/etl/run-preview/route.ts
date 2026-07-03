@@ -24,7 +24,7 @@ import {
   getValue,
   CastTargetType
 } from "@/lib/etl/transformations";
-import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT, ETL_PREVIEW_MAX_WHEN_UNLIMITED } from "@/lib/etl/limits";
+import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT, ETL_PREVIEW_MAX_WHEN_UNLIMITED, ETL_TRANSFORM_SAMPLE_LIMIT } from "@/lib/etl/limits";
 import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
 import {
   normalizeExcelDataTableRows,
@@ -156,6 +156,8 @@ type RunBody = {
   inferTypes?: boolean;
   limit?: number;
   unlimited?: boolean;
+  /** Muestra ampliada (10k) para duplicados / transformación; evita async y previewFast en JOIN. */
+  transformSample?: boolean;
   previewFast?: boolean;
   asyncPreviewAction?: "start" | "execute";
   previewJobId?: string;
@@ -188,8 +190,11 @@ export async function POST(req: NextRequest) {
     body = (await req.json()) as RunBody | null;
     if (!body) throw new Error("Cuerpo vacío");
 
+    const transformSample = body?.transformSample === true;
     const effectiveLimit =
-      body?.unlimited === true
+      transformSample
+        ? ETL_TRANSFORM_SAMPLE_LIMIT
+        : body?.unlimited === true
         ? Math.min(ETL_MAX_ROWS_CEILING, ETL_PREVIEW_MAX_WHEN_UNLIMITED)
         : Math.min(
             Number(body?.limit) || ETL_PREVIEW_DEFAULT_LIMIT,
@@ -555,12 +560,11 @@ export async function POST(req: NextRequest) {
             const cookieHeader = req.headers.get("cookie");
             const joinsCount = joinsWithCols.length;
             const previewTargetRows = Math.min(
-              body?.unlimited === true ? ETL_PREVIEW_MAX_WHEN_UNLIMITED : effectiveLimit,
-              body?.unlimited === true ? ETL_PREVIEW_MAX_WHEN_UNLIMITED : effectiveLimit
+              transformSample ? ETL_TRANSFORM_SAMPLE_LIMIT : effectiveLimit,
+              transformSample ? ETL_TRANSFORM_SAMPLE_LIMIT : effectiveLimit
             );
-            // Siempre previewFast en vista previa: la materialización acota filas por tabla
-            // (ETL_PREVIEW_MATERIALIZE_* en join-query) y evita copiar tablas Firebird enteras.
-            const fastJoinPreview = true;
+            // Vista previa rápida: materialización acotada. transformSample usa paginación completa hasta 10k.
+            const fastJoinPreview = !transformSample;
             const starJoinPrimaryTable =
               starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "";
             const starJoinConditions = body.filter?.conditions || [];
@@ -581,6 +585,7 @@ export async function POST(req: NextRequest) {
                 limit,
                 offset,
                 previewFast: fastJoinPreview,
+                ...(transformSample ? { fromEtlRun: true } : {}),
               };
               if (matPrefix) {
                 joinQueryBody._materializationPrefix = matPrefix;

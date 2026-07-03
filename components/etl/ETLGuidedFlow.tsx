@@ -29,7 +29,7 @@ import { Connection as ServerConnection } from "@/components/connections/Connect
 import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { ETL_DISTINCT_VALUES_MAX_DEFAULT } from "@/lib/etl/limits";
+import { ETL_DISTINCT_VALUES_MAX_DEFAULT, ETL_TRANSFORM_SAMPLE_LIMIT } from "@/lib/etl/limits";
 import {
   deriveColumnMetadataFromSample,
   inferColumnMetadata,
@@ -462,6 +462,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewSortKey, setPreviewSortKey] = useState<string | null>(null);
   const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
   const [previewUnlimited, setPreviewUnlimited] = useState(false);
+  /** Muestra de hasta 10k filas para duplicados (paso Transformación). */
+  const [transformSampleRows, setTransformSampleRows] = useState<Record<string, unknown>[] | null>(null);
+  const [loadingTransformSample, setLoadingTransformSample] = useState(false);
+  const [transformSampleError, setTransformSampleError] = useState<string | null>(null);
+  /** Valores distintos por columna (normalizar / correcciones), desde BD. */
+  const [columnValueOptions, setColumnValueOptions] = useState<Record<string, string[]>>({});
+  const [loadingColumnValuesKey, setLoadingColumnValuesKey] = useState<string | null>(null);
   const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1304,12 +1311,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     [datasetColumnOptions]
   );
 
-  /** Duplicados compuestos (≥2 columnas) en la vista previa del dataset. */
+  /** Duplicados compuestos (≥2 columnas) en muestra de transformación o vista previa. */
+  const dedupeAnalysisRows = transformSampleRows?.length ? transformSampleRows : previewRows;
   const dedupeValidation = useMemo(() => {
     const cols = dedupe?.keyColumns ?? [];
-    if (cols.length < 2 || !previewRows?.length) return null;
-    const rowKeys = Object.keys(previewRows[0] as Record<string, unknown>);
-    const keys = previewRows.map((row) => {
+    if (cols.length < 2 || !dedupeAnalysisRows?.length) return null;
+    const rowKeys = Object.keys(dedupeAnalysisRows[0] as Record<string, unknown>);
+    const keys = dedupeAnalysisRows.map((row) => {
       const r = row as Record<string, unknown>;
       return cols
         .map((col) => {
@@ -1325,8 +1333,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       duplicateRows: keys.length - uniqueKeys,
       uniqueKeys,
       totalRows: keys.length,
+      fromTransformSample: Boolean(transformSampleRows?.length),
     };
-  }, [dedupe?.keyColumns, previewRows]);
+  }, [dedupe?.keyColumns, dedupeAnalysisRows, transformSampleRows?.length]);
 
   useEffect(() => {
     if (!distinctColumn) return;
@@ -1692,7 +1701,142 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     dateFilterExactDatesText,
   ]);
 
-  /** Preview síncrono (rápido) salvo con «Sin límite»; JOIN usa pocas filas y una sola consulta. */
+  const fetchColumnDistinctValues = useCallback(
+    async (columnKey: string) => {
+      if (!connectionId || !selectedTable || !columnKey.trim()) return;
+      setLoadingColumnValuesKey(columnKey);
+      try {
+        const queries = resolveDistinctValueQueries(
+          columnKey,
+          connectionId,
+          selectedTable,
+          effectiveJoinItemsForOptions,
+          unionRightItems,
+          useUnion
+        );
+        if (queries.length === 0) {
+          toast.error("No se pudo resolver la columna en la conexión");
+          return;
+        }
+        const results = await Promise.all(
+          queries.map((q) =>
+            fetch("/api/connection/distinct-values", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                connectionId: q.connectionId,
+                table: q.table,
+                column: q.column,
+              }),
+            }).then((res) => safeJsonResponse(res))
+          )
+        );
+        const merged = new Set<string>();
+        const values: string[] = [];
+        let hitCap = false;
+        for (const data of results) {
+          if (data.ok && Array.isArray(data.values)) {
+            if (data.capped) hitCap = true;
+            for (const v of data.values) {
+              const s = String(v);
+              if (!merged.has(s)) {
+                merged.add(s);
+                values.push(s);
+                if (values.length >= ETL_DISTINCT_VALUES_MAX_DEFAULT) {
+                  hitCap = true;
+                  break;
+                }
+              }
+            }
+          } else if (data?.error) {
+            toast.error(data.error);
+            return;
+          }
+          if (values.length >= ETL_DISTINCT_VALUES_MAX_DEFAULT) break;
+        }
+        values.sort((a, b) => a.localeCompare(b, "es"));
+        setColumnValueOptions((prev) => ({
+          ...prev,
+          [columnKey]: values.slice(0, ETL_DISTINCT_VALUES_MAX_DEFAULT),
+        }));
+        if (hitCap) {
+          toast.info(
+            `Se cargaron los primeros ${ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} valores. Usá filtros para acotar.`
+          );
+        } else {
+          toast.success(`${values.length.toLocaleString("es-AR")} valor(es) cargados`);
+        }
+      } catch {
+        toast.error("Error al cargar valores de la columna");
+      } finally {
+        setLoadingColumnValuesKey(null);
+      }
+    },
+    [
+      connectionId,
+      selectedTable,
+      effectiveJoinItemsForOptions,
+      unionRightItems,
+      useUnion,
+    ]
+  );
+
+  const fetchTransformSample = useCallback(() => {
+    const body = buildGuidedConfigBody();
+    if (!body || !connectionId || !selectedTable) {
+      setTransformSampleRows(null);
+      setTransformSampleError(null);
+      return;
+    }
+    setLoadingTransformSample(true);
+    setTransformSampleError(null);
+    const previewBody = { ...body, transformSample: true, limit: ETL_TRANSFORM_SAMPLE_LIMIT } as Record<string, unknown>;
+    delete previewBody.end;
+
+    fetch("/api/etl/run-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(previewBody),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          let errMsg = `Error del servidor (${res.status})`;
+          try {
+            const j = JSON.parse(text) as { error?: string };
+            if (j?.error) errMsg = j.error;
+          } catch {
+            if (text?.trim()) errMsg = text.trim().slice(0, 200);
+          }
+          throw new Error(errMsg);
+        }
+        return safeJsonResponse(res) as Promise<{
+          ok?: boolean;
+          previewRows?: Record<string, unknown>[];
+          error?: string;
+        }>;
+      })
+      .then((data) => {
+        if (!data?.ok) throw new Error(data?.error || "Error al cargar muestra");
+        const rows = Array.isArray(data.previewRows) ? data.previewRows : [];
+        setTransformSampleRows(rows);
+        setTransformSampleError(null);
+      })
+      .catch((e: unknown) => {
+        setTransformSampleRows(null);
+        setTransformSampleError(e instanceof Error ? e.message : "Error al cargar muestra");
+      })
+      .finally(() => setLoadingTransformSample(false));
+  }, [buildGuidedConfigBody, connectionId, selectedTable]);
+
+  useEffect(() => {
+    if (step !== "transformacion" || !connectionId || !selectedTable) return;
+    fetchTransformSample();
+    // Solo al entrar al paso o cambiar conexión/tabla (evita re-fetch en cada render del body).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, connectionId, selectedTable]);
+
+  /** Preview síncrono (rápido); «Muestra ampliada» usa transformSample (10k filas). */
   const fetchPreview = useCallback(() => {
     const body = buildGuidedConfigBody();
     if (!body || !connectionId || !selectedTable) {
@@ -1713,7 +1857,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     delete previewBody.end;
     const hasJoin = Boolean(previewBody.join);
     if (previewUnlimited) {
-      previewBody.unlimited = true;
+      previewBody.transformSample = true;
+      previewBody.limit = ETL_TRANSFORM_SAMPLE_LIMIT;
     } else {
       previewBody.limit = hasJoin ? ETL_PREVIEW_JOIN_INSTANT_LIMIT : ETL_PREVIEW_TABLE_LIMIT;
       previewBody.previewFast = true;
@@ -1723,10 +1868,6 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (u.rights.length > 0) (previewBody.union as Record<string, unknown>).right = u.rights[0];
     }
     const signal = previewAbortRef.current.signal;
-    const sleep = (ms: number) =>
-      new Promise<void>((resolve) => {
-        previewPollTimeoutRef.current = setTimeout(() => resolve(), ms);
-      });
 
     const runSyncPreview = async () => {
       const res = await fetch("/api/etl/run-preview", {
@@ -1762,78 +1903,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
     (async () => {
       try {
-        if (previewUnlimited) {
-          const startRes = await fetch("/api/etl/run-preview", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...previewBody, asyncPreviewAction: "start" }),
-            signal,
-          });
-          if (!startRes.ok) {
-            const text = await startRes.text();
-            let errMsg = `Error del servidor (${startRes.status})`;
-            try {
-              const j = JSON.parse(text) as { error?: string };
-              if (j?.error && typeof j.error === "string") errMsg = j.error;
-            } catch {
-              if (text?.trim()) errMsg = text.trim().slice(0, 200);
-            }
-            throw new Error(errMsg);
-          }
-          const startData = await safeJsonResponse(startRes) as { ok?: boolean; previewJobId?: string; error?: string };
-          if (!startData?.ok || !startData?.previewJobId) {
-            throw new Error(startData?.error || "No se pudo iniciar la vista previa asíncrona.");
-          }
-          const previewJobId = startData.previewJobId;
-          const startedAt = Date.now();
-          while (true) {
-            if (signal.aborted) return;
-            const statusRes = await fetch(`/api/etl/run-preview/status?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
-            const statusData = await safeJsonResponse(statusRes) as {
-              ok?: boolean;
-              status?: string;
-              rowsProcessed?: number;
-              rowsSample?: Record<string, unknown>[];
-              error?: string;
-            };
-            if (!statusRes.ok || !statusData?.ok) {
-              throw new Error(statusData?.error || `Error consultando estado (${statusRes.status})`);
-            }
-            if (Array.isArray(statusData.rowsSample) && statusData.rowsSample.length > 0) {
-              previewLoadedOnceRef.current = true;
-              setPreviewRows(statusData.rowsSample);
-              setPreviewRowsProcessed(statusData.rowsProcessed ?? statusData.rowsSample.length);
-              setPreviewError(null);
-            }
-            if (statusData.status === "failed") {
-              throw new Error(statusData.error || "La vista previa asíncrona falló.");
-            }
-            if (statusData.status === "completed") {
-              const resultRes = await fetch(`/api/etl/run-preview/result?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
-              const resultData = await safeJsonResponse(resultRes) as {
-                ok?: boolean;
-                previewRows?: Record<string, unknown>[];
-                rowsProcessed?: number;
-                error?: string;
-              };
-              if (!resultRes.ok || !resultData?.ok) {
-                throw new Error(resultData?.error || `Error obteniendo resultado (${resultRes.status})`);
-              }
-              const rows = Array.isArray(resultData.previewRows) ? resultData.previewRows : [];
-              previewLoadedOnceRef.current = true;
-              setPreviewRows(rows);
-              setPreviewRowsProcessed(resultData.rowsProcessed ?? rows.length);
-              setPreviewError(null);
-              break;
-            }
-            if (Date.now() - startedAt > 15 * 60 * 1000) {
-              throw new Error("La vista previa tardó demasiado. Ajustá filtros o cantidad de joins.");
-            }
-            await sleep(300);
-          }
-        } else {
-          await runSyncPreview();
-        }
+        await runSyncPreview();
       } catch (e: unknown) {
         if ((e as { name?: string }).name === "AbortError") return;
         setPreviewRows(null);
@@ -3366,7 +3436,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   {/* Normalización de texto por columna */}
                   <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Normalización de texto por columna</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una operación por columna del dataset (tabla principal y tablas del JOIN). Podés aplicar la misma operación a todas de una vez.</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una operación por columna. En «Reemplazar texto» podés cargar hasta {ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} valores distintos desde la base para elegir qué buscar.</p>
                     <div className="flex flex-wrap items-end gap-2 p-3 rounded-xl border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                       <span className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Aplicar a todas las columnas:</span>
                       <div className="flex-1 min-w-[200px] max-w-[240px]">
@@ -3427,11 +3497,27 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             </div>
                             {op === "replace" && (
                               <>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="rounded-lg h-8 text-xs shrink-0"
+                                  style={{ borderColor: "var(--platform-border)" }}
+                                  disabled={loadingColumnValuesKey === colName}
+                                  onClick={() => fetchColumnDistinctValues(colName)}
+                                >
+                                  {loadingColumnValuesKey === colName ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    "Valores"
+                                  )}
+                                </Button>
                                 <input
                                   type="text"
                                   className="rounded-xl border px-2 py-1.5 text-xs w-24"
                                   style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
                                   placeholder="Buscar"
+                                  list={columnValueOptions[colName]?.length ? `norm-values-${colName.replace(/[^a-zA-Z0-9_-]/g, "_")}` : undefined}
                                   value={t?.find ?? ""}
                                   onChange={(ev) =>
                                     setCleanTransforms((prev) =>
@@ -3443,6 +3529,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                     )
                                   }
                                 />
+                                {columnValueOptions[colName]?.length ? (
+                                  <datalist id={`norm-values-${colName.replace(/[^a-zA-Z0-9_-]/g, "_")}`}>
+                                    {columnValueOptions[colName].map((v) => (
+                                      <option key={v} value={v} />
+                                    ))}
+                                  </datalist>
+                                ) : null}
                                 <input
                                   type="text"
                                   className="rounded-xl border px-2 py-1.5 text-xs w-24"
@@ -3470,7 +3563,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   {/* Correcciones permanentes */}
                   <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Correcciones permanentes</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Reemplazar valor incorrecto → correcto (coincidencia exacta). La comparación es exacta (el valor en la celda debe coincidir con &apos;Incorrecto&apos;). Si no aplica, comprobá espacios o mayúsculas.</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Reemplazar valor incorrecto → correcto (coincidencia exacta). Usá «Valores» para cargar hasta {ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} opciones desde la base.</p>
                     <div className="space-y-2 max-h-36 overflow-y-auto">
                       {dataFixes.map((fix, idx) => (
                         <div key={idx} className="flex gap-2 items-center flex-wrap">
@@ -3482,7 +3575,37 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               placeholder="Columna"
                             />
                           </div>
-                          <input type="text" className="rounded-xl border px-2 py-1.5 text-sm w-28" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }} placeholder="Incorrecto" value={fix.find} onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, find: e.target.value }; return n; })} />
+                          <input
+                            type="text"
+                            className="rounded-xl border px-2 py-1.5 text-sm w-28"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                            placeholder="Incorrecto"
+                            list={columnValueOptions[fix.column]?.length ? `fix-values-${idx}` : undefined}
+                            value={fix.find}
+                            onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, find: e.target.value }; return n; })}
+                          />
+                          {columnValueOptions[fix.column]?.length ? (
+                            <datalist id={`fix-values-${idx}`}>
+                              {columnValueOptions[fix.column].map((v) => (
+                                <option key={v} value={v} />
+                              ))}
+                            </datalist>
+                          ) : null}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="rounded-lg h-8 text-xs shrink-0"
+                            style={{ borderColor: "var(--platform-border)" }}
+                            disabled={!fix.column || loadingColumnValuesKey === fix.column}
+                            onClick={() => fetchColumnDistinctValues(fix.column)}
+                          >
+                            {loadingColumnValuesKey === fix.column ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              "Valores"
+                            )}
+                          </Button>
                           <span style={{ color: "var(--platform-fg-muted)" }}>→</span>
                           <input type="text" className="rounded-xl border px-2 py-1.5 text-sm w-28" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }} placeholder="Correcto" value={fix.replaceWith} onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, replaceWith: e.target.value }; return n; })} />
                           <button type="button" className="text-red-500 hover:bg-red-50 rounded-lg p-1.5" onClick={() => setDataFixes((prev) => prev.filter((_, i) => i !== idx))} aria-label="Quitar">×</button>
@@ -3496,9 +3619,32 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
                   {/* Duplicados */}
                   <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Duplicados</Label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Duplicados</Label>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="rounded-lg h-8"
+                        style={{ borderColor: "var(--platform-border)" }}
+                        disabled={loadingTransformSample || !connectionId || !selectedTable}
+                        onClick={() => fetchTransformSample()}
+                      >
+                        {loadingTransformSample ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                            Cargando…
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                            Recargar muestra ({ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas)
+                          </>
+                        )}
+                      </Button>
+                    </div>
                     <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                      Elegí dos columnas (o más) del dataset. Se detectan filas con la misma combinación de valores en todas las columnas elegidas; al ejecutar el ETL se conserva solo la primera o la última.
+                      Elegí dos columnas (o más) del dataset. Se analizan hasta {ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas del dataset; al ejecutar el ETL se conserva solo la primera o la última por combinación duplicada.
                     </p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="space-y-1">
@@ -3594,15 +3740,24 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           color: "var(--platform-fg-muted)",
                         }}
                       >
-                        {!previewRows?.length ? (
-                          <span>Volvé al paso anterior y cargá la vista previa para analizar duplicados en el dataset (incluye columnas del JOIN).</span>
+                        {!dedupeAnalysisRows?.length ? (
+                          <span>
+                            {loadingTransformSample
+                              ? `Cargando muestra de hasta ${ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas…`
+                              : transformSampleError
+                                ? `No se pudo cargar la muestra: ${transformSampleError}`
+                                : "Cargá la muestra con el botón de arriba para analizar duplicados."}
+                          </span>
                         ) : dedupeValidation && dedupeValidation.duplicateRows > 0 ? (
                           <span style={{ color: "var(--platform-error, #dc2626)" }}>
-                            Se detectaron <strong>{dedupeValidation.duplicateRows}</strong> fila(s) duplicada(s) con la combinación elegida en la vista previa ({dedupeValidation.uniqueKeys} claves únicas en {dedupeValidation.totalRows} filas).
+                            Se detectaron <strong>{dedupeValidation.duplicateRows}</strong> fila(s) duplicada(s) en la muestra
+                            {dedupeValidation.fromTransformSample ? ` (${ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas máx.)` : ""}
+                            : {dedupeValidation.uniqueKeys} claves únicas en {dedupeValidation.totalRows} filas.
                           </span>
                         ) : dedupeValidation ? (
                           <span style={{ color: "var(--platform-fg)" }}>
-                            Sin duplicados en la vista previa para esa combinación ({dedupeValidation.totalRows} filas, {dedupeValidation.uniqueKeys} claves únicas).
+                            Sin duplicados en la muestra para esa combinación ({dedupeValidation.totalRows} filas analizadas
+                            {dedupeValidation.fromTransformSample ? `, hasta ${ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")}` : ""}).
                           </span>
                         ) : null}
                       </div>
@@ -3857,7 +4012,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     onChange={(e) => setPreviewUnlimited(e.target.checked)}
                     className="rounded border"
                   />
-                  Sin límite de filas
+                  Sin límite de filas ({ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} máx.)
                 </label>
                 <Button
                   type="button"
@@ -3963,10 +4118,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <div className="font-medium" style={{ color: "var(--platform-fg)" }}>Total obtenido: {previewLoading ? "…" : previewError ? "Error al cargar" : (previewRows != null ? (previewRowsProcessed ?? previewRows.length) : "—")}</div>
                       {!previewLoading && previewRows != null && previewRows.length > 0 && (
                         <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                          {useJoin
+                          {previewUnlimited
+                            ? `Muestra ampliada: hasta ${ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas.`
+                            : useJoin
                             ? `Muestra rápida: hasta ${ETL_PREVIEW_JOIN_INSTANT_LIMIT} filas del JOIN (principal + tablas unidas).`
                             : `Mostrando hasta ${ETL_PREVIEW_TABLE_LIMIT} filas (vista previa).`}
-                          {previewUnlimited ? " Modo sin límite: muestra hasta 50.000 filas (muestra acotada por tabla en JOIN Firebird)." : ""}
                         </p>
                       )}
                     </dd>

@@ -51,6 +51,12 @@ export function getDistinctValuesCap(): number {
 }
 
 /**
+ * Muestra para análisis en Transformación (duplicados) y vista previa ampliada.
+ * Mismo tope que valores distintos para evitar timeouts serverless.
+ */
+export const ETL_TRANSFORM_SAMPLE_LIMIT = ETL_DISTINCT_VALUES_MAX_DEFAULT;
+
+/**
  * Variables de entorno para join-query (API connection):
  * - ETL_JOIN_TIMEOUT_MS: timeout en ms para la ruta join-query; pasado este tiempo se devuelve 504. Default 295000 (~5 min; Vercel Pro techo 300s).
  * - ETL_JOIN_SOURCE_LIMIT_MAX: tope opcional de filas por tabla en JOIN in-memory (Firebird/cross-connection). Se aplica además del cap por número de joins.
