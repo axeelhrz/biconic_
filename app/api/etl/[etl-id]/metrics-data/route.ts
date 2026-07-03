@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import postgres from "postgres";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
+import { expandColumnDisplayMap, type ColumnDisplayEntry } from "@/lib/etl/column-display-keys";
 
 /** Timeout para lectura de tablas grandes en monitoreo (varios millones de filas). */
 export const maxDuration = 120;
@@ -893,10 +894,11 @@ export async function GET(
       rawRows = rawRows.map((row: Record<string, unknown>) => pickFromRow(row, fields.all));
     }
 
-    const columnDisplay =
+    const columnDisplayRaw =
       filterConfig && typeof (filterConfig as { columnDisplay?: unknown }).columnDisplay === "object"
-        ? (filterConfig as { columnDisplay: Record<string, { label?: string; format?: string; type?: string }> }).columnDisplay
+        ? ((filterConfig as { columnDisplay: Record<string, ColumnDisplayEntry> }).columnDisplay ?? undefined)
         : undefined;
+    const columnDisplay = columnDisplayRaw ? expandColumnDisplayMap(columnDisplayRaw) : undefined;
 
     // Incluir en fields.date todas las columnas marcadas como Fecha en el ETL (columnDisplay[].type)
     if (columnDisplay && typeof columnDisplay === "object") {

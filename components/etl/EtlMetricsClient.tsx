@@ -24,6 +24,7 @@ import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector"
 import { DashboardWidgetRenderer } from "@/components/dashboard/DashboardWidgetRenderer";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { getColumnDisplayLabel, resolveColumnDisplayKey } from "@/lib/etl/column-display-keys";
 import { getDataEndpoints } from "@/lib/api/endpoints";
 import EtlScheduleSettings from "@/components/etl/EtlScheduleSettings";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
@@ -1453,19 +1454,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return null;
   }, [formMetrics]);
 
-  const getColumnDisplayKey = (col: string): string => {
-    const cd = data?.columnDisplay;
-    if (!cd) return col;
-    if (cd[col] !== undefined) return col;
-    const found = Object.keys(cd).find((k) => k.toLowerCase() === col.toLowerCase());
-    return found ?? col;
-  };
+  const getColumnDisplayKey = (col: string): string =>
+    resolveColumnDisplayKey(col, data?.columnDisplay);
 
-  const getSampleDisplayLabel = (col: string): string => {
-    const key = getColumnDisplayKey(col);
-    const label = data?.columnDisplay?.[key]?.label?.trim();
-    return label || col;
-  };
+  const getSampleDisplayLabel = (col: string): string =>
+    getColumnDisplayLabel(col, data?.columnDisplay);
 
   const getFilterSelectedValues = (f: AggregationFilterEdit): string[] =>
     Array.isArray(f.value) ? f.value : (f.value != null && f.value !== "" ? [String(f.value)] : []);

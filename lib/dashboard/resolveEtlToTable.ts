@@ -1,6 +1,7 @@
 import type { AppDbClient } from "@/lib/supabase/db-client";
 import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { expandColumnDisplayMap, type ColumnDisplayEntry } from "@/lib/etl/column-display-keys";
 
 export type ResolvedEtlTable = {
   schema: string;
@@ -116,7 +117,7 @@ export async function resolveEtlToTableAndFields(
 
 export function extractColumnDisplayFromEtlLayout(
   layout: unknown
-): Record<string, { type?: string; label?: string }> | undefined {
+): Record<string, ColumnDisplayEntry> | undefined {
   if (!layout || typeof layout !== "object") return undefined;
   const guided = (layout as { guided_config?: unknown }).guided_config;
   if (!guided || typeof guided !== "object") return undefined;
@@ -124,5 +125,5 @@ export function extractColumnDisplayFromEtlLayout(
   if (!filter || typeof filter !== "object") return undefined;
   const columnDisplay = (filter as { columnDisplay?: unknown }).columnDisplay;
   if (!columnDisplay || typeof columnDisplay !== "object") return undefined;
-  return columnDisplay as Record<string, { type?: string; label?: string }>;
+  return expandColumnDisplayMap(columnDisplay as Record<string, ColumnDisplayEntry>);
 }
