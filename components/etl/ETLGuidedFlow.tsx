@@ -28,7 +28,7 @@ import {
 import { Connection as ServerConnection } from "@/components/connections/ConnectionsCard";
 import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
-import { safeJsonResponse } from "@/lib/safe-json-response";
+import { ETL_DISTINCT_VALUES_MAX_DEFAULT } from "@/lib/etl/limits";
 import {
   deriveColumnMetadataFromSample,
   inferColumnMetadata,
@@ -1376,21 +1376,33 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         if (cancelled) return;
         const merged = new Set<string>();
         const values: string[] = [];
+        let hitCap = false;
         for (const data of results) {
           if (data.ok && Array.isArray(data.values)) {
+            if (data.capped) hitCap = true;
             for (const v of data.values) {
               const s = String(v);
               if (!merged.has(s)) {
                 merged.add(s);
                 values.push(s);
+                if (values.length >= ETL_DISTINCT_VALUES_MAX_DEFAULT) {
+                  hitCap = true;
+                  break;
+                }
               }
             }
           } else if (data?.error) {
             toast.error(data.error);
           }
+          if (values.length >= ETL_DISTINCT_VALUES_MAX_DEFAULT) break;
         }
         values.sort((a, b) => a.localeCompare(b, "es"));
-        setDistinctValuesList(values);
+        setDistinctValuesList(values.slice(0, ETL_DISTINCT_VALUES_MAX_DEFAULT));
+        if (hitCap) {
+          toast.info(
+            `Se muestran los primeros ${ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} valores distintos. Usá el buscador o agregá filtros en pasos anteriores para acotar la lista.`
+          );
+        }
       })
       .catch(() => toast.error("Error al cargar valores"))
       .finally(() => {
@@ -2770,7 +2782,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
                   <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                    Elegí una columna; se cargarán todos los valores distintos desde la base de datos. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado. Se aplica al final, después de UNION y JOIN.
+                    Elegí una columna; se cargarán hasta {ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} valores distintos desde la base de datos. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado. Se aplica al final, después de UNION y JOIN.
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
                     <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>

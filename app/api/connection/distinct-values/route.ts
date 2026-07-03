@@ -17,23 +17,21 @@ import {
 import { Client as PgClient } from "pg";
 import mysql from "mysql2/promise";
 import { quoteIdent, quoteQualified } from "@/lib/sql/helpers";
+import { getDistinctValuesCap } from "@/lib/etl/limits";
 
-/** Sin tope por defecto; opcional ETL_DISTINCT_VALUES_MAX en servidor para acotar cardinalidad extrema. */
-const DISTINCT_VALUES_CAP =
-  Number(process.env.ETL_DISTINCT_VALUES_MAX) > 0
-    ? Math.floor(Number(process.env.ETL_DISTINCT_VALUES_MAX))
-    : null;
+/** Tope por defecto 10.000; override con ETL_DISTINCT_VALUES_MAX en servidor. */
+const DISTINCT_VALUES_CAP = getDistinctValuesCap();
 
 function pgLimitSuffix(): string {
-  return DISTINCT_VALUES_CAP ? ` LIMIT ${DISTINCT_VALUES_CAP}` : "";
+  return ` LIMIT ${DISTINCT_VALUES_CAP}`;
 }
 
 function fbFirstClause(): string {
-  return DISTINCT_VALUES_CAP ? `FIRST ${DISTINCT_VALUES_CAP} ` : "";
+  return `FIRST ${DISTINCT_VALUES_CAP} `;
 }
 
 function mysqlLimitSuffix(): string {
-  return DISTINCT_VALUES_CAP ? ` LIMIT ${DISTINCT_VALUES_CAP}` : "";
+  return ` LIMIT ${DISTINCT_VALUES_CAP}`;
 }
 
 function firebirdTablePart(tableQualified: string): string {
@@ -134,7 +132,13 @@ export async function POST(req: NextRequest) {
         const values = sortDistinctValues(
           (res.rows || []).map((r: { value?: unknown }) => (r.value != null ? String(r.value) : "")).filter(Boolean)
         );
-        return NextResponse.json({ ok: true, values, total: values.length, capped: !!DISTINCT_VALUES_CAP });
+        return NextResponse.json({
+          ok: true,
+          values,
+          total: values.length,
+          capped: values.length >= DISTINCT_VALUES_CAP,
+          cap: DISTINCT_VALUES_CAP,
+        });
       } finally {
         await client.end();
       }
@@ -160,7 +164,13 @@ export async function POST(req: NextRequest) {
         const values = sortDistinctValues(
           (res.rows || []).map((r: { value?: unknown }) => (r.value != null ? String(r.value) : "")).filter(Boolean)
         );
-        return NextResponse.json({ ok: true, values, total: values.length, capped: !!DISTINCT_VALUES_CAP });
+        return NextResponse.json({
+          ok: true,
+          values,
+          total: values.length,
+          capped: values.length >= DISTINCT_VALUES_CAP,
+          cap: DISTINCT_VALUES_CAP,
+        });
       } finally {
         await client.end();
       }
@@ -189,7 +199,13 @@ export async function POST(req: NextRequest) {
         const values = sortDistinctValues(
           (Array.isArray(rows) ? rows : []).map((r: { value?: unknown }) => (r?.value != null ? String(r.value) : "")).filter(Boolean)
         );
-        return NextResponse.json({ ok: true, values, total: values.length, capped: !!DISTINCT_VALUES_CAP });
+        return NextResponse.json({
+          ok: true,
+          values,
+          total: values.length,
+          capped: values.length >= DISTINCT_VALUES_CAP,
+          cap: DISTINCT_VALUES_CAP,
+        });
       } finally {
         await connection.end();
       }
@@ -242,7 +258,7 @@ export async function POST(req: NextRequest) {
       if (distinctValues == null) {
         const seen = new Set<string>();
         distinctValues = [];
-        const pageSize = DISTINCT_VALUES_CAP ?? 50_000;
+        const pageSize = Math.min(5_000, DISTINCT_VALUES_CAP);
         const fbCol = colCandidates[0];
         let skip = 0;
         for (;;) {
@@ -269,21 +285,23 @@ export async function POST(req: NextRequest) {
               if (!seen.has(s)) {
                 seen.add(s);
                 distinctValues.push(s);
+                if (distinctValues.length >= DISTINCT_VALUES_CAP) break;
               }
             }
           }
-          if (DISTINCT_VALUES_CAP && distinctValues.length >= DISTINCT_VALUES_CAP) break;
+          if (distinctValues.length >= DISTINCT_VALUES_CAP) break;
           if (rows.length < pageSize) break;
           skip += pageSize;
         }
       }
 
-      const values = sortDistinctValues(distinctValues);
+      const values = sortDistinctValues(distinctValues).slice(0, DISTINCT_VALUES_CAP);
       return NextResponse.json({
         ok: true,
         values,
         total: values.length,
-        capped: !!DISTINCT_VALUES_CAP,
+        capped: values.length >= DISTINCT_VALUES_CAP,
+        cap: DISTINCT_VALUES_CAP,
       });
     }
 

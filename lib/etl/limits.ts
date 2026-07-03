@@ -38,6 +38,19 @@ export const ETL_PREVIEW_MATERIALIZE_FAST_MAX_ROWS_PER_TABLE = 1_500;
 export const ETL_JOIN_CHUNK_SIZE_DEFAULT = 100_000;
 
 /**
+ * Tope de valores distintos en «Excluir filas» (API /connection/distinct-values).
+ * Evita FUNCTION_INVOCATION_TIMEOUT en columnas de alta cardinalidad.
+ * Override opcional: ETL_DISTINCT_VALUES_MAX.
+ */
+export const ETL_DISTINCT_VALUES_MAX_DEFAULT = 10_000;
+
+export function getDistinctValuesCap(): number {
+  const fromEnv = Number(process.env.ETL_DISTINCT_VALUES_MAX);
+  if (fromEnv > 0) return Math.floor(fromEnv);
+  return ETL_DISTINCT_VALUES_MAX_DEFAULT;
+}
+
+/**
  * Variables de entorno para join-query (API connection):
  * - ETL_JOIN_TIMEOUT_MS: timeout en ms para la ruta join-query; pasado este tiempo se devuelve 504. Default 295000 (~5 min; Vercel Pro techo 300s).
  * - ETL_JOIN_SOURCE_LIMIT_MAX: tope opcional de filas por tabla en JOIN in-memory (Firebird/cross-connection). Se aplica además del cap por número de joins.
