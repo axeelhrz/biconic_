@@ -61,7 +61,7 @@ function safeIdentFirebird(name: string): string {
 }
 
 /** Consultas DISTINCT en tablas grandes pueden tardar; Railway/Vercel Pro permiten más tiempo. */
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
@@ -127,7 +127,8 @@ export async function POST(req: NextRequest) {
       try {
         const col = quoteIdent(columnName.trim(), "postgres");
         const qual = `"${schema.replace(/"/g, '""')}"."${table.replace(/"/g, '""')}"`;
-        const sql = `SELECT DISTINCT ${col} AS value FROM ${qual} WHERE ${col} IS NOT NULL ORDER BY ${col}${pgLimitSuffix()}`;
+        // Sin ORDER BY: permite HashAggregate (más rápido); el orden se aplica en sortDistinctValues.
+        const sql = `SELECT DISTINCT ${col} AS value FROM ${qual} WHERE ${col} IS NOT NULL${pgLimitSuffix()}`;
         const res = await client.query(sql);
         const values = sortDistinctValues(
           (res.rows || []).map((r: { value?: unknown }) => (r.value != null ? String(r.value) : "")).filter(Boolean)
@@ -159,7 +160,7 @@ export async function POST(req: NextRequest) {
       try {
         const qual = quoteQualified(tableQualified.trim(), "postgres");
         const col = quoteIdent(columnName.trim(), "postgres");
-        const sql = `SELECT DISTINCT ${col} AS value FROM ${qual} WHERE ${col} IS NOT NULL ORDER BY ${col}${pgLimitSuffix()}`;
+        const sql = `SELECT DISTINCT ${col} AS value FROM ${qual} WHERE ${col} IS NOT NULL${pgLimitSuffix()}`;
         const res = await client.query(sql);
         const values = sortDistinctValues(
           (res.rows || []).map((r: { value?: unknown }) => (r.value != null ? String(r.value) : "")).filter(Boolean)
@@ -194,7 +195,7 @@ export async function POST(req: NextRequest) {
       });
       try {
         const [rows] = await connection.execute(
-          `SELECT DISTINCT ${col} AS value FROM ${fullTable} WHERE ${col} IS NOT NULL ORDER BY ${col}${mysqlLimitSuffix()}`
+          `SELECT DISTINCT ${col} AS value FROM ${fullTable} WHERE ${col} IS NOT NULL${mysqlLimitSuffix()}`
         );
         const values = sortDistinctValues(
           (Array.isArray(rows) ? rows : []).map((r: { value?: unknown }) => (r?.value != null ? String(r.value) : "")).filter(Boolean)
@@ -240,7 +241,8 @@ export async function POST(req: NextRequest) {
 
       let distinctValues: string[] | null = null;
       for (const fbCol of colCandidates) {
-        const sql = `SELECT ${fbFirstClause()}DISTINCT ${fbCol} AS value FROM ${relationName} WHERE ${fbCol} IS NOT NULL ORDER BY ${fbCol}`;
+        // Sin ORDER BY: DISTINCT ya deduplica en el servidor y evita un sort extra sobre toda la tabla.
+        const sql = `SELECT ${fbFirstClause()}DISTINCT ${fbCol} AS value FROM ${relationName} WHERE ${fbCol} IS NOT NULL`;
         try {
           const rows = await queryFb(sql);
           distinctValues = rows
