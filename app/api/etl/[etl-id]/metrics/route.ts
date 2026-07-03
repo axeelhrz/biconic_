@@ -119,6 +119,7 @@ export async function PUT(
         ? (body.datasetConfig as Record<string, unknown>)
         : undefined;
     const datasetName = typeof body.datasetName === "string" ? body.datasetName.trim() || null : undefined;
+    const datasetId = typeof body.datasetId === "string" ? body.datasetId.trim() || null : null;
     const linkedDashboardId = typeof body.dashboardId === "string" ? body.dashboardId : undefined;
     const dashboardFilters = body.dashboardFilters !== undefined && Array.isArray(body.dashboardFilters) ? body.dashboardFilters : undefined;
     const savedAnalyses = body.savedAnalyses !== undefined && Array.isArray(body.savedAnalyses) ? body.savedAnalyses : undefined;
@@ -160,30 +161,62 @@ export async function PUT(
     }
 
     let datasetListUpdated = true;
+    let savedDatasetId: string | undefined;
     if (datasetConfig !== undefined) {
+      const configJson = JSON.parse(JSON.stringify(datasetConfig)) as Json;
+      const now = new Date().toISOString();
       try {
-        const { error: datasetError } = await adminClient
-          .from("dataset")
-          .upsert(
-            {
-              etl_id: etlId,
-              config: JSON.parse(JSON.stringify(datasetConfig)) as Json,
-              updated_at: new Date().toISOString(),
+        if (datasetId) {
+          const { data: existing, error: fetchDsErr } = await adminClient
+            .from("dataset")
+            .select("id, etl_id")
+            .eq("id", datasetId)
+            .maybeSingle();
+          if (fetchDsErr || !existing || (existing as { etl_id: string }).etl_id !== etlId) {
+            return NextResponse.json(
+              { ok: false, error: "Dataset no encontrado para este ETL" },
+              { status: 404 }
+            );
+          }
+          const { error: datasetError } = await adminClient
+            .from("dataset")
+            .update({
+              config: configJson,
+              updated_at: now,
               ...(datasetName !== undefined && { name: datasetName }),
-            },
-            { onConflict: "etl_id" }
-          );
-        if (datasetError) {
-          console.error("[metrics] Error al guardar en tabla dataset:", datasetError.message);
-          datasetListUpdated = false;
+            })
+            .eq("id", datasetId);
+          if (datasetError) {
+            console.error("[metrics] Error al actualizar dataset:", datasetError.message);
+            datasetListUpdated = false;
+          } else {
+            savedDatasetId = datasetId;
+          }
+        } else {
+          const { data: inserted, error: datasetError } = await adminClient
+            .from("dataset")
+            .insert({
+              etl_id: etlId,
+              config: configJson,
+              updated_at: now,
+              name: datasetName ?? null,
+            })
+            .select("id")
+            .single();
+          if (datasetError) {
+            console.error("[metrics] Error al insertar dataset:", datasetError.message);
+            datasetListUpdated = false;
+          } else {
+            savedDatasetId = (inserted as { id: string }).id;
+          }
         }
       } catch (datasetErr) {
-        console.error("[metrics] Error al upsert dataset:", datasetErr);
+        console.error("[metrics] Error al guardar dataset:", datasetErr);
         datasetListUpdated = false;
       }
     }
 
-    return NextResponse.json({ ok: true, datasetListUpdated });
+    return NextResponse.json({ ok: true, datasetListUpdated, ...(savedDatasetId && { datasetId: savedDatasetId }) });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Error al guardar métricas";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

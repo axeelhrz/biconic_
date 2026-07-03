@@ -657,6 +657,8 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "etl-id requerido" }, { status: 400 });
     }
 
+    const datasetIdParam = request.nextUrl.searchParams.get("datasetId")?.trim() || null;
+
     const { data: etlRow, error: etlError } = await supabase
       .from("etl")
       .select("id, title, name, layout, output_table")
@@ -925,10 +927,25 @@ export async function GET(
         ? ((layout as Record<string, Record<string, string>>).date_column_periodicity_overrides ?? {})
         : {};
 
-    const datasetConfig =
+    const datasetConfigFromLayout =
       layout && typeof layout === "object" && (layout as Record<string, unknown>).dataset_config != null
         ? ((layout as Record<string, Record<string, unknown>>).dataset_config ?? {})
         : undefined;
+
+    let datasetConfig = datasetConfigFromLayout;
+    if (datasetIdParam) {
+      const { data: dsRow } = await serviceClient
+        .from("dataset")
+        .select("config, etl_id")
+        .eq("id", datasetIdParam)
+        .maybeSingle();
+      if (dsRow && (dsRow as { etl_id: string }).etl_id === etlId) {
+        const cfg = (dsRow as { config?: unknown }).config;
+        if (cfg && typeof cfg === "object") {
+          datasetConfig = cfg as Record<string, unknown>;
+        }
+      }
+    }
 
     // Incluir columnas calculadas (derivedColumns) en fields para que aparezcan en Rol BI, Profiling e Insertar columna
     const rawDerived = (datasetConfig as { derivedColumns?: { name: string }[]; derived_columns?: { name: string }[] })?.derivedColumns

@@ -533,9 +533,15 @@ export type EtlMetricsClientProps = {
   onDatasetSaved?: () => void;
   /** Si true y datasetOnly, el wizard está dentro del modal de /admin/datasets: se oculta el link "Volver a Datasets" (el cierre es con la X del modal). */
   embeddedInDatasetsModal?: boolean;
+  /** ID del dataset en edición; omitir al crear uno nuevo (insert en lugar de upsert por etl_id). */
+  datasetId?: string | null;
+  /** Nombre inicial del dataset (edición). */
+  initialDatasetName?: string | null;
+  /** Configuración inicial del dataset (edición); evita cargar la del ETL compartido. */
+  initialDatasetConfig?: Record<string, unknown> | null;
 };
 
-export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false, onDatasetSaved, embeddedInDatasetsModal = false }: EtlMetricsClientProps) {
+export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false, onDatasetSaved, embeddedInDatasetsModal = false, datasetId: propDatasetId = null, initialDatasetName = null, initialDatasetConfig = null }: EtlMetricsClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
@@ -599,7 +605,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [savingAnalysis, setSavingAnalysis] = useState(false);
   const [savingDatasetConfig, setSavingDatasetConfig] = useState(false);
   /** Nombre opcional del dataset (paso Publicar); se persiste en la tabla dataset. */
-  const [datasetName, setDatasetName] = useState("");
+  const [datasetName, setDatasetName] = useState(initialDatasetName ?? "");
   /** Nombre al guardar una nueva métrica desde el paso B (Preview). */
   const [metricNameToSave, setMetricNameToSave] = useState("");
   /** Lista de datasets (solo cuando hideDatasetTab) para mostrar "Dataset a utilizar" y habilitar/deshabilitar Nueva métrica. */
@@ -888,6 +894,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       let url = unlimited
         ? `/api/etl/${etlId}/metrics-data?unlimited=1`
         : `/api/etl/${etlId}/metrics-data?sampleRows=${cappedSample}`;
+      const activeDatasetId = hideDatasetTab ? selectedDatasetId : propDatasetId;
+      if (activeDatasetId) url += `&datasetId=${encodeURIComponent(activeDatasetId)}`;
       if (opts?.bustCache) url += `&_t=${Date.now()}`;
       const res = await fetch(url);
       const json = await safeJsonResponse<MetricsDataResponse>(res);
@@ -904,7 +912,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     } finally {
       setLoading(false);
     }
-  }, [etlId]);
+  }, [etlId, hideDatasetTab, selectedDatasetId, propDatasetId]);
 
   useEffect(() => {
     fetchData();
@@ -988,6 +996,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const datasetConfigHydratedRef = useRef(false);
   useEffect(() => {
     if (hideDatasetTab) return;
+    if (datasetOnly && !propDatasetId) return;
     const cfg = data?.datasetConfig;
     if (!cfg || typeof cfg !== "object") return;
     if (!datasetConfigHydratedRef.current) {
@@ -1002,7 +1011,48 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
     }
     if (Array.isArray((cfg as { derivedColumns?: DerivedColumn[] }).derivedColumns)) setDerivedColumns((cfg as { derivedColumns: DerivedColumn[] }).derivedColumns);
-  }, [data?.datasetConfig, hideDatasetTab]);
+  }, [data?.datasetConfig, hideDatasetTab, datasetOnly, propDatasetId]);
+
+  const datasetOnlyInitialConfigHydratedRef = useRef(false);
+  useEffect(() => {
+    if (!datasetOnly || !propDatasetId || !initialDatasetConfig || typeof initialDatasetConfig !== "object") return;
+    if (datasetOnlyInitialConfigHydratedRef.current) return;
+    datasetOnlyInitialConfigHydratedRef.current = true;
+
+    const cfgObj = initialDatasetConfig;
+    if (typeof cfgObj.grainOption === "string") setGrainOption(cfgObj.grainOption as string);
+    if (Array.isArray(cfgObj.grainCustomColumns)) setGrainCustomColumns(cfgObj.grainCustomColumns as string[]);
+    if (typeof cfgObj.datasetHasTime === "boolean") setDatasetHasTime(cfgObj.datasetHasTime);
+    if (typeof cfgObj.timeColumn === "string") setTimeColumn(cfgObj.timeColumn as string);
+    if (typeof cfgObj.periodicity === "string") setPeriodicity(cfgObj.periodicity as string);
+    if (cfgObj.periodicityOverrides != null && typeof cfgObj.periodicityOverrides === "object") {
+      setPeriodicityOverrides(cfgObj.periodicityOverrides as Record<string, string>);
+    }
+    if (cfgObj.columnRoles && typeof cfgObj.columnRoles === "object") {
+      setColumnRoles(cfgObj.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>);
+    }
+    if (Array.isArray(cfgObj.datasetRelations)) setDatasetRelations(cfgObj.datasetRelations as DatasetRelation[]);
+
+    const derivedRaw = cfgObj.derivedColumns ?? cfgObj.derived_columns;
+    if (Array.isArray(derivedRaw)) {
+      const nextDerived: DerivedColumn[] = derivedRaw
+        .filter((d) => d && typeof d === "object")
+        .map((d) => {
+          const obj = d as Record<string, unknown>;
+          const name = typeof obj.name === "string" ? obj.name : "";
+          const expression = typeof obj.expression === "string" ? obj.expression : "";
+          const defaultAggregation =
+            typeof obj.defaultAggregation === "string"
+              ? obj.defaultAggregation
+              : typeof obj.default_aggregation === "string"
+                ? obj.default_aggregation
+                : "SUM";
+          return { name, expression, defaultAggregation };
+        })
+        .filter((d) => d.name && d.expression);
+      setDerivedColumns(nextDerived);
+    }
+  }, [datasetOnly, propDatasetId, initialDatasetConfig]);
 
   /** Construye el objeto completo de configuración del dataset desde el estado actual (para persistir y reutilizar). */
   const buildFullDatasetConfig = useCallback((): Record<string, unknown> => {
@@ -1029,6 +1079,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           datasetConfig,
+          ...(propDatasetId && { datasetId: propDatasetId }),
           ...(datasetName.trim() && { datasetName: datasetName.trim() }),
         }),
       });
@@ -1058,7 +1109,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     } finally {
       setSavingDatasetConfig(false);
     }
-  }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName, onDatasetSaved]);
+  }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName, onDatasetSaved, propDatasetId]);
 
   const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
 
