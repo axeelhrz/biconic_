@@ -40,6 +40,7 @@ import {
   type LoadPreviewWidgetDataParams,
 } from "@/lib/dashboard/previewWidgetDataLoader";
 import { runWithConcurrency } from "@/lib/async/runWithConcurrency";
+import { isSupersededFetchError } from "@/lib/fetch/abortError";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
 import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2 } from "lucide-react";
@@ -570,6 +571,7 @@ export function DashboardViewer({
   const stateRef = useRef({ widgets, setWidgets });
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
+  const widgetFetchAbortRef = useRef<Record<string, AbortController>>({});
   const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalysisForMerge[]>([]);
   const [savedMetricsFromEtl, setSavedMetricsFromEtl] = useState<SavedMetricForAnalysisMerge[]>([]);
   const [derivedColumnsFromEtl, setDerivedColumnsFromEtl] = useState<
@@ -890,6 +892,9 @@ export function DashboardViewer({
       genMap[widgetId] = (genMap[widgetId] ?? 0) + 1;
       const myGen = genMap[widgetId]!;
       const isStale = () => widgetLoadGenRef.current[widgetId] !== myGen;
+      widgetFetchAbortRef.current[widgetId]?.abort();
+      const loadAbort = new AbortController();
+      widgetFetchAbortRef.current[widgetId] = loadAbort;
 
       const etlId = (etlData as any)?.etl?.id;
       let fullTableName = getTableNameForWidget(widget);
@@ -1241,6 +1246,7 @@ export function DashboardViewer({
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
             rawLimit: 500,
             accentColor: chartAccent,
+            fetchSignal: loadAbort.signal,
           });
 
           if (isStale()) return;
@@ -1316,6 +1322,7 @@ export function DashboardViewer({
             rawLimit: 500,
             accentColor: chartAccent,
             rawExtraPayload: rawPayload,
+            fetchSignal: loadAbort.signal,
           });
 
           if (isStale()) return;
@@ -1357,7 +1364,8 @@ export function DashboardViewer({
             );
           }
         }
-      } catch {
+      } catch (err) {
+        if (isStale() || isSupersededFetchError(err)) return;
         if (!isStale()) {
           setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
         }

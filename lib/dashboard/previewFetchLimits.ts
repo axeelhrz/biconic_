@@ -14,7 +14,7 @@ export const PREVIEW_FETCH_LIMITS = {
 } as const;
 
 export type PreviewAggregateFetchPlan = {
-  unlimited: boolean;
+  unlimited?: boolean;
   limit?: number;
   orderBy?: { field: string; direction: "ASC" | "DESC" };
 };

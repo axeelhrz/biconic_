@@ -48,6 +48,7 @@ import {
 import type { ChartLabelDisplayMode, ChartPercentBasis, ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
 import { runWithConcurrency } from "@/lib/async/runWithConcurrency";
+import { formatFetchErrorMessage, isSupersededFetchError } from "@/lib/fetch/abortError";
 import { DashboardCompareDefaultsSection } from "@/components/admin/dashboard/DashboardCompareDefaultsSection";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
@@ -508,6 +509,7 @@ export function AdminDashboardStudio({
   const filtersDataKeyRef = useRef<string | null>(null);
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
+  const widgetFetchAbortRef = useRef<Record<string, AbortController>>({});
   const layoutHydratedForAnalysisRef = useRef(false);
   const widgetsRef = useRef<StudioWidget[]>([]);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -883,6 +885,9 @@ export function AdminDashboardStudio({
       genMap[widgetId] = (genMap[widgetId] ?? 0) + 1;
       const myGen = genMap[widgetId]!;
       const isStale = () => widgetLoadGenRef.current[widgetId] !== myGen;
+      widgetFetchAbortRef.current[widgetId]?.abort();
+      const loadAbort = new AbortController();
+      widgetFetchAbortRef.current[widgetId] = loadAbort;
       if (effectiveWidget.type === "image" || effectiveWidget.type === "text") {
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...effectiveWidget, isLoading: false } : w)));
         return;
@@ -1258,6 +1263,7 @@ export function AdminDashboardStudio({
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,
             accentColor: (widget as { color?: string }).color ?? "",
+            fetchSignal: loadAbort.signal,
           });
           if (isStale()) return;
           if (!loaded.hasData) {
@@ -1321,6 +1327,7 @@ export function AdminDashboardStudio({
             rawLimit: 500,
             accentColor: (widget as { color?: string }).color ?? "",
             rawExtraPayload: rawPayload,
+            fetchSignal: loadAbort.signal,
           });
           if (isStale()) return;
           if (!loaded.hasData) {
@@ -1356,10 +1363,10 @@ export function AdminDashboardStudio({
           }
         }
       } catch (err) {
-        if (!isStale()) {
-          toast.error(err instanceof Error ? err.message : "Error al cargar datos");
-          setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
-        }
+        if (isStale() || isSupersededFetchError(err)) return;
+        const message = formatFetchErrorMessage(err, "Error al cargar datos del gráfico");
+        if (message) toast.error(message);
+        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
     [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, savedAnalyses, activePageId, dashboardCompareDefaults]
