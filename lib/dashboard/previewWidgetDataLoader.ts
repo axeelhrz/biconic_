@@ -94,9 +94,11 @@ type SavedMetricLike = {
 import { getDataEndpoints } from "@/lib/api/endpoints";
 import { isAbortError, SupersededFetchError } from "@/lib/fetch/abortError";
 
-const PREVIEW_FETCH_TIMEOUT_MS = 45_000;
-const PREVIEW_FETCH_TIMEOUT_MAP_MS = 90_000;
-const PREVIEW_FETCH_TIMEOUT_SERIES_MS = 60_000;
+// Deben quedar por debajo del maxDuration configurado en vercel.json para estas rutas,
+// así el usuario ve un mensaje de error claro en vez de un FUNCTION_INVOCATION_TIMEOUT crudo.
+const PREVIEW_FETCH_TIMEOUT_MS = 35_000;
+const PREVIEW_FETCH_TIMEOUT_MAP_MS = 45_000;
+const PREVIEW_FETCH_TIMEOUT_SERIES_MS = 40_000;
 
 function resolvePreviewFetchTimeoutMs(chartType: string): number {
   const type = chartType.trim().toLowerCase();

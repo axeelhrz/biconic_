@@ -34,6 +34,14 @@ const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 const NOMINATIM_TIMEOUT_MS = 7000;
 const NOMINATIM_MIN_INTERVAL_MS = 1100;
 const MAX_GEOCODE_ROWS = 500;
+/**
+ * Tope de tiempo dedicado a geocodificar ubicaciones NUEVAS (sin caché) en una sola request.
+ * Nominatim limita a ~1 req/seg, así que muchas ubicaciones nuevas pueden tardar minutos; sin este
+ * presupuesto el handler excede el timeout de la función serverless (FUNCTION_INVOCATION_TIMEOUT).
+ * Las ubicaciones que no llegan a resolverse quedan marcadas y se resuelven en cargas siguientes
+ * gracias al caché que se va completando.
+ */
+const GEOCODE_TIME_BUDGET_MS = 15000;
 
 let lastNominatimCallAt = 0;
 let ensureTablePromise: Promise<void> | null = null;
@@ -466,6 +474,7 @@ export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Prom
   const restRows = rows.slice(MAX_GEOCODE_ROWS);
   const enriched: Record<string, unknown>[] = [];
   const geocodeInFlight = new Map<string, Promise<GeocodeResult | null>>();
+  const geoStartedAt = Date.now();
 
   const resolveCoordinatesDeduped = (
     parts: GeoComponent,
@@ -538,6 +547,18 @@ export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Prom
             restrictResultsToArgentinaBBox: argentinaMode && nominatimCc === "ar",
           }
         : undefined;
+
+    const budgetCc = resolveCtx?.nominatimCountryCodes?.trim().toLowerCase();
+    const budgetBaseKey = buildCacheKey(withCountry);
+    const budgetCacheKey = budgetCc ? `${budgetBaseKey}|cc:${budgetCc}` : budgetBaseKey;
+    const isNewLookup = !geocodeInFlight.has(budgetCacheKey);
+    if (isNewLookup && Date.now() - geoStartedAt > GEOCODE_TIME_BUDGET_MS) {
+      r.__geo_resolved = false;
+      r.__geo_source = "skipped_time_budget";
+      r.__geo_label = label ?? buildGeoQueryCandidates(withCountry)[0] ?? "";
+      enriched.push(r);
+      continue;
+    }
 
     const resolved = await resolveCoordinatesDeduped(withCountry, resolveCtx);
     if (resolved) {

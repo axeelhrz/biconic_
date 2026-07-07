@@ -555,6 +555,10 @@ export function DashboardViewer({
     Record<string, Record<string, unknown>>
   >({});
   const [dimensionDefaultDistinctValues, setDimensionDefaultDistinctValues] = useState<Record<string, unknown[]>>({});
+  /** Evita recargar todos los widgets dos veces al montar (una vez con config base, otra al llegar savedAnalyses/filtros). */
+  const [etlMetricsReady, setEtlMetricsReady] = useState(false);
+  const filtersReloadKeyRef = useRef<string | null>(null);
+  const initialLoadedRef = useRef(false);
   const canvasExportRef = useRef<HTMLDivElement>(null);
   const exportRootRef = useRef<HTMLDivElement>(null);
   const [exportBusy, setExportBusy] = useState(false);
@@ -807,7 +811,10 @@ export function DashboardViewer({
     const etlIds = new Set<string>();
     if ((etlData as { etl?: { id?: string } }).etl?.id) etlIds.add((etlData as { etl: { id: string } }).etl.id);
     (etlData as { dataSources?: { etlId: string }[] }).dataSources?.forEach((s) => etlIds.add(s.etlId));
-    if (etlIds.size === 0) return;
+    if (etlIds.size === 0) {
+      setEtlMetricsReady(true);
+      return;
+    }
     etlMetricsFetchedRef.current = true;
     let cancelled = false;
     (async () => {
@@ -848,6 +855,7 @@ export function DashboardViewer({
           return newOnes.length > 0 ? [...prev, ...newOnes] : prev.length > 0 ? prev : allDerived;
         });
       }
+      setEtlMetricsReady(true);
     })();
     return () => {
       cancelled = true;
@@ -859,6 +867,8 @@ export function DashboardViewer({
     setSavedAnalyses([]);
     setSavedMetricsFromEtl([]);
     setDerivedColumnsFromEtl([]);
+    setEtlMetricsReady(false);
+    filtersReloadKeyRef.current = null;
   }, [dashboardId]);
 
   const getTableNameForWidget = useCallback(
@@ -1391,7 +1401,9 @@ export function DashboardViewer({
   );
 
   useEffect(() => {
-    if (!etlData || savedAnalyses.length === 0 || widgets.length === 0) return;
+    // Solo recarga por cambios de savedAnalyses/savedMetrics POSTERIORES a la carga inicial:
+    // la primera carga (initialLoadedRef) ya espera a etlMetricsReady, así que no hace falta duplicarla aquí.
+    if (!initialLoadedRef.current || !etlData || savedAnalyses.length === 0 || widgets.length === 0) return;
     const timer = window.setTimeout(() => {
       void loadWidgetsWithConcurrency(
         collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
@@ -1410,6 +1422,15 @@ export function DashboardViewer({
 
   useEffect(() => {
     if (!etlData || widgets.length === 0) return;
+    // Ignora el primer valor (seed inicial de filtros/dimension defaults al montar): sólo recarga
+    // ante cambios reales del usuario, para no duplicar la carga inicial de widgets.
+    const key = JSON.stringify({ f: filtersForDataLoad, d: dimensionDefaultFilterValues });
+    if (filtersReloadKeyRef.current === null) {
+      filtersReloadKeyRef.current = key;
+      return;
+    }
+    if (filtersReloadKeyRef.current === key) return;
+    filtersReloadKeyRef.current = key;
     const timer = setTimeout(() => {
       void loadWidgetsWithConcurrency(
         collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
@@ -1417,7 +1438,7 @@ export function DashboardViewer({
       );
     }, 300);
     return () => clearTimeout(timer);
-  }, [filtersForDataLoad, dimensionDefaultFilterValues, loadDataForWidget, etlData, pageLayout]);
+  }, [filtersForDataLoad, dimensionDefaultFilterValues, loadDataForWidget, etlData, pageLayout, widgets.length]);
 
   useEffect(() => {
     const dataSources = (etlData as { dataSources?: { id: string; schema?: string; tableName?: string }[] } | undefined)
@@ -1472,13 +1493,12 @@ export function DashboardViewer({
     };
   }, [etlData, widgets, apiEndpoints?.distinctValues]);
 
-  const initialLoadedRef = useRef(false);
   useEffect(() => {
-    if (!initialLoadedRef.current && widgets.length > 0 && etlData) {
+    if (!initialLoadedRef.current && widgets.length > 0 && etlData && etlMetricsReady) {
       initialLoadedRef.current = true;
       reloadAll();
     }
-  }, [widgets, etlData, reloadAll]);
+  }, [widgets, etlData, etlMetricsReady, reloadAll]);
 
   useEffect(() => {
     initialLoadedRef.current = false;
