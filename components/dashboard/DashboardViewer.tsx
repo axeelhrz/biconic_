@@ -489,7 +489,7 @@ const WIDGET_LOAD_CONCURRENCY = 3;
 
 function collectLoadableWidgetIds(
   widgets: Widget[],
-  pageLayout?: { firstPageId: string; activePageId: string }
+  pageLayout?: { firstPageId: string; activePageId: string } | null
 ): string[] {
   return widgets
     .filter((w) => w.type !== "filter" && w.type !== "text" && w.type !== "image")
