@@ -47,6 +47,7 @@ import {
 } from "@/lib/dashboard/buildChartConfig";
 import type { ChartLabelDisplayMode, ChartPercentBasis, ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
+import { runWithConcurrency } from "@/lib/async/runWithConcurrency";
 import { DashboardCompareDefaultsSection } from "@/components/admin/dashboard/DashboardCompareDefaultsSection";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
@@ -1219,7 +1220,6 @@ export function AdminDashboardStudio({
             savedMetrics: savedByLinkedIds.length > 0 ? savedByLinkedIds : savedMetrics,
             metricsOverride: metricsPayload as Parameters<typeof buildAggregateRequestPayload>[0]["metricsOverride"],
             derivedColumns: derivedColumnsFromLayout.length > 0 ? derivedColumnsFromLayout : undefined,
-            forceUnlimited: true,
           });
           setWidgets((prev) =>
             prev.map((w) =>
@@ -1570,7 +1570,7 @@ export function AdminDashboardStudio({
     (async () => {
       setIsRunning(true);
       try {
-        await Promise.all(toLoad.map((w) => loadMetricData(w.id)));
+        await runWithConcurrency(toLoad, 3, (w) => loadMetricData(w.id));
       } finally {
         setIsRunning(false);
       }

@@ -39,6 +39,7 @@ import {
   loadPreviewWidgetData,
   type LoadPreviewWidgetDataParams,
 } from "@/lib/dashboard/previewWidgetDataLoader";
+import { runWithConcurrency } from "@/lib/async/runWithConcurrency";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
 import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2 } from "lucide-react";
@@ -482,6 +483,26 @@ function widgetMatchesActivePage(
     return true;
   }
   return false;
+}
+
+const WIDGET_LOAD_CONCURRENCY = 3;
+
+function collectLoadableWidgetIds(
+  widgets: Widget[],
+  pageLayout?: { firstPageId: string; activePageId: string }
+): string[] {
+  return widgets
+    .filter((w) => w.type !== "filter" && w.type !== "text" && w.type !== "image")
+    .filter((w) => !pageLayout || widgetMatchesActivePage(w, pageLayout))
+    .map((w) => w.id);
+}
+
+async function loadWidgetsWithConcurrency(
+  widgetIds: string[],
+  loadOne: (widgetId: string) => Promise<void>
+): Promise<void> {
+  if (widgetIds.length === 0) return;
+  await runWithConcurrency(widgetIds, WIDGET_LOAD_CONCURRENCY, (id) => loadOne(id));
 }
 
 export interface DashboardViewerProps {
@@ -1364,31 +1385,28 @@ export function DashboardViewer({
   useEffect(() => {
     if (!etlData || savedAnalyses.length === 0 || widgets.length === 0) return;
     const timer = window.setTimeout(() => {
-      stateRef.current.widgets.forEach((w) => {
-        if (w.type === "filter" || w.type === "text" || w.type === "image") return;
-        if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
-        loadDataForWidget(w.id);
-      });
+      void loadWidgetsWithConcurrency(
+        collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
+        loadDataForWidget
+      );
     }, 150);
     return () => window.clearTimeout(timer);
   }, [savedAnalyses, savedMetricsFromEtl, etlData, pageLayout, loadDataForWidget, widgets.length]);
 
   const reloadAll = useCallback(() => {
-    stateRef.current.widgets.forEach((w) => {
-      if (w.type === "filter" || w.type === "text" || w.type === "image") return;
-      if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
-      loadDataForWidget(w.id);
-    });
+    void loadWidgetsWithConcurrency(
+      collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
+      loadDataForWidget
+    );
   }, [loadDataForWidget, pageLayout]);
 
   useEffect(() => {
     if (!etlData || widgets.length === 0) return;
     const timer = setTimeout(() => {
-      stateRef.current.widgets.forEach((w) => {
-        if (w.type === "filter" || w.type === "text" || w.type === "image") return;
-        if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
-        loadDataForWidget(w.id);
-      });
+      void loadWidgetsWithConcurrency(
+        collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
+        loadDataForWidget
+      );
     }, 300);
     return () => clearTimeout(timer);
   }, [filtersForDataLoad, dimensionDefaultFilterValues, loadDataForWidget, etlData, pageLayout]);

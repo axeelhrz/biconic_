@@ -1163,11 +1163,14 @@ export async function runAggregateData(
     }
 
     const SAFETY_MAX_ROWS = 500_000;
+    const DEFAULT_AGGREGATE_LIMIT = 5000;
     if (body.unlimited === true) {
       query += ` LIMIT ${SAFETY_MAX_ROWS}`;
     } else if (body.limit != null && body.limit > 0) {
-      const lim = Math.max(1, Math.min(SAFETY_MAX_ROWS, parseInt(String(body.limit), 10) || 5000));
+      const lim = Math.max(1, Math.min(SAFETY_MAX_ROWS, parseInt(String(body.limit), 10) || DEFAULT_AGGREGATE_LIMIT));
       query += ` LIMIT ${lim}`;
+    } else {
+      query += ` LIMIT ${DEFAULT_AGGREGATE_LIMIT}`;
     }
 
     // 5b. Fórmulas derivadas: subquery y columnas calculadas (permite metric_N y alias de otras métricas; solo caracteres seguros)
@@ -1388,9 +1391,7 @@ export async function runAggregateData(
           })
         : comparedResults;
 
-    const shouldEnrichGeo =
-      requestedChartType === "map" ||
-      /\b(lat|lon|lng|geo|country|pais|ciudad|city|localidad|provincia|estado)\b/i.test(dimList.join(" "));
+    const shouldEnrichGeo = requestedChartType === "map";
     const cacheClient = deps.geoCacheClient ?? null;
     const geoReadyRows = shouldEnrichGeo
       ? await enrichRowsWithGeo({

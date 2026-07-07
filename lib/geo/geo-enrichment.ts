@@ -465,6 +465,22 @@ export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Prom
   const limitedRows = rows.slice(0, MAX_GEOCODE_ROWS);
   const restRows = rows.slice(MAX_GEOCODE_ROWS);
   const enriched: Record<string, unknown>[] = [];
+  const geocodeInFlight = new Map<string, Promise<GeocodeResult | null>>();
+
+  const resolveCoordinatesDeduped = (
+    parts: GeoComponent,
+    resolveCtx: ResolveGeoContext | undefined
+  ): Promise<GeocodeResult | null> => {
+    const cc = resolveCtx?.nominatimCountryCodes?.trim().toLowerCase();
+    const baseKey = buildCacheKey(parts);
+    if (!baseKey.replace(/\|/g, "")) return Promise.resolve(null);
+    const cacheKey = cc ? `${baseKey}|cc:${cc}` : baseKey;
+    const existing = geocodeInFlight.get(cacheKey);
+    if (existing) return existing;
+    const pending = resolveCoordinates(parts, cacheClient, resolveCtx);
+    geocodeInFlight.set(cacheKey, pending);
+    return pending;
+  };
 
   for (const row of limitedRows) {
     const r = { ...row } as Record<string, unknown>;
@@ -523,7 +539,7 @@ export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Prom
           }
         : undefined;
 
-    const resolved = await resolveCoordinates(withCountry, cacheClient, resolveCtx);
+    const resolved = await resolveCoordinatesDeduped(withCountry, resolveCtx);
     if (resolved) {
       r.__geo_lat = resolved.lat;
       r.__geo_lon = resolved.lon;

@@ -2237,8 +2237,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           : useAnalysisConfig && dg?.defaultTemporalOrderBy
             ? dg.defaultTemporalOrderBy
             : undefined,
-        unlimited: true,
-        ...(formLimit != null && formLimit > 0 ? { limit: formLimit } : {}),
+        ...(formChartType === "map"
+          ? { limit: 500 }
+          : {
+              unlimited: true,
+              ...(formLimit != null && formLimit > 0 ? { limit: formLimit } : {}),
+            }),
       };
       if (derivedToSend.length > 0) {
         body.derivedColumns = derivedToSend.map((d) => ({

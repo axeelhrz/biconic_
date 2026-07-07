@@ -268,7 +268,6 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       savedMetrics,
       metricsOverride,
       derivedColumns,
-      forceUnlimited: true,
       skipTemporalFilterExpand: useDualQuery && compareContexts.comparable,
     };
 
