@@ -558,6 +558,7 @@ export function DashboardViewer({
   /** Evita recargar todos los widgets dos veces al montar (una vez con config base, otra al llegar savedAnalyses/filtros). */
   const [etlMetricsReady, setEtlMetricsReady] = useState(false);
   const filtersReloadKeyRef = useRef<string | null>(null);
+  const savedAnalysesReloadKeyRef = useRef<string | null>(null);
   const initialLoadedRef = useRef(false);
   const canvasExportRef = useRef<HTMLDivElement>(null);
   const exportRootRef = useRef<HTMLDivElement>(null);
@@ -869,6 +870,7 @@ export function DashboardViewer({
     setDerivedColumnsFromEtl([]);
     setEtlMetricsReady(false);
     filtersReloadKeyRef.current = null;
+    savedAnalysesReloadKeyRef.current = null;
   }, [dashboardId]);
 
   const getTableNameForWidget = useCallback(
@@ -1401,9 +1403,17 @@ export function DashboardViewer({
   );
 
   useEffect(() => {
-    // Solo recarga por cambios de savedAnalyses/savedMetrics POSTERIORES a la carga inicial:
-    // la primera carga (initialLoadedRef) ya espera a etlMetricsReady, así que no hace falta duplicarla aquí.
+    // Solo recarga por cambios de CONTENIDO de savedAnalyses/savedMetrics posteriores a la carga inicial.
+    // `loadDataForWidget` cambia de identidad con cada cambio de filtro (depende de filtersForDataLoad),
+    // así que sin esta comparación por contenido este efecto también dispararía una recarga extra al
+    // aplicar filtros, duplicando la del efecto de filtros de más abajo.
     if (!initialLoadedRef.current || !etlData || savedAnalyses.length === 0 || widgets.length === 0) return;
+    const key = JSON.stringify({ a: savedAnalyses, m: savedMetricsFromEtl });
+    if (savedAnalysesReloadKeyRef.current === null || savedAnalysesReloadKeyRef.current === key) {
+      savedAnalysesReloadKeyRef.current = key;
+      return;
+    }
+    savedAnalysesReloadKeyRef.current = key;
     const timer = window.setTimeout(() => {
       void loadWidgetsWithConcurrency(
         collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
