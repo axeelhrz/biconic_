@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { shouldUseOwnBackend } from "@/lib/api/backend-proxy";
-import { parseComparativeFieldMapping } from "@/lib/dataset/comparativeRelation";
+import { parseComparativeFieldMapping, type ComparativeFieldMapping } from "@/lib/dataset/comparativeRelation";
 import { validateComparativeRelation } from "@/lib/dataset/validateComparativeRelation";
 
 export async function POST(req: NextRequest) {
@@ -22,10 +22,10 @@ export async function POST(req: NextRequest) {
     const comparativeDatasetId =
       typeof body.comparativeDatasetId === "string" ? body.comparativeDatasetId.trim() : "";
 
-    const fieldMappings = Array.isArray(body.fieldMappings)
+    const fieldMappings: ComparativeFieldMapping[] = Array.isArray(body.fieldMappings)
       ? body.fieldMappings
           .map(parseComparativeFieldMapping)
-          .filter((m): m is NonNullable<ReturnType<typeof parseComparativeFieldMapping>> => m != null)
+          .filter((m: ComparativeFieldMapping | null): m is ComparativeFieldMapping => m != null)
       : [];
 
     if (!baseDatasetId || !comparativeDatasetId || fieldMappings.length === 0) {

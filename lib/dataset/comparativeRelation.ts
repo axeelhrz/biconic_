@@ -60,7 +60,7 @@ export function detectComparativeValueType(
   columnName: string,
   sampleValues?: unknown[]
 ): ComparativeValueType {
-  const format = inferFormatForColumn(columnName, sampleValues);
+  const format = inferFormatForColumn(columnName, "Número", sampleValues ?? []);
   if (format === "percent") return "percent";
   return "absolute";
 }
@@ -76,7 +76,7 @@ export function isComparativeMeasureCandidate(params: {
   if (inferredType === "Número" || inferredType === "number") {
     if (format === "percent" || format === "currency" || format === "number" || !format) return true;
   }
-  const detected = inferFormatForColumn(columnName);
+  const detected = inferFormatForColumn(columnName, "Número", []);
   return detected === "percent" || detected === "currency" || detected === "number";
 }
 

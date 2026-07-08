@@ -98,7 +98,7 @@ export function ComparativeRelationWizard({
     } finally {
       setCompFieldsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (editing?.comparativeDatasetId && editing.comparativeDatasetId) {

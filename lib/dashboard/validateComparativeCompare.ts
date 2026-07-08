@@ -36,12 +36,14 @@ export function validateComparativeCompare(params: {
     return { level: "ok", messages };
   }
 
+  const compare = params.compare;
+
   if (!params.relation) {
     return { level: "blocked", messages: ["La relación comparativa seleccionada no existe en el dataset base."] };
   }
 
   const field = params.relation.comparativeFields.find(
-    (f) => f.column === params.compare.comparativeField
+    (f) => f.column === compare.comparativeField
   );
   if (!field) {
     return {

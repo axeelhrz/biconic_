@@ -434,6 +434,7 @@ const COMPARE_KIND_LABELS: Record<Exclude<CompareSpec["kind"], "none">, string> 
   average: "Vs promedio",
   total_share: "% del total",
   cumulative: "Acumulado / YTD",
+  comparative: "Relación comparativa",
 };
 
 export function compareKindBadgeLabel(compare: CompareSpec): string | null {
