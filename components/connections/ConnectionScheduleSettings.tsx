@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/Select";
 import { Clock, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { ETL_SCHEDULE_FREQUENCIES } from "@/lib/etl/schedule";
+import { ETL_SCHEDULE_FREQUENCIES, formatScheduleDateTime } from "@/lib/etl/schedule";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 
 export type ConnectionScheduleSettingsProps = {
@@ -94,17 +94,7 @@ export default function ConnectionScheduleSettings({
 
   const formatLastRun = (iso: string | null) => {
     if (!iso) return "—";
-    try {
-      return new Date(iso).toLocaleString("es-AR", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    } catch {
-      return iso;
-    }
+    return formatScheduleDateTime(iso);
   };
 
   const excel = isExcelType(connectionType);
@@ -124,8 +114,8 @@ export default function ConnectionScheduleSettings({
         </h3>
         <p className="text-xs mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>
           {excel
-            ? "Programá con qué frecuencia se vuelve a importar el archivo y se ejecutan los ETL vinculados."
-            : "Programá con qué frecuencia se ejecutan los ETL vinculados para traer datos nuevos de esta conexión."}
+            ? "Programá con qué frecuencia se vuelve a importar el archivo y se ejecutan los ETL vinculados. Horarios en Argentina (ART)."
+            : "Programá con qué frecuencia se ejecutan los ETL vinculados para traer datos nuevos de esta conexión. Horarios en Argentina (ART)."}
         </p>
       </div>
 

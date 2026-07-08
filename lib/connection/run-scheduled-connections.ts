@@ -120,13 +120,14 @@ async function triggerEtlRun(
     waitForCompletion: false,
   };
 
-  const baseUrl = getAppBaseUrl();
-
-  const res = await fetch(`${baseUrl}/api/etl/run`, {
+  // Preferir backend Nest directo (Railway) con secret; evita proxy Next sin auth.
+  const backendUrl = getBackendApiUrl();
+  const res = await fetch(`${backendUrl}/etl/run`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-cron-secret": cronSecret,
+      Authorization: `Bearer ${cronSecret}`,
     },
     body: JSON.stringify(body),
   });

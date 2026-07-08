@@ -21,6 +21,16 @@ export async function proxyToBackend(
   const authorization = req.headers.get("authorization");
   if (authorization) headers.set("authorization", authorization);
 
+  // El cron de Vercel / runners programados autenticán con x-cron-secret hacia /api/etl/run.
+  const cronSecret = req.headers.get("x-cron-secret");
+  if (cronSecret) headers.set("x-cron-secret", cronSecret);
+
+  const internalEtl = req.headers.get("x-internal-etl");
+  if (internalEtl) headers.set("x-internal-etl", internalEtl);
+
+  const internalExcel = req.headers.get("x-internal-process-excel");
+  if (internalExcel) headers.set("x-internal-process-excel", internalExcel);
+
   const method = init?.method ?? req.method;
   let body: BodyInit | undefined = init?.body as BodyInit | undefined;
   if (!body && method !== "GET" && method !== "HEAD") {

@@ -61,7 +61,31 @@ export function formatScheduleLabel(frequency: string | null | undefined): strin
   return ETL_SCHEDULE_FREQUENCIES.find((x) => x.value === f)?.label ?? f;
 }
 
-/** Texto para UI de tarjetas (próxima ejecución). */
+/** Zona horaria de negocio para mostrar horarios de programación (Argentina). */
+export const SCHEDULE_DISPLAY_TIMEZONE = "America/Argentina/Buenos_Aires";
+
+export function formatScheduleDateTime(
+  date: Date | string,
+  locale = "es-AR",
+  timeZone = SCHEDULE_DISPLAY_TIMEZONE
+): string {
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return "—";
+  try {
+    return d.toLocaleString(locale, {
+      timeZone,
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return d.toISOString();
+  }
+}
+
+/** Texto para UI de tarjetas (próxima ejecución) — siempre en hora Argentina. */
 export function formatNextExecutionDisplay(
   lastRunAt: string | null | undefined,
   frequency: string | null | undefined,
@@ -71,17 +95,7 @@ export function formatNextExecutionDisplay(
   if (!f) return "Manual";
   const next = computeNextRunAt(lastRunAt, f);
   if (!next) return "—";
-  try {
-    return next.toLocaleString(locale, {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return next.toISOString();
-  }
+  return formatScheduleDateTime(next, locale);
 }
 
 export function parseScheduleFromLayout(layout: unknown): EtlSchedule | undefined {

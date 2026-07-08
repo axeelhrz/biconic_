@@ -81,21 +81,118 @@ export class EtlService {
     if (!expected || secret !== expected) {
       return { error: "Unauthorized" };
     }
-    const scheduled = await this.db.query<{ id: string; user_id: string }>(
-      `SELECT id, user_id FROM public.etl
-       WHERE (layout->>'schedule_enabled')::boolean = true
-       LIMIT 50`
+
+    // Misma forma que la UI: layout.guided_config.schedule.{frequency,lastRunAt}
+    const rows = await this.db.query<{
+      id: string;
+      user_id: string;
+      layout: Record<string, unknown> | null;
+    }>(
+      `SELECT id, user_id, layout FROM public.etl
+       WHERE layout->'guided_config'->'schedule'->>'frequency' IS NOT NULL
+         AND trim(layout->'guided_config'->'schedule'->>'frequency') <> ''
+       LIMIT 200`
     );
-    const jobs = [];
-    for (const etl of scheduled) {
+
+    const { getIntervalMs, isDue, ACTIVE_RUN_GUARD_MINUTES } = await import(
+      "@/lib/etl/schedule"
+    );
+
+    const jobs: Array<{ runId: string; status: string; destinationTable: string }> = [];
+    let due = 0;
+    let skippedActive = 0;
+
+    for (const etl of rows) {
+      const guided = (etl.layout?.guided_config ?? {}) as Record<string, unknown>;
+      const schedule = (guided.schedule ?? {}) as {
+        frequency?: string;
+        lastRunAt?: string;
+      };
+      const frequency = String(schedule.frequency ?? "").trim();
+      const intervalMs = getIntervalMs(frequency);
+      if (intervalMs == null) continue;
+      if (!isDue(schedule.lastRunAt, intervalMs)) continue;
+      due++;
+
+      const threshold = new Date(
+        Date.now() - ACTIVE_RUN_GUARD_MINUTES * 60 * 1000
+      ).toISOString();
+      const active = await this.db.queryOne<{ id: string }>(
+        `SELECT id FROM public.etl_runs_log
+         WHERE etl_id = $1
+           AND status IN ('started', 'running')
+           AND started_at >= $2
+         LIMIT 1`,
+        [etl.id, threshold]
+      );
+      if (active) {
+        skippedActive++;
+        continue;
+      }
+
+      let sanitizedJoin = guided.join as Record<string, unknown> | undefined;
+      if (
+        sanitizedJoin &&
+        typeof sanitizedJoin === "object" &&
+        Array.isArray(sanitizedJoin.joins)
+      ) {
+        const validJoins = (sanitizedJoin.joins as Record<string, unknown>[]).filter(
+          (jn) =>
+            !!jn &&
+            typeof jn === "object" &&
+            jn.secondaryConnectionId != null &&
+            String(jn.secondaryConnectionId).trim() !== ""
+        );
+        sanitizedJoin = validJoins.length === 0 ? undefined : { ...sanitizedJoin, joins: validJoins };
+      }
+
+      const body: Record<string, unknown> = {
+        etlId: etl.id,
+        connectionId: guided.connectionId,
+        filter: guided.filter,
+        union: guided.union,
+        ...(sanitizedJoin ? { join: sanitizedJoin } : {}),
+        clean: guided.clean,
+        end: guided.end,
+        schedule: guided.schedule,
+        waitForCompletion: false,
+        scheduled: true,
+      };
+
       const result = await this.enqueueRun({
         etlId: etl.id,
         userId: etl.user_id,
-        body: { scheduled: true },
+        body,
       });
       jobs.push(result);
+
+      // Marca lastRunAt al encolar para no re-disparar en el próximo tick del cron.
+      try {
+        await this.db.query(
+          `UPDATE public.etl
+           SET layout = jsonb_set(
+             COALESCE(layout, '{}'::jsonb),
+             '{guided_config,schedule,lastRunAt}',
+             to_jsonb($2::text),
+             true
+           )
+           WHERE id = $1`,
+          [etl.id, new Date().toISOString()]
+        );
+      } catch (err) {
+        console.warn(`[runScheduled] no se pudo actualizar lastRunAt de ${etl.id}:`, err);
+      }
     }
+
     const connections = await runScheduledConnections(secret);
-    return { enqueued: jobs.length, jobs, connections };
+    return {
+      ok: true,
+      due,
+      triggered: jobs.length,
+      skippedActive,
+      enqueued: jobs.length,
+      jobs,
+      connections,
+    };
   }
 }

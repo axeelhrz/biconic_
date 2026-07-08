@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/Select";
 import { Clock, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { ETL_SCHEDULE_FREQUENCIES } from "@/lib/etl/schedule";
+import { ETL_SCHEDULE_FREQUENCIES, formatScheduleDateTime } from "@/lib/etl/schedule";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 
 export type EtlScheduleSettingsProps = {
@@ -120,17 +120,7 @@ export default function EtlScheduleSettings({
 
   const formatLastRun = (iso: string | null) => {
     if (!iso) return "—";
-    try {
-      return new Date(iso).toLocaleString("es-AR", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    } catch {
-      return iso;
-    }
+    return formatScheduleDateTime(iso);
   };
 
   return (
@@ -145,7 +135,7 @@ export default function EtlScheduleSettings({
             Actualización automática
           </h3>
           <p className="text-xs mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>
-            Programá con qué frecuencia el sistema traerá los nuevos registros de la base del cliente.
+            Programá con qué frecuencia el sistema traerá los nuevos registros de la base del cliente. Horarios en Argentina (ART).
           </p>
         </div>
         {showEditFlowLink && !embedded && (

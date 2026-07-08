@@ -71,7 +71,11 @@ async function runScheduled() {
   const baseUrl = process.env.VERCEL_URL
     ? `https://${process.env.VERCEL_URL}`
     : process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  const runUrl = `${baseUrl}/api/etl/run`;
+  // Preferir backend Nest (misma lógica/auth de cron) cuando existe API_URL.
+  const { getBackendApiUrl, shouldUseOwnBackend } = await import("@/lib/api/backend-config");
+  const runUrl = shouldUseOwnBackend()
+    ? `${getBackendApiUrl()}/etl/run`
+    : `${baseUrl}/api/etl/run`;
   const cronSecret = process.env.ETL_SCHEDULER_SECRET || process.env.CRON_SECRET;
   let triggered = 0;
   let skippedActive = 0;
@@ -111,6 +115,7 @@ async function runScheduled() {
         headers: {
           "Content-Type": "application/json",
           "x-cron-secret": cronSecret!,
+          Authorization: `Bearer ${cronSecret}`,
         },
         body: JSON.stringify(body),
       });
