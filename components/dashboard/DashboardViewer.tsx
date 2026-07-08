@@ -43,7 +43,7 @@ import { runWithConcurrency } from "@/lib/async/runWithConcurrency";
 import { isSupersededFetchError } from "@/lib/fetch/abortError";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
-import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2, Search } from "lucide-react";
 import {
   buildFilterSummaryFromGlobals,
   collectExportWidgetTargets,
@@ -324,6 +324,292 @@ function filterRecordsEqualShallowJson(a: Record<string, unknown>, b: Record<str
     if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) return false;
   }
   return true;
+}
+
+function normalizeFilterSearchQuery(q: string): string {
+  return q
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function filterOptionMatchesSearch(label: string, query: string): boolean {
+  const q = normalizeFilterSearchQuery(query);
+  if (!q) return true;
+  return normalizeFilterSearchQuery(label).includes(q);
+}
+
+function optionDisplayLabel(
+  operator: unknown,
+  value: unknown,
+  opts?: { yearMonth?: boolean; day?: boolean }
+): string {
+  if (opts?.yearMonth || isYearMonthOperator(operator)) return yearMonthFilterOptionLabel(value);
+  if (opts?.day || isDayOperator(operator)) return `Día ${value}`;
+  return monthFilterOptionLabel(operator, value);
+}
+
+const filterPopoverPanelStyle: React.CSSProperties = {
+  background: "var(--platform-surface, var(--platform-bg, #fff))",
+  borderColor: "var(--platform-border)",
+  color: "var(--platform-fg)",
+};
+
+const filterTriggerStyle: React.CSSProperties = {
+  borderColor: "var(--platform-border)",
+  color: "var(--platform-fg)",
+  background: "var(--platform-surface, var(--platform-bg))",
+};
+
+function GlobalFilterSearchInput({
+  value,
+  onChange,
+  placeholder = "Buscar…",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div className="relative mb-2">
+      <Search
+        className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 opacity-50"
+        style={{ color: "var(--platform-fg-muted)" }}
+        aria-hidden
+      />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        className="h-8 w-full rounded-md border pl-7 pr-2 text-xs outline-none"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-bg, var(--platform-surface))",
+          color: "var(--platform-fg)",
+        }}
+        onKeyDown={(e) => e.stopPropagation()}
+      />
+    </div>
+  );
+}
+
+function GlobalFilterMultiSelect({
+  label,
+  operator,
+  options,
+  selectedArray,
+  onChangeSelected,
+}: {
+  label: string;
+  operator: unknown;
+  options: unknown[];
+  selectedArray: string[];
+  onChangeSelected: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(() => {
+    return options.filter((v) =>
+      filterOptionMatchesSearch(optionDisplayLabel(operator, v), search)
+    );
+  }, [options, operator, search]);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setSearch("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 min-w-[10rem] max-w-[14rem] justify-between gap-1 text-xs font-normal rounded-md px-2"
+          style={filterTriggerStyle}
+          aria-haspopup="dialog"
+          aria-label={`${label}: elegir valores`}
+        >
+          <span className="truncate text-left">
+            {globalMultiFilterTriggerLabel(operator, selectedArray, options)}
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-3 border shadow-lg" style={filterPopoverPanelStyle}>
+        <GlobalFilterSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder={`Buscar en ${label}…`}
+        />
+        <div className="flex flex-wrap gap-2 mb-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs rounded-md"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            onClick={() => onChangeSelected(filtered.map(String))}
+          >
+            Seleccionar todo
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs rounded-md"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            onClick={() => onChangeSelected([])}
+          >
+            Deseleccionar todo
+          </Button>
+        </div>
+        <div className="max-h-60 overflow-y-auto flex flex-col gap-1.5 pr-1">
+          {filtered.length === 0 ? (
+            <p className="px-1 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+              Sin coincidencias
+            </p>
+          ) : (
+            filtered.map((v) => {
+              const s = String(v);
+              const checked = selectedArray.includes(s);
+              return (
+                <label
+                  key={s}
+                  className="flex items-center gap-2 cursor-pointer text-xs py-0.5"
+                  style={{ color: "var(--platform-fg)" }}
+                >
+                  <input
+                    type="checkbox"
+                    className="rounded border shrink-0"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    checked={checked}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                        ? selectedArray.includes(s)
+                          ? selectedArray
+                          : [...selectedArray, s]
+                        : selectedArray.filter((x) => x !== s);
+                      onChangeSelected(next);
+                    }}
+                  />
+                  <span>{optionDisplayLabel(operator, v)}</span>
+                </label>
+              );
+            })
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function GlobalFilterSingleSelect({
+  label,
+  operator,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  operator: unknown;
+  options: unknown[];
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const singleLabel = !value ? "Todos" : optionDisplayLabel(operator, value);
+  const filtered = useMemo(() => {
+    return options.filter((v) =>
+      filterOptionMatchesSearch(optionDisplayLabel(operator, v), search)
+    );
+  }, [options, operator, search]);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setSearch("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 min-w-[8rem] max-w-[14rem] justify-between gap-1 text-xs font-normal rounded-md px-2"
+          style={filterTriggerStyle}
+          aria-haspopup="listbox"
+          aria-label={`${label}: ${singleLabel}`}
+        >
+          <span className="truncate text-left">{singleLabel}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 p-2 border shadow-lg" style={filterPopoverPanelStyle}>
+        <GlobalFilterSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder={`Buscar en ${label}…`}
+        />
+        <div className="max-h-60 overflow-y-auto">
+          <button
+            type="button"
+            className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
+            style={{
+              color: "var(--platform-fg)",
+              background:
+                value === ""
+                  ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
+                  : "transparent",
+            }}
+            onClick={() => {
+              onChange("");
+              setOpen(false);
+            }}
+          >
+            Todos
+          </button>
+          {filtered.length === 0 ? (
+            <p className="px-2.5 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+              Sin coincidencias
+            </p>
+          ) : (
+            filtered.map((v) => {
+              const s = String(v);
+              const selected = value === s;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
+                  style={{
+                    color: "var(--platform-fg)",
+                    background: selected
+                      ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
+                      : "transparent",
+                  }}
+                  onClick={() => {
+                    onChange(s);
+                    setOpen(false);
+                  }}
+                >
+                  {optionDisplayLabel(operator, v)}
+                </button>
+              );
+            })
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 // Types compatible with persisted layout and API
@@ -1895,193 +2181,35 @@ export function DashboardViewer({
               <div key={gf.id} className="flex flex-col gap-1.5 text-sm">
                 <span style={{ color: "var(--platform-fg-muted)" }}>{label}</span>
                 {isMulti && hasOptions ? (
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 min-w-[10rem] max-w-[14rem] justify-between gap-1 text-xs font-normal rounded-md px-2"
-                        style={{
-                          borderColor: "var(--platform-border)",
-                          color: "var(--platform-fg)",
-                          background: "var(--platform-surface, var(--platform-bg))",
-                        }}
-                        aria-haspopup="dialog"
-                        aria-label={`${label}: elegir valores`}
-                      >
-                        <span className="truncate text-left">
-                          {globalMultiFilterTriggerLabel((gf as AggregationFilter).operator, selectedArray, options)}
-                        </span>
-                        <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      align="start"
-                      className="w-72 p-3 border shadow-lg"
-                      style={{
-                        background: "var(--platform-surface, var(--platform-bg, #fff))",
-                        borderColor: "var(--platform-border)",
-                        color: "var(--platform-fg)",
-                      }}
-                    >
-                      <div className="flex flex-wrap gap-2 mb-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs rounded-md"
-                          style={{ borderColor: "var(--platform-border)" }}
-                          onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: [...options].map(String) }))}
-                        >
-                          Seleccionar todo
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs rounded-md"
-                          style={{ borderColor: "var(--platform-border)" }}
-                          onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: [] }))}
-                        >
-                          Deseleccionar todo
-                        </Button>
-                      </div>
-                      <div className="max-h-60 overflow-y-auto flex flex-col gap-1.5 pr-1">
-                        {options.map((v) => {
-                          const s = String(v);
-                          const checked = selectedArray.includes(s);
-                          return (
-                            <label
-                              key={s}
-                              className="flex items-center gap-2 cursor-pointer text-xs py-0.5"
-                              style={{ color: "var(--platform-fg)" }}
-                            >
-                              <input
-                                type="checkbox"
-                                className="rounded border shrink-0"
-                                style={{ borderColor: "var(--platform-border)" }}
-                                checked={checked}
-                                onChange={(e) => {
-                                  setUiFilterValues((prev) => {
-                                    const cur = globalMultiPrevToSelectedStrings(
-                                      (gf as AggregationFilter).operator,
-                                      prev[gf.id]
-                                    );
-                                    const next = e.target.checked
-                                      ? cur.includes(s)
-                                        ? cur
-                                        : [...cur, s]
-                                      : cur.filter((x) => x !== s);
-                                    return { ...prev, [gf.id]: next };
-                                  });
-                                }}
-                              />
-                              <span>
-                                {isYearMonthOp
-                                  ? yearMonthFilterOptionLabel(v)
-                                  : isDayOperator((gf as AggregationFilter).operator)
-                                    ? `Día ${v}`
-                                    : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
+                  <GlobalFilterMultiSelect
+                    label={String(label)}
+                    operator={(gf as AggregationFilter).operator}
+                    options={options as unknown[]}
+                    selectedArray={selectedArray}
+                    onChangeSelected={(next) =>
+                      setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))
+                    }
+                  />
                 ) : (((gf as any).inputType === "select" ||
                   isYearOp ||
                   isYearMonthOp ||
                   (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf)) &&
                   hasOptions) ? (
-                  (() => {
-                    const singleValue = isYearOp
-                      ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
-                      : isYearMonthOp
-                        ? String(uiFilterValues[gf.id] ?? "")
-                        : isDayOperator((gf as AggregationFilter).operator)
-                          ? dayFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
-                          : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id]);
-                    const singleLabel = !singleValue
-                      ? "Todos"
-                      : isYearMonthOp
-                        ? yearMonthFilterOptionLabel(singleValue)
-                        : isDayOperator((gf as AggregationFilter).operator)
-                          ? `Día ${singleValue}`
-                          : monthFilterOptionLabel((gf as AggregationFilter).operator, singleValue);
-                    return (
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 min-w-[8rem] max-w-[14rem] justify-between gap-1 text-xs font-normal rounded-md px-2"
-                            style={{
-                              borderColor: "var(--platform-border)",
-                              color: "var(--platform-fg)",
-                              background: "var(--platform-surface, var(--platform-bg))",
-                            }}
-                            aria-haspopup="listbox"
-                            aria-label={`${label}: ${singleLabel}`}
-                          >
-                            <span className="truncate text-left">{singleLabel}</span>
-                            <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent
-                          align="start"
-                          className="w-56 max-h-72 overflow-y-auto p-1.5 border shadow-lg"
-                          style={{
-                            background: "var(--platform-surface, var(--platform-bg, #fff))",
-                            borderColor: "var(--platform-border)",
-                            color: "var(--platform-fg)",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
-                            style={{
-                              color: "var(--platform-fg)",
-                              background:
-                                singleValue === ""
-                                  ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
-                                  : "transparent",
-                            }}
-                            onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: "" }))}
-                          >
-                            Todos
-                          </button>
-                          {(options as unknown[]).map((v) => {
-                            const s = String(v);
-                            const selected = singleValue === s;
-                            const optLabel = isYearMonthOp
-                              ? yearMonthFilterOptionLabel(v)
-                              : isDayOperator((gf as AggregationFilter).operator)
-                                ? `Día ${v}`
-                                : monthFilterOptionLabel((gf as AggregationFilter).operator, v);
-                            return (
-                              <button
-                                key={s}
-                                type="button"
-                                className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
-                                style={{
-                                  color: "var(--platform-fg)",
-                                  background: selected
-                                    ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
-                                    : "transparent",
-                                }}
-                                onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: s }))}
-                              >
-                                {optLabel}
-                              </button>
-                            );
-                          })}
-                        </PopoverContent>
-                      </Popover>
-                    );
-                  })()
+                  <GlobalFilterSingleSelect
+                    label={String(label)}
+                    operator={(gf as AggregationFilter).operator}
+                    options={options as unknown[]}
+                    value={
+                      isYearOp
+                        ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
+                        : isYearMonthOp
+                          ? String(uiFilterValues[gf.id] ?? "")
+                          : isDayOperator((gf as AggregationFilter).operator)
+                            ? dayFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
+                            : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
+                    }
+                    onChange={(next) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))}
+                  />
                 ) : (
                   <input
                     type={(gf as any).inputType === "number" ? "number" : (gf as any).inputType === "date" ? "date" : "text"}
