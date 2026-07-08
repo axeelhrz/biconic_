@@ -4,8 +4,12 @@ import {
   type DataSourceForDistinct,
 } from "@/lib/dashboard/applyGlobalFiltersToWidget";
 import type { DerivedColumnRef } from "@/lib/dashboard/metricExpressionToSql";
+import {
+  isDashboardDateFilterOperator,
+  looksLikeDateFieldName,
+} from "@/lib/dashboard/isDashboardFilterDateField";
 
-const DATE_DISTINCT_TRANSFORMS = new Set(["YEAR", "MONTH", "DAY", "QUARTER", "SEMESTER"]);
+const DATE_DISTINCT_TRANSFORMS = new Set(["YEAR", "MONTH", "DAY", "QUARTER", "SEMESTER", "YEAR_MONTH"]);
 
 export type GlobalFilterDistinctInput = {
   id: string;
@@ -21,7 +25,9 @@ function isSelectLikeFilter(gf: GlobalFilterDistinctInput): boolean {
     (gf.inputType === "select" ||
       gf.inputType === "multi" ||
       gf.filterType === "single" ||
-      gf.filterType === "multi")
+      gf.filterType === "multi" ||
+      // Filtros de fecha temporales también necesitan distinct (AÑO, MES, …).
+      isDashboardDateFilterOperator(gf.operator))
   );
 }
 
@@ -35,6 +41,39 @@ function dedupeValues(values: unknown[]): unknown[] {
     out.push(v);
   }
   return out;
+}
+
+/** Extrae años únicos desde timestamps ISO / fechas si el backend aún no transformó. */
+export function normalizeDistinctYearOptions(values: unknown[]): string[] {
+  const years = new Set<string>();
+  for (const v of values) {
+    if (v == null || v === "") continue;
+    if (typeof v === "number" && Number.isFinite(v)) {
+      const n = Math.trunc(v);
+      if (n >= 1900 && n <= 2100) years.add(String(n));
+      continue;
+    }
+    const s = String(v).trim();
+    if (/^\d{4}$/.test(s)) {
+      years.add(s);
+      continue;
+    }
+    const isoYear = s.match(/^(\d{4})-/);
+    if (isoYear?.[1]) {
+      years.add(isoYear[1]);
+      continue;
+    }
+    const dmy = s.match(/^\d{1,2}\/\d{1,2}\/(\d{4})/);
+    if (dmy?.[1]) {
+      years.add(dmy[1]);
+      continue;
+    }
+    const parsed = Date.parse(s);
+    if (!Number.isNaN(parsed)) {
+      years.add(String(new Date(parsed).getUTCFullYear()));
+    }
+  }
+  return [...years].sort((a, b) => Number(a) - Number(b));
 }
 
 /**
@@ -98,9 +137,12 @@ export async function fetchGlobalFilterDistinctValues(options: {
       const physicalField = target.physicalField;
       const isDateField =
         !!physicalField &&
-        target.dateFields.some(
+        (target.dateFields.some(
           (d) => (d || "").toLowerCase() === (physicalField || "").toLowerCase()
-        );
+        ) ||
+          looksLikeDateFieldName(physicalField) ||
+          looksLikeDateFieldName(semanticField) ||
+          isDashboardDateFilterOperator(filterOp));
 
       if (filterOp === "MONTH" && isDateField) {
         allValues.push(...GLOBAL_MONTH_FILTER_VALUES);
@@ -126,7 +168,7 @@ export async function fetchGlobalFilterDistinctValues(options: {
         if (isDateField) {
           const t =
             filterOp === "YEAR_MONTH"
-              ? "MONTH"
+              ? "YEAR_MONTH"
               : DATE_DISTINCT_TRANSFORMS.has(filterOp)
                 ? filterOp
                 : "YEAR";
@@ -150,6 +192,8 @@ export async function fetchGlobalFilterDistinctValues(options: {
 
     if (filterOp === "MONTH") {
       result[gf.id] = [...GLOBAL_MONTH_FILTER_VALUES];
+    } else if (filterOp === "YEAR" && allValues.length > 0) {
+      result[gf.id] = normalizeDistinctYearOptions(allValues);
     } else if (allValues.length > 0) {
       result[gf.id] = dedupeValues(allValues);
     }

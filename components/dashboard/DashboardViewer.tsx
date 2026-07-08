@@ -67,7 +67,7 @@ import {
 } from "@/lib/dashboard/expandMonthFilterWithYear";
 import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
 import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
-import { fetchGlobalFilterDistinctValues } from "@/lib/dashboard/fetchGlobalFilterDistinctValues";
+import { fetchGlobalFilterDistinctValues, normalizeDistinctYearOptions } from "@/lib/dashboard/fetchGlobalFilterDistinctValues";
 import type { DerivedColumnRef } from "@/lib/dashboard/metricExpressionToSql";
 import { GLOBAL_MONTH_FILTER_VALUES } from "@/lib/dashboard/globalMonthFilterValues";
 import {
@@ -1872,7 +1872,9 @@ export function DashboardViewer({
                 : [...GLOBAL_MONTH_FILTER_VALUES]
               : isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf
                 ? getGlobalDayFilterOptions(gf.field!, globalFilters, uiFilterValues)
-                : rawDistinct;
+                : isYearOperator((gf as AggregationFilter).operator) && Array.isArray(rawDistinct)
+                  ? normalizeDistinctYearOptions(rawDistinct)
+                  : rawDistinct;
             const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
             const isYearOp = isYearOperator((gf as AggregationFilter).operator);
             const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
@@ -1903,7 +1905,7 @@ export function DashboardViewer({
                         style={{
                           borderColor: "var(--platform-border)",
                           color: "var(--platform-fg)",
-                          background: "var(--platform-bg)",
+                          background: "var(--platform-surface, var(--platform-bg))",
                         }}
                         aria-haspopup="dialog"
                         aria-label={`${label}: elegir valores`}
@@ -1916,9 +1918,9 @@ export function DashboardViewer({
                     </PopoverTrigger>
                     <PopoverContent
                       align="start"
-                      className="w-72 p-3"
+                      className="w-72 p-3 border shadow-lg"
                       style={{
-                        background: "var(--platform-bg, var(--popover))",
+                        background: "var(--platform-surface, var(--platform-bg, #fff))",
                         borderColor: "var(--platform-border)",
                         color: "var(--platform-fg)",
                       }}
@@ -1993,36 +1995,102 @@ export function DashboardViewer({
                   isYearMonthOp ||
                   (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf)) &&
                   hasOptions) ? (
-                  <select
-                    className="rounded-md border px-2 py-1 text-sm min-w-[8rem]"
-                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
-                    value={
-                      isYearOp
-                        ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
-                        : isYearMonthOp
-                          ? String(uiFilterValues[gf.id] ?? "")
-                          : isDayOperator((gf as AggregationFilter).operator)
-                            ? dayFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
-                            : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
-                    }
-                    onChange={(e) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value }))}
-                  >
-                    <option value="">Todos</option>
-                    {(options as unknown[]).map((v) => (
-                      <option key={String(v)} value={String(v)}>
-                        {isYearMonthOp
-                          ? yearMonthFilterOptionLabel(v)
-                          : isDayOperator((gf as AggregationFilter).operator)
-                            ? `Día ${v}`
-                            : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
-                      </option>
-                    ))}
-                  </select>
+                  (() => {
+                    const singleValue = isYearOp
+                      ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
+                      : isYearMonthOp
+                        ? String(uiFilterValues[gf.id] ?? "")
+                        : isDayOperator((gf as AggregationFilter).operator)
+                          ? dayFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
+                          : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id]);
+                    const singleLabel = !singleValue
+                      ? "Todos"
+                      : isYearMonthOp
+                        ? yearMonthFilterOptionLabel(singleValue)
+                        : isDayOperator((gf as AggregationFilter).operator)
+                          ? `Día ${singleValue}`
+                          : monthFilterOptionLabel((gf as AggregationFilter).operator, singleValue);
+                    return (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 min-w-[8rem] max-w-[14rem] justify-between gap-1 text-xs font-normal rounded-md px-2"
+                            style={{
+                              borderColor: "var(--platform-border)",
+                              color: "var(--platform-fg)",
+                              background: "var(--platform-surface, var(--platform-bg))",
+                            }}
+                            aria-haspopup="listbox"
+                            aria-label={`${label}: ${singleLabel}`}
+                          >
+                            <span className="truncate text-left">{singleLabel}</span>
+                            <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          align="start"
+                          className="w-56 max-h-72 overflow-y-auto p-1.5 border shadow-lg"
+                          style={{
+                            background: "var(--platform-surface, var(--platform-bg, #fff))",
+                            borderColor: "var(--platform-border)",
+                            color: "var(--platform-fg)",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
+                            style={{
+                              color: "var(--platform-fg)",
+                              background:
+                                singleValue === ""
+                                  ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
+                                  : "transparent",
+                            }}
+                            onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: "" }))}
+                          >
+                            Todos
+                          </button>
+                          {(options as unknown[]).map((v) => {
+                            const s = String(v);
+                            const selected = singleValue === s;
+                            const optLabel = isYearMonthOp
+                              ? yearMonthFilterOptionLabel(v)
+                              : isDayOperator((gf as AggregationFilter).operator)
+                                ? `Día ${v}`
+                                : monthFilterOptionLabel((gf as AggregationFilter).operator, v);
+                            return (
+                              <button
+                                key={s}
+                                type="button"
+                                className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
+                                style={{
+                                  color: "var(--platform-fg)",
+                                  background: selected
+                                    ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
+                                    : "transparent",
+                                }}
+                                onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: s }))}
+                              >
+                                {optLabel}
+                              </button>
+                            );
+                          })}
+                        </PopoverContent>
+                      </Popover>
+                    );
+                  })()
                 ) : (
                   <input
                     type={(gf as any).inputType === "number" ? "number" : (gf as any).inputType === "date" ? "date" : "text"}
                     className="rounded-md border px-2 py-1 text-sm w-32"
-                    style={{ borderColor: "var(--platform-border)" }}
+                    style={{
+                      borderColor: "var(--platform-border)",
+                      background: "var(--platform-surface, var(--platform-bg))",
+                      color: "var(--platform-fg)",
+                    }}
                     value={String(uiFilterValues[gf.id] ?? "")}
                     onChange={(e) =>
                       setUiFilterValues((prev) => ({

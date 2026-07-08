@@ -30,10 +30,14 @@ export class DashboardController {
   @UseGuards(JwtAuthGuard)
   @Post("distinct-values")
   async distinctValues(
-    @Body() body: { tableName: string; field: string; limit?: number },
+    @Body()
+    body: { tableName: string; field: string; limit?: number; transform?: string },
     @Req() req: Request & { user: { sub: string } }
   ) {
     const result = await this.dashboard.distinctValues(body, req.user.sub);
+    if (result.status >= 400) {
+      throw new HttpException(result.data as string | Record<string, unknown>, result.status);
+    }
     return result.data;
   }
 

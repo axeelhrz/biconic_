@@ -1540,9 +1540,9 @@ export function AdminDashboardStudio({
         etlData,
         derivedColumns: derivedColumnsFromLayout,
         savedMetrics,
-        excludeFields: globalFilters.map((f) => f.field),
+        // Permitir la misma columna en varios filtros (p. ej. Año + Mes sobre fecha).
       }),
-    [etlData, derivedColumnsFromLayout, savedMetrics, globalFilters]
+    [etlData, derivedColumnsFromLayout, savedMetrics]
   );
 
   const globalFilterFieldOptionsForEdit = useMemo(
@@ -2486,12 +2486,13 @@ export function AdminDashboardStudio({
               e.target.value = "";
               if (!value) return;
               const label = globalFilterFieldLabel(value, etlData, derivedColumnsFromLayout);
+              const isDate = isDashboardFilterDateField(value, filterDateFieldCtx);
               setGlobalFilters((prev) => [
                 ...prev,
                 {
                   id: `gf-${Date.now()}`,
                   field: value,
-                  operator: "=",
+                  operator: isDate ? "YEAR" : "=",
                   value: "",
                   label,
                   inputType: "select",
