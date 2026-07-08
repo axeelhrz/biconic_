@@ -294,6 +294,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     const basePayloadParams = {
       tableName,
       etlId,
+      datasetId: typeof (agg as { datasetId?: string }).datasetId === "string" ? (agg as { datasetId: string }).datasetId : undefined,
       chartType: type,
       agg: aggForPayload,
       sourceId,

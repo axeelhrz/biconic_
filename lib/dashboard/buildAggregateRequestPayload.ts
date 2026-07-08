@@ -104,6 +104,7 @@ function buildSavedMetricsPayload(
 export type BuildAggregateRequestPayloadParams = {
   tableName: string;
   etlId?: string | null;
+  datasetId?: string | null;
   chartType: string;
   agg: AggregateRequestAgg;
   sourceId?: string | null;
@@ -131,6 +132,7 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
   const {
     tableName,
     etlId,
+    datasetId,
     chartType,
     agg,
     sourceId,
@@ -258,6 +260,7 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
   return {
     tableName,
     etlId: etlId ?? undefined,
+    ...(datasetId ? { datasetId } : {}),
     chartType,
     ...(mappedChartX ? { chartXAxis: mappedChartX } : {}),
     dimension,

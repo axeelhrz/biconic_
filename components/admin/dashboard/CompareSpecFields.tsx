@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { CompareSpec, CompareTemporalMode, ComparePeriodSource } from "@/lib/dashboard/compareSpec";
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
+import { ComparativeRelationCompareFields } from "@/components/admin/dashboard/ComparativeRelationCompareFields";
+import type { ComparativeRelation } from "@/lib/dataset/comparativeRelation";
 
 const GRANULARITIES: DateGranularity[] = ["day", "week", "month", "quarter", "semester", "year"];
 
@@ -27,6 +29,11 @@ export type CompareSpecFieldsProps = {
   showKpiTemporalSeriesHint?: boolean;
   /** KPI: explica que el valor grande es el total y la comparación es del último período. */
   showKpiTotalVsPeriodHint?: boolean;
+  /** Relaciones comparativas del dataset base (transformación comparative). */
+  comparativeRelations?: ComparativeRelation[];
+  comparativeMetricOptions?: { alias: string; label: string; valueType?: "absolute" | "percent" }[];
+  analysisDateGranularity?: DateGranularity;
+  chartValueType?: string;
 };
 
 function fieldClass(variant: "studio" | "etl"): string {
@@ -158,6 +165,10 @@ export function CompareSpecFields({
   onMissingColumnCandidate,
   showKpiTemporalSeriesHint,
   showKpiTotalVsPeriodHint,
+  comparativeRelations = [],
+  comparativeMetricOptions = [],
+  analysisDateGranularity,
+  chartValueType,
 }: CompareSpecFieldsProps) {
   const timeOptions =
     timeColumnOptions && timeColumnOptions.length > 0
@@ -244,6 +255,19 @@ export function CompareSpecFields({
                 granularity,
                 periodSource: "dashboard",
               });
+              return;
+            }
+            if (v === "comparative") {
+              const firstRel = comparativeRelations[0];
+              const firstField = firstRel?.comparativeFields[0]?.column ?? "";
+              const metricAlias = comparativeMetricOptions[0]?.alias ?? "";
+              if (!firstRel) return;
+              setCompare({
+                kind: "comparative",
+                relationId: firstRel.id,
+                metricAlias,
+                comparativeField: firstField,
+              });
             }
           }}
         >
@@ -254,6 +278,7 @@ export function CompareSpecFields({
           <option value="average">Promedio</option>
           <option value="total_share">Participación sobre total</option>
           <option value="cumulative">Acumulados (YTD)</option>
+          <option value="comparative">Relación Comparativa</option>
         </select>
       </FieldsBlock>
 
@@ -481,6 +506,22 @@ export function CompareSpecFields({
             variant={variant}
             value={compare.periodSource ?? "dashboard"}
             onChange={(periodSource) => setCompare({ ...compare, periodSource })}
+          />
+        </FieldsBlock>
+      )}
+
+      {compare.kind === "comparative" && (
+        <FieldsBlock variant={variant}>
+          <ComparativeRelationCompareFields
+            variant={variant}
+            compare={compare}
+            setCompare={setCompare}
+            relations={comparativeRelations}
+            metricOptions={comparativeMetricOptions}
+            analysisDimensions={dims}
+            analysisDateGranularity={analysisDateGranularity ?? granularity}
+            timeColumn={timeColumnDefault}
+            chartValueType={chartValueType}
           />
         </FieldsBlock>
       )}

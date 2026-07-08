@@ -1,5 +1,6 @@
 import type { CompareSpec, LegacyCompareInput } from "@/lib/dashboard/compareSpec";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
+import { comparativeOutputColumns } from "@/lib/dataset/comparativeRelation";
 import { getEffectiveDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import { getRowValue, resolveRowColumnKey, compareBucketSortTime } from "@/lib/dashboard/compareMetricRows";
 import { formatValue, type ChartStyleConfig } from "@/lib/dashboard/chartOptions";
@@ -227,6 +228,24 @@ export function getCompareColumnKeys(
       deltaPctKey: null,
       referenceSeriesKey: refSeries,
       tableExtraKeys: [run, ytd].filter((col) => Object.prototype.hasOwnProperty.call(row, col)),
+    };
+  }
+
+  if (spec.kind === "comparative" && spec.metricAlias === metricAlias) {
+    const alias = k ?? metricAlias;
+    const percentCols = comparativeOutputColumns(alias, "percent");
+    const usePercent = percentCols.some((col) => Object.prototype.hasOwnProperty.call(row, col));
+    const cols = comparativeOutputColumns(alias, usePercent ? "percent" : "absolute");
+    const ref = cols[1] ? resolveRowColumnKey(row, cols[1]) : null;
+    const delta = cols[2] ? resolveRowColumnKey(row, cols[2]) : null;
+    const deltaPct = cols[3] ? resolveRowColumnKey(row, cols[3]) : null;
+    return {
+      resolvedMetricKey: cols[0] ? resolveRowColumnKey(row, cols[0]) : k,
+      referenceKey: ref,
+      deltaKey: delta,
+      deltaPctKey: deltaPct,
+      referenceSeriesKey: ref,
+      tableExtraKeys: cols.filter((col) => Object.prototype.hasOwnProperty.call(row, col)),
     };
   }
 

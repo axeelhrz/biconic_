@@ -47,6 +47,12 @@ import { normalizeAggregationCompare, deriveLegacyTransformCompare } from "@/lib
 import { compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
 import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import { CompareSpecFields } from "@/components/admin/dashboard/CompareSpecFields";
+import { ComparativeRelationWizard } from "@/components/etl/comparative-relation/ComparativeRelationWizard";
+import {
+  type ComparativeRelation,
+  parseComparativeRelationsFromConfig,
+  comparativeOutputColumns,
+} from "@/lib/dataset/comparativeRelation";
 import { resolveEffectiveDateGroupByForFetch } from "@/lib/dashboard/aggregateCompareRequest";
 import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
@@ -509,16 +515,6 @@ function buildEtlDataFromMetricsResponse(res: MetricsDataResponse["data"]): ETLD
 export type DerivedColumn = { name: string; expression: string; defaultAggregation: string };
 
 type ConnectionOption = { id: string; title: string; type: string };
-type DatasetRelation = {
-  id: string;
-  connectionId: string;
-  connectionTitle: string;
-  tableKey: string;
-  tableLabel: string;
-  thisColumn: string;
-  otherColumn: string;
-  joinType: "INNER" | "LEFT";
-};
 
 type ParsedDatasetConfig = {
   grainOption: string;
@@ -528,7 +524,7 @@ type ParsedDatasetConfig = {
   periodicity: string;
   periodicityOverrides: Record<string, string>;
   columnRoles: Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>;
-  datasetRelations: DatasetRelation[];
+  comparativeRelations: ComparativeRelation[];
   derivedColumns: DerivedColumn[];
 };
 
@@ -542,7 +538,7 @@ function parseInitialDatasetConfig(cfg: Record<string, unknown> | null | undefin
     periodicity: "Diaria",
     periodicityOverrides: {},
     columnRoles: {},
-    datasetRelations: [],
+    comparativeRelations: [],
     derivedColumns: [],
   };
   if (!cfg || typeof cfg !== "object") return out;
@@ -557,7 +553,7 @@ function parseInitialDatasetConfig(cfg: Record<string, unknown> | null | undefin
   if (cfg.columnRoles && typeof cfg.columnRoles === "object") {
     out.columnRoles = cfg.columnRoles as ParsedDatasetConfig["columnRoles"];
   }
-  if (Array.isArray(cfg.datasetRelations)) out.datasetRelations = cfg.datasetRelations as DatasetRelation[];
+  out.comparativeRelations = parseComparativeRelationsFromConfig(cfg);
   const derivedRaw = (cfg as { derivedColumns?: unknown; derived_columns?: unknown }).derivedColumns
     ?? (cfg as { derived_columns?: unknown }).derived_columns;
   if (Array.isArray(derivedRaw)) {
@@ -811,18 +807,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [filterListSearch, setFilterListSearch] = useState("");
   /** Nivel de jerarquía de fecha por filtro (id del filtro → day|month|quarter|semester|year). */
   const [filterDateLevel, setFilterDateLevel] = useState<Record<string, string>>({});
-  const [datasetRelations, setDatasetRelations] = useState<DatasetRelation[]>(initialParsedConfig.datasetRelations);
-  const [relationFormConnectionId, setRelationFormConnectionId] = useState("");
-  const [relationFormTableKey, setRelationFormTableKey] = useState("");
-  const [relationFormThisColumn, setRelationFormThisColumn] = useState("");
-  const [relationFormOtherColumn, setRelationFormOtherColumn] = useState("");
-  const [relationFormJoinType, setRelationFormJoinType] = useState<"INNER" | "LEFT">("LEFT");
-  const [connectionTables, setConnectionTables] = useState<{ schema: string; name: string; columns: { name: string }[] }[]>([]);
-  const [connectionTablesLoading, setConnectionTablesLoading] = useState(false);
+  const [comparativeRelations, setComparativeRelations] = useState<ComparativeRelation[]>(initialParsedConfig.comparativeRelations);
+  const [comparativeRelationsCanAdvance, setComparativeRelationsCanAdvance] = useState(true);
   /** Límite de filas para profiling del dataset: 200, 500, 5000, 200k, 500k o "unlimited" (muestra completa en backend). */
   const [profileRowLimit, setProfileRowLimit] = useState<200 | 500 | 5000 | 200000 | 500000 | "unlimited">(500);
-  const [otherTableColumnsLoaded, setOtherTableColumnsLoaded] = useState<string[]>([]);
-  const [otherTableColumnsLoading, setOtherTableColumnsLoading] = useState(false);
   const formulaInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const [creatingColumn, setCreatingColumn] = useState(false);
   const [formulasHelpOpen, setFormulasHelpOpen] = useState(false);
@@ -920,7 +908,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   }, [resetChartWizardState, clearAnalysisDraft]);
 
   const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
-    A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
+    A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relación Comparativa", "Publicar"],
     B: ["Cálculo", "Propiedades", "Filtros base", "Preview"],
     C: ["Identidad", "Métricas", "Dimensiones y Tiempo", "Filtros", "Transformaciones", "Preview"],
     D: ["Tipo visual", "Mapeo", "Formato y colores", "Guardar"],
@@ -1071,7 +1059,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (typeof cfg.periodicity === "string" && cfg.periodicity) setPeriodicity(cfg.periodicity);
       if (cfg.periodicityOverrides != null && typeof cfg.periodicityOverrides === "object") setPeriodicityOverrides(cfg.periodicityOverrides as Record<string, string>);
       if (cfg.columnRoles && typeof cfg.columnRoles === "object") setColumnRoles(cfg.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>);
-      if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
+      setComparativeRelations(parseComparativeRelationsFromConfig(cfg));
     }
     if (Array.isArray((cfg as { derivedColumns?: DerivedColumn[] }).derivedColumns)) setDerivedColumns((cfg as { derivedColumns: DerivedColumn[] }).derivedColumns);
   }, [data?.datasetConfig, hideDatasetTab, datasetOnly]);
@@ -1086,10 +1074,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       periodicity,
       periodicityOverrides: Object.keys(periodicityOverrides).length ? periodicityOverrides : undefined,
       columnRoles: Object.keys(columnRoles).length ? columnRoles : undefined,
-      datasetRelations: datasetRelations.length ? datasetRelations : undefined,
+      comparativeRelations: comparativeRelations.length ? comparativeRelations : undefined,
       derivedColumns: derivedColumns.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" })),
     };
-  }, [grainOption, grainCustomColumns, datasetHasTime, timeColumn, periodicity, periodicityOverrides, columnRoles, datasetRelations, derivedColumns]);
+  }, [grainOption, grainCustomColumns, datasetHasTime, timeColumn, periodicity, periodicityOverrides, columnRoles, comparativeRelations, derivedColumns]);
 
   /** Guarda la configuración del dataset en el servidor y luego pasa al wizard de Métrica o redirige a Datasets (según datasetOnly). */
   const saveDatasetConfigAndGoToMetric = useCallback(async () => {
@@ -1134,107 +1122,6 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setSavingDatasetConfig(false);
     }
   }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName, onDatasetSaved, propDatasetId, embeddedInDatasetsModal]);
-
-  const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
-
-  useEffect(() => {
-    if (!relationFormConnectionId) {
-      setConnectionTables([]);
-      setRelationFormTableKey("");
-      return;
-    }
-    setConnectionTablesLoading(true);
-    setRelationFormTableKey("");
-    type MetadataRes = { metadata?: { tables?: { schema?: string; name?: string; columns?: { name: string }[] }[] } };
-    fetch("/api/connection/metadata", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ connectionId: relationFormConnectionId, discoverTables: true }),
-    })
-      .then((r) => safeJsonResponse<MetadataRes>(r))
-      .then((json) => {
-        if (json?.metadata?.tables && Array.isArray(json.metadata.tables)) {
-          setConnectionTables(
-            json.metadata.tables.map((t) => ({
-              schema: t.schema ?? "",
-              name: t.name ?? "",
-              columns: t.columns ?? [],
-            }))
-          );
-        } else {
-          setConnectionTables([]);
-        }
-      })
-      .catch(() => setConnectionTables([]))
-      .finally(() => setConnectionTablesLoading(false));
-  }, [relationFormConnectionId]);
-
-  const loadTableColumns = useCallback((connId: string, tableKey: string): Promise<string[]> => {
-    if (!tableKey) return Promise.resolve([]);
-    type MetadataRes = { metadata?: { tables?: { schema?: string; name?: string; columns?: { name: string }[] }[] } };
-    return fetch("/api/connection/metadata", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ connectionId: connId, tableName: tableKey }),
-    })
-      .then((r) => safeJsonResponse<MetadataRes>(r))
-      .then((json) => {
-        if (json?.metadata?.tables?.[0]?.columns) {
-          return json.metadata.tables[0].columns.map((c) => c.name);
-        }
-        return [] as string[];
-      })
-      .catch(() => [] as string[]);
-  }, []);
-
-  useEffect(() => {
-    if (!relationFormConnectionId || !relationFormTableKey) {
-      setOtherTableColumnsLoaded([]);
-      return;
-    }
-    setOtherTableColumnsLoading(true);
-    loadTableColumns(relationFormConnectionId, relationFormTableKey)
-      .then((cols) => setOtherTableColumnsLoaded(cols || []))
-      .catch(() => setOtherTableColumnsLoaded([]))
-      .finally(() => setOtherTableColumnsLoading(false));
-  }, [relationFormConnectionId, relationFormTableKey, loadTableColumns]);
-
-  const addRelation = () => {
-    if (!relationFormConnectionId || !relationFormTableKey || !relationFormThisColumn || !relationFormOtherColumn) {
-      toast.error("Completá conexión, tabla y ambas columnas.");
-      return;
-    }
-    const conn = connectionsProp.find((c) => String(c.id) === relationFormConnectionId);
-    const tableLabel = connectionTables.find(
-      (t) => `${t.schema}.${t.name}` === relationFormTableKey || t.name === relationFormTableKey
-    )
-      ? `${relationFormTableKey}`
-      : relationFormTableKey;
-    setDatasetRelations((prev) => [
-      ...prev,
-      {
-        id: `rel-${Date.now()}`,
-        connectionId: relationFormConnectionId,
-        connectionTitle: conn?.title || relationFormConnectionId,
-        tableKey: relationFormTableKey,
-        tableLabel,
-        thisColumn: relationFormThisColumn,
-        otherColumn: relationFormOtherColumn,
-        joinType: relationFormJoinType,
-      },
-    ]);
-    setRelationFormConnectionId("");
-    setRelationFormTableKey("");
-    setRelationFormThisColumn("");
-    setRelationFormOtherColumn("");
-    setRelationFormJoinType("LEFT");
-    setConnectionTables([]);
-    toast.success("Relación agregada");
-  };
-
-  const removeRelation = (id: string) => {
-    setDatasetRelations((prev) => prev.filter((r) => r.id !== id));
-  };
 
   // Refrescar datos del ETL al entrar al paso Profiling (Dataset) para mostrar filas/columnas actualizadas (solo fetchData aquí; fetchPreview se usa en un useEffect más abajo)
   useEffect(() => {
@@ -1318,6 +1205,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   /** Dataset activo para persistir configuración (evita crear datasets duplicados al guardar métricas/columnas). */
   const activeDatasetIdForSave = hideDatasetTab ? (currentDataset?.id ?? null) : propDatasetId;
 
+  const activeComparativeRelations = useMemo(() => {
+    if (hideDatasetTab && currentDataset?.config) {
+      return parseComparativeRelationsFromConfig(currentDataset.config);
+    }
+    if (data?.datasetConfig) {
+      return parseComparativeRelationsFromConfig(data.datasetConfig);
+    }
+    return comparativeRelations;
+  }, [hideDatasetTab, currentDataset?.config, data?.datasetConfig, comparativeRelations]);
+
   const datasetConfigHydratedDatasetIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!hideDatasetTab) return;
@@ -1343,7 +1240,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     if (cfgObj.columnRoles && typeof cfgObj.columnRoles === "object") {
       setColumnRoles(cfgObj.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>);
     }
-    if (Array.isArray(cfgObj.datasetRelations)) setDatasetRelations(cfgObj.datasetRelations as DatasetRelation[]);
+    setComparativeRelations(parseComparativeRelationsFromConfig(cfgObj));
 
     const derivedRaw = cfgObj.derivedColumns ?? cfgObj.derived_columns;
     if (Array.isArray(derivedRaw)) {
@@ -1983,6 +1880,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return [...new Set(keys.map((k) => String(k).trim()).filter(Boolean))];
   }, [effectiveFormMetrics, formDimensions]);
 
+  const comparativeMetricOptions = useMemo(() => {
+    return effectiveFormMetrics.map((m, i) => ({
+      alias: aggregationResultColumnKey(m, i),
+      label: m.alias || m.field || `Métrica ${i + 1}`,
+      valueType: chartValueType === "percent" ? ("percent" as const) : ("absolute" as const),
+    }));
+  }, [effectiveFormMetrics, chartValueType]);
+
   /** Al reabrir una métrica guardada, ratioReuseMode en config fuerza el mismo modo visual que al guardar. */
   const editingSavedAggregationConfig = useMemo(() => {
     if (!editingId) return null;
@@ -2271,6 +2176,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (useAnalysisConfig && analysisCompare.kind !== "none") {
         body.compare = analysisCompare as unknown as Record<string, unknown>;
       }
+      const datasetIdForCompare = activeDatasetIdForSave ?? propDatasetId ?? selectedDatasetId;
+      if (datasetIdForCompare) {
+        (body as Record<string, unknown>).datasetId = datasetIdForCompare;
+      }
       if (useAnalysisConfig && transformShowAccum) {
         body.cumulative = "running_sum";
       }
@@ -2350,6 +2259,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     geoOverridesByXLabel,
     data?.columnDisplay,
     dimensionDefaultFiltersForm,
+    activeDatasetIdForSave,
+    propDatasetId,
+    selectedDatasetId,
   ]);
 
   const fetchPreviewRef = useRef(fetchPreview);
@@ -2852,8 +2764,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         if (rowKeysSet.has(`${alias}_ytd_run`)) requested.push(`${alias}_ytd_run`);
       }
     }
+    if (analysisCompare.kind === "comparative") {
+      const rel = activeComparativeRelations.find((r) => r.id === analysisCompare.relationId);
+      const field = rel?.comparativeFields.find((f) => f.column === analysisCompare.comparativeField);
+      const cols = comparativeOutputColumns(analysisCompare.metricAlias, field?.valueType ?? "absolute");
+      for (const col of cols) {
+        if (rowKeysSet.has(col)) requested.push(col);
+      }
+    }
     return requested;
-  }, [previewData, formDimensions, wizard, analysisDisplayMetricAliases, effectiveFormMetrics, analysisCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum, ratioReuseDisplayMode, ratioReuseResultMetricAlias, ratioReuseResultMetricIndex]);
+  }, [previewData, formDimensions, wizard, analysisDisplayMetricAliases, effectiveFormMetrics, analysisCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum, ratioReuseDisplayMode, ratioReuseResultMetricAlias, ratioReuseResultMetricIndex, activeComparativeRelations]);
 
   const chartAvailableColumns = useMemo(() => {
     if (!previewData?.[0]) return [];
@@ -4101,6 +4021,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             ),
           }
         : {}),
+      ...(activeDatasetIdForSave ? { datasetId: activeDatasetIdForSave } : {}),
     };
   }, [
     analysisDateFormat,
@@ -5203,89 +5124,43 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                   </div>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Relaciones</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Relación Comparativa</Button>
                   </div>
                 </section>
               )}
 
-              {/* Wizard A4: Relaciones — conectar con tablas de otras conexiones */}
+              {/* Wizard A4: Relación Comparativa */}
               {wizard === "A" && wizardStep === 4 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Relaciones entre datasets (joins)</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Opcional: definí cómo se combina este dataset con tablas de otras conexiones para análisis multi-dataset.</p>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Relación Comparativa</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
+                    Vinculá este dataset (base) con otro dataset de objetivos, presupuesto, forecast o benchmark procesado en la plataforma.
+                  </p>
                   <div className="rounded-lg border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Dataset actual</p>
-                    <p className="font-medium text-sm" style={{ color: "var(--platform-fg)" }}>{etlTitle}</p>
+                    <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Dataset base</p>
+                    <p className="font-medium text-sm" style={{ color: "var(--platform-fg)" }}>{datasetName || etlTitle}</p>
                     <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>{data?.schema}.{data?.tableName} · {data?.rowCount ?? 0} filas</p>
                   </div>
-                  {datasetRelations.length > 0 && (
-                    <div className="rounded-xl border mb-4 overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <table className="w-full text-sm border-collapse">
-                        <thead style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
-                          <tr>
-                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Conexión / Tabla</th>
-                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna este dataset</th>
-                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna otra tabla</th>
-                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Join</th>
-                            <th className="w-10" />
-                          </tr>
-                        </thead>
-                        <tbody style={{ color: "var(--platform-fg)" }}>
-                          {datasetRelations.map((r) => (
-                            <tr key={r.id} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
-                              <td className="px-3 py-2">{r.connectionTitle} · {r.tableLabel}</td>
-                              <td className="px-3 py-2">{getSampleDisplayLabel(r.thisColumn)}</td>
-                              <td className="px-3 py-2">{r.otherColumn}</td>
-                              <td className="px-3 py-2">{r.joinType}</td>
-                              <td className="px-2 py-2">
-                                <button type="button" onClick={() => removeRelation(r.id)} className="text-xs rounded px-2 py-1 hover:bg-red-500/10 text-red-600" aria-label="Quitar relación">Quitar</button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  <div className="rounded-xl border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                    <p className="text-xs font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Agregar relación</p>
-                    <div className="flex flex-wrap items-end gap-3">
-                      <div className="min-w-[180px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
-                        <Select value={relationFormConnectionId} onChange={(v: string) => setRelationFormConnectionId(v)} options={[{ value: "", label: "Elegir conexión" }, ...connectionOptions]} placeholder="Conexión" className="text-sm" buttonClassName="h-9" disablePortal />
-                      </div>
-                      <div className="min-w-[160px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
-                        <Select
-                          value={relationFormTableKey}
-                          onChange={(v: string) => setRelationFormTableKey(v)}
-                          options={[{ value: "", label: connectionTablesLoading ? "Cargando…" : "Elegir tabla" }, ...connectionTables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))]}
-                          placeholder="Tabla"
-                          className="text-sm"
-                          buttonClassName="h-9"
-                          disablePortal
-                        />
-                      </div>
-                      <div className="min-w-[140px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Columna (este dataset)</Label>
-                        <Select value={relationFormThisColumn} onChange={(v: string) => setRelationFormThisColumn(v)} options={[{ value: "", label: "Columna" }, ...fields.map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]} placeholder="Columna" className="text-sm" buttonClassName="h-9" disablePortal />
-                      </div>
-                      <div className="min-w-[140px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Columna (otra tabla)</Label>
-                        <Select value={relationFormOtherColumn} onChange={(v: string) => setRelationFormOtherColumn(v)} options={[{ value: "", label: otherTableColumnsLoading ? "Cargando…" : "Columna" }, ...otherTableColumnsLoaded.map((c) => ({ value: c, label: c }))]} placeholder="Columna" className="text-sm" buttonClassName="h-9" disablePortal />
-                      </div>
-                      <div className="min-w-[100px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Tipo join</Label>
-                        <Select value={relationFormJoinType} onChange={(v: string) => setRelationFormJoinType(v as "INNER" | "LEFT")} options={[{ value: "LEFT", label: "LEFT" }, { value: "INNER", label: "INNER" }]} buttonClassName="h-9" disablePortal />
-                      </div>
-                      <Button type="button" variant="outline" size="sm" className="rounded-lg h-9" style={{ borderColor: "var(--platform-border)" }} onClick={addRelation}>Agregar</Button>
-                    </div>
-                  </div>
-                  {connectionsProp.length === 0 && (
-                    <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>No hay otras conexiones disponibles. Creá conexiones en Admin para poder relacionar tablas.</p>
-                  )}
-                  <div className="flex justify-between">
+                  <ComparativeRelationWizard
+                    currentDatasetId={propDatasetId}
+                    baseFields={fields}
+                    baseDateFields={dateFields}
+                    formatFieldLabel={getSampleDisplayLabel}
+                    relations={comparativeRelations}
+                    onRelationsChange={setComparativeRelations}
+                    onCanAdvanceChange={setComparativeRelationsCanAdvance}
+                  />
+                  <div className="flex justify-between mt-6">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Publicar</Button>
+                    <Button
+                      type="button"
+                      className="rounded-xl"
+                      style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                      onClick={goNext}
+                      disabled={!comparativeRelationsCanAdvance}
+                    >
+                      Siguiente: Publicar
+                    </Button>
                   </div>
                 </section>
               )}
@@ -5370,15 +5245,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       </div>
                     )}
                     <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Relaciones (joins)</p>
-                      {datasetRelations.length > 0 ? (
+                      <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Relaciones comparativas</p>
+                      {comparativeRelations.length > 0 ? (
                         <ul className="space-y-1.5 text-sm" style={{ color: "var(--platform-fg)" }}>
-                          {datasetRelations.map((r) => (
-                            <li key={r.id} className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> {r.connectionTitle} · {r.tableLabel}: {getSampleDisplayLabel(r.thisColumn)} = {r.otherColumn} ({r.joinType})</li>
+                          {comparativeRelations.map((r) => (
+                            <li key={r.id} className="flex items-center gap-2">
+                              <span style={{ color: "var(--platform-accent)" }}>✓</span>
+                              {r.name}: vs {r.comparativeDatasetName || r.comparativeDatasetId} · {r.fieldMappings.length} mapeo(s) · {r.comparativeFields.length} campo(s) comparativo(s)
+                            </li>
                           ))}
                         </ul>
                       ) : (
-                        <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Ninguna (solo este dataset)</p>
+                        <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Ninguna (solo dataset base)</p>
                       )}
                     </div>
                   </div>
@@ -6477,6 +6355,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     compareColumnCandidates={compareColumnCandidates}
                     fixedValue={transformCompareFixedValue}
                     onFixedValueChange={setTransformCompareFixedValue}
+                    comparativeRelations={activeComparativeRelations}
+                    comparativeMetricOptions={comparativeMetricOptions}
+                    analysisDateGranularity={(analysisGranularity || "month") as DateGranularity}
+                    chartValueType={chartValueType}
                     onMissingTimeColumn={() =>
                       toast.error(
                         "No hay columna de fecha: definí el eje temporal en el paso anterior o agregá una columna fecha al dataset."
@@ -6486,7 +6368,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       toast.error("No hay columnas candidatas (agregá métricas o dimensiones).")
                     }
                   />
-                  {analysisCompare.kind !== "none" && (
+                  {analysisCompare.kind !== "none" && analysisCompare.kind !== "comparative" && (
                     <div
                       className="rounded-lg border p-3 space-y-2"
                       style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}

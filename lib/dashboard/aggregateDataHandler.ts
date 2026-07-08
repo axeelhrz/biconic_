@@ -18,6 +18,11 @@ import {
 } from "@/lib/geo/geo-enrichment";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { applyCompareSpecToRows } from "@/lib/dashboard/compareMetricRows";
+import {
+  applyComparativeRelationToRows,
+  buildComparativeAggregateSql,
+} from "@/lib/dashboard/applyComparativeRelation";
+import { findComparativeRelation } from "@/lib/dataset/comparativeRelation";
 import { compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
 import {
   expandAggregationFiltersForTemporalCompare,
@@ -56,6 +61,13 @@ export interface AggregateDataDeps {
   findEtlIdByOutputTable: (table: string) => Promise<string | null>;
   findEtlIdByRunDestination: (table: string) => Promise<string | null>;
   getEtlLayout: (etlId: string) => Promise<Record<string, unknown> | null>;
+  getDatasetById?: (datasetId: string) => Promise<{
+    id: string;
+    etl_id: string;
+    config: Record<string, unknown>;
+  } | null>;
+  getFirstDatasetIdForEtl?: (etlId: string) => Promise<string | null>;
+  resolveDatasetTable?: (etlId: string) => Promise<{ schema: string; tableName: string } | null>;
 }
 
 // --- Interfaces ---
@@ -123,6 +135,8 @@ export interface AggregationRequest {
   dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string };
   /** Definiciones de métricas guardadas enviadas por el cliente para resolver por nombre (evita depender solo del ETL lookup). */
   savedMetrics?: Array<{ name: string; field?: string; func?: string; alias?: string; expression?: string }>;
+  /** ID del dataset semántico (para relaciones comparativas). */
+  datasetId?: string;
   chartType?: string;
   chartXAxis?: string;
   geoHints?: GeoHints;
@@ -1347,7 +1361,9 @@ export async function runAggregateData(
     const comparedResults =
       compareSpec.kind === "none"
         ? mappedResults
-        : applyCompareSpecToRows(
+        : compareSpec.kind === "comparative"
+          ? mappedResults
+          : applyCompareSpecToRows(
             mappedResults as Record<string, unknown>[],
             metricExternalKeys,
             compareSpec,
@@ -1356,6 +1372,70 @@ export async function runAggregateData(
               dimensionColumns: dimensionColumnsOrdered,
             }
           );
+
+    let finalResults = comparedResults as Record<string, unknown>[];
+
+    if (compareSpec.kind === "comparative") {
+      let datasetId = String((body as { datasetId?: string }).datasetId ?? "").trim();
+      if (!datasetId && body.etlId && deps.getFirstDatasetIdForEtl) {
+        datasetId = (await deps.getFirstDatasetIdForEtl(body.etlId)) ?? "";
+      }
+      if (!datasetId || !deps.getDatasetById || !deps.resolveDatasetTable) {
+        return jsonResponse(
+          { error: "Relación comparativa requiere datasetId y resolución de tabla." },
+          { status: 400 }
+        );
+      }
+
+      const datasetRow = await deps.getDatasetById(datasetId);
+      if (!datasetRow) {
+        return jsonResponse({ error: "Dataset base no encontrado." }, { status: 404 });
+      }
+
+      const relation = findComparativeRelation(datasetRow.config, compareSpec.relationId);
+      if (!relation) {
+        return jsonResponse({ error: "Relación comparativa no encontrada en el dataset." }, { status: 400 });
+      }
+
+      const compDataset = await deps.getDatasetById(relation.comparativeDatasetId);
+      if (!compDataset) {
+        return jsonResponse({ error: "Dataset comparativo no encontrado." }, { status: 404 });
+      }
+
+      const compTable = await deps.resolveDatasetTable(compDataset.etl_id);
+      if (!compTable) {
+        return jsonResponse({ error: "Tabla del dataset comparativo no resuelta." }, { status: 400 });
+      }
+
+      const measureField = relation.comparativeFields.find((f) => f.column === compareSpec.comparativeField);
+      const valueType = measureField?.valueType ?? "absolute";
+
+      const compSql = buildComparativeAggregateSql({
+        schema: compTable.schema,
+        tableName: compTable.tableName,
+        relation,
+        comparativeField: compareSpec.comparativeField,
+        valueType,
+      });
+
+      const compResult = await deps.executeSql(compSql);
+      if (compResult.error) {
+        return jsonResponse(
+          { error: `Error al consultar dataset comparativo: ${compResult.error.message}` },
+          { status: 500 }
+        );
+      }
+
+      const comparativeRows = (compResult.data ?? []) as Record<string, unknown>[];
+      finalResults = applyComparativeRelationToRows({
+        baseRows: mappedResults as Record<string, unknown>[],
+        comparativeRows,
+        relation,
+        compareSpec,
+        metricAliases: metricExternalKeys,
+        parseOpts: body.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
+      });
+    }
 
     const requestedSortNormalized = normalizeStr(body.orderBy?.field || "");
     const dateFieldNormalized = normalizeStr(body.dateGroupBy?.field || "");
@@ -1381,7 +1461,7 @@ export async function runAggregateData(
     // Defensa final: evita orden lexicográfico incorrecto en etiquetas de periodo por configuraciones heredadas.
     const sortedResults =
       body.dateGroupBy?.field && requestedTemporalSort && temporalKey
-        ? [...comparedResults].sort((a, b) => {
+        ? [...finalResults].sort((a, b) => {
             const va = (a as Record<string, unknown>)[temporalKey];
             const vb = (b as Record<string, unknown>)[temporalKey];
             const ta = parseDateLike(va, dateParseOpts)?.getTime() ?? NaN;
@@ -1389,7 +1469,7 @@ export async function runAggregateData(
             if (!Number.isNaN(ta) && !Number.isNaN(tb)) return (ta - tb) * directionMultiplier;
             return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true }) * directionMultiplier;
           })
-        : comparedResults;
+        : finalResults;
 
     const shouldEnrichGeo = requestedChartType === "map";
     const cacheClient = deps.geoCacheClient ?? null;

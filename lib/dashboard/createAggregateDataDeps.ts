@@ -72,5 +72,53 @@ export function createPgAggregateDataDeps(options: {
       );
       return (rows[0] as { layout?: Record<string, unknown> } | undefined)?.layout ?? null;
     },
+    async getDatasetById(datasetId: string) {
+      const rows = await sql.unsafe(
+        `SELECT id, etl_id, config FROM public.dataset WHERE id = $1 LIMIT 1`,
+        toSqlParams([datasetId])
+      );
+      const row = rows[0] as { id?: string; etl_id?: string; config?: unknown } | undefined;
+      if (!row?.id) return null;
+      return {
+        id: String(row.id),
+        etl_id: String(row.etl_id ?? ""),
+        config:
+          row.config && typeof row.config === "object"
+            ? (row.config as Record<string, unknown>)
+            : {},
+      };
+    },
+    async getFirstDatasetIdForEtl(etlId: string) {
+      const rows = await sql.unsafe(
+        `SELECT id FROM public.dataset WHERE etl_id = $1 ORDER BY updated_at DESC LIMIT 1`,
+        toSqlParams([etlId])
+      );
+      const id = (rows[0] as { id?: string } | undefined)?.id;
+      return id ? String(id) : null;
+    },
+    async resolveDatasetTable(etlId: string) {
+      const runRows = await sql.unsafe(
+        `SELECT destination_schema, destination_table_name FROM public.etl_runs_log
+         WHERE etl_id = $1 AND status = 'completed'
+         ORDER BY completed_at DESC LIMIT 1`,
+        toSqlParams([etlId])
+      );
+      const run = runRows[0] as { destination_schema?: string; destination_table_name?: string } | undefined;
+      if (run?.destination_table_name) {
+        return {
+          schema: run.destination_schema || "etl_output",
+          tableName: run.destination_table_name,
+        };
+      }
+      const etlRows = await sql.unsafe(
+        `SELECT output_table FROM public.etl WHERE id = $1 LIMIT 1`,
+        toSqlParams([etlId])
+      );
+      const outputTable = (etlRows[0] as { output_table?: string } | undefined)?.output_table?.trim();
+      if (outputTable) {
+        return { schema: "etl_output", tableName: outputTable };
+      }
+      return null;
+    },
   };
 }
