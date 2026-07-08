@@ -2,10 +2,62 @@ import { Injectable } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import type { GeoCacheClient } from "@/lib/geo/geo-enrichment";
 
 @Injectable()
 export class DashboardService {
   constructor(private readonly db: DatabaseService) {}
+
+  /**
+   * Cliente de caché de geocodificación (mapas). Usa `this.db.query`/`queryOne` (pg.Pool
+   * directo, sin restricción de solo-SELECT) en vez de `executeSql`, porque este último
+   * pasa por la función `public.execute_sql`, que por diseño solo permite SELECT/WITH y
+   * bloquearía el UPSERT de coordenadas nuevas.
+   */
+  private buildGeoCacheClient(): GeoCacheClient {
+    const db = this.db;
+    return {
+      from(_table: string) {
+        return {
+          select() {
+            return {
+              eq(_column: string, value: string) {
+                return {
+                  async maybeSingle() {
+                    try {
+                      const row = await db.queryOne<{ cache_key: string; lat: number; lng: number }>(
+                        `SELECT cache_key, lat, lng FROM public.geo_location_cache WHERE cache_key = $1 LIMIT 1`,
+                        [value]
+                      );
+                      return { data: row, error: null };
+                    } catch (err) {
+                      return {
+                        data: null,
+                        error: { message: err instanceof Error ? err.message : String(err) },
+                      };
+                    }
+                  },
+                };
+              },
+            };
+          },
+          async upsert(payload: { cache_key: string; lat: number; lng: number }) {
+            try {
+              await db.query(
+                `INSERT INTO public.geo_location_cache (cache_key, lat, lng)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (cache_key) DO UPDATE SET lat = EXCLUDED.lat, lng = EXCLUDED.lng`,
+                [payload.cache_key, payload.lat, payload.lng]
+              );
+              return { error: null };
+            } catch (err) {
+              return { error: { message: err instanceof Error ? err.message : String(err) } };
+            }
+          },
+        };
+      },
+    };
+  }
 
   private async loadAggregateModules() {
     // Dynamic import allows tsx runtime to resolve shared lib with @/ aliases
@@ -30,6 +82,7 @@ export class DashboardService {
     });
 
     deps.executeSql = (query: string) => this.db.executeSql(query);
+    deps.geoCacheClient = this.buildGeoCacheClient();
     deps.findEtlIdByOutputTable = async (table: string) => {
       const row = await this.db.queryOne<{ id: string }>(
         `SELECT id FROM public.etl WHERE output_table ILIKE $1 LIMIT 1`,
