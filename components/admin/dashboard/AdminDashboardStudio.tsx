@@ -8,6 +8,9 @@ import { Plus, Check, BarChart2, Pencil, ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select } from "@/components/ui/Select";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +18,11 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  isDashboardDateFilterOperator,
+  isDashboardFilterDateField,
+  resolveDashboardFilterOperator,
+} from "@/lib/dashboard/isDashboardFilterDateField";
 import { useAdminDashboardEtlData } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { searchEtls, addDashboardDataSource, removeDashboardDataSource } from "@/app/admin/(main)/dashboard/actions";
@@ -1547,6 +1555,17 @@ export function AdminDashboardStudio({
     [etlData, derivedColumnsFromLayout, savedMetrics]
   );
 
+  const filterDateFieldCtx = useMemo(
+    () => ({
+      etlDateFields: etlData?.fields?.date ?? [],
+      dataSourceDateFields: (etlData?.dataSources ?? []).map((ds) => ds.fields?.date ?? []),
+    }),
+    [etlData]
+  );
+
+  const studioSelectButtonClass =
+    "h-10 w-full justify-between rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)] px-3 text-sm font-medium text-[var(--studio-fg)] shadow-none hover:bg-[var(--studio-bg)]";
+
   const filtersDataFingerprint = useMemo(
     () =>
       `${globalFiltersFingerprint}\x1e${studioFiltersFingerprint}\x1e${JSON.stringify(dashboardCompareDefaults ?? null)}`,
@@ -2539,244 +2558,306 @@ export function AdminDashboardStudio({
           if (!open) setEditingFilterId(null);
         }}
       >
-        <DialogContent className="sm:max-w-md border border-[var(--studio-border)]">
+        <DialogContent className="sm:max-w-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]">
           <DialogHeader>
             <DialogTitle className="text-[var(--studio-fg)]">Configurar filtro</DialogTitle>
             <DialogDescription className="text-[var(--studio-fg-muted)]">
-              Tipo de filtro, etiqueta y a qué gráficos se aplica.
+              Campo, nivel temporal (si es fecha), tipo de control y a qué gráficos aplica.
             </DialogDescription>
           </DialogHeader>
           {editFilterForm && etlData && (
-            <div className="py-4 space-y-4">
-              <div>
-                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Campo</label>
-                <select
-                  value={editFilterForm.field}
-                  onChange={(e) => {
-                    const newField = e.target.value;
-                    const willBeDate =
-                      newField === "date" ||
-                      (etlData?.fields?.date ?? []).includes(newField) ||
-                      (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(newField));
-                    const dateOps = ["YEAR", "MONTH", "DAY", "YEAR_MONTH", "SEMESTER", "QUARTER"];
-                    setEditFilterForm((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            field: newField,
-                            ...(willBeDate && prev.operator && !dateOps.includes(prev.operator)
-                              ? { operator: "YEAR" as const }
-                              : {}),
-                          }
-                        : null
-                    );
-                  }}
-                  className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
-                >
-                  {globalFilterFieldOptionsForEdit.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Etiqueta (opcional)</label>
-                <Input
-                  value={editFilterForm.label ?? ""}
-                  onChange={(e) => setEditFilterForm((prev) => (prev ? { ...prev, label: e.target.value } : null))}
-                  placeholder={editFilterForm.field}
-                  className="border border-[var(--studio-border)] bg-[var(--studio-bg)]"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Tipo de filtro</label>
-                <select
-                  value={editFilterForm.inputType ?? "select"}
-                  onChange={(e) => {
-                    const v = e.target.value as GlobalFilter["inputType"];
-                    const isDate =
-                      editFilterForm.field === "date" ||
-                      (etlData?.fields?.date ?? []).includes(editFilterForm.field) ||
-                      (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(editFilterForm.field));
-                    setEditFilterForm((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            inputType: v,
-                            operator: v === "multi" && !isDate ? "IN" : prev.operator ?? (isDate ? "YEAR" : "="),
-                          }
-                        : null
-                    );
-                  }}
-                  className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
-                >
-                  <option value="select">Lista desplegable</option>
-                  <option value="multi">Selección múltiple</option>
-                  <option value="search">Campo de búsqueda (escribir valores)</option>
-                  <option value="number">Número</option>
-                  <option value="date">Fecha</option>
-                </select>
-              </div>
+            <div className="space-y-5 py-2">
               {(() => {
-                const isDateField =
-                  editFilterForm.field === "date" ||
-                  (etlData?.fields?.date ?? []).includes(editFilterForm.field) ||
-                  (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(editFilterForm.field));
+                const isDateMode = isDashboardFilterDateField(editFilterForm.field, {
+                  ...filterDateFieldCtx,
+                  inputType: editFilterForm.inputType,
+                });
+                const temporalOp = isDashboardDateFilterOperator(editFilterForm.operator)
+                  ? String(editFilterForm.operator).toUpperCase()
+                  : "YEAR";
+                const compareOp = editFilterForm.operator ?? "=";
+                const applyTo = editFilterForm.applyTo ?? "all";
+
                 return (
-                  <div>
-                    <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">
-                      {isDateField ? "Nivel de filtrado (fecha)" : "Condición"}
-                    </label>
-                    <select
-                      value={
-                        isDateField
-                          ? ["YEAR", "MONTH", "DAY", "YEAR_MONTH", "SEMESTER", "QUARTER"].includes(
-                              editFilterForm.operator ?? ""
-                            )
-                            ? editFilterForm.operator
-                            : "YEAR"
-                          : editFilterForm.operator ?? "="
-                      }
-                      onChange={(e) =>
-                        setEditFilterForm((prev) => (prev ? { ...prev, operator: e.target.value } : null))
-                      }
-                      className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
-                    >
-                      {isDateField ? (
-                        <>
-                          <option value="YEAR">AÑO</option>
-                          <option value="MONTH">MES</option>
-                          <option value="DAY">DÍA</option>
-                          <option value="YEAR_MONTH">AÑO/MES</option>
-                          <option value="DAY">AÑO/MES/DÍA</option>
-                          <option value="SEMESTER">SEMESTRE</option>
-                          <option value="QUARTER">TRIMESTRE</option>
-                        </>
+                  <>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Campo</Label>
+                      <Select
+                        value={editFilterForm.field}
+                        searchable
+                        searchPlaceholder="Buscar campo…"
+                        disablePortal
+                        options={globalFilterFieldOptionsForEdit}
+                        buttonClassName={studioSelectButtonClass}
+                        onChange={(newField: string) => {
+                          const willBeDate = isDashboardFilterDateField(newField, {
+                            ...filterDateFieldCtx,
+                            inputType: editFilterForm.inputType === "date" ? "date" : undefined,
+                          });
+                          setEditFilterForm((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  field: newField,
+                                  ...(willBeDate && !isDashboardDateFilterOperator(prev.operator)
+                                    ? { operator: "YEAR" }
+                                    : {}),
+                                }
+                              : null
+                          );
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">
+                        Etiqueta (opcional)
+                      </Label>
+                      <Input
+                        value={editFilterForm.label ?? ""}
+                        onChange={(e) =>
+                          setEditFilterForm((prev) => (prev ? { ...prev, label: e.target.value } : null))
+                        }
+                        placeholder={editFilterForm.field}
+                        className="h-10 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)] text-[var(--studio-fg)]"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">
+                        Tipo de filtro
+                      </Label>
+                      <Select
+                        value={editFilterForm.inputType ?? "select"}
+                        disablePortal
+                        buttonClassName={studioSelectButtonClass}
+                        options={[
+                          { value: "select", label: "Lista desplegable" },
+                          { value: "multi", label: "Selección múltiple" },
+                          { value: "search", label: "Campo de búsqueda" },
+                          { value: "number", label: "Número" },
+                          { value: "date", label: "Fecha" },
+                        ]}
+                        onChange={(v: string) => {
+                          const nextType = v as GlobalFilter["inputType"];
+                          setEditFilterForm((prev) => {
+                            if (!prev) return null;
+                            const nextIsDate = isDashboardFilterDateField(prev.field, {
+                              ...filterDateFieldCtx,
+                              inputType: nextType,
+                            });
+                            let operator = prev.operator ?? (nextIsDate ? "YEAR" : "=");
+                            if (nextType === "multi" && !nextIsDate) operator = "IN";
+                            else if (nextIsDate && !isDashboardDateFilterOperator(operator)) operator = "YEAR";
+                            return { ...prev, inputType: nextType, operator };
+                          });
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">
+                        {isDateMode ? "Nivel temporal" : "Condición"}
+                      </Label>
+                      {isDateMode ? (
+                        <Select
+                          value={temporalOp}
+                          disablePortal
+                          buttonClassName={studioSelectButtonClass}
+                          options={[
+                            { value: "YEAR", label: "Año" },
+                            { value: "MONTH", label: "Mes" },
+                            { value: "DAY", label: "Día" },
+                            { value: "YEAR_MONTH", label: "Año / Mes" },
+                            { value: "SEMESTER", label: "Semestre" },
+                            { value: "QUARTER", label: "Trimestre" },
+                          ]}
+                          onChange={(op: string) =>
+                            setEditFilterForm((prev) => (prev ? { ...prev, operator: op } : null))
+                          }
+                        />
                       ) : (
-                        <>
-                          <option value="=">Igual</option>
-                          <option value="!=">Distinto</option>
-                          <option value="CONTAINS">Contiene</option>
-                          <option value="STARTS_WITH">Comienza por</option>
-                          <option value="ENDS_WITH">Termina en</option>
-                          <option value=">">Mayor que</option>
-                          <option value=">=">Mayor o igual</option>
-                          <option value="<">Menor que</option>
-                          <option value="<=">Menor o igual</option>
-                        </>
+                        <Select
+                          value={compareOp}
+                          disablePortal
+                          buttonClassName={studioSelectButtonClass}
+                          options={[
+                            { value: "=", label: "Igual" },
+                            { value: "!=", label: "Distinto" },
+                            { value: "CONTAINS", label: "Contiene" },
+                            { value: "STARTS_WITH", label: "Comienza por" },
+                            { value: "ENDS_WITH", label: "Termina en" },
+                            { value: ">", label: "Mayor que" },
+                            { value: ">=", label: "Mayor o igual" },
+                            { value: "<", label: "Menor que" },
+                            { value: "<=", label: "Menor o igual" },
+                          ]}
+                          onChange={(op: string) =>
+                            setEditFilterForm((prev) => (prev ? { ...prev, operator: op } : null))
+                          }
+                        />
                       )}
-                    </select>
-                  </div>
+                      {isDateMode ? (
+                        <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+                          Define cómo se agrupa la fecha al filtrar (por ejemplo Año para elegir 2024, 2025…).
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Aplicar a</Label>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {(
+                          [
+                            { id: "all" as const, title: "Todos los gráficos", hint: "El filtro afecta a toda la página" },
+                            {
+                              id: "selected" as const,
+                              title: "Solo seleccionados",
+                              hint: "Elegí en qué tarjetas aplica",
+                            },
+                          ] as const
+                        ).map((opt) => {
+                          const selected = applyTo === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() =>
+                                setEditFilterForm((prev) =>
+                                  prev
+                                    ? {
+                                        ...prev,
+                                        applyTo: opt.id,
+                                        applyToWidgetIds: opt.id === "all" ? undefined : prev.applyToWidgetIds ?? [],
+                                      }
+                                    : null
+                                )
+                              }
+                              className={cn(
+                                "rounded-lg border px-3 py-2.5 text-left transition-colors",
+                                selected
+                                  ? "border-[var(--studio-accent,#0ea5e9)] bg-[color-mix(in_srgb,var(--studio-accent,#0ea5e9)_12%,transparent)]"
+                                  : "border-[var(--studio-border)] bg-[var(--studio-bg)] hover:border-[var(--studio-fg-muted)]"
+                              )}
+                            >
+                              <span className="block text-sm font-medium text-[var(--studio-fg)]">{opt.title}</span>
+                              <span className="mt-0.5 block text-[11px] text-[var(--studio-fg-muted)]">{opt.hint}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {applyTo === "selected" && (
+                        <div className="mt-1 max-h-44 space-y-1 overflow-y-auto rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)] p-2">
+                          {widgets
+                            .filter((w) => w.type !== "filter")
+                            .map((w) => {
+                              const checked = (editFilterForm.applyToWidgetIds ?? []).includes(w.id);
+                              return (
+                                <label
+                                  key={w.id}
+                                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm hover:bg-[color-mix(in_srgb,var(--studio-fg)_4%,transparent)]"
+                                >
+                                  <Checkbox
+                                    checked={checked}
+                                    onCheckedChange={(state) => {
+                                      const nextChecked = state === true;
+                                      setEditFilterForm((prev) => {
+                                        if (!prev) return null;
+                                        const ids = prev.applyToWidgetIds ?? [];
+                                        const next = nextChecked
+                                          ? ids.includes(w.id)
+                                            ? ids
+                                            : [...ids, w.id]
+                                          : ids.filter((id) => id !== w.id);
+                                        return { ...prev, applyToWidgetIds: next };
+                                      });
+                                    }}
+                                    className="border-[var(--studio-border)] data-[state=checked]:border-[var(--studio-accent,#0ea5e9)] data-[state=checked]:bg-[var(--studio-accent,#0ea5e9)]"
+                                  />
+                                  <span className="min-w-0 truncate text-[var(--studio-fg)]">
+                                    {w.title || w.id || "Sin título"}
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          {widgets.filter((w) => w.type !== "filter").length === 0 && (
+                            <p className="px-2 py-1 text-xs text-[var(--studio-fg-muted)]">
+                              No hay gráficos en el dashboard.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {applyTo === "selected" &&
+                        (() => {
+                          const dataSources = (
+                            etlData as { dataSources?: { id: string; fields?: { all?: string[] } }[] }
+                          )?.dataSources;
+                          const datasetDimensions = (
+                            etlData as {
+                              datasetDimensions?: Record<string, Record<string, string>>;
+                              primarySourceId?: string;
+                            }
+                          )?.datasetDimensions;
+                          const primarySourceId =
+                            (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
+                          const selectedIds = editFilterForm.applyToWidgetIds ?? [];
+                          const incompatible: { id: string; title: string }[] = [];
+                          if (dataSources?.length && selectedIds.length > 0) {
+                            for (const widgetId of selectedIds) {
+                              const w = widgets.find((x) => x.id === widgetId);
+                              if (!w || w.type === "filter") continue;
+                              const widgetSourceId = w.dataSourceId ?? primarySourceId ?? dataSources[0]?.id;
+                              const source = dataSources.find((s) => s.id === widgetSourceId) ?? dataSources[0];
+                              const sourceFieldsAll = (source?.fields?.all ?? []).map((c: string) =>
+                                (c || "").toLowerCase()
+                              );
+                              const resolvePhysical = (sem: string) => {
+                                const bySource = datasetDimensions?.[sem];
+                                if (bySource && widgetSourceId && bySource[widgetSourceId]) {
+                                  return bySource[widgetSourceId];
+                                }
+                                return sem;
+                              };
+                              const physical = resolvePhysical(editFilterForm.field);
+                              const hasField =
+                                physical &&
+                                sourceFieldsAll.some((c: string) => c === (physical || "").toLowerCase());
+                              if (!hasField) {
+                                incompatible.push({ id: w.id, title: w.title || w.id || "Sin título" });
+                              }
+                            }
+                          }
+                          if (incompatible.length === 0) return null;
+                          return (
+                            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+                              Los siguientes gráficos no contienen el campo &quot;{editFilterForm.field}&quot;:{" "}
+                              {incompatible.map((x) => x.title).join(", ")}. El filtro no tendrá efecto en ellos.
+                            </div>
+                          );
+                        })()}
+                    </div>
+                  </>
                 );
               })()}
-              <div>
-                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Aplicar a</label>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="applyTo"
-                      checked={(editFilterForm.applyTo ?? "all") === "all"}
-                      onChange={() =>
-                        setEditFilterForm((prev) => (prev ? { ...prev, applyTo: "all" as const, applyToWidgetIds: undefined } : null))
-                      }
-                    />
-                    <span className="text-sm">Todos los gráficos</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="applyTo"
-                      checked={(editFilterForm.applyTo ?? "all") === "selected"}
-                      onChange={() =>
-                        setEditFilterForm((prev) => (prev ? { ...prev, applyTo: "selected" as const, applyToWidgetIds: [] } : null))
-                      }
-                    />
-                    <span className="text-sm">Solo gráficos seleccionados</span>
-                  </label>
-                </div>
-                {(editFilterForm.applyTo ?? "all") === "selected" && (
-                  <div className="mt-2 max-h-40 overflow-y-auto rounded border border-[var(--studio-border)] p-2 space-y-1">
-                    {widgets
-                      .filter((w) => w.type !== "filter")
-                      .map((w) => {
-                        const checked = (editFilterForm.applyToWidgetIds ?? []).includes(w.id);
-                        return (
-                          <label key={w.id} className="flex items-center gap-2 cursor-pointer text-sm">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => {
-                                setEditFilterForm((prev) => {
-                                  if (!prev) return null;
-                                  const ids = prev.applyToWidgetIds ?? [];
-                                  const next = checked ? ids.filter((id) => id !== w.id) : [...ids, w.id];
-                                  return { ...prev, applyToWidgetIds: next };
-                                });
-                              }}
-                            />
-                            <span className="truncate">{w.title || w.id || "Sin título"}</span>
-                          </label>
-                        );
-                      })}
-                    {widgets.filter((w) => w.type !== "filter").length === 0 && (
-                      <p className="text-xs text-[var(--studio-fg-muted)]">No hay gráficos en el dashboard.</p>
-                    )}
-                  </div>
-                )}
-                {(editFilterForm.applyTo ?? "all") === "selected" &&
-                  (() => {
-                    const dataSources = (etlData as { dataSources?: { id: string; fields?: { all?: string[] } }[] })?.dataSources;
-                    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>>; primarySourceId?: string })?.datasetDimensions;
-                    const primarySourceId = (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
-                    const selectedIds = editFilterForm.applyToWidgetIds ?? [];
-                    const incompatible: { id: string; title: string }[] = [];
-                    if (dataSources?.length && selectedIds.length > 0) {
-                      for (const widgetId of selectedIds) {
-                        const w = widgets.find((x) => x.id === widgetId);
-                        if (!w || w.type === "filter") continue;
-                        const widgetSourceId = w.dataSourceId ?? primarySourceId ?? dataSources[0]?.id;
-                        const source = dataSources.find((s) => s.id === widgetSourceId) ?? dataSources[0];
-                        const sourceFieldsAll = (source?.fields?.all ?? []).map((c: string) => (c || "").toLowerCase());
-                        const resolvePhysical = (sem: string) => {
-                          const bySource = datasetDimensions?.[sem];
-                          if (bySource && widgetSourceId && bySource[widgetSourceId]) return bySource[widgetSourceId];
-                          return sem;
-                        };
-                        const physical = resolvePhysical(editFilterForm.field);
-                        const hasField = physical && sourceFieldsAll.some((c: string) => c === (physical || "").toLowerCase());
-                        if (!hasField) incompatible.push({ id: w.id, title: w.title || w.id || "Sin título" });
-                      }
-                    }
-                    if (incompatible.length === 0) return null;
-                    return (
-                      <div className="mt-2 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-200">
-                        Los siguientes gráficos no contienen el campo &quot;{editFilterForm.field}&quot;:{" "}
-                        {incompatible.map((x) => x.title).join(", ")}. El filtro no tendrá efecto en ellos.
-                      </div>
-                    );
-                  })()}
-              </div>
             </div>
           )}
           {editFilterForm && (
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 border-t border-[var(--studio-border)] pt-4">
               <Button variant="outline" onClick={() => setEditingFilterId(null)}>
                 Cancelar
               </Button>
               <Button
                 onClick={() => {
                   if (!editFilterForm) return;
-                  const isDate =
-                    editFilterForm.field === "date" ||
-                    (etlData?.fields?.date ?? []).includes(editFilterForm.field) ||
-                    (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(editFilterForm.field));
-                  const dateOps = ["YEAR", "MONTH", "DAY", "YEAR_MONTH", "SEMESTER", "QUARTER"];
-                  const operator =
-                    isDate && editFilterForm.operator && !dateOps.includes(editFilterForm.operator)
-                      ? "YEAR"
-                      : (editFilterForm.operator ?? "=");
+                  const operator = resolveDashboardFilterOperator({
+                    field: editFilterForm.field,
+                    operator: editFilterForm.operator,
+                    inputType: editFilterForm.inputType,
+                    etlDateFields: filterDateFieldCtx.etlDateFields,
+                    dataSourceDateFields: filterDateFieldCtx.dataSourceDateFields,
+                  });
                   setGlobalFilters((prev) =>
                     prev.map((f) =>
                       f.id === editingFilterId ? { ...editFilterForm, id: f.id, operator } : f
