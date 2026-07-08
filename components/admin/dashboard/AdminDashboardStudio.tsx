@@ -615,16 +615,22 @@ export function AdminDashboardStudio({
           const firstPageId = loadedPages[0].id;
           const loadedCardLayoutMode = normalizeCardLayoutMode(layout.cardLayoutMode);
           if (Array.isArray(layout.widgets)) {
-            loadedWidgets = layout.widgets.map((w: unknown, i: number) =>
-              normalizeLoadedStudioWidget(
+            loadedWidgets = layout.widgets.map((w: unknown, i: number) => {
+              const normalized = normalizeLoadedStudioWidget(
                 {
                   ...(w as object),
                   gridOrder: (w as StudioWidget).gridOrder ?? i,
                   gridSpan: (w as StudioWidget).gridSpan ?? 2,
                   pageId: (w as StudioWidget).pageId ?? firstPageId,
                 } as StudioWidget
-              )
-            );
+              );
+              const needsData =
+                normalized.type !== "filter" &&
+                normalized.type !== "text" &&
+                normalized.type !== "image" &&
+                !!normalized.aggregationConfig?.enabled;
+              return { ...normalized, isLoading: needsData };
+            });
           }
           if (layout.theme) loadedTheme = mergeTheme(layout.theme);
           if (!cancelled) {

@@ -656,7 +656,15 @@ export function DashboardViewer({
   useEffect(() => {
     if (initialWidgets?.length) {
       setPageLayout(null);
-      setWidgets(initialWidgets.map((w) => normalizeLoadedDashboardWidget(w)));
+      setWidgets(
+        initialWidgets.map((w) => ({
+          ...normalizeLoadedDashboardWidget(w),
+          isLoading:
+            w.type !== "filter" && w.type !== "text" && w.type !== "image"
+              ? true
+              : false,
+        }))
+      );
       if (initialTitle) setTitle(initialTitle);
       if (initialGlobalFilters) {
         setGlobalFilters(initialGlobalFilters);
@@ -745,11 +753,16 @@ export function DashboardViewer({
     const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
     const loadedWidgets = rawWidgets.map((w, i) => {
       const base = w as Widget;
-      return normalizeLoadedDashboardWidget({
+      const normalized = normalizeLoadedDashboardWidget({
         ...base,
         gridOrder: base.gridOrder ?? i,
         pageId: normalizeWidgetPageId(base.pageId),
       });
+      const needsData =
+        normalized.type !== "filter" &&
+        normalized.type !== "text" &&
+        normalized.type !== "image";
+      return { ...normalized, isLoading: needsData };
     });
     const loadedTheme = layout?.theme && typeof layout.theme === "object" ? layout.theme : {};
     setWidgets(loadedWidgets);

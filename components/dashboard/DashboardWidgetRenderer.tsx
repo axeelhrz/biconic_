@@ -409,7 +409,11 @@ export function DashboardWidgetRenderer({
   }, [chartType, chartConfig?.labels?.length, effectiveMinHeight]);
   const defaultCartesianChartHeight = Math.max(220, effectiveMinHeight - 72);
   const hasViz = useMemo(() => {
-    if (chartType === "kpi") return true;
+    // KPI: no tratar como visualización “lista” sin filas; si no, el mensaje vacío
+    // aparece antes del primer fetch (isLoading aún false al montar el layout).
+    if (chartType === "kpi") {
+      return Array.isArray(tableRows) && tableRows.length > 0;
+    }
     if (chartType === "table") return Array.isArray(tableRows) && tableRows.length > 0;
     if (chartType === "text") return true;
     if (chartType === "image") return true;
@@ -1885,11 +1889,11 @@ export function DashboardWidgetRenderer({
                   <span className="text-4xl font-bold tabular-nums" style={{ color: "var(--platform-fg, #0f172a)" }}>
                     {kpiValue}
                   </span>
-                ) : (
+                ) : Array.isArray(widget.rows) && widget.rows.length > 0 ? (
                   <div className="max-w-sm rounded-lg border px-4 py-3 text-center text-sm" style={{ borderColor: "var(--platform-border, #e2e8f0)", color: "var(--platform-fg-muted, #64748b)", background: "var(--platform-surface, #fff)" }}>
                     No hay dato unico para KPI. Revisa metrica/ejes o usa Tabla.
                   </div>
-                )}
+                ) : null}
                 {(() => {
                   if (widget.kpiSecondaryLabel || widget.kpiSecondaryValue) {
                     return (
