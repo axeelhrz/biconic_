@@ -486,6 +486,7 @@ function widgetMatchesActivePage(
   return false;
 }
 
+/** Carga inicial / remount: acota para no saturar el backend. */
 const WIDGET_LOAD_CONCURRENCY = 3;
 
 function collectLoadableWidgetIds(
@@ -504,6 +505,23 @@ async function loadWidgetsWithConcurrency(
 ): Promise<void> {
   if (widgetIds.length === 0) return;
   await runWithConcurrency(widgetIds, WIDGET_LOAD_CONCURRENCY, (id) => loadOne(id));
+}
+
+/**
+ * Al aplicar filtros: marca todas las tarjetas en loading a la vez y dispara
+ * los fetches en paralelo (no de a N), para que el refresh se vea simultáneo.
+ */
+async function loadWidgetsInParallel(
+  widgetIds: string[],
+  setWidgets: React.Dispatch<React.SetStateAction<Widget[]>>,
+  loadOne: (widgetId: string) => Promise<void>
+): Promise<void> {
+  if (widgetIds.length === 0) return;
+  const idSet = new Set(widgetIds);
+  setWidgets((prev) =>
+    prev.map((w) => (idSet.has(w.id) ? { ...w, isLoading: true } : w))
+  );
+  await Promise.all(widgetIds.map((id) => loadOne(id)));
 }
 
 export interface DashboardViewerProps {
@@ -1442,8 +1460,9 @@ export function DashboardViewer({
     if (filtersReloadKeyRef.current === key) return;
     filtersReloadKeyRef.current = key;
     const timer = setTimeout(() => {
-      void loadWidgetsWithConcurrency(
+      void loadWidgetsInParallel(
         collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
+        setWidgets,
         loadDataForWidget
       );
     }, 300);

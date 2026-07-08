@@ -1493,14 +1493,11 @@ export function AdminDashboardStudio({
       (w) => (w.pageId ?? "page-1") === pageId && w.aggregationConfig?.enabled && w.type !== "image" && w.type !== "text"
     );
     if (toLoad.length === 0) return;
-    const sid = selectedId;
-    void (async () => {
-      if (sid && toLoad.some((w) => w.id === sid)) {
-        await loadMetricData(sid);
-      }
-      await Promise.all(toLoad.filter((w) => w.id !== sid).map((w) => loadMetricData(w.id)));
-    })();
-  }, [widgets, activePageId, loadMetricData, selectedId]);
+    const ids = new Set(toLoad.map((w) => w.id));
+    // Marcar todas en loading a la vez y disparar fetches en paralelo (no secuencial ni de a N).
+    setWidgets((prev) => prev.map((w) => (ids.has(w.id) ? { ...w, isLoading: true } : w)));
+    void Promise.all(toLoad.map((w) => loadMetricData(w.id)));
+  }, [widgets, activePageId, loadMetricData]);
 
   const handleStudioFilterChange = useCallback((widgetId: string, value: unknown) => {
     setStudioFilterValues((prev) => ({ ...prev, [widgetId]: value }));
