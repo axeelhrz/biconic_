@@ -1,6 +1,24 @@
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { getPublicBackendApiUrl } from "@/lib/api/backend-config";
-import { shouldUseDirectS3Upload } from "@/lib/storage/s3-excel-storage";
+import {
+  shouldUseDirectS3Upload,
+  VERCEL_SAFE_UPLOAD_BYTES,
+} from "@/lib/storage/s3-excel-storage";
+
+/** En el navegador `process.env.VERCEL` no existe; detectar despliegue remoto. */
+function shouldClientUseDirectS3Upload(fileSize: number): boolean {
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host !== "localhost" && host !== "127.0.0.1") {
+      return true;
+    }
+    if (process.env.NEXT_PUBLIC_FORCE_DIRECT_EXCEL_UPLOAD === "1") {
+      return true;
+    }
+    return fileSize > VERCEL_SAFE_UPLOAD_BYTES;
+  }
+  return shouldUseDirectS3Upload(fileSize);
+}
 
 function uploadError(message: string, stage = "upload_storage"): Error & { stage: string } {
   const err = new Error(message) as Error & { stage: string };
@@ -48,7 +66,7 @@ function postFormWithUploadToken(
     xhr.onerror = () => {
       reject(
         uploadError(
-          "No se pudo conectar con el servidor de archivos. Verificá CORS_ORIGIN=https://biconic-blush.vercel.app en Railway."
+          "No se pudo conectar con el servidor de archivos. Verificá CORS_ORIGIN en Railway (debe incluir el dominio de la app, p. ej. https://biconic-platform.vercel.app)."
         )
       );
     };
@@ -131,9 +149,15 @@ async function uploadExcelMultipart(input: {
     dataTableId?: string;
     error?: string;
     stage?: string;
+    useDirectUpload?: boolean;
   }>(res);
 
   if (!res.ok || !data.connectionId || !data.dataTableId) {
+    if (res.status === 413 && data.useDirectUpload) {
+      const err = uploadError("DIRECT_UPLOAD_REQUIRED", data.stage ?? "upload_storage");
+      (err as Error & { useDirectUpload: boolean }).useDirectUpload = true;
+      throw err;
+    }
     throw uploadError(data.error ?? "Error al subir el archivo", data.stage ?? "upload_storage");
   }
 
@@ -231,8 +255,19 @@ export async function uploadExcelViaOwnBackend(input: {
   connectionName: string;
   clientId: string;
 }): Promise<{ connectionId: string; dataTableId: string }> {
-  if (shouldUseDirectS3Upload(input.file.size)) {
+  if (shouldClientUseDirectS3Upload(input.file.size)) {
     return uploadExcelViaPresignedUrl(input);
   }
-  return uploadExcelMultipart(input);
+  try {
+    return await uploadExcelMultipart(input);
+  } catch (err) {
+    const needsDirect =
+      err instanceof Error &&
+      "useDirectUpload" in err &&
+      (err as Error & { useDirectUpload?: boolean }).useDirectUpload === true;
+    if (needsDirect) {
+      return uploadExcelViaPresignedUrl(input);
+    }
+    throw err;
+  }
 }
