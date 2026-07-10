@@ -27,7 +27,7 @@ const ETL_RUN_POLL_INTERVAL_MS =
 const ETL_RUN_MAX_WAIT_MS =
   Number(process.env.ETL_RUN_MAX_WAIT_MS) > 0
     ? Number(process.env.ETL_RUN_MAX_WAIT_MS)
-    : 2 * 60 * 60 * 1000; // 2h: tope defensivo, no debería alcanzarse en runs normales
+    : 4 * 60 * 60 * 1000; // 4h: runs grandes con JOIN pueden tardar horas
 
 /**
  * Espera a que el run termine consultando la base directamente (el worker ya tiene

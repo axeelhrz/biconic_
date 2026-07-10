@@ -3,6 +3,11 @@ import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
 import { v4 as uuidv4 } from "uuid";
 import { runScheduledConnections } from "@/lib/connection/run-scheduled-connections";
+import {
+  resolvePrimaryConnectionId,
+  sanitizeGuidedJoinForRun,
+} from "@/lib/etl/guided-config-sanitize";
+import { getStaleRunMinutes } from "@/lib/etl/schedule";
 import { DatabaseService } from "../database/database.service";
 import { ETL_QUEUE } from "./etl.constants";
 
@@ -65,12 +70,14 @@ export class EtlService {
   }
 
   async markStaleRunsFailed() {
+    const staleMinutes = getStaleRunMinutes();
     const rows = await this.db.query(
       `UPDATE public.etl_runs_log
        SET status = 'failed', error_message = 'Timeout: run stale', completed_at = now()
        WHERE status IN ('started', 'running')
-         AND started_at < now() - interval '2 hours'
-       RETURNING id`
+         AND started_at < now() - ($1::text || ' minutes')::interval
+       RETURNING id`,
+      [String(staleMinutes)]
     );
     return { marked: rows.length };
   }
@@ -130,25 +137,36 @@ export class EtlService {
         continue;
       }
 
-      let sanitizedJoin = guided.join as Record<string, unknown> | undefined;
-      if (
-        sanitizedJoin &&
-        typeof sanitizedJoin === "object" &&
-        Array.isArray(sanitizedJoin.joins)
-      ) {
-        const validJoins = (sanitizedJoin.joins as Record<string, unknown>[]).filter(
-          (jn) =>
-            !!jn &&
-            typeof jn === "object" &&
-            jn.secondaryConnectionId != null &&
-            String(jn.secondaryConnectionId).trim() !== ""
+      let sanitizedJoin: Record<string, unknown> | undefined;
+      const joinResult = sanitizeGuidedJoinForRun(guided.join, guided.filter);
+      if (joinResult && !joinResult.ok) {
+        console.warn(`[runScheduled] ETL ${etl.id} omitido: ${joinResult.error}`);
+        continue;
+      }
+      if (joinResult?.ok) {
+        sanitizedJoin = joinResult.join;
+      }
+
+      const connectionId = resolvePrimaryConnectionId(guided, sanitizedJoin);
+      if (!connectionId) {
+        console.warn(`[runScheduled] ETL ${etl.id} omitido: sin connectionId configurado.`);
+        continue;
+      }
+
+      const conn = await this.db.queryOne<{ id: string }>(
+        `SELECT id FROM public.connections WHERE id = $1`,
+        [connectionId]
+      );
+      if (!conn) {
+        console.warn(
+          `[runScheduled] ETL ${etl.id} omitido: conexión ${connectionId} no encontrada.`
         );
-        sanitizedJoin = validJoins.length === 0 ? undefined : { ...sanitizedJoin, joins: validJoins };
+        continue;
       }
 
       const body: Record<string, unknown> = {
         etlId: etl.id,
-        connectionId: guided.connectionId,
+        connectionId,
         filter: guided.filter,
         union: guided.union,
         ...(sanitizedJoin ? { join: sanitizedJoin } : {}),

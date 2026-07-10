@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { shouldUseOwnBackend, proxyToBackend } from "@/lib/api/backend-proxy";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { getStaleRunMinutes } from "@/lib/etl/schedule";
+import { isEtlRunProgressMessage } from "@/lib/etl/run-progress";
 
-/** Minutos desde started_at para considerar un run "stale" (por encima de maxDuration 300s de Vercel). El cron en vercel.json invoca este endpoint cada 10 min. */
-const STALE_MINUTES = 20;
+/** Minutos desde started_at para considerar un run "stale". Override: ETL_STALE_RUN_MINUTES */
+const STALE_MINUTES = getStaleRunMinutes();
 
 function getSecret(req: NextRequest): string | null {
   return (
@@ -29,7 +31,7 @@ async function markStaleRunsFailed() {
 
   const { data: staleRows, error: fetchErr } = await supabase
     .from("etl_runs_log")
-    .select("id, status, started_at, etl_id")
+    .select("id, status, started_at, etl_id, rows_processed, error_message")
     .in("status", ["started", "running"])
     .lt("started_at", threshold);
 
@@ -38,11 +40,24 @@ async function markStaleRunsFailed() {
     throw new Error(fetchErr.message);
   }
 
-  if (!staleRows?.length) {
+  type StaleRunRow = {
+    id: string;
+    rows_processed?: number | null;
+    error_message?: string | null;
+  };
+
+  const ids = ((staleRows || []) as StaleRunRow[])
+    .filter((row) => {
+      const rowsProcessed = Number(row.rows_processed ?? 0);
+      if (rowsProcessed > 0) return false;
+      if (isEtlRunProgressMessage(row.error_message)) return false;
+      return true;
+    })
+    .map((row) => row.id);
+
+  if (!ids.length) {
     return { ok: true, marked: 0, message: "No hay runs obsoletos." };
   }
-
-  const ids = staleRows.map((r: any) => (r as { id: string }).id);
   const { error: updateErr } = await supabase
     .from("etl_runs_log")
     .update({

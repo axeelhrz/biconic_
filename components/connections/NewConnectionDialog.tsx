@@ -362,7 +362,7 @@ export default function NewConnectionDialog({
           }
         }
       } else if (!wantsAllSheets && fileExt !== "csv") {
-        selectedSheet = "__ALL__";
+        selectedSheet = undefined;
       }
 
       setCurrentImportId(dataTableId);

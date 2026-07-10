@@ -81,6 +81,62 @@ export function listSheetNamesFromBuffer(
   return (workbook.SheetNames ?? []).filter(Boolean);
 }
 
+export async function listSheetNamesForConnection(
+  connectionId: string,
+  supabaseAdmin: { from: (table: string) => unknown },
+  options?: { cookieHeader?: string | null; internal?: boolean }
+): Promise<{ sheetNames: string[]; storagePath: string; originalFileName: string | null }> {
+  const { data: connection } = await (supabaseAdmin as { from: (t: string) => any })
+    .from("connections")
+    .select("storage_object_path, original_file_name")
+    .eq("id", connectionId)
+    .single();
+
+  const storagePath = String(connection?.storage_object_path ?? "").trim();
+  if (!storagePath) {
+    throw new Error("No se encontró el archivo Excel en almacenamiento.");
+  }
+
+  const originalFileName = (connection?.original_file_name as string | null) ?? null;
+  const buffer = await loadWorkbookBufferForConnection(storagePath, originalFileName, options);
+  const sheetNames = listSheetNamesFromBuffer(buffer, storagePath, originalFileName);
+  return { sheetNames, storagePath, originalFileName };
+}
+
+export type ImportSheetResolution =
+  | { mode: "single"; sheetName: string; sheetNames: string[] }
+  | { mode: "all"; sheetNames: string[] };
+
+/** Convierte `__ALL__` / null en hoja concreta o importación multi-hoja. */
+export async function resolveImportSheetSelection(
+  connectionId: string,
+  selectedSheet: string | null | undefined,
+  supabaseAdmin: { from: (table: string) => unknown },
+  options?: { cookieHeader?: string | null; internal?: boolean }
+): Promise<ImportSheetResolution> {
+  const token = selectedSheet?.trim() || null;
+  const { sheetNames } = await listSheetNamesForConnection(connectionId, supabaseAdmin, options);
+
+  if (sheetNames.length === 0) {
+    throw new Error("El archivo no contiene hojas legibles.");
+  }
+
+  const wantsAllSheets = token === "__ALL__" || (token == null && sheetNames.length > 1);
+  if (wantsAllSheets && sheetNames.length > 1) {
+    return { mode: "all", sheetNames };
+  }
+
+  if (token && token !== "__ALL__" && sheetNames.includes(token)) {
+    return { mode: "single", sheetName: token, sheetNames };
+  }
+
+  if (token && token !== "__ALL__" && !sheetNames.includes(token)) {
+    throw new Error(`La hoja "${token}" no existe en el archivo.`);
+  }
+
+  return { mode: "single", sheetName: sheetNames[0], sheetNames };
+}
+
 export async function ensureDataTablesForSheets(
   supabaseAdmin: any,
   connectionId: string,

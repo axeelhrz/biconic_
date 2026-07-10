@@ -25,7 +25,7 @@ import {
   CastTargetType
 } from "@/lib/etl/transformations";
 import { ETL_MAX_ROWS_CEILING, ETL_JOIN_CHUNK_SIZE_DEFAULT } from "@/lib/etl/limits";
-import { updateEtlScheduleLastRunAt } from "@/lib/etl/schedule";
+import { updateEtlScheduleLastRunAt, getHardStaleRunMinutes, getStaleRunMinutes } from "@/lib/etl/schedule";
 import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
 import {
   normalizeExcelDataTableRows,
@@ -38,6 +38,7 @@ import {
 import { callJoinQueryForEtl } from "@/lib/connection/call-join-query-for-etl";
 import {
   clearEtlRunProgressMessage,
+  isEtlRunProgressMessage,
   reportEtlRunProgress,
 } from "@/lib/etl/run-progress";
 
@@ -349,7 +350,6 @@ function pgCastExpr(columnIdentifier: string, targetType: CastTargetType) {
 
 const ETL_RETRIES = 3;
 const ETL_RETRY_DELAY_MS = 2000;
-const STALE_RUN_MINUTES = 20;
 
 async function withRetry<T>(
   fn: () => Promise<T>,
@@ -396,15 +396,37 @@ export async function markStaleRunsForEtl(
   supabaseAdmin: any,
   etlId: string
 ): Promise<void> {
-  const threshold = new Date(Date.now() - STALE_RUN_MINUTES * 60 * 1000).toISOString();
-  const { data: staleRows, error } = await supabaseAdmin
+  const staleMinutes = getStaleRunMinutes();
+  const hardStaleMinutes = getHardStaleRunMinutes();
+  const staleThreshold = new Date(Date.now() - staleMinutes * 60 * 1000).toISOString();
+  const hardThreshold = new Date(Date.now() - hardStaleMinutes * 60 * 1000).toISOString();
+
+  const { data: activeRows, error } = await supabaseAdmin
     .from("etl_runs_log")
-    .select("id")
+    .select("id, started_at, rows_processed, error_message")
     .eq("etl_id", etlId)
-    .in("status", ["started", "running"])
-    .lt("started_at", threshold);
-  if (error || !staleRows?.length) return;
-  const ids = staleRows.map((r: { id: string }) => r.id);
+    .in("status", ["started", "running"]);
+  if (error || !activeRows?.length) return;
+
+  const ids = (activeRows as Array<{
+    id: string;
+    started_at: string;
+    rows_processed: number | null;
+    error_message: string | null;
+  }>)
+    .filter((row) => {
+      const startedAt = row.started_at;
+      if (startedAt < hardThreshold) return true;
+      if (startedAt >= staleThreshold) return false;
+      const rowsProcessed = Number(row.rows_processed ?? 0);
+      if (rowsProcessed > 0) return false;
+      if (isEtlRunProgressMessage(row.error_message)) return false;
+      return true;
+    })
+    .map((row) => row.id);
+
+  if (!ids.length) return;
+
   await supabaseAdmin
     .from("etl_runs_log")
     .update({
@@ -1073,6 +1095,15 @@ export async function executeEtlPipeline(
         if (isJoin) {
           const isStar = isStarJoin && Array.isArray(joinObj.joins) && joinObj.joins.length > 0;
           if (isStar && Array.isArray(joinObj.joins) && joinObj.joins.length > 1) {
+            const primaryTableResolved = String(
+              joinObj.primaryTable || (body!.filter?.table || "")
+            ).trim();
+            if (!primaryTableResolved) {
+              throw createHttpError(
+                "JOIN múltiple: falta tabla principal (primaryTable o filter.table). Editá el ETL y volvé a guardarlo.",
+                400
+              );
+            }
             const selectedCols = (body!.filter?.columns || []) as string[];
             const primaryColumns = selectedCols
               .filter((c: string) => /^primary\./i.test(c))
@@ -1117,7 +1148,7 @@ export async function executeEtlPipeline(
               try {
                 for await (const batch of streamFirebirdStarJoin({
                   attachOptions: fbOpts as unknown as Record<string, unknown>,
-                  primaryTable: joinObj.primaryTable || (body!.filter?.table || "").trim(),
+                  primaryTable: primaryTableResolved,
                   primaryColumns,
                   joins: joinsWithCols,
                   conditions: (body!.filter?.conditions || []) as any,
@@ -1179,7 +1210,7 @@ export async function executeEtlPipeline(
               while (true) {
                 const joinQueryBody: Record<string, unknown> = {
                   primaryConnectionId: joinObj.primaryConnectionId,
-                  primaryTable: joinObj.primaryTable || (body!.filter?.table || "").trim(),
+                  primaryTable: primaryTableResolved,
                   joins: joinsWithCols,
                   primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
                   conditions: body!.filter?.conditions || [],

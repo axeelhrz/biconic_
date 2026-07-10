@@ -403,7 +403,7 @@ export default function AdminNewConnectionDialog({
           }
         }
       } else if (!wantsAllSheets && fileExt !== "csv") {
-        selectedSheet = "__ALL__";
+        selectedSheet = undefined;
       }
 
       setCurrentImportId(dataTableId);

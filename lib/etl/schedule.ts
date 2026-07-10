@@ -107,8 +107,28 @@ export function parseScheduleFromLayout(layout: unknown): EtlSchedule | undefine
   return schedule as EtlSchedule;
 }
 
-/** Minutos para considerar un run activo (evitar solapamiento con cron). */
-export const ACTIVE_RUN_GUARD_MINUTES = 20;
+/** Minutos para considerar un run activo (evitar solapamiento con cron). Override: ETL_ACTIVE_RUN_GUARD_MINUTES */
+function resolveActiveRunGuardMinutes(): number {
+  const raw = Number(process.env.ETL_ACTIVE_RUN_GUARD_MINUTES);
+  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+  return 240;
+}
+
+export const ACTIVE_RUN_GUARD_MINUTES = resolveActiveRunGuardMinutes();
+
+/** Minutos sin progreso para cerrar runs colgados al iniciar otro run del mismo ETL. Override: ETL_STALE_RUN_MINUTES */
+export function getStaleRunMinutes(): number {
+  const raw = Number(process.env.ETL_STALE_RUN_MINUTES);
+  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+  return 240;
+}
+
+/** Tope duro: runs activos más allá de esto se cierran aunque reporten progreso (zombie). */
+export function getHardStaleRunMinutes(): number {
+  const raw = Number(process.env.ETL_HARD_STALE_RUN_MINUTES);
+  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+  return 480;
+}
 
 /** Aplica frecuencia en guided_config.schedule; frequency vacío desactiva auto-actualización. */
 export function mergeScheduleIntoGuidedConfig(

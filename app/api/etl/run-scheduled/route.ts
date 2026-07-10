@@ -5,9 +5,14 @@ import { runScheduledConnections } from "@/lib/connection/run-scheduled-connecti
 import {
   ACTIVE_RUN_GUARD_MINUTES,
   getIntervalMs,
+  getStaleRunMinutes,
   isDue,
   type EtlSchedule,
 } from "@/lib/etl/schedule";
+import {
+  resolvePrimaryConnectionId,
+  sanitizeGuidedJoinForRun,
+} from "@/lib/etl/guided-config-sanitize";
 
 function getSecret(req: NextRequest): string | null {
   return (
@@ -86,20 +91,25 @@ async function runScheduled() {
       continue;
     }
 
-    let sanitizedJoin = guidedConfig.join as Record<string, unknown> | undefined;
-    if (sanitizedJoin && typeof sanitizedJoin === "object" && Array.isArray(sanitizedJoin.joins)) {
-      const validJoins = (sanitizedJoin.joins as Record<string, unknown>[]).filter(
-        (jn) => !!jn && typeof jn === "object" && jn.secondaryConnectionId != null && String(jn.secondaryConnectionId).trim() !== ""
-      );
-      if (validJoins.length === 0) {
-        sanitizedJoin = undefined;
-      } else {
-        sanitizedJoin = { ...sanitizedJoin, joins: validJoins };
-      }
+    let sanitizedJoin: Record<string, unknown> | undefined;
+    const joinResult = sanitizeGuidedJoinForRun(guidedConfig.join, guidedConfig.filter);
+    if (joinResult && !joinResult.ok) {
+      console.warn(`[run-scheduled] ETL ${id} omitido: ${joinResult.error}`);
+      continue;
     }
+    if (joinResult?.ok) {
+      sanitizedJoin = joinResult.join;
+    }
+
+    const connectionId = resolvePrimaryConnectionId(guidedConfig, sanitizedJoin);
+    if (!connectionId) {
+      console.warn(`[run-scheduled] ETL ${id} omitido: sin connectionId configurado.`);
+      continue;
+    }
+
     const body = {
       etlId: id,
-      connectionId: guidedConfig.connectionId,
+      connectionId,
       filter: guidedConfig.filter,
       union: guidedConfig.union,
       ...(sanitizedJoin ? { join: sanitizedJoin } : {}),
