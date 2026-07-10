@@ -20,9 +20,18 @@ function shouldClientUseDirectS3Upload(fileSize: number): boolean {
   return shouldUseDirectS3Upload(fileSize);
 }
 
-function uploadError(message: string, stage = "upload_storage"): Error & { stage: string } {
-  const err = new Error(message) as Error & { stage: string };
+type UploadError = Error & { stage: string; useDirectUpload?: boolean };
+
+function uploadError(
+  message: string,
+  stage = "upload_storage",
+  options?: { useDirectUpload?: boolean }
+): UploadError {
+  const err = new Error(message) as UploadError;
   err.stage = stage;
+  if (options?.useDirectUpload) {
+    err.useDirectUpload = true;
+  }
   return err;
 }
 
@@ -154,9 +163,9 @@ async function uploadExcelMultipart(input: {
 
   if (!res.ok || !data.connectionId || !data.dataTableId) {
     if (res.status === 413 && data.useDirectUpload) {
-      const err = uploadError("DIRECT_UPLOAD_REQUIRED", data.stage ?? "upload_storage");
-      (err as Error & { useDirectUpload: boolean }).useDirectUpload = true;
-      throw err;
+      throw uploadError("DIRECT_UPLOAD_REQUIRED", data.stage ?? "upload_storage", {
+        useDirectUpload: true,
+      });
     }
     throw uploadError(data.error ?? "Error al subir el archivo", data.stage ?? "upload_storage");
   }
@@ -264,7 +273,7 @@ export async function uploadExcelViaOwnBackend(input: {
     const needsDirect =
       err instanceof Error &&
       "useDirectUpload" in err &&
-      (err as Error & { useDirectUpload?: boolean }).useDirectUpload === true;
+      (err as UploadError).useDirectUpload === true;
     if (needsDirect) {
       return uploadExcelViaPresignedUrl(input);
     }
