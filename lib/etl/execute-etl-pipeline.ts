@@ -252,8 +252,13 @@ function resolveEtlOutputColumnKeys(body: RunBody): string[] {
   };
 
   const filterCols = Array.isArray(body.filter?.columns) ? (body.filter!.columns as string[]) : [];
-  const joinRaw = body.join as unknown as { joins?: Array<{ secondaryColumns?: string[] }> } | undefined;
+  const joinRaw = body.join as unknown as
+    | { primaryConnectionId?: unknown; joins?: Array<{ secondaryColumns?: string[] }> }
+    | undefined;
   const joins = Array.isArray(joinRaw?.joins) ? joinRaw!.joins! : [];
+  // Solo el JOIN estrella produce filas con claves prefijadas (primary_col / join_N_col).
+  // Sin JOIN, las filas llegan con la columna tal cual; prefijar crearía columnas vacías duplicadas.
+  const hasStarJoin = Boolean(joinRaw?.primaryConnectionId) && joins.length > 0;
 
   for (const raw of filterCols) {
     const trimmed = (raw || "").trim();
@@ -271,8 +276,10 @@ function resolveEtlOutputColumnKeys(body: RunBody): string[] {
     }
     if (/^(primary\.|join_\d+\.)/i.test(trimmed)) {
       addKey(configColumnRefToRowKey(trimmed));
-    } else {
+    } else if (hasStarJoin) {
       addKey(configColumnRefToRowKey(`primary.${trimmed}`));
+    } else {
+      addKey(configColumnRefToRowKey(trimmed));
     }
   }
 
