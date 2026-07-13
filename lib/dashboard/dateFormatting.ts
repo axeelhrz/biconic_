@@ -11,6 +11,22 @@ function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
 
+/** Abreviaturas en inglés (p. ej. Sep-2024) usadas en relaciones comparativas. */
+export const MONTH_NAMES_EN_SHORT = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
 const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const PLAUSIBLE_DATE_YEAR_MIN = 1970;
@@ -117,6 +133,17 @@ export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): D
     return safeDateFromParts(year, month, 1);
   }
 
+  // Mon-YYYY (p. ej. Sep-2024 en datasets comparativos)
+  const monYear = raw.match(/^([A-Za-z]{3})-(\d{4})$/);
+  if (monYear) {
+    const monthIdx = MONTH_NAMES_EN_SHORT.findIndex(
+      (name) => name.toLowerCase() === monYear[1]!.toLowerCase()
+    );
+    if (monthIdx >= 0) {
+      return safeDateFromParts(Number(monYear[2]), monthIdx + 1, 1);
+    }
+  }
+
   // yyyy-MM (periodo mes; inequívoco frente a dd/MM vs MM/dd)
   const ym = raw.match(/^(\d{4})-(\d{1,2})$/);
   if (ym) {
@@ -191,6 +218,35 @@ export function formatDateByGranularity(
 export type AnalysisDateDisplayFormat = "short" | "monthYear" | "year" | "datetime";
 
 const MONTH_NAMES_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+
+export function parseMonthYearEnLabel(raw: string): { year: number; month: number } | null {
+  const monYear = /^([A-Za-z]{3})-(\d{4})$/.exec(raw.trim());
+  if (!monYear) return null;
+  const monthIdx = MONTH_NAMES_EN_SHORT.findIndex(
+    (name) => name.toLowerCase() === monYear[1]!.toLowerCase()
+  );
+  if (monthIdx < 0) return null;
+  const year = Number(monYear[2]);
+  if (!Number.isFinite(year) || year < 1000 || year > 9999) return null;
+  return { year, month: monthIdx + 1 };
+}
+
+export function formatMonthYearEnLabel(
+  value: unknown,
+  parseOpts?: ParseDateLikeOptions
+): string | null {
+  if (typeof value === "string") {
+    const parsed = parseMonthYearEnLabel(value);
+    if (parsed) {
+      return `${MONTH_NAMES_EN_SHORT[parsed.month - 1]}-${parsed.year}`;
+    }
+  }
+  const dt = parseDateLike(value, parseOpts);
+  if (!dt) return null;
+  const month = dt.getUTCMonth() + 1;
+  const year = dt.getUTCFullYear();
+  return `${MONTH_NAMES_EN_SHORT[month - 1]}-${year}`;
+}
 
 /**
  * Extrae año y mes desde `YYYY-MM` o prefijo `YYYY-MM-DD` / ISO (`…T…`), sin `Date`.

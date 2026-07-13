@@ -1,6 +1,12 @@
 import type { CompareSpec } from "@/lib/dashboard/compareSpec";
 import { getRowValue, resolveRowColumnKey } from "@/lib/dashboard/compareMetricRows";
-import { formatDateByGranularity, parseDateLike, type DateGranularity, type ParseDateLikeOptions } from "@/lib/dashboard/dateFormatting";
+import {
+  formatDateByGranularity,
+  formatMonthYearEnLabel,
+  parseDateLike,
+  type DateGranularity,
+  type ParseDateLikeOptions,
+} from "@/lib/dashboard/dateFormatting";
 import type {
   ComparativeFieldMapping,
   ComparativeRelation,
@@ -19,6 +25,18 @@ function norm(s: string): string {
   return s.replace(/\s+/g, "").toUpperCase();
 }
 
+function transformComparativeKeyValue(
+  raw: unknown,
+  transform: DateTransform | undefined,
+  parseOpts?: ParseDateLikeOptions
+): string {
+  if (raw == null) return "";
+  if (transform === "monthYear") {
+    return formatMonthYearEnLabel(raw, parseOpts) ?? String(raw).trim();
+  }
+  return String(raw).trim();
+}
+
 function transformBaseKeyValue(
   raw: unknown,
   transform: DateTransform | undefined,
@@ -26,6 +44,10 @@ function transformBaseKeyValue(
 ): string {
   if (raw == null) return "";
   if (!transform || transform === "none") return String(raw).trim();
+
+  if (transform === "monthYear") {
+    return formatMonthYearEnLabel(raw, parseOpts) ?? String(raw).trim();
+  }
 
   const gran = transform as DateGranularity;
   const d = parseDateLike(raw, parseOpts);
@@ -49,7 +71,7 @@ export function buildComparativeJoinKey(
     const val =
       side === "base"
         ? transformBaseKeyValue(raw, m.baseDateTransform, parseOpts)
-        : String(raw ?? "").trim();
+        : transformComparativeKeyValue(raw, m.baseDateTransform, parseOpts);
     parts.push(val);
   }
   return parts.join("\x01");

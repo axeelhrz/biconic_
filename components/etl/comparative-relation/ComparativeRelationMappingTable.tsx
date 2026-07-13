@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { ComparativeFieldMapping, DateTransform } from "@/lib/dataset/comparativeRelation";
-import { deriveComparisonLevel } from "@/lib/dataset/comparativeRelation";
+import { deriveComparisonLevel, inferComparativeDateTransform } from "@/lib/dataset/comparativeRelation";
 
 type Props = {
   baseFields: string[];
@@ -44,9 +44,31 @@ export function ComparativeRelationMappingTable({
     ]);
   };
 
+  const withSuggestedDateTransform = (
+    mapping: ComparativeFieldMapping,
+    patch: Partial<ComparativeFieldMapping>
+  ): ComparativeFieldMapping => {
+    const next = { ...mapping, ...patch };
+    const baseColumn = next.baseColumn;
+    const comparativeColumn = next.comparativeColumn;
+    const isDate = baseDateFields.includes(baseColumn);
+    const suggested = isDate ? inferComparativeDateTransform(comparativeColumn) : undefined;
+    const current = next.baseDateTransform ?? "none";
+
+    if (
+      suggested &&
+      isDate &&
+      (patch.comparativeColumn != null || patch.baseColumn != null) &&
+      (current === "none" || current === "month")
+    ) {
+      return { ...next, baseDateTransform: suggested };
+    }
+    return next;
+  };
+
   const updateMapping = (id: string, patch: Partial<ComparativeFieldMapping>) => {
     onChange(
-      mappings.map((m) => (m.id === id ? { ...m, ...patch } : m))
+      mappings.map((m) => (m.id === id ? withSuggestedDateTransform(m, patch) : m))
     );
   };
 

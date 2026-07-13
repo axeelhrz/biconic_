@@ -44,6 +44,7 @@ const DATE_TRANSFORM_OPTIONS: { value: DateTransform; label: string }[] = [
   { value: "day", label: "Día" },
   { value: "week", label: "Semana" },
   { value: "month", label: "Mes" },
+  { value: "monthYear", label: "Mes-Año" },
   { value: "quarter", label: "Trimestre" },
   { value: "year", label: "Año" },
 ];

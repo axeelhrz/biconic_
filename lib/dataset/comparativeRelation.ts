@@ -1,7 +1,7 @@
 import { inferFormatForColumn, type InferredColumnFormat } from "@/lib/derive-column-types";
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
 
-export type DateTransform = "none" | "day" | "week" | "month" | "quarter" | "year";
+export type DateTransform = "none" | "day" | "week" | "month" | "monthYear" | "quarter" | "year";
 export type ComparativeValueType = "absolute" | "percent";
 
 export type ComparativeFieldMapping = {
@@ -37,17 +37,28 @@ export type ComparativeRelation = {
   validation?: ComparativeRelationValidation;
 };
 
-const DATE_TRANSFORMS: DateTransform[] = ["none", "day", "week", "month", "quarter", "year"];
+const DATE_TRANSFORMS: DateTransform[] = ["none", "day", "week", "month", "monthYear", "quarter", "year"];
 
 const GRANULARITY_RANK: Record<DateTransform | DateGranularity, number> = {
   none: 0,
   day: 1,
   week: 2,
   month: 3,
+  monthYear: 3,
   quarter: 4,
   semester: 4,
   year: 5,
 };
+
+const MONTH_YEAR_COLUMN_RE = /mes[\s_-]*y[\s_-]*a[\s_-]*o|mes[\s_-]*a[\s_-]*n[\s_-]*o|month[\s_-]*year/i;
+
+/** Sugiere transformación Mes-Año cuando la columna comparativa ya viene en formato Mon-YYYY. */
+export function inferComparativeDateTransform(comparativeColumn: string): DateTransform | undefined {
+  const name = comparativeColumn.trim();
+  if (!name) return undefined;
+  if (MONTH_YEAR_COLUMN_RE.test(name)) return "monthYear";
+  return undefined;
+}
 
 export function isDateTransform(v: unknown): v is DateTransform {
   return typeof v === "string" && DATE_TRANSFORMS.includes(v as DateTransform);
@@ -252,8 +263,14 @@ export function findComparativeRelation(
   return relations.find((r) => r.id === relationId) ?? null;
 }
 
+const SQL_MONTH_YEAR_LABEL =
+  "(ARRAY['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'])[EXTRACT(MONTH FROM DATE_TRUNC('month', __COL__::timestamp))::int] || '-' || TO_CHAR(DATE_TRUNC('month', __COL__::timestamp), 'YYYY')";
+
 export function sqlDateTruncExpr(columnSql: string, transform: DateTransform): string {
   if (transform === "none") return columnSql;
+  if (transform === "monthYear") {
+    return SQL_MONTH_YEAR_LABEL.replaceAll("__COL__", columnSql);
+  }
   if (transform === "quarter") {
     return `DATE_TRUNC('quarter', ${columnSql}::timestamp)`;
   }
@@ -293,8 +310,18 @@ export function normalizeComparativeFieldMappings(
   mappings: ComparativeFieldMapping[],
   availableFields: string[]
 ): ComparativeFieldMapping[] {
-  return mappings.map((m) => ({
-    ...m,
-    comparativeColumn: normalizeComparativeColumnRef(m.comparativeColumn, availableFields),
-  }));
+  return mappings.map((m) => {
+    const comparativeColumn = normalizeComparativeColumnRef(m.comparativeColumn, availableFields);
+    const suggested = inferComparativeDateTransform(comparativeColumn);
+    const current = m.baseDateTransform ?? "none";
+    const baseDateTransform =
+      suggested === "monthYear" && (current === "none" || current === "month")
+        ? "monthYear"
+        : m.baseDateTransform;
+    return {
+      ...m,
+      comparativeColumn,
+      ...(baseDateTransform ? { baseDateTransform } : {}),
+    };
+  });
 }

@@ -5,11 +5,14 @@ import {
   detectComparativeValueType,
   filterComparativeRelationFields,
   granularityRank,
+  inferComparativeDateTransform,
   isAnalysisFinerThanComparisonLevel,
   normalizeComparativeColumnRef,
   normalizeComparativeFieldMappings,
   parseComparativeRelation,
+  sqlDateTruncExpr,
 } from "@/lib/dataset/comparativeRelation";
+import { formatMonthYearEnLabel, parseMonthYearEnLabel } from "@/lib/dashboard/dateFormatting";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { validateComparativeCompare } from "@/lib/dashboard/validateComparativeCompare";
 import { applyComparativeRelationToRows } from "@/lib/dashboard/applyComparativeRelation";
@@ -54,9 +57,21 @@ describe("comparativeRelation", () => {
         fields
       )
     ).toEqual([
-      { id: "1", comparativeColumn: "mes_y_a_o", baseColumn: "fecha" },
+      { id: "1", comparativeColumn: "mes_y_a_o", baseColumn: "fecha", baseDateTransform: "monthYear" },
       { id: "2", comparativeColumn: "zona", baseColumn: "zona" },
       { id: "3", comparativeColumn: "provincia", baseColumn: "provincia" },
+    ]);
+  });
+
+  it("auto-upgrades month transform to monthYear for mes_y_a_o columns", () => {
+    const fields = ["mes_y_a_o", "zona", "provincia"];
+    expect(
+      normalizeComparativeFieldMappings(
+        [{ id: "1", comparativeColumn: "mes_y_a_o", baseColumn: "fecha", baseDateTransform: "month" }],
+        fields
+      )
+    ).toEqual([
+      { id: "1", comparativeColumn: "mes_y_a_o", baseColumn: "fecha", baseDateTransform: "monthYear" },
     ]);
   });
 
@@ -83,6 +98,16 @@ describe("comparativeRelation", () => {
     });
     expect(blocked).toBe(true);
     expect(granularityRank("day")).toBeLessThan(granularityRank("month"));
+  });
+
+  it("infers monthYear transform for mes_y_a_o columns", () => {
+    expect(inferComparativeDateTransform("mes_y_a_o")).toBe("monthYear");
+    expect(inferComparativeDateTransform("provincia")).toBeUndefined();
+  });
+
+  it("formats monthYear SQL expression for Mon-YYYY keys", () => {
+    expect(sqlDateTruncExpr('"fecha"', "monthYear")).toContain("Sep");
+    expect(sqlDateTruncExpr('"fecha"', "monthYear")).toContain("ARRAY");
   });
 });
 
@@ -155,5 +180,39 @@ describe("applyComparativeRelationToRows", () => {
   it("generates percent output columns", () => {
     const cols = comparativeOutputColumns("tasa", "percent");
     expect(cols).toContain("tasa_diferencia_puntos_porcentuales");
+  });
+
+  it("joins rows when base date uses monthYear transform", () => {
+    const relation = {
+      id: "r1",
+      name: "Objetivos",
+      comparativeDatasetId: "ds-2",
+      fieldMappings: [
+        {
+          id: "m1",
+          comparativeColumn: "mes_y_a_o",
+          baseColumn: "fecha",
+          baseDateTransform: "monthYear" as const,
+        },
+      ],
+      comparisonLevel: ["fecha"],
+      comparativeFields: [{ column: "meta", valueType: "absolute" as const }],
+    };
+    const rows = applyComparativeRelationToRows({
+      baseRows: [{ fecha: "2024-09-15", ventas: 100 }],
+      comparativeRows: [{ mes_y_a_o: "Sep-2024", meta: 80 }],
+      relation,
+      compareSpec: { kind: "comparative", relationId: "r1", metricAlias: "ventas", comparativeField: "meta" },
+      metricAliases: ["ventas"],
+    });
+    expect(rows[0]?.ventas_valor_comparativo).toBe(80);
+  });
+});
+
+describe("monthYear formatting", () => {
+  it("parses and formats Mon-YYYY labels", () => {
+    expect(parseMonthYearEnLabel("Sep-2024")).toEqual({ year: 2024, month: 9 });
+    expect(formatMonthYearEnLabel("Sep-2024")).toBe("Sep-2024");
+    expect(formatMonthYearEnLabel("2024-09-15")).toBe("Sep-2024");
   });
 });
