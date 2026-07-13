@@ -20,6 +20,7 @@ export type ComparativeMeasureField = {
 export type ComparativeRelationValidation = {
   status: "ok" | "blocked" | "warning";
   duplicates?: { count: number; sampleKeys?: string[] };
+  emptyKeyColumns?: { columns: string[]; message?: string };
   baseWithoutMatch?: { count: number };
   comparativeWithoutBase?: { count: number };
   validatedAt: string;
@@ -261,4 +262,39 @@ export function sqlDateTruncExpr(columnSql: string, transform: DateTransform): s
 
 export function quoteSqlIdentifier(name: string): string {
   return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+/**
+ * Oculta columnas legacy `primary_*` cuando existe la columna real sin prefijo
+ * (artefacto de ETLs sin JOIN que duplicaban el esquema).
+ */
+export function filterComparativeRelationFields(fields: string[]): string[] {
+  const set = new Set(fields);
+  return fields.filter((col) => {
+    if (!col.startsWith("primary_")) return true;
+    const twin = col.slice("primary_".length);
+    return !set.has(twin);
+  });
+}
+
+/** Corrige referencias a columnas `primary_*` vacías si existe la columna real. */
+export function normalizeComparativeColumnRef(
+  column: string,
+  availableFields: string[]
+): string {
+  const trimmed = column.trim();
+  if (!trimmed.startsWith("primary_")) return trimmed;
+  const twin = trimmed.slice("primary_".length);
+  const set = new Set(availableFields);
+  return set.has(twin) ? twin : trimmed;
+}
+
+export function normalizeComparativeFieldMappings(
+  mappings: ComparativeFieldMapping[],
+  availableFields: string[]
+): ComparativeFieldMapping[] {
+  return mappings.map((m) => ({
+    ...m,
+    comparativeColumn: normalizeComparativeColumnRef(m.comparativeColumn, availableFields),
+  }));
 }

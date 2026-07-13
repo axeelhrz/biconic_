@@ -84,6 +84,45 @@ export async function validateComparativeRelation(
       return { status: "blocked", validatedAt, duplicates: { count: 0 } };
     }
 
+    const emptyKeyColumns: string[] = [];
+    for (const m of input.fieldMappings) {
+      const colSql = quoteSqlIdentifier(m.comparativeColumn);
+      const emptyCheckQuery = `
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(NULLIF(TRIM(${colSql}::text), ''))::int AS non_empty
+        FROM ${compTable}
+      `;
+      const emptyRows = await sql.unsafe<{ total: number; non_empty: number }[]>(emptyCheckQuery);
+      const total = Number(emptyRows[0]?.total ?? 0);
+      const nonEmpty = Number(emptyRows[0]?.non_empty ?? 0);
+      if (total > 0 && nonEmpty === 0) {
+        emptyKeyColumns.push(m.comparativeColumn);
+      }
+    }
+
+    if (emptyKeyColumns.length > 0) {
+      const twinHints = emptyKeyColumns
+        .filter((c) => c.startsWith("primary_"))
+        .map((c) => c.slice("primary_".length))
+        .filter((twin) =>
+          input.fieldMappings.some((m) => m.comparativeColumn === twin || m.baseColumn === twin)
+        );
+      const hint =
+        twinHints.length > 0
+          ? ` Probá usar ${twinHints.map((t) => `"${t}"`).join(", ")} en lugar de las columnas primary_* vacías.`
+          : "";
+      return {
+        status: "blocked",
+        validatedAt,
+        duplicates: { count: 0 },
+        emptyKeyColumns: {
+          columns: emptyKeyColumns,
+          message: `Columna(s) de clave vacías en el dataset comparativo: ${emptyKeyColumns.join(", ")}.${hint}`,
+        },
+      };
+    }
+
     const compGroupBy = compKeys.groupExprs.join(", ");
     const dupQuery = `
       SELECT COUNT(*)::int AS c FROM (
@@ -106,9 +145,9 @@ export async function validateComparativeRelation(
       `;
       const sampleRows = await sql.unsafe<Record<string, unknown>[]>(sampleDupQuery);
       sampleKeys = sampleRows.map((r) =>
-        Object.values(r)
-          .map((v) => String(v ?? ""))
-          .join(" | ")
+        input.fieldMappings
+          .map((m, i) => `${m.comparativeColumn}=${String(r[`k${i}`] ?? "").trim() || "(vacío)"}`)
+          .join(" · ")
       );
     }
 

@@ -3,8 +3,11 @@ import {
   comparativeOutputColumns,
   deriveComparisonLevel,
   detectComparativeValueType,
+  filterComparativeRelationFields,
   granularityRank,
   isAnalysisFinerThanComparisonLevel,
+  normalizeComparativeColumnRef,
+  normalizeComparativeFieldMappings,
   parseComparativeRelation,
 } from "@/lib/dataset/comparativeRelation";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
@@ -24,6 +27,37 @@ describe("comparativeRelation", () => {
   it("detects percent columns by name", () => {
     expect(detectComparativeValueType("porcentaje_cumplimiento")).toBe("percent");
     expect(detectComparativeValueType("importe_total")).toBe("absolute");
+  });
+
+  it("filters legacy primary_* columns when real column exists", () => {
+    expect(
+      filterComparativeRelationFields([
+        "primary_mes_y_a_o",
+        "mes_y_a_o",
+        "primary_zona",
+        "zona",
+        "provincia",
+      ])
+    ).toEqual(["mes_y_a_o", "zona", "provincia"]);
+  });
+
+  it("normalizes comparative field mappings away from empty primary_* columns", () => {
+    const fields = ["mes_y_a_o", "zona", "provincia", "primary_zona"];
+    expect(normalizeComparativeColumnRef("primary_zona", fields)).toBe("zona");
+    expect(
+      normalizeComparativeFieldMappings(
+        [
+          { id: "1", comparativeColumn: "mes_y_a_o", baseColumn: "fecha" },
+          { id: "2", comparativeColumn: "primary_zona", baseColumn: "zona" },
+          { id: "3", comparativeColumn: "provincia", baseColumn: "provincia" },
+        ],
+        fields
+      )
+    ).toEqual([
+      { id: "1", comparativeColumn: "mes_y_a_o", baseColumn: "fecha" },
+      { id: "2", comparativeColumn: "zona", baseColumn: "zona" },
+      { id: "3", comparativeColumn: "provincia", baseColumn: "provincia" },
+    ]);
   });
 
   it("parses comparative relation from config", () => {

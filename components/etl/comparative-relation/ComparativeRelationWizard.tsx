@@ -14,7 +14,9 @@ import {
   type DateTransform,
   deriveComparisonLevel,
   detectComparativeValueType,
+  filterComparativeRelationFields,
   isComparativeMeasureCandidate,
+  normalizeComparativeFieldMappings,
   parseComparativeRelation,
 } from "@/lib/dataset/comparativeRelation";
 import { ComparativeRelationMappingTable } from "./ComparativeRelationMappingTable";
@@ -90,8 +92,11 @@ export function ComparativeRelationWizard({
       const json = await res.json();
       const fields: string[] = json?.data?.fields?.all ?? [];
       const numeric: string[] = json?.data?.fields?.numeric ?? [];
-      setCompFields(fields);
-      setCompNumericFields(numeric.length > 0 ? numeric : fields);
+      const filtered = filterComparativeRelationFields(fields);
+      setCompFields(filtered);
+      setCompNumericFields(
+        filterComparativeRelationFields(numeric.length > 0 ? numeric : fields)
+      );
     } catch {
       setCompFields([]);
       setCompNumericFields([]);
@@ -122,6 +127,26 @@ export function ComparativeRelationWizard({
     );
     onRelationsChange(next);
   };
+
+  useEffect(() => {
+    if (!editing || compFields.length === 0 || editing.fieldMappings.length === 0) return;
+    const normalized = normalizeComparativeFieldMappings(editing.fieldMappings, compFields);
+    const changed = normalized.some(
+      (m, i) => m.comparativeColumn !== editing.fieldMappings[i]?.comparativeColumn
+    );
+    if (!changed) return;
+    const next = relations.map((r) =>
+      r.id === editing.id
+        ? {
+            ...r,
+            fieldMappings: normalized,
+            comparisonLevel: deriveComparisonLevel(normalized),
+            validation: undefined,
+          }
+        : r
+    );
+    onRelationsChange(next);
+  }, [compFields, editing?.id, editing?.fieldMappings, relations, onRelationsChange]);
 
   const addRelation = () => {
     const id = `crel-${Date.now()}`;
@@ -177,13 +202,24 @@ export function ComparativeRelationWizard({
     }
     setValidating(true);
     try {
+      const normalizedMappings = normalizeComparativeFieldMappings(
+        editing.fieldMappings,
+        compFields
+      );
+      if (
+        normalizedMappings.some(
+          (m, i) => m.comparativeColumn !== editing.fieldMappings[i]?.comparativeColumn
+        )
+      ) {
+        updateEditing({ fieldMappings: normalizedMappings });
+      }
       const res = await fetch("/api/dataset/comparative-relation/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           baseDatasetId: currentDatasetId,
           comparativeDatasetId: editing.comparativeDatasetId,
-          fieldMappings: editing.fieldMappings,
+          fieldMappings: normalizedMappings,
         }),
       });
       const json = await res.json();
@@ -194,7 +230,10 @@ export function ComparativeRelationWizard({
       const validation = json.data.validation as ComparativeRelationValidation;
       updateEditing({ validation });
       if (validation.status === "blocked") {
-        toast.error("Validación bloqueada: hay duplicados en el dataset comparativo.");
+        const emptyMsg = validation.emptyKeyColumns?.message;
+        toast.error(
+          emptyMsg ?? "Validación bloqueada: hay duplicados en el dataset comparativo."
+        );
       } else if (validation.status === "warning") {
         toast.warning("Relación válida con advertencias de cobertura.");
       } else {
