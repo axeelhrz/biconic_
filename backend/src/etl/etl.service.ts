@@ -101,7 +101,7 @@ export class EtlService {
        LIMIT 200`
     );
 
-    const { getIntervalMs, isDue, ACTIVE_RUN_GUARD_MINUTES } = await import(
+    const { isScheduleDue, ACTIVE_RUN_GUARD_MINUTES } = await import(
       "@/lib/etl/schedule"
     );
 
@@ -114,11 +114,11 @@ export class EtlService {
       const schedule = (guided.schedule ?? {}) as {
         frequency?: string;
         lastRunAt?: string;
+        runAtTime?: string;
+        runOnWeekdays?: number[];
       };
-      const frequency = String(schedule.frequency ?? "").trim();
-      const intervalMs = getIntervalMs(frequency);
-      if (intervalMs == null) continue;
-      if (!isDue(schedule.lastRunAt, intervalMs)) continue;
+      if (!String(schedule.frequency ?? "").trim()) continue;
+      if (!isScheduleDue(schedule)) continue;
       due++;
 
       const threshold = new Date(

@@ -695,7 +695,7 @@ async function processDataImport(connectionId, dataTableId, supabaseAdmin, dbUrl
                     .eq("id", dataTableId);
             }
             const resumeCursor = parseImportCursor(forceReimport ? null : tableState.columns);
-            const selectedSheetToUse = resumeCursor?.selectedSheet !== null && resumeCursor?.selectedSheet !== undefined
+            let selectedSheetToUse = resumeCursor?.selectedSheet !== null && resumeCursor?.selectedSheet !== undefined
                 ? resumeCursor.selectedSheet
                 : selectedSheet ?? null;
             const parseModeToUse = resumeCursor?.parseMode || parseMode;
@@ -821,7 +821,11 @@ async function processDataImport(connectionId, dataTableId, supabaseAdmin, dbUrl
             };
             const preWarnings = [];
             if (selectedSheetToUse === "__ALL__") {
-                throw new Error("La importación de todas las hojas debe orquestarse desde runProcessExcelImport.");
+                const resolved = await (0, excel_sheet_tables_1.resolveImportSheetSelection)(connectionId, selectedSheetToUse, supabaseAdmin, storageOptions);
+                if (resolved.mode === "all") {
+                    throw new Error("La importación de todas las hojas debe orquestarse desde runProcessExcelImport.");
+                }
+                selectedSheetToUse = resolved.sheetName;
             }
             const isAllSheets = false;
             const extLower = (preferredExtension || "").toLowerCase();
@@ -1343,29 +1347,15 @@ async function runProcessExcelImport(input) {
         Boolean(process.env.RAILWAY_ENVIRONMENT) ||
         Boolean(process.env.PROCESS_EXCEL_RUNNER_URL?.trim());
     let selectedSheet = input.selectedSheet;
-    if (!input.continuation) {
-        const { data: connection } = await supabaseAdmin
-            .from("connections")
-            .select("storage_object_path, original_file_name")
-            .eq("id", input.connectionId)
-            .single();
-        if (connection?.storage_object_path) {
-            const buffer = await (0, excel_sheet_tables_1.loadWorkbookBufferForConnection)(connection.storage_object_path, connection.original_file_name ?? null, {
-                cookieHeader: input.cookieHeader,
-                internal: useInternalStorage,
-            });
-            const sheetNames = (0, excel_sheet_tables_1.listSheetNamesFromBuffer)(buffer, connection.storage_object_path, connection.original_file_name ?? null);
-            const wantsAllSheets = selectedSheet === "__ALL__" ||
-                (selectedSheet == null && sheetNames.length > 1);
-            if (wantsAllSheets && sheetNames.length > 1) {
-                await runAllSheetsExcelImport(input, sheetNames, supabaseAdmin, dbUrl, useInternalStorage);
-                return;
-            }
-            if (!selectedSheet && sheetNames.length === 1) {
-                selectedSheet = sheetNames[0];
-            }
-        }
+    const sheetResolution = await (0, excel_sheet_tables_1.resolveImportSheetSelection)(input.connectionId, selectedSheet, supabaseAdmin, {
+        cookieHeader: input.cookieHeader,
+        internal: useInternalStorage,
+    });
+    if (sheetResolution.mode === "all") {
+        await runAllSheetsExcelImport(input, sheetResolution.sheetNames, supabaseAdmin, dbUrl, useInternalStorage);
+        return;
     }
+    selectedSheet = sheetResolution.sheetName;
     if (!input.continuation) {
         const { error } = await supabaseAdmin
             .from("data_tables")

@@ -4,11 +4,14 @@ import {
   ETL_SCHEDULE_FREQUENCIES,
   formatNextExecutionDisplay,
   formatScheduleLabel,
+  normalizeScheduleInput,
   type EtlSchedule,
+  type ScheduleInput,
 } from "@/lib/etl/schedule";
 
 export { ETL_SCHEDULE_FREQUENCIES, formatNextExecutionDisplay, formatScheduleLabel };
 export type ConnectionSchedule = EtlSchedule;
+export type { ScheduleInput };
 
 export function parseScheduleFromConnectionConfig(config: unknown): ConnectionSchedule | undefined {
   if (!config || typeof config !== "object" || Array.isArray(config)) return undefined;
@@ -17,25 +20,28 @@ export function parseScheduleFromConnectionConfig(config: unknown): ConnectionSc
   return schedule as ConnectionSchedule;
 }
 
-/** Aplica frecuencia en config.schedule; frequency vacío desactiva auto-actualización. */
+/** Aplica programación en config.schedule; frequency vacío desactiva auto-actualización. */
 export function mergeScheduleIntoConnectionConfig(
   config: Record<string, unknown> | null | undefined,
-  frequency: string | null | undefined,
+  input: ScheduleInput | string | null | undefined,
   preserveLastRunAt?: string | null
 ): Record<string, unknown> {
+  const scheduleInput: ScheduleInput =
+    typeof input === "string" || input === null || input === undefined
+      ? { frequency: input }
+      : input;
+  const normalized = normalizeScheduleInput(scheduleInput);
   const base = { ...(config ?? {}) };
-  const existing = (base.schedule as ConnectionSchedule | undefined) ?? {};
-  const f = (frequency ?? "").trim();
-  if (!f) {
+  if (!normalized) {
     const { schedule: _removed, ...rest } = base;
     return rest;
   }
+  const existing = (base.schedule as ConnectionSchedule | undefined) ?? {};
   const lastRunAt = existing.lastRunAt ?? preserveLastRunAt ?? undefined;
   return {
     ...base,
     schedule: {
-      ...existing,
-      frequency: f,
+      ...normalized,
       ...(lastRunAt ? { lastRunAt } : {}),
     },
   };

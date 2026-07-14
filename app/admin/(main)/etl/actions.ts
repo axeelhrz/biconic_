@@ -148,7 +148,7 @@ export async function getEtlsAdmin(options?: { clientId?: string | null }) {
     return {
       ...r,
       lastExecution: lastRunByEtlId[String(r.id)] ?? null,
-      nextExecution: formatNextExecutionDisplay(schedule?.lastRunAt, frequency),
+      nextExecution: formatNextExecutionDisplay(schedule?.lastRunAt, frequency, schedule ?? undefined),
       createdAt: r.created_at ?? null,
     };
   });

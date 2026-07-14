@@ -12,6 +12,7 @@ export declare class DashboardController {
         tableName: string;
         field: string;
         limit?: number;
+        transform?: string;
     }, req: Request & {
         user: {
             sub: string;

@@ -4,6 +4,7 @@ import { useState } from "react";
 import AdminConnectionsGrid from "@/components/admin/AdminConnectionsGrid";
 import { Search, Plus, Database } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ClientFilter } from "@/components/admin/dashboard/ClientFilter";
 import AdminNewConnectionDialog from "@/components/admin/AdminNewConnectionDialog";
 import ConnectionConfigDialog from "@/components/admin/ConnectionConfigDialog";
 import ConnectionTablesDialog from "@/components/connections/ConnectionTablesDialog";
@@ -11,6 +12,7 @@ import DeleteConnectionDialog from "@/components/connections/DeleteConnectionDia
 
 export default function AdminConnectionsPage() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [configDialogConnectionId, setConfigDialogConnectionId] = useState<string | null>(null);
   const [configDialogMode, setConfigDialogMode] = useState<"view" | "edit">("edit");
@@ -118,28 +120,32 @@ export default function AdminConnectionsPage() {
         </div>
       </section>
 
-      {/* Toolbar: búsqueda */}
+      {/* Toolbar: búsqueda y filtro por cliente */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
-        <div className="relative flex-1 sm:max-w-[320px]">
-          <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
-          <input
-            type="text"
-            placeholder="Buscar por nombre, host o base..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full h-11 rounded-xl border pl-11 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)] focus:border-transparent transition-shadow"
-            style={{
-              background: "var(--platform-surface)",
-              borderColor: "var(--platform-border)",
-              color: "var(--platform-fg)",
-            }}
-          />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4 w-full sm:w-auto">
+          <div className="relative flex-1 sm:max-w-[320px]">
+            <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2" style={{ color: "var(--platform-fg-muted)" }} />
+            <input
+              type="text"
+              placeholder="Buscar por nombre, host, base o cliente..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full h-11 rounded-xl border pl-11 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)] focus:border-transparent transition-shadow"
+              style={{
+                background: "var(--platform-surface)",
+                borderColor: "var(--platform-border)",
+                color: "var(--platform-fg)",
+              }}
+            />
+          </div>
+          <ClientFilter onSelect={setSelectedClientId} />
         </div>
       </div>
 
       {/* Grid de Conexiones */}
       <AdminConnectionsGrid
         searchQuery={searchQuery}
+        clientId={selectedClientId}
         onConfigure={(id) => {
           setConfigDialogMode("edit");
           setConfigDialogConnectionId(id);

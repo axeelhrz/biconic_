@@ -3,46 +3,76 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/Select";
 import { Clock, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { ETL_SCHEDULE_FREQUENCIES, formatScheduleDateTime } from "@/lib/etl/schedule";
+import { formatScheduleDateTime, validateScheduleInput, type ScheduleInput } from "@/lib/etl/schedule";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import {
+  formStateToScheduleInput,
+  ScheduleFrequencyFields,
+  scheduleResponseToFormState,
+  scheduleToFormState,
+  type ScheduleApiData,
+  type ScheduleFormState,
+} from "@/components/schedule/ScheduleFrequencyFields";
 
 export type EtlScheduleSettingsProps = {
   etlId: string;
   /** Modo embebido en wizard: no muestra botón Guardar; notifica cambios al padre. */
   embedded?: boolean;
   frequency?: string;
+  runAtTime?: string;
+  runOnWeekdays?: number[];
   lastRunAt?: string | null;
   nextExecution?: string | null;
   onFrequencyChange?: (frequency: string) => void;
+  onScheduleChange?: (input: ScheduleInput) => void;
   /** En modo standalone, tras guardar exitoso. */
-  onSaved?: (data: { frequency: string | null; lastRunAt: string | null; nextExecution: string }) => void;
+  onSaved?: (data: ScheduleApiData) => void;
   showEditFlowLink?: boolean;
 };
-
-const FREQUENCY_OPTIONS = [
-  { value: "", label: "Ninguna (solo manual)" },
-  ...ETL_SCHEDULE_FREQUENCIES.map((f) => ({ value: f.value, label: f.label })),
-];
 
 export default function EtlScheduleSettings({
   etlId,
   embedded = false,
   frequency: frequencyProp,
+  runAtTime: runAtTimeProp,
+  runOnWeekdays: runOnWeekdaysProp,
   lastRunAt: lastRunAtProp,
   nextExecution: nextExecutionProp,
   onFrequencyChange,
+  onScheduleChange,
   onSaved,
   showEditFlowLink = true,
 }: EtlScheduleSettingsProps) {
-  const [frequency, setFrequency] = useState(frequencyProp ?? "");
+  const [form, setForm] = useState<ScheduleFormState>(() =>
+    scheduleToFormState({
+      frequency: frequencyProp,
+      runAtTime: runAtTimeProp,
+      runOnWeekdays: runOnWeekdaysProp,
+    })
+  );
   const [lastRunAt, setLastRunAt] = useState<string | null>(lastRunAtProp ?? null);
   const [nextExecution, setNextExecution] = useState<string | null>(nextExecutionProp ?? null);
   const [loading, setLoading] = useState(!embedded);
   const [saving, setSaving] = useState(false);
+
+  const notifyParent = (next: ScheduleFormState) => {
+    const input = formStateToScheduleInput(next);
+    onFrequencyChange?.(next.frequency);
+    onScheduleChange?.(input);
+  };
+
+  const handleFormChange = (next: ScheduleFormState) => {
+    setForm(next);
+    if (embedded) notifyParent(next);
+  };
+
+  const applyApiData = (d: ScheduleApiData) => {
+    setForm(scheduleResponseToFormState(d));
+    setLastRunAt(d.lastRunAt);
+    setNextExecution(d.nextExecution);
+  };
 
   const loadSchedule = useCallback(async () => {
     if (embedded && frequencyProp !== undefined) return;
@@ -53,14 +83,7 @@ export default function EtlScheduleSettings({
       if (!res.ok || !data.ok) {
         throw new Error(data?.error || "Error al cargar programación");
       }
-      const d = data.data as {
-        frequency: string | null;
-        lastRunAt: string | null;
-        nextExecution: string;
-      };
-      setFrequency(d.frequency ?? "");
-      setLastRunAt(d.lastRunAt);
-      setNextExecution(d.nextExecution);
+      applyApiData(data.data as ScheduleApiData);
     } catch (e) {
       if (!embedded) toast.error(e instanceof Error ? e.message : "Error al cargar");
     } finally {
@@ -73,8 +96,17 @@ export default function EtlScheduleSettings({
   }, [embedded, loadSchedule]);
 
   useEffect(() => {
-    if (frequencyProp !== undefined) setFrequency(frequencyProp);
-  }, [frequencyProp]);
+    if (frequencyProp === undefined && runAtTimeProp === undefined && runOnWeekdaysProp === undefined) {
+      return;
+    }
+    setForm(
+      scheduleToFormState({
+        frequency: frequencyProp,
+        runAtTime: runAtTimeProp,
+        runOnWeekdays: runOnWeekdaysProp,
+      })
+    );
+  }, [frequencyProp, runAtTimeProp, runOnWeekdaysProp]);
 
   useEffect(() => {
     if (lastRunAtProp !== undefined) setLastRunAt(lastRunAtProp);
@@ -84,31 +116,27 @@ export default function EtlScheduleSettings({
     if (nextExecutionProp !== undefined) setNextExecution(nextExecutionProp);
   }, [nextExecutionProp]);
 
-  const handleFrequencyChange = (v: string) => {
-    setFrequency(v ?? "");
-    onFrequencyChange?.(v ?? "");
-  };
-
   const handleSave = async () => {
+    const payload = formStateToScheduleInput(form);
+    const validationError = validateScheduleInput(payload);
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
+
     setSaving(true);
     try {
       const res = await fetch(`/api/etl/${etlId}/schedule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ frequency: frequency || null }),
+        body: JSON.stringify(payload),
       });
       const data = await safeJsonResponse(res);
       if (!res.ok || !data.ok) {
         throw new Error(data?.error || "Error al guardar");
       }
-      const d = data.data as {
-        frequency: string | null;
-        lastRunAt: string | null;
-        nextExecution: string;
-      };
-      setFrequency(d.frequency ?? "");
-      setLastRunAt(d.lastRunAt);
-      setNextExecution(d.nextExecution);
+      const d = data.data as ScheduleApiData;
+      applyApiData(d);
       toast.success("Programación guardada");
       onSaved?.(d);
     } catch (e) {
@@ -156,17 +184,7 @@ export default function EtlScheduleSettings({
         </div>
       ) : (
         <>
-          <div className="max-w-xs">
-            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
-              Frecuencia
-            </Label>
-            <Select
-              value={frequency}
-              onChange={(v: string) => handleFrequencyChange(v ?? "")}
-              options={FREQUENCY_OPTIONS}
-              placeholder="Elegir frecuencia"
-            />
-          </div>
+          <ScheduleFrequencyFields value={form} onChange={handleFormChange} />
 
           {!embedded && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">

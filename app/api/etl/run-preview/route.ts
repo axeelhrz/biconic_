@@ -25,6 +25,11 @@ import {
   CastTargetType
 } from "@/lib/etl/transformations";
 import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT, ETL_PREVIEW_MAX_WHEN_UNLIMITED, ETL_TRANSFORM_SAMPLE_LIMIT } from "@/lib/etl/limits";
+import {
+  buildFirebirdSelectList,
+  isFirebirdColumnQueryError,
+  projectRowsToConfiguredColumns,
+} from "@/lib/etl/firebird-query-helpers";
 import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
 import {
   normalizeExcelDataTableRows,
@@ -401,14 +406,12 @@ export async function POST(req: NextRequest) {
           const tablePart = tableQ.includes(".")
             ? (tableQ.split(".").pop() || tableQ.trim()).trim().toUpperCase()
             : safePart(tableQ);
-          // Firebird con solo nombre de tabla: usar SELECT * para evitar -206 (Column unknown) por diferencias de nombre/casing
-          const cols = "*";
+          if (!tablePart) throw new Error("Nombre de tabla vacío para Firebird.");
+          const configuredColumns = src.filter?.columns;
           const rawConditions = (src.filter?.conditions || []).filter(
             (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
           );
           const { clause, params } = buildWhereClauseFirebird(rawConditions);
-          if (!tablePart) return Promise.reject(new Error("Nombre de tabla vacío para Firebird."));
-          // Interpolar parámetros; evitar punto en literales numéricos (puede causar -104 en algunos entornos Firebird)
           const escapeFbLiteral = (v: any): string => {
             if (v == null) return "NULL";
             if (typeof v === "boolean") return v ? "1" : "0";
@@ -420,39 +423,50 @@ export async function POST(req: NextRequest) {
             return `'${s.replace(/'/g, "''")}'`;
           };
           let clauseInlined = clause;
-          let idx = 0;
           for (const p of params) {
             const pos = clauseInlined.indexOf("?");
             if (pos === -1) break;
             clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
-            idx++;
           }
           const limit = effectiveLimit;
           const Firebird = require("node-firebird");
           const PREVIEW_FIREBIRD_TIMEOUT_MS = 25000;
-          return new Promise<Record<string, any>[]>((resolve, reject) => {
-            const timeoutId = setTimeout(() => {
-              reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s)."));
-            }, PREVIEW_FIREBIRD_TIMEOUT_MS);
-            Firebird.attach(fbOpts, (err: Error | null, db: any) => {
-              if (err) {
-                clearTimeout(timeoutId);
-                return reject(err);
-              }
-              const sql = `SELECT FIRST ${limit} ${cols} FROM ${tablePart} ${clauseInlined}`.trim();
-              db.query(sql, [], (qerr: Error | null, rows: any[]) => {
-                clearTimeout(timeoutId);
-                if (db?.detach) try { db.detach(() => {}); } catch (_) {}
-                if (qerr) return reject(qerr);
-                const normalized = (rows || []).map((row: Record<string, any>) => {
-                  const out: Record<string, any> = {};
-                  for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
-                  return out;
+          const toSane = (k: string) => k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+          const runQuery = (selectList: string) =>
+            new Promise<Record<string, any>[]>((resolve, reject) => {
+              const timeoutId = setTimeout(() => {
+                reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s)."));
+              }, PREVIEW_FIREBIRD_TIMEOUT_MS);
+              Firebird.attach(fbOpts, (err: Error | null, db: any) => {
+                if (err) {
+                  clearTimeout(timeoutId);
+                  return reject(err);
+                }
+                const sql = `SELECT FIRST ${limit} ${selectList} FROM ${tablePart} ${clauseInlined}`.trim();
+                db.query(sql, [], (qerr: Error | null, rows: any[]) => {
+                  clearTimeout(timeoutId);
+                  if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                  if (qerr) return reject(qerr);
+                  const normalized = (rows || []).map((row: Record<string, any>) => {
+                    const out: Record<string, any> = {};
+                    for (const k in row) out[toSane(k)] = row[k];
+                    return out;
+                  });
+                  resolve(normalized);
                 });
-                resolve(normalized);
               });
             });
-          });
+          const selectList = buildFirebirdSelectList(configuredColumns, safePart);
+          try {
+            const rows = await runQuery(selectList);
+            return projectRowsToConfiguredColumns(rows, configuredColumns, toSane);
+          } catch (firstErr) {
+            if (selectList !== "*" && isFirebirdColumnQueryError(firstErr)) {
+              const rows = await runQuery("*");
+              return projectRowsToConfiguredColumns(rows, configuredColumns, toSane);
+            }
+            throw firstErr;
+          }
         };
 
         const sameConnection = String(left.connectionId) === String(right.connectionId);
@@ -1069,8 +1083,8 @@ export async function POST(req: NextRequest) {
             const tablePart = tableToQuery.includes(".")
               ? (tableToQuery.split(".").pop() || tableToQuery.trim()).trim().toUpperCase()
               : safePart(tableToQuery);
-            // Firebird con solo nombre de tabla: usar SELECT * para evitar -206 (Column unknown)
-            const colsFirebird = "*";
+            const configuredColumns = body.filter?.columns;
+            const toSane = (k: string) => k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
             const rawConditions = (sqlConditions as FilterCondition[]).filter(
               (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
             );
@@ -1106,25 +1120,40 @@ export async function POST(req: NextRequest) {
             const limit = effectiveLimit;
             const Firebird = require("node-firebird");
             const fbOpts = resolveFirebirdAttachOptions(conn);
-            const baseQuery = `SELECT FIRST ${limit} ${colsFirebird} FROM ${tablePart} ${clauseInlined}`.trim();
-            const rows = await new Promise<Record<string, any>[]>((resolve, reject) => {
-              const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
-              Firebird.attach(fbOpts, (err: Error | null, db: any) => {
-                if (err) { clearTimeout(t); return reject(err); }
-                db.query(baseQuery, [], (qerr: Error | null, r: any[]) => {
-                  clearTimeout(t);
-                  if (db?.detach) try { db.detach(() => {}); } catch (_) {}
-                  if (qerr) return reject(qerr);
-                  const normalized = (r || []).map((row: Record<string, any>) => {
-                    const out: Record<string, any> = {};
-                    for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
-                    return out;
+            const runFbPreview = (selectList: string) =>
+              new Promise<Record<string, any>[]>((resolve, reject) => {
+                const baseQuery = `SELECT FIRST ${limit} ${selectList} FROM ${tablePart} ${clauseInlined}`.trim();
+                const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
+                Firebird.attach(fbOpts, (err: Error | null, db: any) => {
+                  if (err) { clearTimeout(t); return reject(err); }
+                  db.query(baseQuery, [], (qerr: Error | null, r: any[]) => {
+                    clearTimeout(t);
+                    if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                    if (qerr) return reject(qerr);
+                    const normalized = (r || []).map((row: Record<string, any>) => {
+                      const out: Record<string, any> = {};
+                      for (const k in row) out[toSane(k)] = row[k];
+                      return out;
+                    });
+                    resolve(normalized);
                   });
-                  resolve(normalized);
                 });
               });
-            });
-            if (rows.length) yield { rows, query: baseQuery };
+            const selectList = buildFirebirdSelectList(configuredColumns, safePart);
+            let rows: Record<string, any>[];
+            let queryUsed = `SELECT FIRST ${limit} ${selectList} FROM ${tablePart} ${clauseInlined}`.trim();
+            try {
+              rows = await runFbPreview(selectList);
+            } catch (firstErr) {
+              if (selectList !== "*" && isFirebirdColumnQueryError(firstErr)) {
+                queryUsed = `SELECT FIRST ${limit} * FROM ${tablePart} ${clauseInlined}`.trim();
+                rows = await runFbPreview("*");
+              } else {
+                throw firstErr;
+              }
+            }
+            rows = projectRowsToConfiguredColumns(rows, configuredColumns, toSane);
+            if (rows.length) yield { rows, query: queryUsed };
             return;
         } else {
             // Lógica para Postgres externo

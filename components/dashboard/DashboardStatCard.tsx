@@ -13,8 +13,7 @@ export default function DashboardStatCard({
 }: DashboardStatCardProps) {
   return (
     <div
-      className="relative flex h-[154px] flex-1 flex-col justify-between overflow-hidden rounded-[17px] 
-                 bg-white/5 p-5 shadow-lg backdrop-blur-lg border border-white/20"
+      className="relative flex min-h-[120px] flex-1 flex-col justify-between overflow-hidden rounded-[17px] border border-white/20 bg-white/5 p-4 shadow-lg backdrop-blur-lg sm:h-[154px] sm:p-5"
     >
       {/* --- Este es el nuevo elemento para el reflejo --- */}
       <div

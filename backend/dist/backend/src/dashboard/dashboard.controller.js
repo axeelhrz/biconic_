@@ -29,6 +29,9 @@ let DashboardController = class DashboardController {
     }
     async distinctValues(body, req) {
         const result = await this.dashboard.distinctValues(body, req.user.sub);
+        if (result.status >= 400) {
+            throw new common_1.HttpException(result.data, result.status);
+        }
         return result.data;
     }
     async rawData(body, req) {

@@ -1,12 +1,15 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ACTIVE_RUN_GUARD_MINUTES = exports.ETL_SCHEDULE_FREQUENCIES = void 0;
+exports.ACTIVE_RUN_GUARD_MINUTES = exports.SCHEDULE_DISPLAY_TIMEZONE = exports.ETL_SCHEDULE_FREQUENCIES = void 0;
 exports.getIntervalMs = getIntervalMs;
 exports.isDue = isDue;
 exports.computeNextRunAt = computeNextRunAt;
 exports.formatScheduleLabel = formatScheduleLabel;
+exports.formatScheduleDateTime = formatScheduleDateTime;
 exports.formatNextExecutionDisplay = formatNextExecutionDisplay;
 exports.parseScheduleFromLayout = parseScheduleFromLayout;
+exports.getStaleRunMinutes = getStaleRunMinutes;
+exports.getHardStaleRunMinutes = getHardStaleRunMinutes;
 exports.mergeScheduleIntoGuidedConfig = mergeScheduleIntoGuidedConfig;
 exports.updateEtlScheduleLastRunAt = updateEtlScheduleLastRunAt;
 exports.ETL_SCHEDULE_FREQUENCIES = [
@@ -57,15 +60,14 @@ function formatScheduleLabel(frequency) {
         return "Manual";
     return exports.ETL_SCHEDULE_FREQUENCIES.find((x) => x.value === f)?.label ?? f;
 }
-function formatNextExecutionDisplay(lastRunAt, frequency, locale = "es-AR") {
-    const f = (frequency || "").trim();
-    if (!f)
-        return "Manual";
-    const next = computeNextRunAt(lastRunAt, f);
-    if (!next)
+exports.SCHEDULE_DISPLAY_TIMEZONE = "America/Argentina/Buenos_Aires";
+function formatScheduleDateTime(date, locale = "es-AR", timeZone = exports.SCHEDULE_DISPLAY_TIMEZONE) {
+    const d = typeof date === "string" ? new Date(date) : date;
+    if (Number.isNaN(d.getTime()))
         return "—";
     try {
-        return next.toLocaleString(locale, {
+        return d.toLocaleString(locale, {
+            timeZone,
             day: "2-digit",
             month: "short",
             year: "numeric",
@@ -74,8 +76,17 @@ function formatNextExecutionDisplay(lastRunAt, frequency, locale = "es-AR") {
         });
     }
     catch {
-        return next.toISOString();
+        return d.toISOString();
     }
+}
+function formatNextExecutionDisplay(lastRunAt, frequency, locale = "es-AR") {
+    const f = (frequency || "").trim();
+    if (!f)
+        return "Manual";
+    const next = computeNextRunAt(lastRunAt, f);
+    if (!next)
+        return "—";
+    return formatScheduleDateTime(next, locale);
 }
 function parseScheduleFromLayout(layout) {
     if (!layout || typeof layout !== "object")
@@ -88,7 +99,25 @@ function parseScheduleFromLayout(layout) {
         return undefined;
     return schedule;
 }
-exports.ACTIVE_RUN_GUARD_MINUTES = 20;
+function resolveActiveRunGuardMinutes() {
+    const raw = Number(process.env.ETL_ACTIVE_RUN_GUARD_MINUTES);
+    if (Number.isFinite(raw) && raw > 0)
+        return Math.floor(raw);
+    return 240;
+}
+exports.ACTIVE_RUN_GUARD_MINUTES = resolveActiveRunGuardMinutes();
+function getStaleRunMinutes() {
+    const raw = Number(process.env.ETL_STALE_RUN_MINUTES);
+    if (Number.isFinite(raw) && raw > 0)
+        return Math.floor(raw);
+    return 240;
+}
+function getHardStaleRunMinutes() {
+    const raw = Number(process.env.ETL_HARD_STALE_RUN_MINUTES);
+    if (Number.isFinite(raw) && raw > 0)
+        return Math.floor(raw);
+    return 480;
+}
 function mergeScheduleIntoGuidedConfig(guidedConfig, frequency, preserveLastRunAt) {
     const existing = guidedConfig.schedule ?? {};
     const f = (frequency ?? "").trim();

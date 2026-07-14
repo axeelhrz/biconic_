@@ -126,6 +126,8 @@ export type LoadPreviewWidgetDataParams = {
   rawExtraPayload?: Record<string, unknown>;
   /** Preset de comparación a nivel dashboard (herencia por widget). */
   dashboardCompareDefaults?: DashboardCompareDefaults;
+  /** Mes de inicio del año fiscal del dashboard (1–12). */
+  fiscalYearStartMonth?: number;
   /** Cancela el fetch si el widget se vuelve a cargar o se desmonta. */
   fetchSignal?: AbortSignal;
 };
@@ -234,6 +236,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     aggregateExtraPayload,
     rawExtraPayload,
     dashboardCompareDefaults,
+    fiscalYearStartMonth,
     fetchSignal,
   } = params;
 
@@ -304,6 +307,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       metricsOverride,
       derivedColumns,
       skipTemporalFilterExpand: useDualQuery && compareContexts.comparable,
+      fiscalYearStartMonth,
     };
 
     const fetchAggregate = async (filtersOverride: typeof userFiltersBeforeExpand) => {

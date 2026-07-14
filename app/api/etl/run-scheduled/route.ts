@@ -4,9 +4,8 @@ import { createServiceRoleClient } from "@/lib/supabase/service";
 import { runScheduledConnections } from "@/lib/connection/run-scheduled-connections";
 import {
   ACTIVE_RUN_GUARD_MINUTES,
-  getIntervalMs,
   getStaleRunMinutes,
-  isDue,
+  isScheduleDue,
   type EtlSchedule,
 } from "@/lib/etl/schedule";
 import {
@@ -58,13 +57,8 @@ async function runScheduled() {
     const layout = (row as { layout?: Record<string, unknown> }).layout as Record<string, unknown> | undefined;
     const guidedConfig = layout?.guided_config as Record<string, unknown> | undefined;
     const schedule = guidedConfig?.schedule as EtlSchedule | undefined;
-    const frequency = schedule?.frequency?.trim();
-    if (!frequency) continue;
-
-    const intervalMs = getIntervalMs(frequency);
-    if (intervalMs == null) continue;
-
-    if (!isDue(schedule?.lastRunAt, intervalMs)) continue;
+    if (!schedule?.frequency?.trim()) continue;
+    if (!isScheduleDue(schedule)) continue;
 
     due.push({
       id: (row as { id: string }).id,

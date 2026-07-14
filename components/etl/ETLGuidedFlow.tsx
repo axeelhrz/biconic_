@@ -39,7 +39,7 @@ import {
   type InferredColumnFormat,
   type InferredColumnType,
 } from "@/lib/derive-column-types";
-import { mergeScheduleIntoGuidedConfig } from "@/lib/etl/schedule";
+import { mergeScheduleIntoGuidedConfig, type ScheduleInput } from "@/lib/etl/schedule";
 import {
   ETL_PREVIEW_JOIN_INSTANT_LIMIT,
   ETL_PREVIEW_TABLE_LIMIT,
@@ -387,6 +387,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [outputTableName, setOutputTableName] = useState("");
   const [outputMode, setOutputMode] = useState<"overwrite" | "append">("overwrite");
   const [scheduleFrequency, setScheduleFrequency] = useState<string>("");
+  const [scheduleRunAtTime, setScheduleRunAtTime] = useState<string>("09:00");
+  const [scheduleRunOnWeekdays, setScheduleRunOnWeekdays] = useState<number[]>([1]);
   const [scheduleLastRunAt, setScheduleLastRunAt] = useState<string | undefined>(undefined);
   const [loadingMeta, setLoadingMeta] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState<string | null>(null);
@@ -533,11 +535,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   const skipClearSelectedTableRef = useRef(false);
   const restoringFromConfigRef = useRef(false);
+  /** Columnas restauradas desde guided_config; loadColumnsForTable no debe pisarlas. */
+  const restoredColumnsRef = useRef<string[] | null>(null);
   // Restaurar estado desde configuración guardada (al editar un ETL ya ejecutado)
   useEffect(() => {
     const cfg = initialGuidedConfig as GuidedConfig | undefined | null;
     restoringFromConfigRef.current = true;
-    if (!cfg || typeof cfg !== "object") return;
+    if (!cfg || typeof cfg !== "object") {
+      queueMicrotask(() => {
+        restoringFromConfigRef.current = false;
+      });
+      return;
+    }
     const connId = cfg.connectionId ?? (cfg.union?.left as { connectionId?: string | number })?.connectionId ?? (cfg.join as { primaryConnectionId?: string | number })?.primaryConnectionId;
     if (connId != null && typeof connId !== "object") setConnectionId(connId);
     const filter = cfg.filter;
@@ -551,8 +560,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       const { primaryCols, joinColsByIdx, legacyUnprefixed } = parsedCols;
       const hasJoinRefs = Object.keys(joinColsByIdx).length > 0;
       if (primaryCols.length > 0) {
+        restoredColumnsRef.current = [...primaryCols];
         setColumns(primaryCols);
       } else if (!hasJoinRefs && legacyUnprefixed.length > 0) {
+        restoredColumnsRef.current = [...legacyUnprefixed];
         setColumns(legacyUnprefixed);
       }
       // Si el config guardado solo trae join_N.*, no contaminar `columns` con esas refs.
@@ -594,6 +605,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (end?.mode) setOutputMode(end.mode);
     const sched = cfg.schedule;
     setScheduleFrequency(sched?.frequency ? String(sched.frequency) : "");
+    setScheduleRunAtTime(sched?.runAtTime ? String(sched.runAtTime) : "09:00");
+    setScheduleRunOnWeekdays(
+      Array.isArray(sched?.runOnWeekdays) ? sched.runOnWeekdays.map((d) => Number(d)) : [1]
+    );
     setScheduleLastRunAt(sched?.lastRunAt ? String(sched.lastRunAt) : undefined);
     const union = cfg.union;
     if (union) {
@@ -974,7 +989,24 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               : t
           )
         );
-        setColumns(cols);
+        const allTableCols = cols;
+        setColumns((prev) => {
+          const fromRestore = restoredColumnsRef.current;
+          if (fromRestore?.length) {
+            const valid = fromRestore.filter((c) =>
+              allTableCols.some((tc) => tc.toLowerCase() === c.toLowerCase())
+            );
+            restoredColumnsRef.current = null;
+            if (valid.length > 0) return valid;
+          }
+          if (prev.length > 0) {
+            const valid = prev.filter((c) =>
+              allTableCols.some((tc) => tc.toLowerCase() === c.toLowerCase())
+            );
+            if (valid.length > 0) return valid;
+          }
+          return allTableCols;
+        });
         applyColumnLabelsToDisplay(columnsWithInferred);
       })
       .finally(() => setLoadingColumns(null));
@@ -1350,6 +1382,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   useEffect(() => {
     if (!distinctColumn || !connectionId || !selectedTable) return;
 
+    const columnForExclude = distinctColumn;
     const queries = resolveDistinctValueQueries(
       distinctColumn,
       connectionId,
@@ -1369,6 +1402,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     setDistinctValuesList([]);
     setLoadingDistinct(true);
 
+    const cancelExcludeSelection = () => {
+      setDistinctColumn(null);
+      setDistinctValuesList([]);
+      setDistinctSearch("");
+      setExcludedValues((prev) => prev.filter((e) => e.column !== columnForExclude));
+    };
+
     Promise.all(
       queries.map((q) =>
         fetch("/api/connection/distinct-values", {
@@ -1387,8 +1427,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         const merged = new Set<string>();
         const values: string[] = [];
         let hitCap = false;
+        let hadError = false;
+        let anyOk = false;
         for (const data of results) {
           if (data.ok && Array.isArray(data.values)) {
+            anyOk = true;
             if (data.capped) hitCap = true;
             for (const v of data.values) {
               const s = String(v);
@@ -1402,9 +1445,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               }
             }
           } else if (data?.error) {
+            hadError = true;
             toast.error(data.error);
           }
           if (values.length >= ETL_DISTINCT_VALUES_MAX_DEFAULT) break;
+        }
+        if (hadError && !anyOk) {
+          cancelExcludeSelection();
+          return;
         }
         values.sort((a, b) => a.localeCompare(b, "es"));
         setDistinctValuesList(values.slice(0, ETL_DISTINCT_VALUES_MAX_DEFAULT));
@@ -1414,7 +1462,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           );
         }
       })
-      .catch(() => toast.error("Error al cargar valores"))
+      .catch(() => {
+        if (!cancelled) {
+          toast.error("Error al cargar valores");
+          cancelExcludeSelection();
+        }
+      })
       .finally(() => {
         if (!cancelled) setLoadingDistinct(false);
       });
@@ -1535,9 +1588,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   /** Construye el objeto guided_config (connectionId, filter, union, join, clean, end) para guardar o ejecutar. Permite parcial (solo conexión) para que al guardar quede algo persistido. */
   const buildGuidedConfigBody = useCallback((): Record<string, unknown> | null => {
     if (!connectionId) return null;
-    const rawEffectiveColumns =
-      columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
-    const effectiveColumns = rawEffectiveColumns
+    const effectiveColumns = columns
       .map((c) => c.replace(/^primary\./i, "").trim())
       .filter((c) => c.length > 0 && !/^join_\d+\./i.test(c));
     const filterConditions = allFilterConditions();
@@ -1681,6 +1732,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     outputTableName,
     outputMode,
     scheduleFrequency,
+    scheduleRunAtTime,
+    scheduleRunOnWeekdays,
     distinctColumn,
     keyColumns,
     useUnion,
@@ -1962,7 +2015,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (!options?.silent) toast.error("Completá al menos la conexión para guardar.");
       return false;
     }
-    guidedConfig = mergeScheduleIntoGuidedConfig(guidedConfig, scheduleFrequency || null, scheduleLastRunAt);
+    const scheduleInput: ScheduleInput = {
+      frequency: scheduleFrequency || null,
+      runAtTime: scheduleRunAtTime,
+      runOnWeekdays: scheduleRunOnWeekdays,
+    };
+    guidedConfig = mergeScheduleIntoGuidedConfig(guidedConfig, scheduleInput, scheduleLastRunAt);
     // Persistir siempre la tabla seleccionada desde el estado
     const tableToSave = (selectedTable ?? "")?.trim() || undefined;
     if (tableToSave && typeof guidedConfig.filter === "object" && guidedConfig.filter !== null) {
@@ -1989,7 +2047,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       toast.error(msg);
       return false;
     }
-  }, [etlId, buildGuidedConfigBody, selectedTable, scheduleFrequency, scheduleLastRunAt]);
+  }, [etlId, buildGuidedConfigBody, selectedTable, scheduleFrequency, scheduleRunAtTime, scheduleRunOnWeekdays, scheduleLastRunAt]);
 
   const handleRun = useCallback(async () => {
     if (!canRun || !connectionId || !selectedTable) return;
@@ -1999,7 +2057,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setRunning(false);
       return;
     }
-    const guidedBody = mergeScheduleIntoGuidedConfig(rawBody, scheduleFrequency || null, scheduleLastRunAt);
+    const scheduleInput: ScheduleInput = {
+      frequency: scheduleFrequency || null,
+      runAtTime: scheduleRunAtTime,
+      runOnWeekdays: scheduleRunOnWeekdays,
+    };
+    const guidedBody = mergeScheduleIntoGuidedConfig(rawBody, scheduleInput, scheduleLastRunAt);
     // Guardar toda la configuración antes de ejecutar para que layout tenga conexión, tabla, columnas, filtros, join/union, destino, etc.
     await saveGuidedConfigToServer({ silent: true });
     // waitForCompletion: false evita FUNCTION_INVOCATION_TIMEOUT en Vercel; el ETL corre en segundo plano
@@ -2029,7 +2092,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       toast.error(e instanceof Error ? e.message : "Error al ejecutar");
       setRunning(false);
     }
-  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, saveGuidedConfigToServer, etlId, router, scheduleFrequency, scheduleLastRunAt]);
+  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, saveGuidedConfigToServer, etlId, router, scheduleFrequency, scheduleRunAtTime, scheduleRunOnWeekdays, scheduleLastRunAt]);
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
   const connectionName =
@@ -2865,6 +2928,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           setDistinctColumn(col);
                           setDistinctValuesList([]);
                           setDistinctSearch("");
+                          if (!col) {
+                            setExcludedValues([]);
+                          }
                         }}
                         options={datasetColumnOptions}
                         placeholder={columns.length === 0 ? "Seleccioná columnas arriba" : "Elegir columna"}
@@ -2875,6 +2941,24 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     </div>
                     {loadingDistinct && distinctColumn && (
                       <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores distintos…</span>
+                    )}
+                    {distinctColumn && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-lg text-xs"
+                        style={{ borderColor: "var(--platform-border)" }}
+                        disabled={loadingDistinct}
+                        onClick={() => {
+                          setDistinctColumn(null);
+                          setDistinctValuesList([]);
+                          setDistinctSearch("");
+                          setExcludedValues([]);
+                        }}
+                      >
+                        Cancelar
+                      </Button>
                     )}
                     {!loadingDistinct && distinctValuesList.length > 0 && distinctColumn && (
                       <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
@@ -3930,7 +4014,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   etlId={etlId}
                   embedded
                   frequency={scheduleFrequency}
+                  runAtTime={scheduleRunAtTime}
+                  runOnWeekdays={scheduleRunOnWeekdays}
                   onFrequencyChange={setScheduleFrequency}
+                  onScheduleChange={(input) => {
+                    setScheduleFrequency(input.frequency?.trim() ?? "");
+                    if (input.runAtTime) setScheduleRunAtTime(input.runAtTime);
+                    if (input.runOnWeekdays) setScheduleRunOnWeekdays(input.runOnWeekdays);
+                  }}
                   showEditFlowLink={false}
                 />
                 <div className="flex gap-3 pt-2">

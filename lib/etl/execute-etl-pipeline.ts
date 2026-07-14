@@ -25,6 +25,11 @@ import {
   CastTargetType
 } from "@/lib/etl/transformations";
 import { ETL_MAX_ROWS_CEILING, ETL_JOIN_CHUNK_SIZE_DEFAULT } from "@/lib/etl/limits";
+import {
+  buildFirebirdSelectList,
+  isFirebirdColumnQueryError,
+  projectRowsToConfiguredColumns,
+} from "@/lib/etl/firebird-query-helpers";
 import { updateEtlScheduleLastRunAt, getHardStaleRunMinutes, getStaleRunMinutes } from "@/lib/etl/schedule";
 import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
 import {
@@ -1691,7 +1696,8 @@ export async function executeEtlPipeline(
         const tablePart = tableToQuery.includes(".")
           ? (tableToQuery.split(".").pop() || tableToQuery).trim().toUpperCase()
           : safePart(tableToQuery);
-        const cols = "*";
+        const configuredColumns = (body!.filter?.columns || []) as string[];
+        let useSelectAll = configuredColumns.length === 0;
         const firebirdConditions = (sqlConditions as FilterCondition[])
           .map((c: any) => ({
             ...c,
@@ -1720,23 +1726,41 @@ export async function executeEtlPipeline(
             { label: "firebird-attach" }
           );
           for (;;) {
+            const selectList = useSelectAll
+              ? "*"
+              : buildFirebirdSelectList(configuredColumns, safePart);
             const sql =
               offset === 0
-                ? `SELECT FIRST ${pageSize} ${cols} FROM ${tablePart} ${mergedClause}`
-                : `SELECT FIRST ${pageSize} SKIP ${offset} ${cols} FROM ${tablePart} ${mergedClause}`;
-            const rows = await withRetry(
-              () =>
-                new Promise<any[]>((resolve, reject) => {
-                  db.query(sql, mergedParams, (err: Error | null, r: any[]) => {
-                    if (err) reject(err);
-                    else resolve(r || []);
-                  });
-                }),
-              { label: "firebird-query" }
-            );
+                ? `SELECT FIRST ${pageSize} ${selectList} FROM ${tablePart} ${mergedClause}`
+                : `SELECT FIRST ${pageSize} SKIP ${offset} ${selectList} FROM ${tablePart} ${mergedClause}`;
+            let rows: any[];
+            try {
+              rows = await withRetry(
+                () =>
+                  new Promise<any[]>((resolve, reject) => {
+                    db.query(sql, mergedParams, (err: Error | null, r: any[]) => {
+                      if (err) reject(err);
+                      else resolve(r || []);
+                    });
+                  }),
+                { label: "firebird-query" }
+              );
+            } catch (queryErr) {
+              if (!useSelectAll && isFirebirdColumnQueryError(queryErr)) {
+                useSelectAll = true;
+                offset = 0;
+                continue;
+              }
+              throw queryErr;
+            }
             const normalized = rows.map(normalizeRow);
-            if (normalized.length === 0) break;
-            yield normalized;
+            const batch = useSelectAll
+              ? projectRowsToConfiguredColumns(normalized, configuredColumns, (k) =>
+                  k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()
+                )
+              : normalized;
+            if (batch.length === 0) break;
+            yield batch;
             if (normalized.length < pageSize) break;
             offset += pageSize;
           }

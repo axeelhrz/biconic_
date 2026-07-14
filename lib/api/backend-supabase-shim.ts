@@ -24,6 +24,7 @@ async function fetchMe(): Promise<UserShape | null> {
 
 class QueryBuilder {
   private filters: Array<{ col: string; op: string; val: unknown }> = [];
+  private orClause: string | null = null;
   private columns = "*";
   private limitN?: number;
   private orderCol?: string;
@@ -56,6 +57,11 @@ class QueryBuilder {
 
   in(col: string, val: unknown[]) {
     this.filters.push({ col, op: "in", val });
+    return this;
+  }
+
+  or(filter: string) {
+    this.orClause = filter;
     return this;
   }
 
@@ -162,12 +168,101 @@ class QueryBuilder {
     }
 
     if (this.table === "dashboard" && !this.isUpdate && !this.isInsert) {
-      const res = await fetch(`${api}/dashboards`, { credentials: "include" });
-      const json = await res.json().catch(() => []);
-      if (!res.ok) return { data: null, error: { message: "Error cargando dashboards" } };
+      const params = new URLSearchParams();
+      for (const f of this.filters) {
+        if (f.op === "eq" && f.col === "user_id") {
+          params.set("eq_user_id", String(f.val));
+        }
+        if (f.op === "in" && f.col === "id" && Array.isArray(f.val)) {
+          params.set("in_id", f.val.map(String).join(","));
+        }
+        if (f.op === "in" && f.col === "client_id" && Array.isArray(f.val)) {
+          params.set("in_client_id", f.val.map(String).join(","));
+        }
+      }
+      const qs = params.toString();
+      const res = await fetch(`/api/viewer/dashboards${qs ? `?${qs}` : ""}`, {
+        credentials: "include",
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg =
+          json && typeof json === "object" && "error" in json
+            ? String((json as { error?: string }).error ?? "Error cargando dashboards")
+            : "Error cargando dashboards";
+        return { data: null, error: { message: msg } };
+      }
       let data = Array.isArray(json) ? json : [];
       for (const f of this.filters) {
-        data = data.filter((r: Record<string, unknown>) => r[f.col] === f.val);
+        if (f.op === "eq") {
+          data = data.filter((r: Record<string, unknown>) => r[f.col] === f.val);
+        }
+        if (f.op === "in" && Array.isArray(f.val)) {
+          const set = new Set(f.val.map(String));
+          data = data.filter((r: Record<string, unknown>) => set.has(String(r[f.col])));
+        }
+      }
+      if (this.wantSingle || this.wantMaybeSingle) {
+        return { data: data[0] ?? null, error: null };
+      }
+      return { data, error: null };
+    }
+
+    if (this.table === "client_members" && !this.isUpdate && !this.isInsert && !this.isDelete) {
+      const res = await fetch("/api/viewer/client-members", { credentials: "include" });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg =
+          json && typeof json === "object" && "error" in json
+            ? String((json as { error?: string }).error ?? "Error cargando membresías")
+            : "Error cargando membresías";
+        return { data: null, error: { message: msg } };
+      }
+      let data = Array.isArray(json) ? (json as Record<string, unknown>[]) : [];
+      for (const f of this.filters) {
+        data = data.filter((r) => {
+          const v = r[f.col];
+          if (f.op === "eq") return v === f.val;
+          if (f.op === "in" && Array.isArray(f.val)) return f.val.includes(v);
+          return true;
+        });
+      }
+      if (this.wantSingle || this.wantMaybeSingle) {
+        return { data: data[0] ?? null, error: null };
+      }
+      return { data, error: null };
+    }
+
+    if (
+      this.table === "dashboard_has_client_permissions" &&
+      !this.isUpdate &&
+      !this.isInsert &&
+      !this.isDelete
+    ) {
+      const inFilter = this.filters.find((f) => f.op === "in" && f.col === "client_member_id");
+      const memberIds = Array.isArray(inFilter?.val)
+        ? inFilter.val.map(String).join(",")
+        : "";
+      const res = await fetch(
+        `/api/viewer/dashboard-permissions?memberIds=${encodeURIComponent(memberIds)}`,
+        { credentials: "include" }
+      );
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg =
+          json && typeof json === "object" && "error" in json
+            ? String((json as { error?: string }).error ?? "Error cargando permisos")
+            : "Error cargando permisos";
+        return { data: null, error: { message: msg } };
+      }
+      let data = Array.isArray(json) ? (json as Record<string, unknown>[]) : [];
+      for (const f of this.filters) {
+        data = data.filter((r) => {
+          const v = r[f.col];
+          if (f.op === "eq") return v === f.val;
+          if (f.op === "in" && Array.isArray(f.val)) return f.val.includes(v);
+          return true;
+        });
       }
       if (this.wantSingle || this.wantMaybeSingle) {
         return { data: data[0] ?? null, error: null };

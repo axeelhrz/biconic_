@@ -37,10 +37,10 @@ type StudioHeaderProps = {
   hideRunButton?: boolean;
 };
 
-const MODES: { id: StudioMode; label: string }[] = [
-  { id: "explorar", label: "Explorar" },
-  { id: "disenar", label: "Diseñar" },
-  { id: "presentar", label: "Presentar" },
+const MODES: { id: StudioMode; label: string; hint: string }[] = [
+  { id: "explorar", label: "Explorar", hint: "Vista limpia para probar filtros y datos" },
+  { id: "disenar", label: "Diseñar", hint: "Editar layout, métricas y configuración" },
+  { id: "presentar", label: "Presentar", hint: "Solo el lienzo, sin herramientas" },
 ];
 
 const STATUS_LABELS: Record<DashboardStatus, string> = {
@@ -128,6 +128,7 @@ export function StudioHeader({
                     : "text-[var(--studio-muted)] hover:text-[var(--studio-fg-muted)]"
                 }`}
                 onClick={() => onModeChange(m.id)}
+                title={m.hint}
               >
                 {m.label}
               </button>

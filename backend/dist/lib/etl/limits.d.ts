@@ -6,3 +6,6 @@ export declare const ETL_PREVIEW_MAX_WHEN_UNLIMITED = 50000;
 export declare const ETL_PREVIEW_MATERIALIZE_MAX_ROWS_PER_TABLE = 3000;
 export declare const ETL_PREVIEW_MATERIALIZE_FAST_MAX_ROWS_PER_TABLE = 1500;
 export declare const ETL_JOIN_CHUNK_SIZE_DEFAULT = 100000;
+export declare const ETL_DISTINCT_VALUES_MAX_DEFAULT = 10000;
+export declare function getDistinctValuesCap(): number;
+export declare const ETL_TRANSFORM_SAMPLE_LIMIT = 10000;

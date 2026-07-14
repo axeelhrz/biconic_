@@ -16,6 +16,7 @@ exports.buildCompareTooltipLineFromAgg = buildCompareTooltipLineFromAgg;
 exports.compareKindBadgeLabel = compareKindBadgeLabel;
 exports.resolveWidgetCompareStatus = resolveWidgetCompareStatus;
 const compareSpec_1 = require("./compareSpec");
+const comparativeRelation_1 = require("../dataset/comparativeRelation");
 const ensureDashboardCompareUi_1 = require("./ensureDashboardCompareUi");
 const compareMetricRows_1 = require("./compareMetricRows");
 const chartOptions_1 = require("./chartOptions");
@@ -179,6 +180,23 @@ function getCompareColumnKeys(spec, metricAlias, row) {
             tableExtraKeys: [run, ytd].filter((col) => Object.prototype.hasOwnProperty.call(row, col)),
         };
     }
+    if (spec.kind === "comparative" && spec.metricAlias === metricAlias) {
+        const alias = k ?? metricAlias;
+        const percentCols = (0, comparativeRelation_1.comparativeOutputColumns)(alias, "percent");
+        const usePercent = percentCols.some((col) => Object.prototype.hasOwnProperty.call(row, col));
+        const cols = (0, comparativeRelation_1.comparativeOutputColumns)(alias, usePercent ? "percent" : "absolute");
+        const ref = cols[1] ? (0, compareMetricRows_1.resolveRowColumnKey)(row, cols[1]) : null;
+        const delta = cols[2] ? (0, compareMetricRows_1.resolveRowColumnKey)(row, cols[2]) : null;
+        const deltaPct = cols[3] ? (0, compareMetricRows_1.resolveRowColumnKey)(row, cols[3]) : null;
+        return {
+            resolvedMetricKey: cols[0] ? (0, compareMetricRows_1.resolveRowColumnKey)(row, cols[0]) : k,
+            referenceKey: ref,
+            deltaKey: delta,
+            deltaPctKey: deltaPct,
+            referenceSeriesKey: ref,
+            tableExtraKeys: cols.filter((col) => Object.prototype.hasOwnProperty.call(row, col)),
+        };
+    }
     return {
         resolvedMetricKey: k,
         referenceKey: null,
@@ -306,6 +324,7 @@ const COMPARE_KIND_LABELS = {
     average: "Vs promedio",
     total_share: "% del total",
     cumulative: "Acumulado / YTD",
+    comparative: "Relación comparativa",
 };
 function compareKindBadgeLabel(compare) {
     if (compare.kind === "none")

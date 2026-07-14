@@ -53,6 +53,42 @@ function createPgAggregateDataDeps(options) {
             const rows = await sql.unsafe(`SELECT layout FROM public.etl WHERE id = $1 LIMIT 1`, toSqlParams([etlId]));
             return rows[0]?.layout ?? null;
         },
+        async getDatasetById(datasetId) {
+            const rows = await sql.unsafe(`SELECT id, etl_id, config FROM public.dataset WHERE id = $1 LIMIT 1`, toSqlParams([datasetId]));
+            const row = rows[0];
+            if (!row?.id)
+                return null;
+            return {
+                id: String(row.id),
+                etl_id: String(row.etl_id ?? ""),
+                config: row.config && typeof row.config === "object"
+                    ? row.config
+                    : {},
+            };
+        },
+        async getFirstDatasetIdForEtl(etlId) {
+            const rows = await sql.unsafe(`SELECT id FROM public.dataset WHERE etl_id = $1 ORDER BY updated_at DESC LIMIT 1`, toSqlParams([etlId]));
+            const id = rows[0]?.id;
+            return id ? String(id) : null;
+        },
+        async resolveDatasetTable(etlId) {
+            const runRows = await sql.unsafe(`SELECT destination_schema, destination_table_name FROM public.etl_runs_log
+         WHERE etl_id = $1 AND status = 'completed'
+         ORDER BY completed_at DESC LIMIT 1`, toSqlParams([etlId]));
+            const run = runRows[0];
+            if (run?.destination_table_name) {
+                return {
+                    schema: run.destination_schema || "etl_output",
+                    tableName: run.destination_table_name,
+                };
+            }
+            const etlRows = await sql.unsafe(`SELECT output_table FROM public.etl WHERE id = $1 LIMIT 1`, toSqlParams([etlId]));
+            const outputTable = etlRows[0]?.output_table?.trim();
+            if (outputTable) {
+                return { schema: "etl_output", tableName: outputTable };
+            }
+            return null;
+        },
     };
 }
 //# sourceMappingURL=createAggregateDataDeps.js.map

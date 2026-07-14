@@ -6,7 +6,7 @@ export default function ViewerEtlSection() {
   const { role } = useUserRole();
   return (
     <div
-      className="flex flex-col box-border w-full max-w-[1390px] px-10 py-8 mx-auto border rounded-[30px] gap-6"
+      className="mx-auto box-border flex w-full max-w-[1390px] flex-col gap-6 rounded-2xl border px-4 py-6 sm:rounded-[30px] sm:px-10 sm:py-8"
       style={{
         background: "var(--platform-bg-elevated)",
         borderColor: "var(--platform-border)",

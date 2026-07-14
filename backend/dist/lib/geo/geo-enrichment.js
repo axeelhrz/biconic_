@@ -19,8 +19,8 @@ const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 const NOMINATIM_TIMEOUT_MS = 7000;
 const NOMINATIM_MIN_INTERVAL_MS = 1100;
 const MAX_GEOCODE_ROWS = 500;
+const GEOCODE_TIME_BUDGET_MS = 25000;
 let lastNominatimCallAt = 0;
-let ensureTablePromise = null;
 function mapDefaultCountryToNominatimCountryCodes(mapDefaultCountry) {
     if (!mapDefaultCountry?.trim())
         return undefined;
@@ -215,51 +215,31 @@ const rateLimitNominatim = async () => {
     }
     lastNominatimCallAt = Date.now();
 };
-const ensureGeoCacheTable = async (cacheClient) => {
-    if (!cacheClient)
-        return;
-    if (ensureTablePromise)
-        return ensureTablePromise;
-    ensureTablePromise = (async () => {
-        try {
-            await cacheClient.rpc("execute_sql", {
-                sql_query: `
-          CREATE TABLE IF NOT EXISTS public.geo_location_cache (
-            cache_key text PRIMARY KEY,
-            query_text text NOT NULL,
-            lat double precision NOT NULL,
-            lon double precision NOT NULL,
-            display_name text NULL,
-            provider text NOT NULL DEFAULT 'nominatim',
-            updated_at timestamptz NOT NULL DEFAULT now()
-          );
-          CREATE INDEX IF NOT EXISTS geo_location_cache_updated_at_idx ON public.geo_location_cache (updated_at DESC);
-        `,
-            });
-        }
-        catch {
-        }
-    })();
-    await ensureTablePromise;
-};
 const readCache = async (cacheClient, cacheKey) => {
     if (!cacheClient)
         return null;
-    await ensureGeoCacheTable(cacheClient);
-    const { data, error } = await cacheClient
-        .from("geo_location_cache")
-        .select("cache_key,query_text,lat,lon,display_name,provider,updated_at")
-        .eq("cache_key", cacheKey)
-        .maybeSingle();
-    if (error || !data)
+    try {
+        const { data, error } = await cacheClient
+            .from("geo_location_cache")
+            .select("cache_key,lat,lng")
+            .eq("cache_key", cacheKey)
+            .maybeSingle();
+        if (error || !data)
+            return null;
+        return data;
+    }
+    catch {
         return null;
-    return data;
+    }
 };
 const writeCache = async (cacheClient, payload) => {
     if (!cacheClient)
         return;
-    await ensureGeoCacheTable(cacheClient);
-    await cacheClient.from("geo_location_cache").upsert(payload, { onConflict: "cache_key" });
+    try {
+        await cacheClient.from("geo_location_cache").upsert(payload, { onConflict: "cache_key" });
+    }
+    catch {
+    }
 };
 const geocodeWithNominatim = async (query, opts) => {
     const controller = new AbortController();
@@ -310,16 +290,11 @@ const resolveCoordinates = async (parts, cacheClient, ctx) => {
         return null;
     const cacheKey = cc ? `${baseKey}|cc:${cc}` : baseKey;
     const cacheHit = await readCache(cacheClient, cacheKey);
-    if (cacheHit && isFiniteNumber(cacheHit.lat) && isFiniteNumber(cacheHit.lon)) {
-        if (ctx?.restrictResultsToArgentinaBBox && !(0, argentinaProvinces_1.isPointInArgentinaBBox)(cacheHit.lat, cacheHit.lon)) {
+    if (cacheHit && isFiniteNumber(cacheHit.lat) && isFiniteNumber(cacheHit.lng)) {
+        if (ctx?.restrictResultsToArgentinaBBox && !(0, argentinaProvinces_1.isPointInArgentinaBBox)(cacheHit.lat, cacheHit.lng)) {
         }
         else {
-            return {
-                lat: cacheHit.lat,
-                lon: cacheHit.lon,
-                displayName: cacheHit.display_name ?? undefined,
-                source: "cache",
-            };
+            return { lat: cacheHit.lat, lon: cacheHit.lng, source: "cache" };
         }
     }
     const candidates = buildGeoQueryCandidates(parts);
@@ -330,14 +305,7 @@ const resolveCoordinates = async (parts, cacheClient, ctx) => {
         if (ctx?.restrictResultsToArgentinaBBox && !(0, argentinaProvinces_1.isPointInArgentinaBBox)(geocoded.lat, geocoded.lon)) {
             continue;
         }
-        await writeCache(cacheClient, {
-            cache_key: cacheKey,
-            query_text: query,
-            lat: geocoded.lat,
-            lon: geocoded.lon,
-            display_name: geocoded.displayName ?? null,
-            provider: "nominatim",
-        });
+        await writeCache(cacheClient, { cache_key: cacheKey, lat: geocoded.lat, lng: geocoded.lon });
         return { ...geocoded, source: "nominatim" };
     }
     return null;
@@ -352,6 +320,21 @@ async function enrichRowsWithGeo(options) {
     const limitedRows = rows.slice(0, MAX_GEOCODE_ROWS);
     const restRows = rows.slice(MAX_GEOCODE_ROWS);
     const enriched = [];
+    const geocodeInFlight = new Map();
+    const geoStartedAt = Date.now();
+    const resolveCoordinatesDeduped = (parts, resolveCtx) => {
+        const cc = resolveCtx?.nominatimCountryCodes?.trim().toLowerCase();
+        const baseKey = buildCacheKey(parts);
+        if (!baseKey.replace(/\|/g, ""))
+            return Promise.resolve(null);
+        const cacheKey = cc ? `${baseKey}|cc:${cc}` : baseKey;
+        const existing = geocodeInFlight.get(cacheKey);
+        if (existing)
+            return existing;
+        const pending = resolveCoordinates(parts, cacheClient, resolveCtx);
+        geocodeInFlight.set(cacheKey, pending);
+        return pending;
+    };
     for (const row of limitedRows) {
         const r = { ...row };
         const keys = Object.keys(r);
@@ -405,7 +388,18 @@ async function enrichRowsWithGeo(options) {
                 restrictResultsToArgentinaBBox: argentinaMode && nominatimCc === "ar",
             }
             : undefined;
-        const resolved = await resolveCoordinates(withCountry, cacheClient, resolveCtx);
+        const budgetCc = resolveCtx?.nominatimCountryCodes?.trim().toLowerCase();
+        const budgetBaseKey = buildCacheKey(withCountry);
+        const budgetCacheKey = budgetCc ? `${budgetBaseKey}|cc:${budgetCc}` : budgetBaseKey;
+        const isNewLookup = !geocodeInFlight.has(budgetCacheKey);
+        if (isNewLookup && Date.now() - geoStartedAt > GEOCODE_TIME_BUDGET_MS) {
+            r.__geo_resolved = false;
+            r.__geo_source = "skipped_time_budget";
+            r.__geo_label = label ?? buildGeoQueryCandidates(withCountry)[0] ?? "";
+            enriched.push(r);
+            continue;
+        }
+        const resolved = await resolveCoordinatesDeduped(withCountry, resolveCtx);
         if (resolved) {
             r.__geo_lat = resolved.lat;
             r.__geo_lon = resolved.lon;

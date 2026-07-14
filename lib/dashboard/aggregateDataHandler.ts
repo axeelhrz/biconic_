@@ -18,6 +18,7 @@ import {
 } from "@/lib/geo/geo-enrichment";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { applyCompareSpecToRows } from "@/lib/dashboard/compareMetricRows";
+import { normalizeFiscalYearStartMonth, sqlFiscalYearPartitionExpr } from "@/lib/dashboard/fiscalYear";
 import {
   applyComparativeRelationToRows,
   buildComparativeAggregateSql,
@@ -40,8 +41,11 @@ import {
   coerceAggFuncForTextOnlyIFS,
   resolveFieldToSql,
   type DerivedColumnRef,
+  type ExpressionToSqlOptions,
 } from "@/lib/dashboard/metricExpressionToSql";
 import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
+import { safeDateCast } from "@/lib/dashboard/sqlDateCast";
+import type { CoerceSqlExprOptions } from "@/lib/dashboard/coerceNumericSqlExpr";
 
 export type AggregateDataResult = { status: number; data: unknown };
 
@@ -81,6 +85,7 @@ interface Metric {
   field: string;
   func: string;
   alias: string;
+  displayRole?: "measure" | "attribute";
   cast?: "numeric" | "sanitize";
   /** Condición: solo se agregan filas que cumplan (ej. estado = 'Aprobado'). */
   condition?: MetricCondition;
@@ -146,6 +151,10 @@ export interface AggregationRequest {
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   /** DMY = DD/MM/YYYY (default); MDY = MM/DD/YYYY para texto con barras ambiguo. */
   dateSlashOrder?: "DMY" | "MDY";
+  /** Columnas de tipo fecha del dataset (mejora parseo en expresiones). */
+  dateFields?: string[];
+  /** Mes de inicio del año fiscal (1–12) para acumulados YTD. */
+  fiscalYearStartMonth?: number;
 }
 
 // --- Constantes ---
@@ -156,6 +165,7 @@ const ALLOWED_AGG_FUNCTIONS = [
   "MIN",
   "MAX",
   "COUNT(DISTINCT",
+  "ATTRIBUTE",
 ];
 const ALLOWED_OPERATORS = new Set([
   "=",
@@ -229,23 +239,6 @@ function isInvalidIdentifier(value: unknown): boolean {
   if (value == null) return true;
   const normalized = String(value).trim().toLowerCase();
   return normalized === "" || normalized === "undefined" || normalized === "null";
-}
-
-/** Parseo robusto de columnas texto/date/timestamp. Barras: DD/MM o MM/DD según `slashOrder`. */
-function safeDateCast(expr: string, slashOrder: "DMY" | "MDY"): string {
-  const e = expr.trim();
-  const slashFmt = slashOrder === "MDY" ? "MM/DD/YYYY" : "DD/MM/YYYY";
-  return `(
-    CASE
-      WHEN ${e} IS NULL THEN NULL
-      WHEN trim((${e})::text) ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(trim((${e})::text), '${slashFmt}')
-      WHEN trim((${e})::text) ~ '^\\d{1,2}-\\d{1,2}-\\d{4}$' THEN to_date(trim((${e})::text), 'DD-MM-YYYY')
-      WHEN trim((${e})::text) ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(trim((${e})::text), 'YYYY-MM-DD')
-      WHEN trim((${e})::text) ~ '^\\d{4}-\\d{2}-\\d{2}[ T].*$' THEN (trim((${e})::text))::timestamp::date
-      WHEN (${e})::text LIKE '%, % de % de %' THEN to_date((${e})::text, 'Day, DD "de" Month "de" YYYY')
-      ELSE NULL
-    END
-  )`;
 }
 
 /** Verifica paréntesis balanceados (ignora los que están dentro de comillas). Devuelve mensaje de error o null si está bien. */
@@ -418,6 +411,10 @@ export async function runAggregateData(
     const requestedChartType = String(body.chartType ?? "").trim().toLowerCase();
     const dateSlashOrder: "DMY" | "MDY" = body.dateSlashOrder === "MDY" ? "MDY" : "DMY";
     const dateParseOpts: ParseDateLikeOptions = { slashDateOrder: dateSlashOrder };
+    const exprSqlOptions: ExpressionToSqlOptions & CoerceSqlExprOptions = {
+      slashOrder: dateSlashOrder,
+      dateFields: Array.isArray(body.dateFields) ? body.dateFields : [],
+    };
 
     if (!Array.isArray(body.metrics) || body.metrics.length === 0) {
       return jsonResponse(
@@ -457,17 +454,19 @@ export async function runAggregateData(
       const m = body.metrics[i];
       if (m.formula) continue;
       const func = (m.func || "").toString().toUpperCase().trim();
+      const isAttributeMetric = func === "ATTRIBUTE" || (m as Metric).displayRole === "attribute";
       const expr = (m as Metric & { expression?: string }).expression?.trim() ?? "";
       const exprIsCountIfSumIf = /^\s*(COUNTIF|SUMIF|COUNTIFS|SUMIFS|AVERAGEIF)\s*\(/i.test(expr);
       const allowed =
         allowedAggSet.has(func) ||
+        isAttributeMetric ||
         func.startsWith("COUNT(DISTINCT") ||
         func === "COUNTA" ||
         allowedAggWhenExpression.has(func) ||
         exprIsCountIfSumIf;
       if (!allowed) {
         return jsonResponse(
-          { error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use: SUM, AVG, COUNT, COUNTA, MIN, MAX, COUNT(DISTINCT), o expresiones con COUNTIF/SUMIF/COUNTIFS/SUMIFS/AVERAGEIF.` },
+          { error: `Métrica en posición ${i + 1}: función "${m.func}" no permitida. Use: SUM, AVG, COUNT, COUNTA, MIN, MAX, COUNT(DISTINCT), ATTRIBUTE, o expresiones con COUNTIF/SUMIF/COUNTIFS/SUMIFS/AVERAGEIF.` },
           { status: 400 }
         );
       }
@@ -708,7 +707,7 @@ export async function runAggregateData(
             { status: 400 }
           );
         }
-        if (!expressionToSql(exprStr, derivedByName)) {
+        if (!expressionToSql(exprStr, derivedByName, exprSqlOptions)) {
           return jsonResponse(
             { error: `Métrica en posición ${i + 1}: la expresión no es válida. Revisá que solo uses columnas del dataset, números, operadores ( * - + / ^ ), comillas para texto, y funciones soportadas (IF, SUM, AVG, ROUND, UPPER, etc.).` },
             { status: 400 }
@@ -746,6 +745,7 @@ export async function runAggregateData(
 
         // Si está envuelta en agregación, extraer. Detectar expresión compuesta (ej. SUM(a)/SUM(b)) para no envolver en func() después.
         let func = (m.func || derived?.defaultAggregation || savedMetric?.func || "SUM").toString().toUpperCase();
+        const isAttributeMetric = func === "ATTRIBUTE" || (m as Metric).displayRole === "attribute";
         let isCompoundAggregate = false;
         if (resolvedExpr) {
           const unwrapped = unwrapAggExpression(resolvedExpr);
@@ -789,12 +789,12 @@ export async function runAggregateData(
                 (m as any)._ratioAggregateError = true;
                 return "1";
               }
-              const numSql = expressionToSql(ratioParsed.numerator, derivedByName);
-              const denSql = expressionToSql(ratioParsed.denominator, derivedByName);
+              const numSql = expressionToSql(ratioParsed.numerator, derivedByName, exprSqlOptions);
+              const denSql = expressionToSql(ratioParsed.denominator, derivedByName, exprSqlOptions);
               if (numSql && denSql) {
                 (m as any)._ratioAggregate = {
-                  numSql: coerceArithmeticOperandsToNumeric(numSql),
-                  denSql: coerceArithmeticOperandsToNumeric(denSql),
+                  numSql: coerceArithmeticOperandsToNumeric(numSql, exprSqlOptions),
+                  denSql: coerceArithmeticOperandsToNumeric(denSql, exprSqlOptions),
                 };
                 return "1";
               }
@@ -803,15 +803,15 @@ export async function runAggregateData(
             const uniqueMatch = resolvedExpr.trim().match(/^\s*UNIQUE\s*\(([\s\S]+)\)\s*$/i);
             if (uniqueMatch) {
               const inner = uniqueMatch[1]!.trim();
-              const innerSql = expressionToSql(inner, derivedByName);
+              const innerSql = expressionToSql(inner, derivedByName, exprSqlOptions);
               if (innerSql) {
                 const countDistinctExpr = `COUNT(DISTINCT (${innerSql}))`;
                 (m as any)._forceCountDistinct = countDistinctExpr;
                 return innerSql;
               }
             }
-            const sqlExpr = expressionToSql(resolvedExpr, derivedByName);
-            if (sqlExpr) return coerceArithmeticOperandsToNumeric(sqlExpr);
+            const sqlExpr = expressionToSql(resolvedExpr, derivedByName, exprSqlOptions);
+            if (sqlExpr) return coerceArithmeticOperandsToNumeric(sqlExpr, exprSqlOptions);
             console.warn("[aggregate-data] expressionToSql returned null for:", resolvedExpr);
           }
           if (derived) {
@@ -855,7 +855,9 @@ export async function runAggregateData(
           else
             aggExpr = `${func}(${buildConditionExpr(m.condition, fieldExpr)})`;
         } else {
-          if (func === "COUNTA") {
+          if (isAttributeMetric) {
+            aggExpr = `MIN(NULLIF(TRIM(${fieldExpr}::text), ''))`;
+          } else if (func === "COUNTA") {
             aggExpr = `COUNT(${fieldExpr})`;
           } else if (func.startsWith("COUNT(DISTINCT"))
             aggExpr = `COUNT(DISTINCT ${fieldExpr})`;
@@ -891,7 +893,7 @@ export async function runAggregateData(
           { status: 400 }
         );
       }
-      if (!expressionToSql(exprStr, derivedByName)) {
+      if (!expressionToSql(exprStr, derivedByName, exprSqlOptions)) {
         return jsonResponse(
           {
             error: `Dimensión «${d}»: la expresión de la columna calculada no es válida. Revisá que solo uses columnas del dataset, números, operadores ( * - + / ^ ), comillas para texto, y funciones soportadas (IF, IFS, SUM, AVG, ROUND, UPPER, etc.).`,
@@ -1250,9 +1252,11 @@ export async function runAggregateData(
     const cumulative = body.cumulative && body.cumulative !== "none" && dimList.length > 0;
     if (cumulative) {
       const orderDim = dimList[0].replace(/"/g, '""');
+      const dateColExpr = `"${body.dateDimension.replace(/"/g, '""')}"::date`;
+      const fyStart = normalizeFiscalYearStartMonth(body.fiscalYearStartMonth);
       const partition =
         body.cumulative === "ytd" && body.dateDimension
-          ? `PARTITION BY EXTRACT(YEAR FROM "${body.dateDimension.replace(/"/g, '""')}"::date)`
+          ? `PARTITION BY ${sqlFiscalYearPartitionExpr(dateColExpr, fyStart)}`
           : "";
       const windowExpr = body.metrics
         .map((m, i) => {
@@ -1370,6 +1374,7 @@ export async function runAggregateData(
             {
               parseDateOpts: body.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
               dimensionColumns: dimensionColumnsOrdered,
+              fiscalYearStartMonth: normalizeFiscalYearStartMonth(body.fiscalYearStartMonth),
             }
           );
 

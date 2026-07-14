@@ -91,7 +91,7 @@ function AdminDashboardContent() {
           <ClientFilter onSelect={setSelectedClientId} />
         </div>
         <div
-          className="flex items-center gap-1 rounded-xl border p-1"
+          className="flex items-center gap-1 rounded-xl border p-1 overflow-x-auto max-w-full"
           style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
         >
           {(["todos", "publicados", "borradores"] as const).map((f: any) => (

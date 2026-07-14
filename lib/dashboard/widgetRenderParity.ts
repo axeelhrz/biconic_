@@ -448,6 +448,7 @@ export const DASHBOARD_VISUAL_OVERRIDE_KEYS = new Set([
   "chartAxisStep",
   "chartPinnedDimensions",
   "tableColumnLabelOverrides",
+  "tableStyle",
   "chartDetailCard",
   "dashboardCompareUi",
 ]);

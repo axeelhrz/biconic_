@@ -632,6 +632,186 @@ async function POST(req) {
                 });
                 if (useInMemoryStarJoin) {
                     const joinsCount = (joins || []).length;
+                    const allSameFirebirdChain = hasFirebirdInChain &&
+                        sameConnectionChain &&
+                        primaryType === "firebird" &&
+                        allSameType;
+                    if (allSameFirebirdChain && joinsCount >= 2) {
+                        log("JOIN Firebird nativo (misma conexión, star schema).", { joinsCount });
+                        try {
+                            const Firebird = require("node-firebird");
+                            const fbOpts = (0, resolve_firebird_connection_1.resolveFirebirdAttachOptions)((0, connection_persistence_1.hydrateConnectionRow)(primaryConn));
+                            const fbTablePart = (table) => {
+                                const t = (table || "").trim();
+                                if (t.includes("."))
+                                    return (t.split(".").pop() || t).trim().toUpperCase();
+                                return /^[A-Z0-9_]+$/i.test(t) ? t.toUpperCase() : `"${t.replace(/"/g, '""')}"`;
+                            };
+                            const fbColPart = (col) => {
+                                const c = (col || "").trim();
+                                return /^[A-Z0-9_]+$/i.test(c) ? c.toUpperCase() : `"${c.replace(/"/g, '""')}"`;
+                            };
+                            const escapeFbLiteral = (v) => {
+                                if (v == null || v === "")
+                                    return "NULL";
+                                if (typeof v === "boolean")
+                                    return v ? "1" : "0";
+                                if (typeof v === "number" && !Number.isNaN(v)) {
+                                    return Number.isInteger(v) ? String(v) : `CAST('${String(v)}' AS DOUBLE PRECISION)`;
+                                }
+                                if (typeof v === "string" && /^-?\d+\.\d+$/.test(v.trim())) {
+                                    const n = v.trim();
+                                    return `CAST('${n.replace(/'/g, "''")}' AS DOUBLE PRECISION)`;
+                                }
+                                return `'${String(v).replace(/'/g, "''")}'`;
+                            };
+                            const inlineFbParams = (sql, params) => {
+                                let out = sql;
+                                for (const p of params) {
+                                    const pos = out.indexOf("?");
+                                    if (pos === -1)
+                                        break;
+                                    out = out.slice(0, pos) + escapeFbLiteral(p) + out.slice(pos + 1);
+                                }
+                                return out;
+                            };
+                            const normalizeKey = (k) => String(k || "").replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+                            const normalizeRow = (row) => {
+                                const out = {};
+                                for (const key of Object.keys(row || {}))
+                                    out[normalizeKey(key)] = row[key];
+                                return out;
+                            };
+                            const resolvedPrimaryCols = primaryColumns && primaryColumns.length > 0 ? primaryColumns : [];
+                            const selectParts = [];
+                            if (resolvedPrimaryCols.length > 0) {
+                                resolvedPrimaryCols.forEach((col) => {
+                                    const nk = normalizeKey(col);
+                                    selectParts.push(`p.${fbColPart(col)} AS "primary_${nk}"`);
+                                });
+                            }
+                            else {
+                                selectParts.push("p.*");
+                            }
+                            for (let idx = 0; idx < joins.length; idx++) {
+                                const jn = joins[idx];
+                                let secCols = jn.secondaryColumns && jn.secondaryColumns.length > 0
+                                    ? jn.secondaryColumns
+                                    : [];
+                                if (secCols.length > 0) {
+                                    secCols.forEach((col) => {
+                                        const nk = normalizeKey(col);
+                                        selectParts.push(`j${idx}.${fbColPart(col)} AS "join_${idx}_${nk}"`);
+                                    });
+                                }
+                                else {
+                                    selectParts.push(`j${idx}.*`);
+                                }
+                            }
+                            const pQualified = fbTablePart(primaryTable || "");
+                            let fromJoin = `FROM ${pQualified} p`;
+                            joins.forEach((jn, idx) => {
+                                const jt = (jn.joinType || "INNER").toUpperCase();
+                                const pairs = getJoinConditionPairs(jn);
+                                if (pairs.length === 0) {
+                                    throw new Error(`Join ${idx}: se requiere al menos una condición de enlace.`);
+                                }
+                                const onClauses = pairs.map(({ leftColumn: pc, rightColumn: sc }) => {
+                                    let leftAlias = "p";
+                                    let leftCol = (pc || "").trim();
+                                    if (leftCol.includes(".")) {
+                                        if (/^primary\./i.test(leftCol)) {
+                                            leftCol = leftCol.replace(/^primary\./i, "").trim();
+                                        }
+                                        else {
+                                            const m = leftCol.match(/^join_(\d+)\.(.+)$/i);
+                                            if (m) {
+                                                const i = Number(m[1]);
+                                                if (!Number.isNaN(i) && i >= 0 && i < idx) {
+                                                    leftAlias = `j${i}`;
+                                                    leftCol = m[2].trim();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    return `${leftAlias}.${fbColPart(leftCol)} = j${idx}.${fbColPart((sc || "").trim())}`;
+                                });
+                                fromJoin += ` ${jt} JOIN ${fbTablePart(jn.secondaryTable || "")} j${idx} ON ${onClauses.join(" AND ")}`;
+                            });
+                            const normalizedConditions = normalizeStarConditions(conditions || [], joins.length);
+                            const { clause: condClause, params: condParams } = (0, helpers_1.buildWhereClauseFirebirdStar)(normalizedConditions, joins.length);
+                            const { clause: dfClause, params: dfParams } = (0, helpers_1.buildDateFilterWhereFragmentFirebirdStar)(body.dateFilter, joins.length);
+                            const whereParts = [];
+                            if (condClause)
+                                whereParts.push(condClause.replace(/^WHERE\s+/i, ""));
+                            if (dfClause)
+                                whereParts.push(dfClause);
+                            const whereClause = whereParts.length ? ` WHERE ${whereParts.join(" AND ")}` : "";
+                            const allParams = [...condParams, ...dfParams];
+                            const effectiveLimit = limit ?? 50;
+                            const effectiveOffset = offset ?? 0;
+                            const orderByFb = resolvedPrimaryCols.length > 0
+                                ? resolvedPrimaryCols.map((c) => `p.${fbColPart(c)}`).join(", ")
+                                : "1";
+                            let sql = effectiveOffset > 0
+                                ? `SELECT FIRST ${effectiveLimit} SKIP ${effectiveOffset} ${selectParts.join(", ")} ${fromJoin}${whereClause} ORDER BY ${orderByFb}`
+                                : `SELECT FIRST ${effectiveLimit} ${selectParts.join(", ")} ${fromJoin}${whereClause} ORDER BY ${orderByFb}`;
+                            sql = inlineFbParams(sql, allParams);
+                            log("Ejecutando JOIN Firebird nativo.", { sql: sql.slice(0, 500), effectiveLimit, effectiveOffset });
+                            const rowsRaw = await new Promise((resolve, reject) => {
+                                Firebird.attach(fbOpts, (err, db) => {
+                                    if (err)
+                                        return reject(err);
+                                    db.query(sql, [], (qErr, rows) => {
+                                        if (db?.detach)
+                                            try {
+                                                db.detach(() => { });
+                                            }
+                                            catch (_) { }
+                                        if (qErr)
+                                            return reject(qErr);
+                                        resolve(rows || []);
+                                    });
+                                });
+                            });
+                            let totalOut;
+                            if (count) {
+                                const countSql = inlineFbParams(`SELECT COUNT(*) AS C ${fromJoin}${whereClause}`, allParams);
+                                const countRow = await new Promise((resolve, reject) => {
+                                    Firebird.attach(fbOpts, (err, db) => {
+                                        if (err)
+                                            return reject(err);
+                                        db.query(countSql, [], (qErr, rows) => {
+                                            if (db?.detach)
+                                                try {
+                                                    db.detach(() => { });
+                                                }
+                                                catch (_) { }
+                                            if (qErr)
+                                                return reject(qErr);
+                                            resolve(rows?.[0] ?? null);
+                                        });
+                                    });
+                                });
+                                const cVal = countRow?.C ?? countRow?.c;
+                                totalOut = typeof cVal === "number" ? cVal : Number(cVal) || 0;
+                            }
+                            const rowsOut = rowsRaw.map(normalizeRow);
+                            return server_1.NextResponse.json({
+                                ok: true,
+                                rows: rowsOut,
+                                total: totalOut,
+                                sourceExhausted: rowsOut.length < effectiveLimit,
+                                nextSourceOffset: effectiveOffset + rowsOut.length,
+                                nativeFirebird: true,
+                            });
+                        }
+                        catch (nativeFbErr) {
+                            log("JOIN Firebird nativo falló, cayendo a materialización.", {
+                                error: nativeFbErr instanceof Error ? nativeFbErr.message : String(nativeFbErr),
+                            });
+                        }
+                    }
                     if (hasFirebirdInChain && joinsCount >= 2) {
                         const pgUrl = (0, internal_db_url_1.getInternalDbUrl)();
                         if (pgUrl) {

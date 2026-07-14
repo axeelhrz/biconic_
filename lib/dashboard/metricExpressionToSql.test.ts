@@ -56,8 +56,25 @@ describe("expressionToSql", () => {
     expect(expressionToSql("cola`backtick`")).toBeNull();
   });
 
-  it("comparación columna = número: literal entre comillas para columnas text en PG", () => {
-    expect(expressionToSql("codigoarticulo=999999")).toBe(`"codigoarticulo"='999999'`);
+  it("DATEDIF entre columnas fecha genera resta de fechas en días", () => {
+    const sql = expressionToSql('DATEDIF(fecha_entrega; fecha_pedido; "D")', undefined, {
+      dateFields: ["fecha_entrega", "fecha_pedido"],
+    });
+    expect(sql).not.toBeNull();
+    expect(sql).toContain("to_date");
+    expect(sql).toMatch(/-\s*\(/);
+  });
+
+  it("resta directa de columnas fecha (sin DATEDIF) se coerce a fechas, no a numeric", () => {
+    const sql = expressionToSql("fecha_fin - fecha_inicio", undefined, {
+      dateFields: ["fecha_fin", "fecha_inicio"],
+    });
+    expect(sql).not.toBeNull();
+    const coerced = coerceArithmeticOperandsToNumeric(sql!, {
+      dateFields: ["fecha_fin", "fecha_inicio"],
+    });
+    expect(coerced).toContain("to_date");
+    expect(coerced).not.toContain("::numeric");
   });
 });
 

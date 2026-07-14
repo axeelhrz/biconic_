@@ -15,12 +15,6 @@ type CacheFromBuilder = {
     }>;
 };
 export type GeoCacheClient = {
-    rpc: (fn: string, params?: {
-        sql_query?: string;
-    }) => Promise<{
-        data: unknown;
-        error: unknown;
-    }>;
     from: (table: string) => CacheFromBuilder;
 };
 export type GeoHints = {
@@ -47,12 +41,8 @@ export type GeoInferencePreview = {
 };
 type GeoCacheRow = {
     cache_key: string;
-    query_text: string;
     lat: number;
-    lon: number;
-    display_name: string | null;
-    provider: string | null;
-    updated_at?: string;
+    lng: number;
 };
 export type EnrichRowsWithGeoOptions = {
     rows: Record<string, unknown>[];

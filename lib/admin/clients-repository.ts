@@ -1,7 +1,10 @@
 import postgres from "postgres";
+import bcrypt from "bcryptjs";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { toSqlParams } from "@/lib/db/sql-params";
 import { getServerAuthUser } from "@/lib/supabase/server-backend";
+import { normalizeClientRole } from "@/lib/admin/client-members-repository";
+import { createSubscriptionFromDb } from "@/lib/admin/plans-repository";
 import type { Database } from "@/lib/supabase/database.types";
 
 type SubscriptionStatus = Database["public"]["Enums"]["subscription_status"];
@@ -286,6 +289,145 @@ export async function deleteClientsFromDb(clientIds: string[]) {
     `;
     if (deleted.length === 0) throw new Error("No se encontraron clientes para eliminar");
     return { ok: true as const };
+  } finally {
+    await sql.end();
+  }
+}
+
+export type CreateClientInDbInput = {
+  clientType: "empresa" | "individuo";
+  companyName?: string;
+  individualFullName?: string;
+  identificationType?: string;
+  identificationNumber?: string;
+  countryId?: string;
+  provinceId?: string;
+  capital?: string;
+  address?: string;
+  contactEmail?: string;
+  status?: "activo" | "inactivo";
+  planId?: string;
+  adminEmail: string;
+  adminPassword: string;
+  adminName?: string;
+  adminRole?: string;
+};
+
+async function getClientColumnSet(sql: ReturnType<typeof postgres>): Promise<Set<string>> {
+  const cols = await sql<{ column_name: string }[]>`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'clients'
+  `;
+  return new Set(cols.map((c) => c.column_name));
+}
+
+function pickClientInsertRow(
+  input: CreateClientInDbInput,
+  schema: ClientSchema,
+  cols: Set<string>
+): Record<string, unknown> {
+  const displayName =
+    input.clientType === "empresa"
+      ? input.companyName?.trim() || "Cliente"
+      : input.individualFullName?.trim() || "Cliente";
+
+  const row: Record<string, unknown> = {
+    type: input.clientType,
+  };
+
+  if (schema.nameCol === "company_name") {
+    if (input.clientType === "empresa" || !cols.has("individual_full_name")) {
+      row.company_name = displayName;
+    }
+    if (cols.has("individual_full_name") && input.clientType === "individuo") {
+      row.individual_full_name = input.individualFullName?.trim() || displayName;
+    }
+  } else if (cols.has("name")) {
+    row.name = displayName;
+  }
+
+  if (cols.has("identification_type") && input.identificationType?.trim()) {
+    row.identification_type = input.identificationType.trim();
+  }
+  if (cols.has("identification_number") && input.identificationNumber?.trim()) {
+    row.identification_number = input.identificationNumber.trim();
+  }
+  if (schema.hasCountries && cols.has("country_id") && input.countryId?.trim()) {
+    row.country_id = input.countryId.trim();
+  }
+  if (cols.has("province_id") && input.provinceId?.trim()) {
+    row.province_id = input.provinceId.trim();
+  }
+  if (cols.has("capital") && input.capital?.trim()) row.capital = input.capital.trim();
+  if (cols.has("address") && input.address?.trim()) row.address = input.address.trim();
+  if (cols.has("contact_email") && input.contactEmail?.trim()) {
+    row.contact_email = input.contactEmail.trim();
+  }
+  if (cols.has("status") && schema.hasStatus) {
+    row.status = input.status === "inactivo" ? "Desactivado" : "Activo";
+  }
+
+  return row;
+}
+
+/** Crea cliente, usuario admin y suscripción opcional. */
+export async function createClientInDb(
+  input: CreateClientInDbInput
+): Promise<{ clientId: string; userId: string }> {
+  await requireAppAdmin();
+  const sql = getSql();
+  const email = input.adminEmail.trim().toLowerCase();
+  if (!email) throw new Error("El email del administrador es requerido");
+  if (!input.adminPassword?.trim()) throw new Error("La contraseña es requerida");
+
+  try {
+    const schema = await getClientSchema(sql);
+    const cols = await getClientColumnSet(sql);
+    const insertRow = pickClientInsertRow(input, schema, cols);
+
+    const [client] = await sql<{ id: string }[]>`
+      INSERT INTO public.clients ${sql(insertRow)}
+      RETURNING id
+    `;
+    if (!client?.id) throw new Error("No se pudo crear el cliente");
+
+    let userId: string | undefined;
+    const existing = await sql<{ id: string }[]>`
+      SELECT id FROM public.profiles WHERE lower(email) = ${email} LIMIT 1
+    `;
+    if (existing.length > 0) {
+      userId = existing[0]!.id;
+    } else {
+      const passwordHash = await bcrypt.hash(input.adminPassword, 12);
+      const [user] = await sql<{ id: string }[]>`
+        INSERT INTO public.profiles (id, email, full_name, password_hash, app_role)
+        VALUES (gen_random_uuid(), ${email}, ${input.adminName?.trim() || null}, ${passwordHash}, 'CREATOR'::public.app_role)
+        RETURNING id
+      `;
+      userId = user?.id;
+    }
+    if (!userId) throw new Error("No se pudo crear el usuario administrador");
+
+    const memberRole = normalizeClientRole(input.adminRole);
+    await sql`
+      INSERT INTO public.client_members (client_id, user_id, role)
+      VALUES (${client.id}, ${userId}, ${memberRole}::public.client_role)
+      ON CONFLICT (client_id, user_id) DO UPDATE SET role = EXCLUDED.role
+    `;
+
+    const planId = input.planId?.trim();
+    if (planId) {
+      const subStatus: Database["public"]["Enums"]["subscription_status"] =
+        input.status === "inactivo" ? "canceled" : "active";
+      await createSubscriptionFromDb(client.id, {
+        planId,
+        status: subStatus,
+        billingInterval: "month",
+      });
+    }
+
+    return { clientId: client.id, userId };
   } finally {
     await sql.end();
   }

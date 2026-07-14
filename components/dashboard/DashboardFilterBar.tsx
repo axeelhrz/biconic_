@@ -39,10 +39,10 @@ export default function DashboardFilterBar({
   ];
 
   return (
-    <div className="flex w-full items-center justify-between gap-5">
+    <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
       {/* --- Barra de Búsqueda --- */}
       <div
-        className="flex h-[34px] flex-1 items-center gap-2.5 rounded-xl border pr-4"
+        className="flex h-[34px] w-full flex-1 items-center gap-2.5 rounded-xl border pr-4 sm:min-w-0"
         style={
           variant === "platform"
             ? {
@@ -82,12 +82,12 @@ export default function DashboardFilterBar({
       </div>
 
       {/* --- Botones de Filtro --- */}
-      <div className="flex items-center gap-4">
+      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3 md:gap-4">
         {filterOptions.map((option) => {
           const isActive = activeFilter === option.id;
 
           const baseClasses =
-            "flex h-[30px] cursor-pointer items-center justify-center rounded-full px-4 py-2 text-[13px] font-medium leading-4 transition-all duration-200";
+            "flex h-[30px] cursor-pointer items-center justify-center rounded-full px-3 py-2 text-[12px] font-medium leading-4 transition-all duration-200 sm:px-4 sm:text-[13px]";
           const activeClasses =
             variant === "platform"
               ? "bg-[var(--platform-accent)] text-[var(--platform-accent-fg)] shadow-[0_0_0_1px_var(--platform-accent)]"

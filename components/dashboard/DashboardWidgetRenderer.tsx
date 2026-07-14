@@ -60,6 +60,10 @@ import {
   resolveShowCardHeaderStrip,
 } from "@/lib/dashboard/compareDisplayKeys";
 import {
+  isAttributeResultKey,
+  resolveDashboardKpiDisplayValue,
+} from "@/lib/dashboard/metricDisplayRole";
+import {
   getEffectiveDashboardCompareUi,
   effectivePlacementEnabled,
 } from "@/lib/dashboard/ensureDashboardCompareUi";
@@ -73,6 +77,14 @@ import {
   type KpiUserTimeScopeOptions,
 } from "@/lib/dashboard/kpiFilterScope";
 import { DashboardPresetHeaderIcon } from "@/lib/dashboard/headerPresetIcons";
+import { buildTablePresentation, resolveTableLayoutFields } from "@/lib/dashboard/buildTablePresentation";
+import {
+  resolveTableStyle,
+  tableBodyCellStyle,
+  tableHeaderCellStyle,
+  tableRowStyle,
+} from "@/lib/dashboard/tableStyle";
+import { applyTableQuickCalc, chartQuickCalcToPercentBasis, chartQuickCalcUsesPercentDisplay, normalizeChartQuickCalc } from "@/lib/dashboard/chartQuickCalc";
 import { mergeChartVisualStyle, widgetAggregationWithStoredVisualOverrides, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { CompareStatusStrip } from "@/components/dashboard/CompareStatusStrip";
 import { resolveEffectiveCompareSpec, resolveWidgetCompareUi } from "@/lib/dashboard/compareContext";
@@ -429,6 +441,10 @@ export function DashboardWidgetRenderer({
     const aggCfg = widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"];
 
     const fromConfig = chartConfig?.datasets?.[0]?.data?.[0];
+    const attrFromConfig = (chartConfig?.datasets?.[0] as { attributeLabels?: string[] } | undefined)?.attributeLabels?.[0];
+    if (attrFromConfig != null && String(attrFromConfig).trim() !== "") {
+      return String(attrFromConfig);
+    }
     if (fromConfig != null && Number.isFinite(Number(fromConfig))) {
       return formatKpiValue(Number(fromConfig), style);
     }
@@ -451,6 +467,12 @@ export function DashboardWidgetRenderer({
 
     if (yKey) {
       const scope = (widget as DashboardWidgetRendererWidget).kpiUserTimeScope ?? null;
+      const metricsKpi = (aggCfg?.metrics ?? []) as { alias?: string; func?: string; field?: string; displayRole?: string }[];
+      const isAttribute = isAttributeResultKey(yKey, metricsKpi);
+      if (isAttribute) {
+        const display = resolveDashboardKpiDisplayValue(rows, yKey, true);
+        return typeof display === "string" ? display : formatKpiValue(display, style);
+      }
       const total = resolveDashboardKpiMainValueForScope(rows, yKey, scope);
       if (Number.isFinite(total)) {
         return formatKpiValue(total, style);
@@ -569,36 +591,41 @@ export function DashboardWidgetRenderer({
     showDataLabels?: boolean;
     labelVisibilityMode?: ChartLabelVisibilityMode;
   } | undefined;
+  const tablePresentation = useMemo(() => {
+    if (chartType !== "table" || !Array.isArray(tableRows) || tableRows.length === 0) {
+      return { columns: [] as string[], rows: [] as Record<string, unknown>[], pivoted: false };
+    }
+    return buildTablePresentation(
+      tableRows as Record<string, unknown>[],
+      widget.aggregationConfig as Parameters<typeof buildTablePresentation>[1]
+    );
+  }, [chartType, tableRows, widget.aggregationConfig]);
+
   const tableColumnOrder = useMemo(() => {
-    if (!Array.isArray(tableRows) || tableRows.length === 0) return [];
-    const firstRowKeys = Object.keys(tableRows[0] ?? {});
-    if (chartType !== "table") return firstRowKeys;
-    const axis = resolveWidgetAxisKeys(tableRows as Record<string, unknown>[], {
-      type: widget.type,
-      aggregationConfig: widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
-      source: widget.source as BuildChartConfigWidget["source"],
-    });
-    if (!axis) return firstRowKeys;
-    const aggRaw = (widget.aggregationConfig ?? {}) as {
-      dimension?: string;
-      dimensions?: string[];
-      dimension2?: string;
-    };
-    const dimensionCandidates = [
-      axis.xKey,
-      aggRaw.dimension,
-      ...(Array.isArray(aggRaw.dimensions) ? aggRaw.dimensions : []),
-      aggRaw.dimension2,
-      (widget.source as { labelField?: string } | undefined)?.labelField,
-    ]
-      .map((k) => String(k ?? "").trim())
-      .filter(Boolean);
-    const dimensionsOrdered = Array.from(new Set(dimensionCandidates))
-      .filter((k) => !axis.yKeys.includes(k) && firstRowKeys.includes(k));
-    const metricsOrdered = axis.yKeys.filter((k) => firstRowKeys.includes(k));
-    const selected = [...dimensionsOrdered, ...metricsOrdered];
-    return selected.length > 0 ? selected : firstRowKeys;
-  }, [tableRows, chartType, widget.type, widget.aggregationConfig, widget.source]);
+    if (chartType !== "table") {
+      if (!Array.isArray(tableRows) || tableRows.length === 0) return [];
+      return Object.keys(tableRows[0] ?? {});
+    }
+    return tablePresentation.columns;
+  }, [chartType, tableRows, tablePresentation.columns]);
+
+  const tableDisplayRows = useMemo(() => {
+    if (chartType !== "table") return tableRows;
+    const base = tablePresentation.rows;
+    const agg = widget.aggregationConfig as Record<string, unknown> | undefined;
+    const availableKeys = base[0] ? Object.keys(base[0]) : [];
+    const { valueFields } = resolveTableLayoutFields(agg, availableKeys);
+    return applyTableQuickCalc(
+      base as Record<string, unknown>[],
+      tablePresentation.columns,
+      {
+        type: widget.type,
+        aggregationConfig: widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
+        source: widget.source as BuildChartConfigWidget["source"],
+      },
+      valueFields
+    );
+  }, [chartType, tableRows, tablePresentation.rows, tablePresentation.columns, widget.type, widget.aggregationConfig, widget.source]);
   const compareTableExtraKeys = useMemo(() => {
     if (chartType !== "table" || !Array.isArray(tableRows) || tableRows.length === 0) return [] as string[];
     const agg = widget.aggregationConfig as Record<string, unknown> | undefined;
@@ -606,16 +633,16 @@ export function DashboardWidgetRenderer({
     if (!effectivePlacementEnabled(agg ?? {}, "table_extra_columns", compareUiOpts)) return [];
     const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg as never));
     if (spec.kind === "none") return [];
-    const axis = resolveWidgetAxisKeys(tableRows as Record<string, unknown>[], {
+    const axis = resolveWidgetAxisKeys(tableDisplayRows as Record<string, unknown>[], {
       type: widget.type,
       aggregationConfig: widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
       source: widget.source as BuildChartConfigWidget["source"],
     });
     const y0 = axis?.yKeys[0];
     if (!y0) return [];
-    const keys = getCompareColumnKeys(spec, y0, tableRows[0] as Record<string, unknown>);
+    const keys = getCompareColumnKeys(spec, y0, tableDisplayRows[0] as Record<string, unknown>);
     return keys.tableExtraKeys;
-  }, [chartType, tableRows, widget.type, widget.aggregationConfig, widget.source]);
+  }, [chartType, tableDisplayRows, widget.type, widget.aggregationConfig, widget.source]);
   const effectiveTableColumnOrder = useMemo(() => {
     const extra = compareTableExtraKeys.filter((k) => !tableColumnOrder.includes(k));
     return [...tableColumnOrder, ...extra];
@@ -641,6 +668,14 @@ export function DashboardWidgetRenderer({
     }
     return next;
   }, [tableHeaderLabels, compareTableExtraKeys, widget.aggregationConfig]);
+  const resolvedTableStyle = useMemo(() => {
+    const aggResolved = widgetAggregationWithStoredVisualOverrides({
+      aggregationConfig: widget.aggregationConfig as Record<string, unknown> | null | undefined,
+      dashboardVisualOverrides: (widget as { dashboardVisualOverrides?: Record<string, unknown> | null })
+        .dashboardVisualOverrides,
+    }) as { tableStyle?: import("@/lib/dashboard/tableStyle").TableStyleConfig };
+    return resolveTableStyle(aggResolved.tableStyle);
+  }, [widget.aggregationConfig, widget]);
   const tableMetricFormatters = useMemo(() => {
     const map = new Map<string, (value: number) => string>();
     const yKeys = Array.isArray(aggConfig?.chartYAxes) ? aggConfig.chartYAxes : [];
@@ -814,9 +849,15 @@ export function DashboardWidgetRenderer({
           : chartType === "scatter"
             ? "line"
             : (chartType as "bar" | "line" | "pie" | "doughnut");
-    const percentBasis = normalizeChartPercentBasis(widget.chartPercentBasis);
-    const pieLabelMode: ChartLabelDisplayMode = widget.labelDisplayMode ?? "percent";
-    const cartesianLabelMode: ChartLabelDisplayMode = widget.labelDisplayMode ?? "value";
+    const quickCalc = normalizeChartQuickCalc(agg?.chartQuickCalc);
+    const quickCalcPercent = chartQuickCalcUsesPercentDisplay(quickCalc);
+    const percentBasis = normalizeChartPercentBasis(
+      quickCalcPercent ? (chartQuickCalcToPercentBasis(quickCalc) ?? widget.chartPercentBasis) : widget.chartPercentBasis
+    );
+    const pieLabelMode: ChartLabelDisplayMode =
+      quickCalcPercent ? "percent" : (widget.labelDisplayMode ?? "percent");
+    const cartesianLabelMode: ChartLabelDisplayMode =
+      quickCalcPercent ? "percent" : (widget.labelDisplayMode ?? "value");
     const metricStyles = widget.chartMetricStyles as (ChartStyleConfig | undefined)[] | undefined;
     const usePerMetricFormat = Array.isArray(metricStyles) && metricStyles.length > 0;
     const optionsBase = getChartOptionsBase(darkChartTheme, chartDevicePixelRatio);
@@ -1308,12 +1349,16 @@ export function DashboardWidgetRenderer({
           pointCtx
         );
       };
-      const datalabelFormatter = (value: number, ctx?: FormatChartPointContext) =>
-        formatCartesianPoint(value, ctx?.datasetIndex, {
+      const datalabelFormatter = (value: number, ctx?: FormatChartPointContext) => {
+        const ds = ctx?.chart?.data?.datasets?.[ctx.datasetIndex ?? 0] as { attributeLabels?: string[] } | undefined;
+        const labelText = ds?.attributeLabels?.[ctx?.dataIndex ?? -1];
+        if (labelText != null && String(labelText).trim() !== "") return String(labelText);
+        return formatCartesianPoint(value, ctx?.datasetIndex, {
           chart: ctx?.chart,
           dataIndex: ctx?.dataIndex,
           datasetIndex: ctx?.datasetIndex,
         });
+      };
 
       const baseOptionsTooltipCallbacks = (
         (optionsBase.plugins as { tooltip?: { callbacks?: Record<string, unknown> } } | undefined)?.tooltip
@@ -1953,23 +1998,29 @@ export function DashboardWidgetRenderer({
                 ) : null}
               </div>
             )}
-            {chartType === "table" && Array.isArray(tableRows) && tableRows.length > 0 && (
+            {chartType === "table" && Array.isArray(tableDisplayRows) && tableDisplayRows.length > 0 && (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <div
-                  className="dashboard-widget-table-scroll min-h-0 min-w-0 flex-1 overflow-auto rounded-md border text-xs"
-                  style={{ borderColor: "var(--platform-border)" }}
+                  className="dashboard-widget-table-scroll min-h-0 min-w-0 flex-1 overflow-auto rounded-md border"
+                  style={{ borderColor: "var(--platform-border)", fontSize: resolvedTableStyle.fontSize }}
                 >
-                  <table className="w-full min-w-max">
+                  <table
+                    className="w-full min-w-max border-collapse"
+                    style={{
+                      tableLayout: resolvedTableStyle.hasFixedColumnWidths ? "fixed" : "auto",
+                    }}
+                  >
                     <thead>
                       <tr className="border-b text-left" style={{ borderColor: "var(--platform-border)" }}>
                         {effectiveTableColumnOrder.map((k) => (
                           <th
                             key={k}
-                            className="sticky top-0 z-[1] py-1.5 pr-2 font-medium"
+                            className="sticky top-0 z-[1] font-medium"
                             style={{
                               color: "var(--platform-fg-muted)",
                               background: "var(--platform-surface, #fff)",
                               boxShadow: "inset 0 -1px 0 var(--platform-border, #e2e8f0)",
+                              ...tableHeaderCellStyle(resolvedTableStyle, k),
                             }}
                           >
                             {String(effectiveTableHeaderLabels?.[k] ?? "").trim() || k}
@@ -1978,10 +2029,20 @@ export function DashboardWidgetRenderer({
                       </tr>
                     </thead>
                     <tbody>
-                      {tableRows.map((row, i) => (
-                        <tr key={i} className="border-b" style={{ borderColor: "var(--platform-border)" }}>
+                      {tableDisplayRows.map((row, i) => (
+                        <tr
+                          key={i}
+                          className="border-b"
+                          style={{ borderColor: "var(--platform-border)", ...tableRowStyle(resolvedTableStyle, i) }}
+                        >
                           {effectiveTableColumnOrder.map((columnKey) => (
-                            <td key={columnKey} className="py-1.5 pr-2" style={{ color: "var(--platform-fg)" }}>
+                            <td
+                              key={columnKey}
+                              style={{
+                                color: "var(--platform-fg)",
+                                ...tableBodyCellStyle(resolvedTableStyle, columnKey),
+                              }}
+                            >
                               {formatTableCellValue(columnKey, row[columnKey])}
                             </td>
                           ))}

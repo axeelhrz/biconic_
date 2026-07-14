@@ -39,6 +39,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildSheetPhysicalTableName = buildSheetPhysicalTableName;
 exports.loadWorkbookBufferForConnection = loadWorkbookBufferForConnection;
 exports.listSheetNamesFromBuffer = listSheetNamesFromBuffer;
+exports.listSheetNamesForConnection = listSheetNamesForConnection;
+exports.resolveImportSheetSelection = resolveImportSheetSelection;
 exports.ensureDataTablesForSheets = ensureDataTablesForSheets;
 exports.excelConnectionTableKeys = excelConnectionTableKeys;
 const XLSX = __importStar(require("xlsx"));
@@ -93,6 +95,39 @@ function listSheetNamesFromBuffer(buffer, storagePath, originalFileName) {
         return ["Sheet1"];
     const workbook = XLSX.read(buffer, { type: "buffer", bookSheets: true });
     return (workbook.SheetNames ?? []).filter(Boolean);
+}
+async function listSheetNamesForConnection(connectionId, supabaseAdmin, options) {
+    const { data: connection } = await supabaseAdmin
+        .from("connections")
+        .select("storage_object_path, original_file_name")
+        .eq("id", connectionId)
+        .single();
+    const storagePath = String(connection?.storage_object_path ?? "").trim();
+    if (!storagePath) {
+        throw new Error("No se encontró el archivo Excel en almacenamiento.");
+    }
+    const originalFileName = connection?.original_file_name ?? null;
+    const buffer = await loadWorkbookBufferForConnection(storagePath, originalFileName, options);
+    const sheetNames = listSheetNamesFromBuffer(buffer, storagePath, originalFileName);
+    return { sheetNames, storagePath, originalFileName };
+}
+async function resolveImportSheetSelection(connectionId, selectedSheet, supabaseAdmin, options) {
+    const token = selectedSheet?.trim() || null;
+    const { sheetNames } = await listSheetNamesForConnection(connectionId, supabaseAdmin, options);
+    if (sheetNames.length === 0) {
+        throw new Error("El archivo no contiene hojas legibles.");
+    }
+    const wantsAllSheets = token === "__ALL__" || (token == null && sheetNames.length > 1);
+    if (wantsAllSheets && sheetNames.length > 1) {
+        return { mode: "all", sheetNames };
+    }
+    if (token && token !== "__ALL__" && sheetNames.includes(token)) {
+        return { mode: "single", sheetName: token, sheetNames };
+    }
+    if (token && token !== "__ALL__" && !sheetNames.includes(token)) {
+        throw new Error(`La hoja "${token}" no existe en el archivo.`);
+    }
+    return { mode: "single", sheetName: sheetNames[0], sheetNames };
 }
 async function ensureDataTablesForSheets(supabaseAdmin, connectionId, sheetNames, initialDataTableId) {
     const { data: existingRows } = await supabaseAdmin

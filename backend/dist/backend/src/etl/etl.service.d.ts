@@ -20,15 +20,25 @@ export declare class EtlService {
     }>;
     runScheduled(secret: string): Promise<{
         error: string;
+        ok?: undefined;
+        due?: undefined;
+        triggered?: undefined;
+        skippedActive?: undefined;
         enqueued?: undefined;
         jobs?: undefined;
+        connections?: undefined;
     } | {
+        ok: boolean;
+        due: number;
+        triggered: number;
+        skippedActive: number;
         enqueued: number;
         jobs: {
             runId: string;
             status: string;
             destinationTable: string;
         }[];
+        connections: import("@/lib/connection/run-scheduled-connections").RunScheduledConnectionsResult;
         error?: undefined;
     }>;
 }

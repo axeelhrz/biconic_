@@ -3,10 +3,11 @@ import type { Json } from "@/lib/supabase/database.types";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import {
-  formatNextExecutionDisplay,
-  formatScheduleLabel,
+  buildScheduleApiPayload,
   mergeScheduleIntoGuidedConfig,
   parseScheduleFromLayout,
+  parseScheduleRequestBody,
+  validateScheduleInput,
   type EtlSchedule,
 } from "@/lib/etl/schedule";
 
@@ -53,15 +54,9 @@ export async function GET(
     }
 
     const schedule = parseScheduleFromLayout(etlRow.layout) ?? {};
-    const frequency = schedule.frequency?.trim() || null;
     return NextResponse.json({
       ok: true,
-      data: {
-        frequency,
-        lastRunAt: schedule.lastRunAt ?? null,
-        label: formatScheduleLabel(frequency),
-        nextExecution: formatNextExecutionDisplay(schedule.lastRunAt, frequency),
-      },
+      data: buildScheduleApiPayload(schedule),
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Error al leer programación";
@@ -71,8 +66,8 @@ export async function GET(
 
 /**
  * POST /api/etl/[etl-id]/schedule
- * Guarda la frecuencia de actualización automática sin ejecutar el ETL.
- * Body: { frequency: string | null } — null o "" desactiva la programación.
+ * Guarda la programación sin ejecutar el ETL.
+ * Body: { frequency, runAtTime?, runOnWeekdays? } — null o "" desactiva.
  */
 export async function POST(
   request: NextRequest,
@@ -91,8 +86,11 @@ export async function POST(
     }
 
     const body = await request.json().catch(() => ({}));
-    const frequency =
-      body.frequency === null || body.frequency === undefined ? null : String(body.frequency).trim();
+    const scheduleInput = parseScheduleRequestBody(body);
+    const validationError = validateScheduleInput(scheduleInput);
+    if (validationError) {
+      return NextResponse.json({ ok: false, error: validationError }, { status: 400 });
+    }
 
     const adminClient = createServiceRoleClient();
     const { data: etlRow, error: fetchError } = await adminClient
@@ -107,7 +105,7 @@ export async function POST(
 
     const currentLayout = (etlRow as { layout?: Record<string, unknown> }).layout ?? {};
     const guidedConfig = (currentLayout.guided_config as Record<string, unknown>) ?? {};
-    const mergedGuided = mergeScheduleIntoGuidedConfig(guidedConfig, frequency);
+    const mergedGuided = mergeScheduleIntoGuidedConfig(guidedConfig, scheduleInput);
     const updatedLayout = { ...currentLayout, guided_config: mergedGuided };
 
     const { error: updateError } = await adminClient
@@ -120,16 +118,9 @@ export async function POST(
     }
 
     const schedule = (mergedGuided.schedule as EtlSchedule | undefined) ?? {};
-    const freq = schedule.frequency?.trim() || null;
-
     return NextResponse.json({
       ok: true,
-      data: {
-        frequency: freq,
-        lastRunAt: schedule.lastRunAt ?? null,
-        label: formatScheduleLabel(freq),
-        nextExecution: formatNextExecutionDisplay(schedule.lastRunAt, freq),
-      },
+      data: buildScheduleApiPayload(schedule),
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Error al guardar programación";

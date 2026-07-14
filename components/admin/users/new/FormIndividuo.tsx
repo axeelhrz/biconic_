@@ -6,6 +6,7 @@ import { PasswordInput } from "@/components/ui/PasswordInput";
 import { Select } from "@/components/ui/Select";
 import { useCompanyOptions } from "@/hooks/useCompanyOptions";
 import { useLocationOptions } from "@/hooks/useLocationOptions";
+import { usePlanOptions } from "@/hooks/usePlanOptions";
 import { useEffect } from "react";
 import type { FieldErrors, FieldValues } from "react-hook-form";
 import type { FormValues } from "@/app/admin/(main)/users/new/page";
@@ -37,9 +38,11 @@ export function FormIndividuo({
   register: UseFormRegister<FormValues>;
   errors: FieldErrors<FormValues>;
 }) {
-  const { control, setValue } = useFormContext<FormValues>() ?? ({} as any);
+  const { control, setValue, watch } = useFormContext<FormValues>() ?? ({} as any);
   const { options: companyOptions, loading: loadingCompanies } =
     useCompanyOptions();
+  const { options: planOptions, loading: loadingPlans } = usePlanOptions();
+  const companyId = watch("companyId");
 
   const {
     countries,
@@ -182,6 +185,57 @@ export function FormIndividuo({
         </Field>
       </div>
 
+      {!companyId ? (
+        <>
+          <div className="text-lg font-semibold mt-2 mb-1" style={{ color: "var(--platform-fg)" }}>
+            Plan y Suscripción
+          </div>
+          <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
+            <Field
+              label="Plan Comercial (opcional)"
+              error={(errors as FieldErrors<FieldValues>).planId?.message as string}
+            >
+              <Controller
+                name="planId"
+                control={control}
+                render={({ field: { value, onChange, name } }) => (
+                  <Select
+                    name={name}
+                    value={value as any}
+                    onChange={onChange}
+                    placeholder="Sin plan asignado"
+                    options={planOptions}
+                    disabled={loadingPlans}
+                    className="w-full rounded-xl"
+                    style={{ color: "var(--platform-fg)" }}
+                  />
+                )}
+              />
+            </Field>
+            <Field label="Estado inicial">
+              <Controller
+                name="status"
+                control={control}
+                render={({ field: { value, onChange, name } }) => (
+                  <Select
+                    name={name}
+                    value={value as any}
+                    onChange={onChange}
+                    placeholder="Seleccione"
+                    options={[
+                      { label: "Activo", value: "activo" },
+                      { label: "Inactivo", value: "inactivo" },
+                    ]}
+                    className="w-full rounded-xl"
+                    style={{ color: "var(--platform-fg)" }}
+                  />
+                )}
+              />
+            </Field>
+          </div>
+        </>
+      ) : null}
+
       <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-3">
         <Field label="Empresa a la cual pertenece">
           <Controller
@@ -231,7 +285,7 @@ export function FormIndividuo({
         </Field>
       </div>
 
-      {/* Plan, Límites y Permisos no aplican para Individuo que se une a empresa. Puedes ocultarlos condicionalmente si quieres. */}
+      {/* Si elige empresa existente, solo se agrega como miembro (sin plan nuevo). */}
 
       <hr className="my-6" style={{ borderColor: "var(--platform-border)" }} />
     </>

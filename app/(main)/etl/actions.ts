@@ -146,7 +146,7 @@ export async function getEtlsAction(searchQuery: string = "", filter: string = "
               description: "", // ETL table doesn't have a description field
               views: 0, // ETL table doesn't have a views field
               lastExecution: "",
-              nextExecution: formatNextExecutionDisplay(schedule?.lastRunAt, frequency),
+              nextExecution: formatNextExecutionDisplay(schedule?.lastRunAt, frequency, schedule ?? undefined),
               createdAt: "",
               clientId: row.client_id ?? "",
               ownerId: row.user_id,

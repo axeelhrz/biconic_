@@ -39,6 +39,14 @@ export declare function buildWhereClauseFirebird(conds?: FilterCondition[]): {
     clause: string;
     params: any[];
 };
+export declare function buildWhereClauseFirebirdStar(conds: FilterCondition[] | undefined, joinsCount: number, strictPrefixed?: boolean): {
+    clause: string;
+    params: any[];
+};
+export declare function buildDateFilterWhereFragmentFirebirdStar(dateFilter: DateFilterSpec | undefined | null, joinsCount: number): {
+    clause: string;
+    params: any[];
+};
 export declare function buildWhereClausePgStar(conds: FilterCondition[] | undefined, joinsCount: number, strictPrefixed?: boolean): {
     clause: string;
     params: any[];

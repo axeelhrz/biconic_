@@ -30,6 +30,7 @@ export async function listAdminDashboardsForGridFromDb(): Promise<Dashboard[]> {
         user_id: string | null;
         client_id: string | null;
         owner_full_name: string | null;
+        client_label: string | null;
       }[]
     >`
       SELECT
@@ -40,10 +41,16 @@ export async function listAdminDashboardsForGridFromDb(): Promise<Dashboard[]> {
         d.layout,
         d.user_id,
         d.client_id,
-        p.full_name AS owner_full_name
+        p.full_name AS owner_full_name,
+        COALESCE(
+          NULLIF(TRIM(c.company_name), ''),
+          NULLIF(TRIM(c.individual_full_name), ''),
+          NULLIF(TRIM(c.name), '')
+        ) AS client_label
       FROM public.dashboard d
       LEFT JOIN public.profiles p ON p.id = d.user_id
-      ORDER BY d.created_at DESC
+      LEFT JOIN public.clients c ON c.id = d.client_id
+      ORDER BY client_label NULLS LAST, d.title ASC NULLS LAST, d.created_at DESC
     `;
 
     return rows.map((row) => ({
@@ -55,6 +62,7 @@ export async function listAdminDashboardsForGridFromDb(): Promise<Dashboard[]> {
       views: 0,
       owner: { fullName: row.owner_full_name ?? "Desconocido" },
       clientId: row.client_id ?? undefined,
+      clientLabel: row.client_label ?? undefined,
       ownerId: row.user_id ?? undefined,
       layout: row.layout ?? undefined,
     }));

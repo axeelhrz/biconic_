@@ -23,7 +23,7 @@ export default function DashboardStatsGrid({ stats }: StatsGridProps) {
       </div>
 
       {/* --- Capa de Contenido (Las Tarjetas) --- */}
-      <div className="relative z-10 flex h-[219px] items-center justify-between gap-4 p-6">
+      <div className="relative z-10 grid grid-cols-2 gap-3 p-4 sm:gap-4 sm:p-6 lg:flex lg:h-[219px] lg:items-center lg:justify-between">
         {stats.map((stat) => (
           <StatCard
             key={stat.id}

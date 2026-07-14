@@ -13,12 +13,18 @@ import {
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
 import { appendCompareLineDatasetsIfConfigured } from "@/lib/dashboard/compareChartMerge";
-import { resolveDashboardKpiMainValue } from "@/lib/dashboard/compareDisplayKeys";
+import {
+  isAttributeResultKey,
+  metricChartNumericValue,
+  metricDisplayTextForRow,
+  resolveDashboardKpiDisplayValue,
+} from "@/lib/dashboard/metricDisplayRole";
 import {
   resolveDashboardKpiMainValueForScope,
   type KpiUserTimeScopeOptions,
 } from "@/lib/dashboard/kpiFilterScope";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
+import { applyChartQuickCalc } from "@/lib/dashboard/chartQuickCalc";
 
 function aggregationDateParseOpts(agg?: { dateSlashOrder?: string }): ParseDateLikeOptions {
   return { slashDateOrder: agg?.dateSlashOrder === "MDY" ? "MDY" : "DMY" };
@@ -31,6 +37,8 @@ export type ChartConfig = {
   datasets: Array<{
     label: string;
     data: number[];
+    /** Etiquetas textuales por punto cuando la métrica es atributo. */
+    attributeLabels?: string[];
     backgroundColor?: string | string[];
     hoverBackgroundColor?: string | string[];
     borderColor?: string | string[];
@@ -49,7 +57,7 @@ export type BuildChartConfigWidget = {
     dimension?: string;
     dimensions?: string[];
     dimension2?: string;
-    metrics?: Array<{ alias?: string; func?: string; field?: string }>;
+    metrics?: Array<{ alias?: string; func?: string; field?: string; displayRole?: "measure" | "attribute" }>;
     chartXAxis?: string;
     chartYAxes?: string[];
     chartSeriesField?: string;
@@ -64,6 +72,11 @@ export type BuildChartConfigWidget = {
     /** Texto en leyenda por clave de métrica (misma clave que chartYAxes / columna en filas). */
     chartDatasetLabelOverrides?: Record<string, string>;
     tableColumnLabelOverrides?: Record<string, string>;
+    tableStyle?: import("@/lib/dashboard/tableStyle").TableStyleConfig;
+    tableRowFields?: string[];
+    tableColumnFields?: string[];
+    chartQuickCalc?: string;
+    chartPercentGroupField?: string;
     chartRankingEnabled?: boolean;
     chartRankingTop?: number;
     chartRankingMetric?: string;
@@ -98,7 +111,25 @@ export type ResolvedWidgetAxisKeys = {
   yKeys: string[];
 };
 
-type AggMetricLike = { alias?: string; func?: string; field?: string };
+type AggMetricLike = { alias?: string; func?: string; field?: string; displayRole?: "measure" | "attribute" };
+
+function buildDatasetSeriesFromRows(
+  rows: Record<string, unknown>[],
+  yKey: string,
+  metrics: AggMetricLike[],
+  displayLabel: string,
+  extras: Record<string, unknown> = {}
+) {
+  const isAttribute = isAttributeResultKey(yKey, metrics);
+  return {
+    label: displayLabel,
+    data: rows.map((r) => metricChartNumericValue(r as Record<string, unknown>, yKey, isAttribute)),
+    ...(isAttribute
+      ? { attributeLabels: rows.map((r) => metricDisplayTextForRow(r as Record<string, unknown>, yKey)) }
+      : {}),
+    ...extras,
+  };
+}
 
 /** Igual que `metricAliases` y `externalKey` en aggregate-data: `alias` o `func(campo)`. */
 function metricExternalColumnKey(m: AggMetricLike | undefined): string {
@@ -548,6 +579,16 @@ export function buildChartConfig(
   accentColor: string = "",
   buildOptions?: BuildChartConfigOptions
 ): ChartConfig | undefined {
+  const cfg = buildChartConfigCore(dataArray, widget, accentColor, buildOptions);
+  return applyChartQuickCalc(cfg, widget, dataArray, accentColor);
+}
+
+function buildChartConfigCore(
+  dataArray: Record<string, unknown>[],
+  widget: BuildChartConfigWidget,
+  accentColor: string = "",
+  buildOptions?: BuildChartConfigOptions
+): ChartConfig | undefined {
   if (!Array.isArray(dataArray) || dataArray.length === 0) return undefined;
   const agg = widget.aggregationConfig;
   const resolvedTypeEarly = (agg?.chartType as string) || widget.type;
@@ -577,12 +618,29 @@ export function buildChartConfig(
         : yKey;
     const kpiLegend =
       typeof dsKpi?.[yKey] === "string" && dsKpi[yKey]!.trim() !== "" ? dsKpi[yKey]!.trim() : kpiDefaultLabel;
-    const kpiNumber = resolveDashboardKpiMainValueForScope(
+    const kpiDisplay = resolveDashboardKpiDisplayValue(
       dataArray as Record<string, unknown>[],
       yKey,
-      buildOptions?.kpiUserTimeScope ?? null
+      isAttributeResultKey(yKey, metricsKpi)
     );
-    return { labels: ["Total"], xRawCategoryKeys: [""], datasets: [{ label: kpiLegend, data: [kpiNumber] }] };
+    const kpiNumber = typeof kpiDisplay === "number"
+      ? resolveDashboardKpiMainValueForScope(
+          dataArray as Record<string, unknown>[],
+          yKey,
+          buildOptions?.kpiUserTimeScope ?? null
+        )
+      : 0;
+    return {
+      labels: ["Total"],
+      xRawCategoryKeys: [""],
+      datasets: [
+        {
+          label: kpiLegend,
+          data: [typeof kpiDisplay === "number" ? kpiNumber : 1],
+          ...(typeof kpiDisplay === "string" ? { attributeLabels: [kpiDisplay] } : {}),
+        },
+      ],
+    };
   }
 
   const axis = resolveWidgetAxisKeys(dataArray, widget);
@@ -818,8 +876,12 @@ export function buildChartConfig(
       const rowSeries = String((row as Record<string, unknown>)[seriesField] ?? "");
       const key = `${rowX}\u0001${rowSeries}`;
       const current = sumByXSeries.get(key) ?? 0;
-      const next = Number((row as Record<string, unknown>)[primaryMetricKey] ?? 0);
-      sumByXSeries.set(key, current + (Number.isFinite(next) ? next : 0));
+      const next = metricChartNumericValue(
+        row as Record<string, unknown>,
+        primaryMetricKey,
+        isAttributeResultKey(primaryMetricKey, (agg?.metrics ?? []) as AggMetricLike[])
+      );
+      sumByXSeries.set(key, current + next);
     });
     const segmentDatasets = seriesValues.map((sv, idx) => ({
       label: labelOverride(sv),
@@ -878,13 +940,17 @@ export function buildChartConfig(
       labels,
       xRawCategoryKeys,
       datasets: [
-        {
-          label: datasetDisplayLabel(firstYKey!),
-          data: rows.map((r) => Number((r as Record<string, unknown>)[firstYKey!] ?? 0)),
-          backgroundColor: bgColors,
-          borderColor: sliceBw > 0 ? pieSliceBorderColorsFromBackgrounds(bgColors) : bgColors,
-          borderWidth: sliceBw,
-        },
+        buildDatasetSeriesFromRows(
+          rows as Record<string, unknown>[],
+          firstYKey!,
+          (agg?.metrics ?? []) as AggMetricLike[],
+          datasetDisplayLabel(firstYKey!),
+          {
+            backgroundColor: bgColors,
+            borderColor: sliceBw > 0 ? pieSliceBorderColorsFromBackgrounds(bgColors) : bgColors,
+            borderWidth: sliceBw,
+          }
+        ),
       ],
     };
   }
@@ -900,26 +966,22 @@ export function buildChartConfig(
       labels,
       xRawCategoryKeys,
       datasets: [
-        {
-          label: label0,
-          data: rows.map((r) => Number((r as Record<string, unknown>)[y0] ?? 0)),
+        buildDatasetSeriesFromRows(rows as Record<string, unknown>[], y0, (agg?.metrics ?? []) as AggMetricLike[], label0, {
           backgroundColor: getColor(y0, 0) + "80",
           borderColor: getColor(y0, 0),
           borderWidth: 2,
           type: "bar",
           yAxisID: "y",
           ...barThicknessOptsForCount(labels.length),
-        },
-        {
-          label: label1,
-          data: rows.map((r) => Number((r as Record<string, unknown>)[y1] ?? 0)),
+        }),
+        buildDatasetSeriesFromRows(rows as Record<string, unknown>[], y1, (agg?.metrics ?? []) as AggMetricLike[], label1, {
           backgroundColor: getColor(y1, 1) + "20",
           borderColor: getColor(y1, 1),
           borderWidth: lineStrokeW,
           type: "line",
           fill: false,
           yAxisID: "y1",
-        },
+        }),
       ],
     };
   }
@@ -940,14 +1002,12 @@ export function buildChartConfig(
       labels,
       xRawCategoryKeys,
       datasets: [
-        {
-          label: displayLabel,
-          data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
+        buildDatasetSeriesFromRows(rows as Record<string, unknown>[], yKey, (agg?.metrics ?? []) as AggMetricLike[], displayLabel, {
           backgroundColor: barColors.map((c) => c + "99"),
           borderColor: barColors,
           borderWidth: 2,
           ...barThicknessOpts,
-        },
+        }),
       ],
     };
   }
@@ -964,15 +1024,19 @@ export function buildChartConfig(
         const isLineLike = resolvedType === "line" || resolvedType === "area";
         const isBarLike =
           resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "stackedColumn";
-        return {
-          label: displayLabel,
-          data: rows.map((r) => Number((r as Record<string, unknown>)[yKey] ?? 0)),
-          backgroundColor: (resolvedType === "area" ? getColor(yKey, idx) + "40" : getColor(yKey, idx) + "99"),
-          borderColor: getColor(yKey, idx),
-          borderWidth: isLineLike ? lineStrokeW : 1,
-          ...(isBarLike ? barThicknessOpts : {}),
-          ...(resolvedType === "area" ? { fill: true } : {}),
-        };
+        return buildDatasetSeriesFromRows(
+          rows as Record<string, unknown>[],
+          yKey,
+          (agg?.metrics ?? []) as AggMetricLike[],
+          displayLabel,
+          {
+            backgroundColor: (resolvedType === "area" ? getColor(yKey, idx) + "40" : getColor(yKey, idx) + "99"),
+            borderColor: getColor(yKey, idx),
+            borderWidth: isLineLike ? lineStrokeW : 1,
+            ...(isBarLike ? barThicknessOpts : {}),
+            ...(resolvedType === "area" ? { fill: true } : {}),
+          }
+        );
       }),
       lineStrokeW
     ),

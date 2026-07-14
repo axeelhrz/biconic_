@@ -12,6 +12,7 @@ import {
 import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
 import { resolvePreviewAggregateFetchPlan } from "@/lib/dashboard/previewFetchLimits";
+import { normalizeFiscalYearStartMonth } from "@/lib/dashboard/fiscalYear";
 
 export type AggregateRequestMetric = {
   id?: string;
@@ -123,6 +124,8 @@ export type BuildAggregateRequestPayloadParams = {
   filtersOverride?: Array<{ field?: string; operator?: string; value?: unknown }>;
   /** Dual query dashboard: no expandir filtros para traer buckets de referencia. */
   skipTemporalFilterExpand?: boolean;
+  /** Mes de inicio del año fiscal del dashboard (1–12). */
+  fiscalYearStartMonth?: number;
 };
 
 /**
@@ -144,6 +147,7 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
     forceUnlimited = false,
     filtersOverride,
     skipTemporalFilterExpand = false,
+    fiscalYearStartMonth,
   } = params;
 
   const effectiveDims = resolveAnalysisDimensionsFromConfig(agg as Record<string, unknown>);
@@ -307,5 +311,6 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
       ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(agg.geoOverridesByXLabel) }
       : {}),
     dateSlashOrder: agg.dateSlashOrder === "MDY" ? "MDY" : "DMY",
+    fiscalYearStartMonth: normalizeFiscalYearStartMonth(fiscalYearStartMonth),
   };
 }

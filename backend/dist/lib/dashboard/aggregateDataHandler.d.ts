@@ -18,6 +18,16 @@ export interface AggregateDataDeps {
     findEtlIdByOutputTable: (table: string) => Promise<string | null>;
     findEtlIdByRunDestination: (table: string) => Promise<string | null>;
     getEtlLayout: (etlId: string) => Promise<Record<string, unknown> | null>;
+    getDatasetById?: (datasetId: string) => Promise<{
+        id: string;
+        etl_id: string;
+        config: Record<string, unknown>;
+    } | null>;
+    getFirstDatasetIdForEtl?: (etlId: string) => Promise<string | null>;
+    resolveDatasetTable?: (etlId: string) => Promise<{
+        schema: string;
+        tableName: string;
+    } | null>;
 }
 interface MetricCondition {
     field: string;
@@ -80,6 +90,7 @@ export interface AggregationRequest {
         alias?: string;
         expression?: string;
     }>;
+    datasetId?: string;
     chartType?: string;
     chartXAxis?: string;
     geoHints?: GeoHints;

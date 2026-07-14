@@ -35,7 +35,9 @@ export async function listAdminDashboardsForGrid(): Promise<Dashboard[]> {
 
   const rows = Array.isArray(data) ? data : [];
   const ownerIds = Array.from(new Set(rows.map((r: { user_id?: string }) => r.user_id).filter(Boolean))) as string[];
+  const clientIds = Array.from(new Set(rows.map((r: { client_id?: string | null }) => r.client_id).filter(Boolean))) as string[];
   let ownerById = new Map<string, { full_name: string | null }>();
+  let clientById = new Map<string, string>();
 
   if (ownerIds.length > 0) {
     const { data: owners } = await supabase
@@ -46,9 +48,23 @@ export async function listAdminDashboardsForGrid(): Promise<Dashboard[]> {
     ownerById = new Map(ownerList.map((o: { id: string; full_name: string | null }) => [o.id, o]));
   }
 
+  if (clientIds.length > 0) {
+    const { data: clientRows } = await supabase
+      .from("clients")
+      .select("id, company_name, individual_full_name, type")
+      .in("id", clientIds);
+    clientById = new Map(
+      (clientRows ?? []).map((c: { id: string; company_name?: string | null; individual_full_name?: string | null; type?: string | null }) => [
+        c.id,
+        c.company_name?.trim() || c.individual_full_name?.trim() || "Cliente",
+      ])
+    );
+  }
+
   return rows.map((row: Record<string, unknown>) => {
     const userId = row.user_id as string | undefined;
     const ownerProfile = userId ? ownerById.get(userId) : undefined;
+    const cid = row.client_id != null ? String(row.client_id) : undefined;
     return {
       id: String(row.id),
       title: String(row.title ?? row.name ?? "Sin título"),
@@ -57,7 +73,8 @@ export async function listAdminDashboardsForGrid(): Promise<Dashboard[]> {
       description: String(row.description ?? ""),
       views: typeof row.views === "number" ? row.views : 0,
       owner: { fullName: ownerProfile?.full_name ?? "Desconocido" },
-      clientId: row.client_id != null ? String(row.client_id) : undefined,
+      clientId: cid,
+      clientLabel: cid ? clientById.get(cid) : undefined,
       ownerId: userId,
       layout: (row.layout as Dashboard["layout"]) ?? undefined,
     };

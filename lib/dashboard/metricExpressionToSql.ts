@@ -5,6 +5,42 @@ export interface DerivedColumnRef {
   defaultAggregation: string;
 }
 
+export type ExpressionToSqlOptions = {
+  /** DMY = DD/MM/YYYY (default); MDY = MM/DD/YYYY para texto con barras ambiguo. */
+  slashOrder?: "DMY" | "MDY";
+  /** Nombres de columnas de tipo fecha (comparación sin distinguir mayúsculas). */
+  dateFields?: Iterable<string>;
+};
+
+type ExpressionToSqlCtx = {
+  derivedLookup?: Record<string, DerivedColumnRef>;
+  depth: number;
+  slashOrder: "DMY" | "MDY";
+  dateFields: Set<string>;
+};
+
+function resolveExpressionCtx(
+  derivedLookup?: Record<string, DerivedColumnRef>,
+  options?: ExpressionToSqlOptions | number
+): ExpressionToSqlCtx {
+  if (typeof options === "number") {
+    return { derivedLookup, depth: options, slashOrder: "DMY", dateFields: new Set() };
+  }
+  const dateFields = new Set<string>();
+  for (const f of options?.dateFields ?? []) {
+    const k = String(f ?? "").trim().toLowerCase();
+    if (k) dateFields.add(k);
+  }
+  return {
+    derivedLookup,
+    depth: 0,
+    slashOrder: options?.slashOrder === "MDY" ? "MDY" : "DMY",
+    dateFields,
+  };
+}
+
+import { safeDateCast } from "@/lib/dashboard/sqlDateCast";
+
 /** Convierte nombre de columna del front (primary.COL, join_N.COL) al nombre físico en la tabla ETL (primary_col, join_n_col). */
 function displayColumnToPhysical(name: string): string {
   let n = (name || "").trim();
@@ -33,7 +69,7 @@ const SQL_KNOWN_FUNCTIONS = new Set([
   "CASE", "WHEN", "THEN", "ELSE", "END",
   "IF", "IFS", "IFERROR", "IFNA", "AND", "OR", "NOT", "TRUE", "FALSE",
   "UPPER", "LOWER", "TRIM", "LENGTH", "LEN", "LEFT", "RIGHT", "SUBSTRING", "MID", "CONCAT", "CONCATENATE", "REPLACE", "SUBSTITUTE",
-  "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "EOMONTH", "DATEDIF", "DATEVALUE", "TIMEVALUE",
+  "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "EOMONTH", "DATEDIF", "EDATE", "DATEVALUE", "TIMEVALUE",
   "VALUE", "TEXT", "REPT", "FIND", "SEARCH", "PROPER",
 ]);
 
@@ -291,21 +327,104 @@ function normalizeNumericComparisonLiterals(sql: string): string {
   );
 }
 
-/** Convierte expresión sobre columnas (ej. "CANTIDAD * PRECIO_UNITARIO", IF(ESTADO='PAGADO',1,0)) en SQL seguro.
- *  - Literales numéricos y cadenas entre comillas se preservan (incl. Unicode en comillas, p. ej. 'México').
- *  - El whitelist de caracteres se aplica al esqueleto tras sustituir literales por placeholders (evita rechazar tildes en texto).
- *  - ; se normaliza a , (estilo Excel).
- *  - AVERAGE( -> AVG(, LEN( -> LENGTH(, MID( -> SUBSTRING(.
- *  - IF(cond, then, else) se convierte en CASE WHEN ... THEN ... ELSE ... END.
- *  - Funciones SQL conocidas se preservan.
- *  - Nombres de columnas calculadas (derivedLookup) se expanden a su expresión.
- *  - Demás identificadores se pasan a quotedColumn.
- */
-export function expressionToSql(
-  expression: string,
-  derivedLookup?: Record<string, DerivedColumnRef>,
-  _depth = 0
-): string | null {
+function stripSqlQuotes(s: string): string {
+  const t = s.trim();
+  if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('"') && t.endsWith('"'))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+function sqlDatedif(startArg: string, endArg: string, unitArg: string, slashOrder: "DMY" | "MDY"): string {
+  const start = safeDateCast(startArg, slashOrder);
+  const end = safeDateCast(endArg, slashOrder);
+  const unit = stripSqlQuotes(unitArg).toUpperCase();
+  if (unit === "M") {
+    return `(EXTRACT(YEAR FROM age(${end}, ${start}))::int * 12 + EXTRACT(MONTH FROM age(${end}, ${start}))::int)`;
+  }
+  if (unit === "Y") {
+    return `EXTRACT(YEAR FROM age(${end}, ${start}))::int`;
+  }
+  return `(${end} - ${start})`;
+}
+
+/** Expande funciones de fecha estilo Excel sobre SQL ya resuelto (columnas citadas, literales, etc.). */
+function expandDateFunctionsInSql(sql: string, slashOrder: "DMY" | "MDY"): string {
+  let s = sql;
+  s = s.replace(/\bTODAY\s*\(\s*\)/gi, "CURRENT_DATE");
+  s = s.replace(/\bNOW\s*\(\s*\)/gi, "CURRENT_TIMESTAMP");
+
+  const singleArgFns: Record<string, (arg: string) => string> = {
+    DATE: (a) => safeDateCast(a, slashOrder),
+    DATEVALUE: (a) => safeDateCast(a, slashOrder),
+    YEAR: (a) => `EXTRACT(YEAR FROM ${safeDateCast(a, slashOrder)})`,
+    MONTH: (a) => `EXTRACT(MONTH FROM ${safeDateCast(a, slashOrder)})`,
+    DAY: (a) => `EXTRACT(DAY FROM ${safeDateCast(a, slashOrder)})`,
+    HOUR: (a) => `EXTRACT(HOUR FROM (${a})::timestamp)`,
+    MINUTE: (a) => `EXTRACT(MINUTE FROM (${a})::timestamp)`,
+    SECOND: (a) => `EXTRACT(SECOND FROM (${a})::timestamp)`,
+  };
+
+  for (const [fn, build] of Object.entries(singleArgFns)) {
+    const re = new RegExp(`\\b${fn}\\s*\\(`, "i");
+    while (re.test(s)) {
+      const m = s.match(re);
+      if (!m || m.index === undefined) break;
+      const open = s.indexOf("(", m.index);
+      const extracted = extractParenContent(s, open);
+      if (!extracted) break;
+      const args = splitArgs(extracted.inner);
+      if (args.length !== 1) break;
+      const repl = `(${build(args[0]!)})`;
+      s = s.slice(0, m.index) + repl + s.slice(extracted.endIndex + 1);
+    }
+  }
+
+  while (/\bDATEDIF\s*\(/i.test(s)) {
+    const m = s.match(/\bDATEDIF\s*\(/i);
+    if (!m || m.index === undefined) break;
+    const open = s.indexOf("(", m.index);
+    const extracted = extractParenContent(s, open);
+    if (!extracted) break;
+    const args = splitArgs(extracted.inner);
+    if (args.length < 2) break;
+    const unit = args[2] ?? "'D'";
+    const repl = `(${sqlDatedif(args[0]!, args[1]!, unit, slashOrder)})`;
+    s = s.slice(0, m.index) + repl + s.slice(extracted.endIndex + 1);
+  }
+
+  while (/\bEOMONTH\s*\(/i.test(s)) {
+    const m = s.match(/\bEOMONTH\s*\(/i);
+    if (!m || m.index === undefined) break;
+    const open = s.indexOf("(", m.index);
+    const extracted = extractParenContent(s, open);
+    if (!extracted) break;
+    const args = splitArgs(extracted.inner);
+    if (args.length < 1) break;
+    const months = args[1] ?? "0";
+    const dateExpr = safeDateCast(args[0]!, slashOrder);
+    const repl = `((DATE_TRUNC('month', ${dateExpr}) + ((${months})::int + 1) * INTERVAL '1 month' - INTERVAL '1 day')::date)`;
+    s = s.slice(0, m.index) + repl + s.slice(extracted.endIndex + 1);
+  }
+
+  while (/\bEDATE\s*\(/i.test(s)) {
+    const m = s.match(/\bEDATE\s*\(/i);
+    if (!m || m.index === undefined) break;
+    const open = s.indexOf("(", m.index);
+    const extracted = extractParenContent(s, open);
+    if (!extracted) break;
+    const args = splitArgs(extracted.inner);
+    if (args.length < 1) break;
+    const months = args[1] ?? "0";
+    const dateExpr = safeDateCast(args[0]!, slashOrder);
+    const repl = `((${dateExpr} + ((${months})::int) * INTERVAL '1 month')::date)`;
+    s = s.slice(0, m.index) + repl + s.slice(extracted.endIndex + 1);
+  }
+
+  return s;
+}
+
+function expressionToSqlInner(expression: string, ctx: ExpressionToSqlCtx): string | null {
   if (!expression || typeof expression !== "string") return null;
   let s = expression.replace(/\s+/g, " ").trim();
   if (!s) return null;
@@ -368,7 +487,7 @@ export function expressionToSql(
     const inner = extracted.inner;
     const countDistinctEnd = s.indexOf(")", extracted.endIndex + 1);
     if (countDistinctEnd === -1) break;
-    const innerSql = expressionToSql(inner, derivedLookup, _depth + 1);
+    const innerSql = expressionToSqlInner(inner, { ...ctx, depth: ctx.depth + 1 });
     if (!innerSql) break;
     const repl = `COUNT(DISTINCT ${innerSql})`;
     s = s.slice(0, start) + repl + s.slice(countDistinctEnd + 1);
@@ -381,10 +500,10 @@ export function expressionToSql(
     if (/^__STR\d+__$/.test(id)) return id;
     if (/^\d+\.?\d*$/.test(id)) return id; // literal numérico
     if (SQL_KNOWN_FUNCTIONS.has(id.toUpperCase())) return id.toUpperCase();
-    if (derivedLookup && _depth < 5 && !/\./.test(id)) {
-      const ref = derivedLookup[id.toLowerCase()];
+    if (ctx.derivedLookup && ctx.depth < 5 && !/\./.test(id)) {
+      const ref = ctx.derivedLookup[id.toLowerCase()];
       if (ref?.expression) {
-        const inner = expressionToSql(ref.expression, derivedLookup, _depth + 1);
+        const inner = expressionToSqlInner(ref.expression, { ...ctx, depth: ctx.depth + 1 });
         if (inner) return `(${inner})`;
       }
     }
@@ -397,7 +516,18 @@ export function expressionToSql(
     return `'${content}'`;
   });
 
-  return normalizeNumericComparisonLiterals(withStrings) || null;
+  const normalized = normalizeNumericComparisonLiterals(withStrings);
+  if (!normalized) return null;
+  return expandDateFunctionsInSql(normalized, ctx.slashOrder) || null;
+}
+
+/** Convierte expresión sobre columnas (estilo Excel/hoja de cálculo) en SQL seguro para Postgres. */
+export function expressionToSql(
+  expression: string,
+  derivedLookup?: Record<string, DerivedColumnRef>,
+  options?: ExpressionToSqlOptions | number
+): string | null {
+  return expressionToSqlInner(expression, resolveExpressionCtx(derivedLookup, options));
 }
 
 /** Resuelve un nombre de campo a SQL: expande columnas calculadas o devuelve quotedColumn para físicas. */

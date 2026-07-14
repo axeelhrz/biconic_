@@ -50,6 +50,46 @@ let DashboardService = class DashboardService {
     constructor(db) {
         this.db = db;
     }
+    buildGeoCacheClient() {
+        const db = this.db;
+        return {
+            from(_table) {
+                return {
+                    select() {
+                        return {
+                            eq(_column, value) {
+                                return {
+                                    async maybeSingle() {
+                                        try {
+                                            const row = await db.queryOne(`SELECT cache_key, lat, lng FROM public.geo_location_cache WHERE cache_key = $1 LIMIT 1`, [value]);
+                                            return { data: row, error: null };
+                                        }
+                                        catch (err) {
+                                            return {
+                                                data: null,
+                                                error: { message: err instanceof Error ? err.message : String(err) },
+                                            };
+                                        }
+                                    },
+                                };
+                            },
+                        };
+                    },
+                    async upsert(payload) {
+                        try {
+                            await db.query(`INSERT INTO public.geo_location_cache (cache_key, lat, lng)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (cache_key) DO UPDATE SET lat = EXCLUDED.lat, lng = EXCLUDED.lng`, [payload.cache_key, payload.lat, payload.lng]);
+                            return { error: null };
+                        }
+                        catch (err) {
+                            return { error: { message: err instanceof Error ? err.message : String(err) } };
+                        }
+                    },
+                };
+            },
+        };
+    }
     async loadAggregateModules() {
         const handler = await Promise.resolve().then(() => __importStar(require("../../../lib/dashboard/aggregateDataHandler")));
         const depsFactory = await Promise.resolve().then(() => __importStar(require("../../../lib/dashboard/createAggregateDataDeps")));
@@ -67,6 +107,7 @@ let DashboardService = class DashboardService {
             databaseUrl,
         });
         deps.executeSql = (query) => this.db.executeSql(query);
+        deps.geoCacheClient = this.buildGeoCacheClient();
         deps.findEtlIdByOutputTable = async (table) => {
             const row = await this.db.queryOne(`SELECT id FROM public.etl WHERE output_table ILIKE $1 LIMIT 1`, [table]);
             return row?.id ?? null;
@@ -95,9 +136,37 @@ let DashboardService = class DashboardService {
         const table = body.tableName.slice(dot + 1);
         const field = body.field.replace(/[^a-zA-Z0-9_]/g, "");
         const limit = Math.min(body.limit ?? 500, 5000);
-        const sql = `SELECT DISTINCT "${field}" AS value
+        const transformOp = String(body.transform ?? "").trim().toUpperCase();
+        const quotedField = `"${field}"`;
+        const dateExpr = `(
+      CASE
+        WHEN ${quotedField}::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}' THEN to_date(substring(${quotedField}::text from 1 for 10), 'DD/MM/YYYY')
+        ELSE ${quotedField}::timestamp
+      END
+    )`;
+        let selectExpression = quotedField;
+        if (transformOp === "YEAR") {
+            selectExpression = `EXTRACT(YEAR FROM ${dateExpr})::int::text`;
+        }
+        else if (transformOp === "MONTH") {
+            selectExpression = `EXTRACT(MONTH FROM ${dateExpr})::int::text`;
+        }
+        else if (transformOp === "YEAR_MONTH") {
+            selectExpression = `TO_CHAR(${dateExpr}, 'YYYY-MM')`;
+        }
+        else if (transformOp === "QUARTER") {
+            selectExpression = `(EXTRACT(YEAR FROM ${dateExpr})::text || '-Q' || EXTRACT(QUARTER FROM ${dateExpr})::text)`;
+        }
+        else if (transformOp === "SEMESTER") {
+            selectExpression = `(EXTRACT(YEAR FROM ${dateExpr})::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${dateExpr}) <= 6 THEN '1' ELSE '2' END)`;
+        }
+        else if (transformOp === "DAY") {
+            selectExpression = `(${dateExpr})::date::text`;
+        }
+        const sql = `SELECT DISTINCT ${selectExpression} AS value
       FROM ${schema}."${table.replace(/"/g, "")}"
-      WHERE "${field}" IS NOT NULL
+      WHERE ${quotedField} IS NOT NULL
+        AND trim(${quotedField}::text) <> ''
       ORDER BY 1 LIMIT ${limit}`;
         const { data, error } = await this.db.executeSql(sql);
         if (error)

@@ -11,6 +11,11 @@ import {
   publishDashboardAdmin,
 } from "@/app/admin/(main)/dashboard/actions";
 import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
+import {
+  AdminClientGroupSection,
+  AdminResourceCardGrid,
+} from "@/components/admin/AdminClientGroupSections";
+import { groupItemsByClient, clientDisplayName } from "@/lib/admin/clientGrouping";
 
 // Shape for mapping Supabase rows
 type SupabaseDashboardRow = {
@@ -37,6 +42,8 @@ interface AdminDashboardGridProps {
   /** Base path for dashboard links, e.g., "/admin/dashboard" */
   basePath?: string;
   clientId?: string | null;
+  /** Agrupar tarjetas por empresa/cliente (orden alfabético). */
+  groupByClient?: boolean;
 }
 
 export default function AdminDashboardGrid({
@@ -44,6 +51,7 @@ export default function AdminDashboardGrid({
   filter = "todos",
   basePath = "/admin/dashboard",
   clientId,
+  groupByClient = true,
 }: AdminDashboardGridProps) {
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,7 +81,9 @@ export default function AdminDashboardGrid({
         const rows = Array.isArray(data) ? (data as SupabaseDashboardRow[]) : [];
 
         const ownerIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
+        const clientIds = Array.from(new Set(rows.map((r) => r.client_id).filter(Boolean))) as string[];
         let ownerById = new Map<string, { full_name: string | null }>();
+        let clientById = new Map<string, string>();
 
         if (ownerIds.length > 0) {
           const { data: owners } = await supabase
@@ -85,9 +95,23 @@ export default function AdminDashboardGrid({
           ownerById = new Map(ownerList.map((o) => [o.id, o]));
         }
 
+        if (clientIds.length > 0) {
+          const { data: clientRows } = await supabase
+            .from("clients")
+            .select("id, company_name, individual_full_name, type")
+            .in("id", clientIds);
+          clientById = new Map(
+            (clientRows ?? []).map((c: { id: string; company_name?: string | null; individual_full_name?: string | null; type?: string | null }) => [
+              c.id,
+              clientDisplayName(c),
+            ])
+          );
+        }
+
         const mapped: Dashboard[] = rows.map((row) => {
           const status = dashboardPublishedStatusFromRow(row);
           const ownerProfile = row.user_id ? ownerById.get(row.user_id) : undefined;
+          const cid = row.client_id ?? undefined;
 
           return {
             id: String(row.id),
@@ -97,7 +121,8 @@ export default function AdminDashboardGrid({
             description: row.description ?? "",
             views: typeof row.views === "number" ? row.views : 0,
             owner: { fullName: ownerProfile?.full_name ?? "Desconocido" },
-            clientId: row.client_id ?? undefined,
+            clientId: cid,
+            clientLabel: cid ? clientById.get(cid) : undefined,
             ownerId: row.user_id,
             layout: row.layout ?? undefined,
           } satisfies Dashboard;
@@ -206,16 +231,43 @@ export default function AdminDashboardGrid({
   });
 
   return (
-    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {(filtered.length > 0 ? filtered : []).map((dashboard) => (
-        <DashboardCard
-          key={dashboard.id}
-          dashboard={dashboard}
-          href={`${basePath}/${dashboard.id}`}
-          onDelete={handleDeleteClick}
-          onPublish={handlePublish}
-        />
-      ))}
+    <>
+      {groupByClient ? (
+        <div className="flex flex-col gap-10">
+          {groupItemsByClient(filtered).map((group) => (
+            <AdminClientGroupSection
+              key={group.clientId ?? "unassigned"}
+              clientId={group.clientId}
+              clientLabel={group.clientLabel}
+              count={group.items.length}
+            >
+              <AdminResourceCardGrid>
+                {group.items.map((dashboard) => (
+                  <DashboardCard
+                    key={dashboard.id}
+                    dashboard={dashboard}
+                    href={`${basePath}/${dashboard.id}`}
+                    onDelete={handleDeleteClick}
+                    onPublish={handlePublish}
+                  />
+                ))}
+              </AdminResourceCardGrid>
+            </AdminClientGroupSection>
+          ))}
+        </div>
+      ) : (
+        <AdminResourceCardGrid>
+          {filtered.map((dashboard) => (
+            <DashboardCard
+              key={dashboard.id}
+              dashboard={dashboard}
+              href={`${basePath}/${dashboard.id}`}
+              onDelete={handleDeleteClick}
+              onPublish={handlePublish}
+            />
+          ))}
+        </AdminResourceCardGrid>
+      )}
       <DeleteDashboardDialog 
         open={deleteDialogOpen} 
         onOpenChange={setDeleteDialogOpen}
@@ -267,6 +319,6 @@ export default function AdminDashboardGrid({
           </p>
         </div>
       )}
-    </div>
+    </>
   );
 }

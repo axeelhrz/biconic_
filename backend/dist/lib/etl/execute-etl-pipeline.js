@@ -41,6 +41,8 @@ exports.markStaleRunsForEtl = markStaleRunsForEtl;
 exports.executeEtlPipeline = executeEtlPipeline;
 const service_1 = require("../supabase/service");
 const connection_secret_1 = require("../connection-secret");
+const connection_persistence_1 = require("../connection/connection-persistence");
+const resolve_firebird_connection_1 = require("../connection/resolve-firebird-connection");
 const pg_1 = require("pg");
 const postgres_1 = __importDefault(require("postgres"));
 const helpers_1 = require("../sql/helpers");
@@ -83,6 +85,66 @@ function inferPostgresType(value) {
         return "JSONB";
     }
     return "TEXT";
+}
+function configColumnRefToRowKey(ref) {
+    const r = (ref || "").trim();
+    if (!r)
+        return r;
+    const mapped = r
+        .replace(/^primary\./i, "primary_")
+        .replace(/^join_(\d+)\./i, (_, d) => `join_${parseInt(d, 10)}_`);
+    return mapped.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+}
+function resolveEtlOutputColumnKeys(body) {
+    const keys = [];
+    const seen = new Set();
+    const addKey = (rowKey) => {
+        const k = rowKey.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+        if (!k || seen.has(k))
+            return;
+        seen.add(k);
+        keys.push(k);
+    };
+    const filterCols = Array.isArray(body.filter?.columns) ? body.filter.columns : [];
+    const joinRaw = body.join;
+    const joins = Array.isArray(joinRaw?.joins) ? joinRaw.joins : [];
+    const hasStarJoin = Boolean(joinRaw?.primaryConnectionId) && joins.length > 0;
+    for (const raw of filterCols) {
+        const trimmed = (raw || "").trim();
+        if (!trimmed)
+            continue;
+        const wildcard = trimmed.match(/^join_(\d+)\.\*$/i);
+        if (wildcard) {
+            const idx = Number(wildcard[1]);
+            const sec = joins[idx]?.secondaryColumns;
+            if (Array.isArray(sec)) {
+                for (const c of sec) {
+                    if (c?.trim())
+                        addKey(configColumnRefToRowKey(`join_${idx}.${c.trim()}`));
+                }
+            }
+            continue;
+        }
+        if (/^(primary\.|join_\d+\.)/i.test(trimmed)) {
+            addKey(configColumnRefToRowKey(trimmed));
+        }
+        else if (hasStarJoin) {
+            addKey(configColumnRefToRowKey(`primary.${trimmed}`));
+        }
+        else {
+            addKey(configColumnRefToRowKey(trimmed));
+        }
+    }
+    for (let idx = 0; idx < joins.length; idx++) {
+        const sec = joins[idx]?.secondaryColumns;
+        if (!Array.isArray(sec))
+            continue;
+        for (const c of sec) {
+            if (c?.trim())
+                addKey(configColumnRefToRowKey(`join_${idx}.${c.trim()}`));
+        }
+    }
+    return keys;
 }
 function pgCastExpr(columnIdentifier, targetType) {
     const col = columnIdentifier;
@@ -142,7 +204,6 @@ function pgCastExpr(columnIdentifier, targetType) {
 }
 const ETL_RETRIES = 3;
 const ETL_RETRY_DELAY_MS = 2000;
-const STALE_RUN_MINUTES = 20;
 async function withRetry(fn, opts = {}) {
     const retries = opts.retries ?? ETL_RETRIES;
     const delayMs = opts.delayMs ?? ETL_RETRY_DELAY_MS;
@@ -170,16 +231,34 @@ async function ensureRunTerminalState(supabaseAdmin, runId, status, payload) {
         .throwOnError(), { retries: 5, delayMs: 1000, label: "ensureRunTerminalState" });
 }
 async function markStaleRunsForEtl(supabaseAdmin, etlId) {
-    const threshold = new Date(Date.now() - STALE_RUN_MINUTES * 60 * 1000).toISOString();
-    const { data: staleRows, error } = await supabaseAdmin
+    const staleMinutes = (0, schedule_1.getStaleRunMinutes)();
+    const hardStaleMinutes = (0, schedule_1.getHardStaleRunMinutes)();
+    const staleThreshold = new Date(Date.now() - staleMinutes * 60 * 1000).toISOString();
+    const hardThreshold = new Date(Date.now() - hardStaleMinutes * 60 * 1000).toISOString();
+    const { data: activeRows, error } = await supabaseAdmin
         .from("etl_runs_log")
-        .select("id")
+        .select("id, started_at, rows_processed, error_message")
         .eq("etl_id", etlId)
-        .in("status", ["started", "running"])
-        .lt("started_at", threshold);
-    if (error || !staleRows?.length)
+        .in("status", ["started", "running"]);
+    if (error || !activeRows?.length)
         return;
-    const ids = staleRows.map((r) => r.id);
+    const ids = activeRows
+        .filter((row) => {
+        const startedAt = row.started_at;
+        if (startedAt < hardThreshold)
+            return true;
+        if (startedAt >= staleThreshold)
+            return false;
+        const rowsProcessed = Number(row.rows_processed ?? 0);
+        if (rowsProcessed > 0)
+            return false;
+        if ((0, run_progress_1.isEtlRunProgressMessage)(row.error_message))
+            return false;
+        return true;
+    })
+        .map((row) => row.id);
+    if (!ids.length)
+        return;
     await supabaseAdmin
         .from("etl_runs_log")
         .update({
@@ -411,11 +490,14 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                     }
                 }
                 const filterColumns = body.filter?.columns;
-                const explicitColumnNames = filterColumns && filterColumns.length > 0
-                    ? filterColumns.map((c) => toSaneKey(c))
-                    : firstRow
-                        ? Object.keys(firstRow).map((k) => toSaneKey(k))
-                        : [];
+                const resolvedFromConfig = resolveEtlOutputColumnKeys(body);
+                const explicitColumnNames = resolvedFromConfig.length > 0
+                    ? resolvedFromConfig
+                    : filterColumns && filterColumns.length > 0
+                        ? filterColumns.map((c) => toSaneKey(c))
+                        : firstRow
+                            ? Object.keys(firstRow).map((k) => toSaneKey(k))
+                            : [];
                 const seen = new Set();
                 for (const colName of explicitColumnNames) {
                     if (!colName || seen.has(colName))
@@ -499,6 +581,45 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                 }
                 return;
             }
+            const ensureTableColumns = async (batchRows) => {
+                if (!tableCreated || isPreview || batchRows.length === 0)
+                    return;
+                const existing = new Set((tableColumnNames || []).map((c) => c.toLowerCase()));
+                const needed = new Set();
+                for (const row of batchRows) {
+                    if (!row || typeof row !== "object")
+                        continue;
+                    for (const key of Object.keys(row)) {
+                        const saneKey = key.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+                        if (saneKey && !existing.has(saneKey))
+                            needed.add(saneKey);
+                    }
+                }
+                if (needed.size === 0)
+                    return;
+                const sample = batchRows.find((r) => r && typeof r === "object") || {};
+                const added = [];
+                for (const col of needed) {
+                    let inferred = "TEXT";
+                    for (const row of batchRows) {
+                        if (!row || typeof row !== "object")
+                            continue;
+                        const rawKey = Object.keys(row).find((k) => k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() === col);
+                        if (rawKey !== undefined) {
+                            inferred = inferPostgresType(row[rawKey]);
+                            break;
+                        }
+                    }
+                    await sqlPersistent.unsafe(`ALTER TABLE etl_output."${newTableName}" ADD COLUMN IF NOT EXISTS "${col}" ${inferred}`);
+                    added.push(col);
+                    existing.add(col);
+                }
+                if (added.length > 0) {
+                    tableColumnNames = [...(tableColumnNames || []), ...added];
+                    console.log(`[Background] Columnas añadidas a etl_output.${newTableName}:`, added);
+                }
+            };
+            await ensureTableColumns(batch);
             const allowedKeys = tableColumnNames && tableColumnNames.length > 0
                 ? new Set(tableColumnNames.map((c) => c.toLowerCase()))
                 : null;
@@ -683,10 +804,12 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                 .single();
             if (!conn)
                 throw new Error(`Conexión ${primaryConnId} no encontrada.`);
-            if (conn.type === "firebird") {
-                const password = conn.db_password_encrypted
-                    ? (0, connection_secret_1.decryptConnectionPassword)(conn.db_password_encrypted)
-                    : conn.db_password ?? "";
+            const hydratedConn = (0, connection_persistence_1.hydrateConnectionRow)(conn);
+            if (hydratedConn.type === "firebird") {
+                const password = hydratedConn.db_password_encrypted
+                    ? (0, connection_secret_1.decryptConnectionPassword)(hydratedConn.db_password_encrypted)
+                    : "";
+                const fbOpts = (0, resolve_firebird_connection_1.resolveFirebirdAttachOptions)(hydratedConn);
                 const safePart = (s) => /^[A-Z0-9_]+$/i.test(s) ? s.toUpperCase() : `"${s.replace(/"/g, '""')}"`;
                 const normalizeRow = (row) => {
                     const out = {};
@@ -698,17 +821,66 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                 if (isJoin) {
                     const isStar = isStarJoin && Array.isArray(joinObj.joins) && joinObj.joins.length > 0;
                     if (isStar && Array.isArray(joinObj.joins) && joinObj.joins.length > 1) {
+                        const primaryTableResolved = String(joinObj.primaryTable || (body.filter?.table || "")).trim();
+                        if (!primaryTableResolved) {
+                            throw createHttpError("JOIN múltiple: falta tabla principal (primaryTable o filter.table). Editá el ETL y volvé a guardarlo.", 400);
+                        }
                         const selectedCols = (body.filter?.columns || []);
                         const primaryColumns = selectedCols
                             .filter((c) => /^primary\./i.test(c))
                             .map((c) => c.replace(/^primary\./i, "").trim());
-                        const joinsWithCols = (joinObj.joins || []).map((jn, idx) => ({
-                            ...jn,
-                            secondaryColumns: selectedCols
+                        const joinsWithCols = (joinObj.joins || []).map((jn, idx) => {
+                            const fromFilter = selectedCols
                                 .filter((c) => new RegExp(`^join_${idx}\\.`, "i").test(c))
-                                .map((c) => c.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim()),
-                        }));
+                                .map((c) => c.replace(new RegExp(`^join_${idx}\\.`, "i"), "").trim())
+                                .filter((c) => c && c !== "*");
+                            const hasWildcard = selectedCols.some((c) => new RegExp(`^join_${idx}\\.\\*$`, "i").test((c || "").trim()));
+                            const fromJoin = Array.isArray(jn.secondaryColumns) && jn.secondaryColumns.length > 0
+                                ? jn.secondaryColumns
+                                : [];
+                            const secondaryColumns = fromFilter.length > 0 ? fromFilter : fromJoin.length > 0 ? fromJoin : hasWildcard ? [] : [];
+                            return { ...jn, secondaryColumns };
+                        });
                         const joinsCount = (joinObj.joins || []).length;
+                        const allJoinsSameFirebirdConn = (joinObj.joins || []).every((jn) => String(jn?.secondaryConnectionId ?? "") === String(primaryConnId));
+                        const resumeOffsetForStar = Math.max(0, Number(body?._resumeStartOffset || 0));
+                        if (allJoinsSameFirebirdConn && resumeOffsetForStar === 0) {
+                            const { streamFirebirdStarJoin } = await Promise.resolve().then(() => __importStar(require("@/lib/etl/firebird-star-stream")));
+                            await (0, run_progress_1.reportEtlRunProgress)(supabaseAdmin, runId, {
+                                message: `JOIN múltiple (${joinsCount} tablas): streaming nativo Firebird…`,
+                                rowsProcessed: 0,
+                            });
+                            let streamedRows = 0;
+                            try {
+                                for await (const batch of streamFirebirdStarJoin({
+                                    attachOptions: fbOpts,
+                                    primaryTable: primaryTableResolved,
+                                    primaryColumns,
+                                    joins: joinsWithCols,
+                                    conditions: (body.filter?.conditions || []),
+                                    dateFilter: body.filter?.dateFilter ?? undefined,
+                                    onProgress: (rowsSoFar) => {
+                                        (0, run_progress_1.reportEtlRunProgress)(supabaseAdmin, runId, {
+                                            message: `JOIN streaming: ${rowsSoFar.toLocaleString("es-AR")} filas leídas…`,
+                                            rowsProcessed: rowsSoFar,
+                                        }).catch(() => { });
+                                    },
+                                })) {
+                                    streamedRows += batch.length;
+                                    yield batch;
+                                }
+                                console.log("[ETL Run] JOIN streaming Firebird completado.", { runId, streamedRows });
+                                return;
+                            }
+                            catch (streamErr) {
+                                if (streamedRows > 0) {
+                                    throw streamErr instanceof Error
+                                        ? streamErr
+                                        : new Error(String(streamErr));
+                                }
+                                console.warn("[ETL Run] JOIN streaming Firebird falló antes de entregar filas; usando ruta por lotes.", { runId, error: streamErr instanceof Error ? streamErr.message : String(streamErr) });
+                            }
+                        }
                         const starChunkCap = joinsCount >= 10 ? 15_000
                             : joinsCount >= 8 ? 20_000
                                 : joinsCount >= 6 ? 30_000
@@ -729,7 +901,7 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                             matTempTables.push(`etl_temp."${materializationPrefix}_join_${mi}"`);
                         try {
                             await (0, run_progress_1.reportEtlRunProgress)(supabaseAdmin, runId, {
-                                message: `JOIN múltiple (${joinsCount} tablas): preparando datos. La primera etapa puede tardar varios minutos…`,
+                                message: `JOIN múltiple (${joinsCount} tablas): leyendo datos por lotes…`,
                                 rowsProcessed: 0,
                             });
                             while (true) {
@@ -738,7 +910,7 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                                 while (true) {
                                     const joinQueryBody = {
                                         primaryConnectionId: joinObj.primaryConnectionId,
-                                        primaryTable: joinObj.primaryTable || (body.filter?.table || "").trim(),
+                                        primaryTable: primaryTableResolved,
                                         joins: joinsWithCols,
                                         primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
                                         conditions: body.filter?.conditions || [],
@@ -752,7 +924,7 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                                     };
                                     await (0, run_progress_1.reportEtlRunProgress)(supabaseAdmin, runId, {
                                         message: starOffset === 0
-                                            ? `JOIN: materializando y leyendo primer lote (${joinsCount} tablas)…`
+                                            ? `JOIN: leyendo primer lote (${joinsCount} tablas)…`
                                             : `JOIN: leyendo lote desde fila ${starOffset.toLocaleString("es-AR")}…`,
                                         rowsProcessed,
                                     });
@@ -863,6 +1035,7 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                     const { data: conn2 } = await supabaseService.from("connections").select("*").eq("id", secondaryConnId).single();
                     if (!conn2)
                         throw new Error(`Conexión secundaria ${secondaryConnId} no encontrada.`);
+                    const hydratedConn2 = (0, connection_persistence_1.hydrateConnectionRow)(conn2);
                     const selectedCols = (body.filter?.columns || []);
                     const leftColumns = selectedCols.filter((c) => /^primary\./i.test(c)).map((c) => c.replace(/^primary\./i, "").trim());
                     const rightColumns = selectedCols.filter((c) => /^join_\d+\./i.test(c)).map((c) => c.replace(/^join_\d+\./i, "").trim());
@@ -877,14 +1050,6 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                     const leftDateFilter = !isDateFilterOnRight && rawDateCol ? { ...dateFilter, column: rawDateCol.replace(/^primary\./i, "").trim() } : undefined;
                     const rightDateFilter = isDateFilterOnRight && rawDateCol ? { ...dateFilter, column: rawDateCol.replace(/^join_\d+\.\s*/i, "").trim() } : undefined;
                     const Firebird = require("node-firebird");
-                    const fbOpts = {
-                        host: conn.db_host || "localhost",
-                        port: conn.db_port ? Number(conn.db_port) : 15421,
-                        database: conn.db_name,
-                        user: conn.db_user,
-                        password: password || "",
-                        lowercase_keys: false,
-                    };
                     const escapeFb = (v) => {
                         if (v == null)
                             return "NULL";
@@ -939,7 +1104,7 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                         return { clause: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };
                     };
                     const isSameFirebirdConnection = String(primaryConnId) === String(secondaryConnId) &&
-                        String(conn2.type || "").toLowerCase() === "firebird";
+                        String(hydratedConn2.type || "").toLowerCase() === "firebird";
                     const canUseNativeJoin = isSameFirebirdConnection && leftColumns.length > 0 && rightColumns.length > 0;
                     if (canUseNativeJoin) {
                         let db = null;
@@ -1028,9 +1193,8 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                             const { clause: rDfClause, params: rDfParams } = (0, helpers_1.buildDateFilterWhereFragmentFirebird)(rightDateFilter);
                             const mergedRightClause = rDfClause ? (rClause ? `${rClause} AND ${rDfClause}` : `WHERE ${rDfClause}`) : rClause;
                             const mergedRightParams = [...rParams, ...rDfParams];
-                            if (String(conn2.type || "").toLowerCase() === "firebird") {
-                                const pwd2 = conn2.db_password_encrypted ? (0, connection_secret_1.decryptConnectionPassword)(conn2.db_password_encrypted) : conn2.db_password ?? "";
-                                const opts2 = { host: conn2.db_host || "localhost", port: conn2.db_port ? Number(conn2.db_port) : 15421, database: conn2.db_name, user: conn2.db_user, password: pwd2 || "", lowercase_keys: false };
+                            if (String(hydratedConn2.type || "").toLowerCase() === "firebird") {
+                                const opts2 = (0, resolve_firebird_connection_1.resolveFirebirdAttachOptions)(hydratedConn2);
                                 return new Promise((resolve, reject) => {
                                     Firebird.attach(opts2, (err, db2) => {
                                         if (err)
@@ -1088,9 +1252,8 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                             let sql = `SELECT FIRST ${limits_1.ETL_MAX_ROWS_CEILING} ${rightColumns.length ? rightColumns.map((c) => safePart(c)).join(", ") : "*"} FROM ${rightTablePart} ${mergedRightClause0}`.trim();
                             sql = inlineClauseParams(sql, mergedRightParams0);
                             sql = sql + extraWhere;
-                            if (String(conn2.type || "").toLowerCase() === "firebird") {
-                                const pwd2 = conn2.db_password_encrypted ? (0, connection_secret_1.decryptConnectionPassword)(conn2.db_password_encrypted) : conn2.db_password ?? "";
-                                const opts2 = { host: conn2.db_host || "localhost", port: conn2.db_port ? Number(conn2.db_port) : 15421, database: conn2.db_name, user: conn2.db_user, password: pwd2 || "", lowercase_keys: false };
+                            if (String(hydratedConn2.type || "").toLowerCase() === "firebird") {
+                                const opts2 = (0, resolve_firebird_connection_1.resolveFirebirdAttachOptions)(hydratedConn2);
                                 const rows = await new Promise((resolve, reject) => {
                                     Firebird.attach(opts2, (err, db2) => {
                                         if (err)
@@ -1235,19 +1398,11 @@ async function executeEtlPipeline(body, runId, supabaseAdmin, user, ctx) {
                 const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
                 const mergedParams = [...params, ...dfParams];
                 const Firebird = require("node-firebird");
-                const opts = {
-                    host: conn.db_host || "localhost",
-                    port: conn.db_port ? Number(conn.db_port) : 15421,
-                    database: conn.db_name,
-                    user: conn.db_user,
-                    password: password || "",
-                    lowercase_keys: false,
-                };
                 let offset = 0;
                 let db = null;
                 try {
                     db = await withRetry(() => new Promise((resolve, reject) => {
-                        Firebird.attach(opts, (err, connection) => {
+                        Firebird.attach(fbOpts, (err, connection) => {
                             if (err)
                                 reject(err);
                             else

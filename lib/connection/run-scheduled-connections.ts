@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { getBackendApiUrl } from "@/lib/api/backend-config";
-import { ACTIVE_RUN_GUARD_MINUTES, getIntervalMs, isDue } from "@/lib/etl/schedule";
+import { ACTIVE_RUN_GUARD_MINUTES, isScheduleDue } from "@/lib/etl/schedule";
 import {
   parseScheduleFromConnectionConfig,
   updateConnectionScheduleLastRunAt,
@@ -172,12 +172,8 @@ export async function runScheduledConnections(
       const schedule = parseScheduleFromConnectionConfig(conn.config) as
         | ConnectionSchedule
         | undefined;
-      const frequency = schedule?.frequency?.trim();
-      if (!frequency) continue;
-
-      const intervalMs = getIntervalMs(frequency);
-      if (intervalMs == null) continue;
-      if (!isDue(schedule?.lastRunAt, intervalMs)) continue;
+      if (!schedule?.frequency?.trim()) continue;
+      if (!isScheduleDue(schedule)) continue;
 
       due++;
       let connectionOk = false;

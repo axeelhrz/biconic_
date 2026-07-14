@@ -15,23 +15,22 @@ import {
   getGeoInferencePreview,
   type GeoComponentOverrides,
 } from "@/lib/geo/geo-enrichment";
-import { DashboardThemeFormSections, mergeCardThemePatch } from "./DashboardThemeFormSections";
 import { MapChartAppearanceFields } from "./MapChartAppearanceFields";
 import {
   type DashboardFixedGrid,
   clampGridSpan,
   DASHBOARD_GRID_COLUMN_COUNT,
 } from "@/lib/dashboard/gridLayout";
-import { HEADER_PRESET_ICONS } from "@/lib/dashboard/headerPresetIcons";
 import type { CompareSpec } from "@/lib/dashboard/compareSpec";
-import { CONTENT_ICON_POSITION_OPTIONS, type ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
+import type { ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
 import { ImageConfigFields } from "@/components/dashboard/ImageConfigFields";
-import { CONTENT_ICON_SIZE_OPTIONS, DEFAULT_IMAGE_CONFIG } from "@/lib/dashboard/imageLayout";
+import { DEFAULT_IMAGE_CONFIG } from "@/lib/dashboard/imageLayout";
 import {
   normalizeChartPercentBasis,
   type ChartLabelDisplayMode,
   type ChartPercentBasis,
 } from "@/lib/dashboard/chartOptions";
+import type { ChartQuickCalc } from "@/lib/dashboard/chartQuickCalcTypes";
 import { resolveWidgetAxisKeys, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import {
   pruneChartSeriesColorsToVisibleKeys,
@@ -39,12 +38,17 @@ import {
 } from "@/lib/dashboard/widgetRenderParity";
 import {
   ChartLabelOverridesSection,
-  ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS,
 } from "@/components/admin/dashboard/ChartLabelOverridesSection";
 import type { DimensionDefaultFilterEdit } from "@/lib/dashboard/dimensionDefaultFilters";
 import type { ChartDetailCardConfig, ChartDetailCardLine } from "@/lib/dashboard/chartDetailCard";
 import type { DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
 import { DashboardCompareSpecSection } from "@/components/admin/dashboard/DashboardCompareSpecSection";
+import {
+  MetricFormatCardAndIconSection,
+  MetricFormatDateLabelsSection,
+  MetricFormatQuickCalcSection,
+  MetricFormatTableSection,
+} from "@/components/admin/dashboard/MetricDashboardFormatSections";
 import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
 
 export type MetricConditionEdit = {
@@ -198,6 +202,14 @@ export type AggregationConfigEdit = {
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   /** Tabla: clave de columna → texto del encabezado. */
   tableColumnLabelOverrides?: Record<string, string>;
+  /** Tabla: dimensiones/métricas en eje Y (filas). */
+  tableRowFields?: string[];
+  /** Tabla: dimensiones en eje X (columnas / pivot). */
+  tableColumnFields?: string[];
+  /** Formato visual de la tabla (filas, columnas, tipografía). */
+  tableStyle?: import("@/lib/dashboard/tableStyle").TableStyleConfig;
+  /** Cálculo rápido sobre valores mostrados. */
+  chartQuickCalc?: ChartQuickCalc;
   /** Tooltip / tarjeta de detalle (gráfico y mapa). */
   chartDetailCard?: ChartDetailCardConfig;
 };
@@ -284,6 +296,7 @@ const AGG_FUNCS: { value: string; label: string }[] = [
   { value: "MAX", label: "Máximo" },
   { value: "COUNT(DISTINCT", label: "Conteo único" },
   { value: "FORMULA", label: "Fórmula / ratio" },
+  { value: "ATTRIBUTE", label: "Atributo (dimensión)" },
 ];
 
 const DIMENSION_DEFAULT_INPUT_TYPES: Array<NonNullable<DimensionDefaultFilterEdit["inputType"]>> = [
@@ -673,6 +686,51 @@ export function MetricConfigPanel({
     return d.map((x) => String(x ?? "").trim()).filter(Boolean);
   }, [agg.dimensions, agg.dimension, agg.dimension2]);
 
+  const setTableFieldAxis = useCallback((fieldKey: string, axis: "none" | "row" | "column" | "value") => {
+    const rowFields = (agg.tableRowFields ?? []).filter((k) => k !== fieldKey);
+    const columnFields = (agg.tableColumnFields ?? []).filter((k) => k !== fieldKey);
+    const yAxes = (agg.chartYAxes ?? []).filter((k) => k !== fieldKey);
+    if (axis === "row") rowFields.push(fieldKey);
+    else if (axis === "column") columnFields.push(fieldKey);
+    else if (axis === "value") yAxes.push(fieldKey);
+    updateAgg({
+      tableRowFields: rowFields.length ? rowFields : undefined,
+      tableColumnFields: columnFields.length ? columnFields : undefined,
+      chartYAxes: yAxes.length ? yAxes : undefined,
+    });
+  }, [agg.tableRowFields, agg.tableColumnFields, agg.chartYAxes, updateAgg]);
+
+  const resolveTableFieldAxis = useCallback(
+    (fieldKey: string): "none" | "row" | "column" | "value" => {
+      if ((agg.tableRowFields ?? []).includes(fieldKey)) return "row";
+      if ((agg.tableColumnFields ?? []).includes(fieldKey)) return "column";
+      if ((agg.chartYAxes ?? []).includes(fieldKey)) return "value";
+      return "none";
+    },
+    [agg.tableRowFields, agg.tableColumnFields, agg.chartYAxes]
+  );
+
+  const tableLayoutColumnOptions = useMemo(() => {
+    if (percentFieldColumnOptions.length > 0) return percentFieldColumnOptions;
+    const keys = new Set<string>();
+    for (const d of dimListForGeo) keys.add(d);
+    for (const k of yAxisKeysForUi) keys.add(k);
+    return [...keys].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [percentFieldColumnOptions, dimListForGeo, yAxisKeysForUi]);
+
+  const tableStyleColumnKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const k of tableLayoutColumnOptions) keys.add(k);
+    for (const [k] of tableColEntries) if (k) keys.add(k);
+    for (const k of Object.keys(agg.tableStyle?.columnWidths ?? {})) keys.add(k);
+    return [...keys].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [tableLayoutColumnOptions, tableColEntries, agg.tableStyle?.columnWidths]);
+
+  const isTableLayoutDimension = useCallback(
+    (fieldKey: string) => dimListForGeo.includes(fieldKey) || !yAxisKeysForUi.includes(fieldKey),
+    [dimListForGeo, yAxisKeysForUi]
+  );
+
   const geoInferencePreview = useMemo(() => {
     if (chartType !== "map") return null;
     if (!previewRows || previewRows.length === 0) return null;
@@ -808,28 +866,6 @@ export function MetricConfigPanel({
         </TabsList>
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto pb-4">
           <TabsContent value="general" className="mt-0 space-y-5 focus-visible:outline-none">
-            {showDataTabs ? (
-              <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/80 p-3">
-                <p className="text-xs leading-relaxed text-[var(--studio-fg)]">
-                  Para la <strong className="text-[var(--studio-accent)]">ubicación de la leyenda</strong>,{" "}
-                  <strong className="text-[var(--studio-accent)]">etiquetas sobre barras/líneas</strong>,{" "}
-                  <strong className="text-[var(--studio-accent)]">tarjeta de detalle (tooltip)</strong>,{" "}
-                  <strong className="text-[var(--studio-accent)]">colores</strong> (serie, cuadrícula, ejes),{" "}
-                  <strong className="text-[var(--studio-accent)]">grosor de barras, líneas de serie y cuadrícula</strong> y{" "}
-                  <strong className="text-[var(--studio-accent)]">tipografía del gráfico</strong>, usá la pestaña{" "}
-                  <strong>Gráfico</strong> (sección <em>Colores, ejes y cuadrícula</em> y <em>Tipografía y espacio</em>).
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 w-full border-[var(--studio-border)] text-xs"
-                  onClick={() => setPanelTab("appearance")}
-                >
-                  Abrir opciones del gráfico
-                </Button>
-              </div>
-            ) : null}
             <div>
               <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Título</Label>
               <Input
@@ -840,98 +876,6 @@ export function MetricConfigPanel({
               />
             </div>
 
-            <div className="space-y-2">
-              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Icono sobre el gráfico / KPI</Label>
-              <p className="text-[11px] text-[var(--studio-fg-muted)]">
-                Se muestra encima del área de datos (no en el título). El icono elegido tiene prioridad sobre la URL.
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  title="Sin icono predefinido"
-                  onClick={() => onUpdate({ headerIconKey: undefined })}
-                  className={`flex h-9 min-w-[2.25rem] items-center justify-center rounded-lg border px-2 text-[11px] font-medium transition-colors ${
-                    !widget.headerIconKey
-                      ? "border-[var(--studio-accent)] bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
-                      : "border-[var(--studio-border)] text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)]"
-                  }`}
-                >
-                  —
-                </button>
-                {HEADER_PRESET_ICONS.map(({ key, label, Icon }) => {
-                  const active = widget.headerIconKey === key;
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      title={label}
-                      onClick={() =>
-                        onUpdate({
-                          headerIconKey: key,
-                          headerIconUrl: undefined,
-                        })
-                      }
-                      className={`flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${
-                        active
-                          ? "border-[var(--studio-accent)] bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
-                          : "border-[var(--studio-border)] text-[var(--studio-fg-muted)] hover:bg-[var(--studio-surface-hover)] hover:text-[var(--studio-fg)]"
-                      }`}
-                    >
-                      <Icon className="h-4 w-4" aria-hidden />
-                    </button>
-                  );
-                })}
-              </div>
-              <Input
-                value={widget.headerIconUrl ?? ""}
-                onChange={(e) =>
-                  onUpdate({
-                    headerIconUrl: e.target.value || undefined,
-                    ...(e.target.value.trim() ? { headerIconKey: undefined } : {}),
-                  })
-                }
-                placeholder="O pegá URL de imagen (https://…)"
-                className="h-9 rounded-lg border-[var(--studio-border)] text-sm"
-              />
-              {(widget.headerIconKey || (widget.headerIconUrl ?? "").trim()) && (
-                <>
-                  <div>
-                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Tamaño del icono</Label>
-                    <select
-                      className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
-                      value={widget.contentIconSize ?? "md"}
-                      onChange={(e) =>
-                        onUpdate({
-                          contentIconSize: e.target.value as NonNullable<typeof widget.contentIconSize>,
-                        })
-                      }
-                    >
-                      {CONTENT_ICON_SIZE_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Posición en el área del gráfico</Label>
-                    <select
-                      className="mt-1.5 h-9 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
-                      value={widget.contentIconPosition ?? "topLeft"}
-                      onChange={(e) =>
-                        onUpdate({ contentIconPosition: e.target.value as ContentIconPosition })
-                      }
-                    >
-                      {CONTENT_ICON_POSITION_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              )}
-            </div>
             <div className="flex items-center gap-2">
               <Checkbox
                 id="hide-widget-header"
@@ -1129,31 +1073,6 @@ export function MetricConfigPanel({
               </div>
             ) : null}
 
-            <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-xs font-semibold text-[var(--studio-fg)]">Apariencia de esta tarjeta</p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 shrink-0 text-xs"
-                  onClick={() => onUpdate({ cardTheme: undefined })}
-                >
-                  Usar solo tema del dashboard
-                </Button>
-              </div>
-              <p className="text-[11px] leading-snug text-[var(--studio-fg-muted)]">
-                Afecta solo a esta métrica en el lienzo y en la vista cliente. Campos vacíos heredan el tema global.
-              </p>
-              <DashboardThemeFormSections
-                scope="card"
-                value={cardAppearancePreview}
-                onPatch={(patch) => onUpdate({ cardTheme: mergeCardThemePatch(widget.cardTheme, patch) })}
-                labelClassName="text-xs font-medium text-[var(--studio-fg-muted)]"
-                inputClassName="h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm text-[var(--studio-fg)]"
-              />
-            </div>
-
             {((widget.aggregationConfig as any)?.chartType || widget.type) === "kpi" && (
               <div className="space-y-3">
                 <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">KPI — texto bajo el número</Label>
@@ -1179,262 +1098,6 @@ export function MetricConfigPanel({
                   className="h-9 rounded-lg"
                   placeholder="Valor (ej. $ 3.202)"
                 />
-              </div>
-            )}
-
-            {((widget.aggregationConfig as any)?.chartType || widget.type) === "table" && (
-              <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
-                <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Encabezados de tabla</Label>
-                <p className="text-[11px] text-[var(--studio-fg-muted)]">
-                  Mapeá el nombre de columna en los datos al texto del encabezado (ej. <code className="text-[10px]">Calc_MargenBruto</code> → Margen bruto).
-                </p>
-                {previewRows.length > 0 && tableColEntries.length === 0 ? (
-                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                    Cargá datos con «Actualizar» y usá «Rellenar desde vista previa» para listar las columnas automáticamente.
-                  </p>
-                ) : null}
-                {previewRows.length > 0 ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={percentFieldColumnOptions.length === 0}
-                    onClick={fillTableColumnLabelOverridesFromPreview}
-                  >
-                    Rellenar desde vista previa
-                  </Button>
-                ) : null}
-                <div className="space-y-2">
-                  {tableColEntries.map(([dataKey, headerText], idx) => (
-                    <div key={`tcol-${idx}-${dataKey}`} className="flex items-center gap-2">
-                      <Input
-                        value={tableColKeyDrafts[dataKey] ?? dataKey}
-                        onChange={(e) => setTableColKeyDrafts((prev) => ({ ...prev, [dataKey]: e.target.value }))}
-                        onBlur={() => commitTableColKeyDraft(dataKey, headerText)}
-                        placeholder="Nombre de columna en datos"
-                        className="h-8 flex-1 text-xs font-mono"
-                      />
-                      <span className="text-xs text-[var(--studio-fg-muted)]">→</span>
-                      <Input
-                        value={headerText}
-                        onChange={(e) => setTableColHeader(dataKey, e.target.value)}
-                        placeholder="Encabezado visible"
-                        className="h-8 flex-1 text-xs"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 shrink-0 text-red-500"
-                        onClick={() => removeTableColOverride(dataKey)}
-                        aria-label="Quitar"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-                <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={addTableColOverride}>
-                  <Plus className="mr-1.5 h-3.5 w-3.5" />
-                  Añadir columna
-                </Button>
-              </div>
-            )}
-
-            {((widget.aggregationConfig as any)?.chartType || widget.type) === "map" && (
-              <div className="space-y-4 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
-                <p className="text-xs font-semibold text-[var(--studio-fg)]">Ubicación (geocodificación)</p>
-                <p className="text-[11px] leading-snug text-[var(--studio-fg-muted)]">
-                  Coincide con el servidor: inferencia por nombre de columna y <code className="text-[10px]">geoHints</code>. Podés forzar país / provincia / ciudad y reglas por etiqueta del eje X (valor de la fila en el mapa).
-                </p>
-                {!previewRows || previewRows.length === 0 ? (
-                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                    Cargá datos con «Actualizar datos» para ver la detección automática en una fila de ejemplo.
-                  </p>
-                ) : geoInferencePreview ? (
-                  <div className="space-y-1.5 rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/60 p-2 text-[11px]">
-                    <p className="font-medium text-[var(--studio-fg-muted)]">Detectado (fila de ejemplo)</p>
-                    <div className="grid gap-1 text-[var(--studio-fg)]">
-                      <div>
-                        <span className="text-[var(--studio-fg-muted)]">País:</span>{" "}
-                        {geoInferencePreview.components.country ?? "—"}
-                        {geoInferencePreview.countryField ? (
-                          <span className="text-[var(--studio-fg-muted)]"> · columna {geoInferencePreview.countryField}</span>
-                        ) : null}
-                      </div>
-                      <div>
-                        <span className="text-[var(--studio-fg-muted)]">Provincia / estado:</span>{" "}
-                        {geoInferencePreview.components.province ?? "—"}
-                        {geoInferencePreview.provinceField ? (
-                          <span className="text-[var(--studio-fg-muted)]"> · columna {geoInferencePreview.provinceField}</span>
-                        ) : null}
-                      </div>
-                      <div>
-                        <span className="text-[var(--studio-fg-muted)]">Localidad / ciudad:</span>{" "}
-                        {geoInferencePreview.components.city ?? "—"}
-                        {geoInferencePreview.cityField ? (
-                          <span className="text-[var(--studio-fg-muted)]"> · columna {geoInferencePreview.cityField}</span>
-                        ) : null}
-                      </div>
-                      {geoInferencePreview.addressField ? (
-                        <div className="text-[var(--studio-fg-muted)]">
-                          Dirección (columna {geoInferencePreview.addressField}):{" "}
-                          {geoInferencePreview.components.address ?? "—"}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="space-y-2">
-                  <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Mapear columnas (opcional)</p>
-                  {(
-                    [
-                      ["countryField", "País"],
-                      ["provinceField", "Provincia / estado"],
-                      ["cityField", "Ciudad / localidad"],
-                      ["addressField", "Dirección"],
-                      ["latField", "Latitud"],
-                      ["lonField", "Longitud"],
-                    ] as const
-                  ).map(([key, lab]) => (
-                    <div key={key} className="flex flex-col gap-1">
-                      <Label className="text-[10px] text-[var(--studio-fg-muted)]">{lab}</Label>
-                      <select
-                        value={(agg.geoHints?.[key] as string | undefined) ?? ""}
-                        onChange={(e) => setGeoHintSelect(key, e.target.value)}
-                        className="h-8 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs text-[var(--studio-fg)]"
-                      >
-                        <option value="">Inferir automáticamente</option>
-                        {fields.map((f) => (
-                          <option key={`${key}-${f}`} value={f}>
-                            {f}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ))}
-                </div>
-
-                <div>
-                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">País por defecto</Label>
-                  <p className="mt-0.5 text-[10px] text-[var(--studio-fg-muted)]">
-                    Solo si la fila <strong>no trae país</strong> en sus columnas. Para forzar Argentina en todas las filas usá el botón de abajo o «Forzar valores».
-                  </p>
-                  <Input
-                    value={agg.mapDefaultCountry ?? ""}
-                    onChange={(e) =>
-                      updateAgg({
-                        mapDefaultCountry: e.target.value === "" ? undefined : e.target.value,
-                      })
-                    }
-                    className="mt-1 h-9 rounded-lg border-[var(--studio-border)]"
-                    placeholder="Ej. Argentina si la fila no trae país"
-                  />
-                </div>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 w-full text-xs"
-                  onClick={() =>
-                    updateAgg({
-                      mapDefaultCountry: "Argentina",
-                      geoComponentOverrides: {
-                        ...(agg.geoComponentOverrides ?? {}),
-                        country: "Argentina",
-                      },
-                    })
-                  }
-                >
-                  Forzar Argentina en todas las filas
-                </Button>
-
-                <div className="space-y-2">
-                  <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Forzar valores (todas las filas)</p>
-                  <p className="text-[10px] text-[var(--studio-fg-muted)]">
-                    Sustituye país, provincia o ciudad inferidos en <strong>cada fila</strong> antes de geocodificar.
-                  </p>
-                  <Input
-                    value={agg.geoComponentOverrides?.country ?? ""}
-                    onChange={(e) => setGlobalGeoOverride("country", e.target.value)}
-                    className="h-8 rounded-lg text-xs"
-                    placeholder="Forzar país"
-                  />
-                  <Input
-                    value={agg.geoComponentOverrides?.province ?? ""}
-                    onChange={(e) => setGlobalGeoOverride("province", e.target.value)}
-                    className="h-8 rounded-lg text-xs"
-                    placeholder="Forzar provincia / estado"
-                  />
-                  <Input
-                    value={agg.geoComponentOverrides?.city ?? ""}
-                    onChange={(e) => setGlobalGeoOverride("city", e.target.value)}
-                    className="h-8 rounded-lg text-xs"
-                    placeholder="Forzar localidad / ciudad"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Corrección por etiqueta del mapa (eje X)</p>
-                  <p className="text-[10px] text-[var(--studio-fg-muted)]">
-                    La clave debe coincidir con el valor mostrado en el eje X (comparación sin distinguir mayúsculas).
-                  </p>
-                  <div className="space-y-2">
-                    {geoByLabelEntries.map(([labelKey, patch]) => (
-                      <div
-                        key={labelKey}
-                        className="flex flex-col gap-2 rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/50 p-2"
-                      >
-                        <div className="flex items-center gap-2">
-                          <Input
-                            value={geoXLabelDrafts[labelKey] ?? labelKey}
-                            onChange={(e) =>
-                              setGeoXLabelDrafts((prev) => ({ ...prev, [labelKey]: e.target.value }))
-                            }
-                            onBlur={() => commitGeoXLabelDraft(labelKey)}
-                            placeholder="Etiqueta eje X"
-                            className="h-8 flex-1 text-xs"
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 shrink-0 text-red-500"
-                            onClick={() => removeGeoByLabelRow(labelKey)}
-                            aria-label="Quitar"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                        <Input
-                          value={patch.country ?? ""}
-                          onChange={(e) => setGeoByLabelPatch(labelKey, "country", e.target.value)}
-                          className="h-8 text-xs"
-                          placeholder="País (opcional)"
-                        />
-                        <Input
-                          value={patch.province ?? ""}
-                          onChange={(e) => setGeoByLabelPatch(labelKey, "province", e.target.value)}
-                          className="h-8 text-xs"
-                          placeholder="Provincia (opcional)"
-                        />
-                        <Input
-                          value={patch.city ?? ""}
-                          onChange={(e) => setGeoByLabelPatch(labelKey, "city", e.target.value)}
-                          className="h-8 text-xs"
-                          placeholder="Ciudad (opcional)"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={addGeoByLabelRow}>
-                    <Plus className="mr-1.5 h-3.5 w-3.5" />
-                    Añadir regla por etiqueta
-                  </Button>
-                </div>
               </div>
             )}
 
@@ -1477,13 +1140,51 @@ export function MetricConfigPanel({
             <>
             <TabsContent value="appearance" className="mt-0 space-y-5 focus-visible:outline-none">
             <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
-              Acá definís <strong className="text-[var(--studio-fg)]">leyenda</strong>,{" "}
-              <strong className="text-[var(--studio-fg)]">etiquetas sobre los datos</strong>,{" "}
-              <strong className="text-[var(--studio-fg)]">tarjeta de detalle (tooltip)</strong>,{" "}
-              <strong className="text-[var(--studio-fg)]">colores</strong> de la serie y de ejes/cuadrícula,{" "}
-              <strong className="text-[var(--studio-fg)]">grosor de barras, líneas de serie y líneas de cuadrícula</strong> del
-              gráfico, y <strong className="text-[var(--studio-fg)]">tipografía</strong> del dibujo. El fondo y borde de la{" "}
-              <em>tarjeta</em> se configuran en <strong>General</strong> → «Apariencia de esta tarjeta».
+              Toda la presentación visual del widget: tarjeta, iconos, leyenda, etiquetas, colores, tipografía, tablas y cálculos rápidos.
+            </p>
+
+            <MetricFormatCardAndIconSection
+              widget={widget}
+              cardAppearancePreview={cardAppearancePreview}
+              onUpdate={onUpdate}
+            />
+
+            {!["filter", "image", "text"].includes(widget.type) && (
+              <MetricFormatQuickCalcSection
+                agg={agg}
+                updateAgg={updateAgg}
+                widget={widget}
+                onUpdate={onUpdate}
+                columnOptions={
+                  percentFieldColumnOptions.length > 0 ? percentFieldColumnOptions : tableLayoutColumnOptions
+                }
+              />
+            )}
+
+            {isDimensionDateField ? (
+              <MetricFormatDateLabelsSection agg={agg} updateAgg={updateAgg} />
+            ) : null}
+
+            {((widget.aggregationConfig as any)?.chartType || widget.type) === "table" && (
+              <MetricFormatTableSection
+                agg={agg}
+                updateAgg={updateAgg}
+                previewRows={previewRows}
+                tableColEntries={tableColEntries}
+                tableColKeyDrafts={tableColKeyDrafts}
+                setTableColKeyDrafts={setTableColKeyDrafts}
+                commitTableColKeyDraft={commitTableColKeyDraft}
+                setTableColHeader={setTableColHeader}
+                removeTableColOverride={removeTableColOverride}
+                addTableColOverride={addTableColOverride}
+                fillTableColumnLabelOverridesFromPreview={fillTableColumnLabelOverridesFromPreview}
+                tableStyleColumnKeys={tableStyleColumnKeys}
+                percentFieldColumnOptionsLength={percentFieldColumnOptions.length}
+              />
+            )}
+
+            <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+              <strong className="text-[var(--studio-fg)]">Gráfico:</strong> leyenda, etiquetas sobre datos, tooltip, colores y tipografía del dibujo.
             </p>
             {chartType === "map" && (
               <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
@@ -2849,38 +2550,9 @@ export function MetricConfigPanel({
                               <option value="semester">Semestre</option>
                               <option value="year">Año</option>
                             </select>
-                          </div>
-                          <div>
-                            <Label className="text-[11px] text-[var(--studio-fg-muted)]">Formato de etiquetas de fecha</Label>
-                            <select
-                              value={agg.analysisDateDisplayFormat ?? ""}
-                              onChange={(e) =>
-                                updateAgg({
-                                  analysisDateDisplayFormat: (e.target.value || undefined) as AggregationConfigEdit["analysisDateDisplayFormat"],
-                                })
-                              }
-                              className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-                            >
-                              {ANALYSIS_DATE_DISPLAY_FORMAT_OPTIONS.map((o) => (
-                                <option key={o.value || "default"} value={o.value}>
-                                  {o.label}
-                                </option>
-                              ))}
-                            </select>
                             <p className="mt-1 text-[10px] text-[var(--studio-fg-muted)]">
-                              Si un mes se ve mal con «Mes y año», probá «Predeterminado» o «Corta»; podés corregir cada valor abajo.
+                              El formato de las etiquetas de fecha se configura en la pestaña <strong>Gráfico</strong>.
                             </p>
-                          </div>
-                          <div>
-                            <Label className="text-[11px] text-[var(--studio-fg-muted)]">Fechas texto con / (import ambiguo)</Label>
-                            <select
-                              value={agg.dateSlashOrder ?? "DMY"}
-                              onChange={(e) => updateAgg({ dateSlashOrder: e.target.value as "DMY" | "MDY" })}
-                              className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
-                            >
-                              <option value="DMY">DD/MM/YYYY (día primero)</option>
-                              <option value="MDY">MM/DD/YYYY (mes primero, US)</option>
-                            </select>
                           </div>
                         </div>
                       )}
@@ -3012,7 +2684,7 @@ export function MetricConfigPanel({
                                     onChange={(v) => updateMetric(i, { field: v })}
                                     etlData={etlData}
                                     dataSourceId={widget.dataSourceId}
-                                    fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" ? "all" : "numeric"}
+                                    fieldType={m.func === "COUNT" || m.func === "COUNT(DISTINCT" || m.func === "ATTRIBUTE" ? "all" : "numeric"}
                                     placeholder="Campo..."
                                     className="mb-0"
                                   />
@@ -3286,6 +2958,253 @@ export function MetricConfigPanel({
                 </>
               )}
             </div>
+
+            {chartType === "table" && (
+              <div className="space-y-3 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
+                <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Asignación de ejes (tabla)</Label>
+                <p className="text-[11px] text-[var(--studio-fg-muted)]">
+                  Definí qué columnas van en filas (Y), columnas (X) o como valores numéricos.
+                </p>
+                {tableLayoutColumnOptions.length === 0 ? (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Cargá datos con «Actualizar» para ver las columnas disponibles.
+                  </p>
+                ) : (
+                  <div className="overflow-auto max-h-[240px] rounded border border-[var(--studio-border)]">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-[var(--studio-border)] text-left text-[10px] text-[var(--studio-fg-muted)]">
+                          <th className="py-1.5 px-2 font-medium">Campo</th>
+                          <th className="py-1.5 px-1 font-medium text-center">Y</th>
+                          <th className="py-1.5 px-1 font-medium text-center">X</th>
+                          <th className="py-1.5 px-1 font-medium text-center">Valor</th>
+                          <th className="py-1.5 px-1 font-medium text-center">—</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tableLayoutColumnOptions.map((col) => {
+                          const isDim = isTableLayoutDimension(col);
+                          const axis = resolveTableFieldAxis(col);
+                          return (
+                            <tr key={col} className="border-b border-[var(--studio-border)] text-[var(--studio-fg)]">
+                              <td className="py-1.5 px-2 font-mono">{col}</td>
+                              {(["row", "column", "value", "none"] as const).map((opt) => (
+                                <td key={opt} className="py-1.5 px-1 text-center">
+                                  <input
+                                    type="radio"
+                                    name={`studio-table-axis-${col}`}
+                                    checked={axis === opt}
+                                    disabled={opt !== "value" && opt !== "none" && !isDim}
+                                    onChange={() => setTableFieldAxis(col, opt)}
+                                    className="rounded-full"
+                                  />
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {chartType === "map" && (
+              <div className="space-y-4 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/40 p-3">
+                <p className="text-xs font-semibold text-[var(--studio-fg)]">Ubicación (geocodificación)</p>
+                <p className="text-[11px] leading-snug text-[var(--studio-fg-muted)]">
+                  Coincide con el servidor: inferencia por nombre de columna y <code className="text-[10px]">geoHints</code>. Podés forzar país / provincia / ciudad y reglas por etiqueta del eje X (valor de la fila en el mapa).
+                </p>
+                {!previewRows || previewRows.length === 0 ? (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Cargá datos con «Actualizar datos» para ver la detección automática en una fila de ejemplo.
+                  </p>
+                ) : geoInferencePreview ? (
+                  <div className="space-y-1.5 rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/60 p-2 text-[11px]">
+                    <p className="font-medium text-[var(--studio-fg-muted)]">Detectado (fila de ejemplo)</p>
+                    <div className="grid gap-1 text-[var(--studio-fg)]">
+                      <div>
+                        <span className="text-[var(--studio-fg-muted)]">País:</span>{" "}
+                        {geoInferencePreview.components.country ?? "—"}
+                        {geoInferencePreview.countryField ? (
+                          <span className="text-[var(--studio-fg-muted)]"> · columna {geoInferencePreview.countryField}</span>
+                        ) : null}
+                      </div>
+                      <div>
+                        <span className="text-[var(--studio-fg-muted)]">Provincia / estado:</span>{" "}
+                        {geoInferencePreview.components.province ?? "—"}
+                        {geoInferencePreview.provinceField ? (
+                          <span className="text-[var(--studio-fg-muted)]"> · columna {geoInferencePreview.provinceField}</span>
+                        ) : null}
+                      </div>
+                      <div>
+                        <span className="text-[var(--studio-fg-muted)]">Localidad / ciudad:</span>{" "}
+                        {geoInferencePreview.components.city ?? "—"}
+                        {geoInferencePreview.cityField ? (
+                          <span className="text-[var(--studio-fg-muted)]"> · columna {geoInferencePreview.cityField}</span>
+                        ) : null}
+                      </div>
+                      {geoInferencePreview.addressField ? (
+                        <div className="text-[var(--studio-fg-muted)]">
+                          Dirección (columna {geoInferencePreview.addressField}):{" "}
+                          {geoInferencePreview.components.address ?? "—"}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Mapear columnas (opcional)</p>
+                  {(
+                    [
+                      ["countryField", "País"],
+                      ["provinceField", "Provincia / estado"],
+                      ["cityField", "Ciudad / localidad"],
+                      ["addressField", "Dirección"],
+                      ["latField", "Latitud"],
+                      ["lonField", "Longitud"],
+                    ] as const
+                  ).map(([key, lab]) => (
+                    <div key={key} className="flex flex-col gap-1">
+                      <Label className="text-[10px] text-[var(--studio-fg-muted)]">{lab}</Label>
+                      <select
+                        value={(agg.geoHints?.[key] as string | undefined) ?? ""}
+                        onChange={(e) => setGeoHintSelect(key, e.target.value)}
+                        className="h-8 w-full rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs text-[var(--studio-fg)]"
+                      >
+                        <option value="">Inferir automáticamente</option>
+                        {fields.map((f) => (
+                          <option key={`${key}-${f}`} value={f}>
+                            {f}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+
+                <div>
+                  <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">País por defecto</Label>
+                  <p className="mt-0.5 text-[10px] text-[var(--studio-fg-muted)]">
+                    Solo si la fila <strong>no trae país</strong> en sus columnas. Para forzar Argentina en todas las filas usá el botón de abajo o «Forzar valores».
+                  </p>
+                  <Input
+                    value={agg.mapDefaultCountry ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        mapDefaultCountry: e.target.value === "" ? undefined : e.target.value,
+                      })
+                    }
+                    className="mt-1 h-9 rounded-lg border-[var(--studio-border)]"
+                    placeholder="Ej. Argentina si la fila no trae país"
+                  />
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-full text-xs"
+                  onClick={() =>
+                    updateAgg({
+                      mapDefaultCountry: "Argentina",
+                      geoComponentOverrides: {
+                        ...(agg.geoComponentOverrides ?? {}),
+                        country: "Argentina",
+                      },
+                    })
+                  }
+                >
+                  Forzar Argentina en todas las filas
+                </Button>
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Forzar valores (todas las filas)</p>
+                  <p className="text-[10px] text-[var(--studio-fg-muted)]">
+                    Sustituye país, provincia o ciudad inferidos en <strong>cada fila</strong> antes de geocodificar.
+                  </p>
+                  <Input
+                    value={agg.geoComponentOverrides?.country ?? ""}
+                    onChange={(e) => setGlobalGeoOverride("country", e.target.value)}
+                    className="h-8 rounded-lg text-xs"
+                    placeholder="Forzar país"
+                  />
+                  <Input
+                    value={agg.geoComponentOverrides?.province ?? ""}
+                    onChange={(e) => setGlobalGeoOverride("province", e.target.value)}
+                    className="h-8 rounded-lg text-xs"
+                    placeholder="Forzar provincia / estado"
+                  />
+                  <Input
+                    value={agg.geoComponentOverrides?.city ?? ""}
+                    onChange={(e) => setGlobalGeoOverride("city", e.target.value)}
+                    className="h-8 rounded-lg text-xs"
+                    placeholder="Forzar localidad / ciudad"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-medium text-[var(--studio-fg-muted)]">Corrección por etiqueta del mapa (eje X)</p>
+                  <p className="text-[10px] text-[var(--studio-fg-muted)]">
+                    La clave debe coincidir con el valor mostrado en el eje X (comparación sin distinguir mayúsculas).
+                  </p>
+                  <div className="space-y-2">
+                    {geoByLabelEntries.map(([labelKey, patch]) => (
+                      <div
+                        key={labelKey}
+                        className="flex flex-col gap-2 rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)]/50 p-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={geoXLabelDrafts[labelKey] ?? labelKey}
+                            onChange={(e) =>
+                              setGeoXLabelDrafts((prev) => ({ ...prev, [labelKey]: e.target.value }))
+                            }
+                            onBlur={() => commitGeoXLabelDraft(labelKey)}
+                            placeholder="Etiqueta eje X"
+                            className="h-8 flex-1 text-xs"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0 text-red-500"
+                            onClick={() => removeGeoByLabelRow(labelKey)}
+                            aria-label="Quitar"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        <Input
+                          value={patch.country ?? ""}
+                          onChange={(e) => setGeoByLabelPatch(labelKey, "country", e.target.value)}
+                          className="h-8 text-xs"
+                          placeholder="País (opcional)"
+                        />
+                        <Input
+                          value={patch.province ?? ""}
+                          onChange={(e) => setGeoByLabelPatch(labelKey, "province", e.target.value)}
+                          className="h-8 text-xs"
+                          placeholder="Provincia (opcional)"
+                        />
+                        <Input
+                          value={patch.city ?? ""}
+                          onChange={(e) => setGeoByLabelPatch(labelKey, "city", e.target.value)}
+                          className="h-8 text-xs"
+                          placeholder="Ciudad (opcional)"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={addGeoByLabelRow}>
+                    <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    Añadir regla por etiqueta
+                  </Button>
+                </div>
+              </div>
+            )}
             </TabsContent>
             <TabsContent value="order" className="mt-0 space-y-5 focus-visible:outline-none">
               <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">

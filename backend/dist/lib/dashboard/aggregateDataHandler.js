@@ -12,6 +12,8 @@ const expandMonthFilterWithYear_1 = require("./expandMonthFilterWithYear");
 const geo_enrichment_1 = require("../geo/geo-enrichment");
 const compareSpec_1 = require("./compareSpec");
 const compareMetricRows_1 = require("./compareMetricRows");
+const applyComparativeRelation_1 = require("./applyComparativeRelation");
+const comparativeRelation_1 = require("../dataset/comparativeRelation");
 const compareDisplayKeys_1 = require("./compareDisplayKeys");
 const expandAggregationFiltersForCompare_1 = require("./expandAggregationFiltersForCompare");
 const coerceNumericSqlExpr_1 = require("./coerceNumericSqlExpr");
@@ -984,12 +986,16 @@ async function runAggregateData(body, deps) {
             query += ` ORDER BY ${dateGroupByExpr} ASC`;
         }
         const SAFETY_MAX_ROWS = 500_000;
+        const DEFAULT_AGGREGATE_LIMIT = 5000;
         if (body.unlimited === true) {
             query += ` LIMIT ${SAFETY_MAX_ROWS}`;
         }
         else if (body.limit != null && body.limit > 0) {
-            const lim = Math.max(1, Math.min(SAFETY_MAX_ROWS, parseInt(String(body.limit), 10) || 5000));
+            const lim = Math.max(1, Math.min(SAFETY_MAX_ROWS, parseInt(String(body.limit), 10) || DEFAULT_AGGREGATE_LIMIT));
             query += ` LIMIT ${lim}`;
+        }
+        else {
+            query += ` LIMIT ${DEFAULT_AGGREGATE_LIMIT}`;
         }
         const aliasToMetricRef = body.metrics
             .map((m, idx) => ({ alias: (m.alias || "").trim(), ref: `metric_${idx}` }))
@@ -1069,7 +1075,7 @@ async function runAggregateData(body, deps) {
             let userMsg = "Error al ejecutar la agregación: " + msg;
             if (/function\s+(sum|avg)\s*\(\s*text\s*\)\s+does\s+not\s+exist/i.test(msg)) {
                 userMsg +=
-                    " Si la métrica usa IFS con comillas (etiquetas de texto), el agregado SUM/AVG se reemplaza por MAX automáticamente; si ves este error, probá elegir MAX o MIN en la métrica, o definí la categoría como columna calculada.";
+                    " Si la métrica usa IFS con comillas, CONCAT u otras fórmulas de texto, el agregado SUM/AVG se reemplaza por MAX automáticamente; si ves este error, probá elegir MAX o MIN en la métrica, o definí la categoría como columna calculada.";
             }
             if (/column\s+["']?(\w+)["']?\s+does not exist/i.test(msg)) {
                 const colMatch = msg.match(/column\s+["']?(\w+)["']?\s+does not exist/i);
@@ -1140,10 +1146,60 @@ async function runAggregateData(body, deps) {
         }
         const comparedResults = compareSpec.kind === "none"
             ? mappedResults
-            : (0, compareMetricRows_1.applyCompareSpecToRows)(mappedResults, metricExternalKeys, compareSpec, {
-                parseDateOpts: body.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
-                dimensionColumns: dimensionColumnsOrdered,
+            : compareSpec.kind === "comparative"
+                ? mappedResults
+                : (0, compareMetricRows_1.applyCompareSpecToRows)(mappedResults, metricExternalKeys, compareSpec, {
+                    parseDateOpts: body.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
+                    dimensionColumns: dimensionColumnsOrdered,
+                });
+        let finalResults = comparedResults;
+        if (compareSpec.kind === "comparative") {
+            let datasetId = String(body.datasetId ?? "").trim();
+            if (!datasetId && body.etlId && deps.getFirstDatasetIdForEtl) {
+                datasetId = (await deps.getFirstDatasetIdForEtl(body.etlId)) ?? "";
+            }
+            if (!datasetId || !deps.getDatasetById || !deps.resolveDatasetTable) {
+                return jsonResponse({ error: "Relación comparativa requiere datasetId y resolución de tabla." }, { status: 400 });
+            }
+            const datasetRow = await deps.getDatasetById(datasetId);
+            if (!datasetRow) {
+                return jsonResponse({ error: "Dataset base no encontrado." }, { status: 404 });
+            }
+            const relation = (0, comparativeRelation_1.findComparativeRelation)(datasetRow.config, compareSpec.relationId);
+            if (!relation) {
+                return jsonResponse({ error: "Relación comparativa no encontrada en el dataset." }, { status: 400 });
+            }
+            const compDataset = await deps.getDatasetById(relation.comparativeDatasetId);
+            if (!compDataset) {
+                return jsonResponse({ error: "Dataset comparativo no encontrado." }, { status: 404 });
+            }
+            const compTable = await deps.resolveDatasetTable(compDataset.etl_id);
+            if (!compTable) {
+                return jsonResponse({ error: "Tabla del dataset comparativo no resuelta." }, { status: 400 });
+            }
+            const measureField = relation.comparativeFields.find((f) => f.column === compareSpec.comparativeField);
+            const valueType = measureField?.valueType ?? "absolute";
+            const compSql = (0, applyComparativeRelation_1.buildComparativeAggregateSql)({
+                schema: compTable.schema,
+                tableName: compTable.tableName,
+                relation,
+                comparativeField: compareSpec.comparativeField,
+                valueType,
             });
+            const compResult = await deps.executeSql(compSql);
+            if (compResult.error) {
+                return jsonResponse({ error: `Error al consultar dataset comparativo: ${compResult.error.message}` }, { status: 500 });
+            }
+            const comparativeRows = (compResult.data ?? []);
+            finalResults = (0, applyComparativeRelation_1.applyComparativeRelationToRows)({
+                baseRows: mappedResults,
+                comparativeRows,
+                relation,
+                compareSpec,
+                metricAliases: metricExternalKeys,
+                parseOpts: body.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
+            });
+        }
         const requestedSortNormalized = normalizeStr(body.orderBy?.field || "");
         const dateFieldNormalized = normalizeStr(body.dateGroupBy?.field || "");
         const temporalKey = body.dateGroupBy?.field
@@ -1160,7 +1216,7 @@ async function runAggregateData(body, deps) {
                 dateFieldNormalized.includes(requestedSortNormalized));
         const directionMultiplier = (body.orderBy?.direction || "ASC").toString().toUpperCase() === "DESC" ? -1 : 1;
         const sortedResults = body.dateGroupBy?.field && requestedTemporalSort && temporalKey
-            ? [...comparedResults].sort((a, b) => {
+            ? [...finalResults].sort((a, b) => {
                 const va = a[temporalKey];
                 const vb = b[temporalKey];
                 const ta = (0, dateFormatting_1.parseDateLike)(va, dateParseOpts)?.getTime() ?? NaN;
@@ -1169,9 +1225,8 @@ async function runAggregateData(body, deps) {
                     return (ta - tb) * directionMultiplier;
                 return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true }) * directionMultiplier;
             })
-            : comparedResults;
-        const shouldEnrichGeo = requestedChartType === "map" ||
-            /\b(lat|lon|lng|geo|country|pais|ciudad|city|localidad|provincia|estado)\b/i.test(dimList.join(" "));
+            : finalResults;
+        const shouldEnrichGeo = requestedChartType === "map";
         const cacheClient = deps.geoCacheClient ?? null;
         const geoReadyRows = shouldEnrichGeo
             ? await (0, geo_enrichment_1.enrichRowsWithGeo)({

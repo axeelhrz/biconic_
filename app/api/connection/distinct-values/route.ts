@@ -5,7 +5,10 @@ import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
 import {
   formatFirebirdConnectError,
+  isFirebirdAuthError,
+  isFirebirdColumnError,
   resolveFirebirdAttachOptions,
+  resolveFirebirdPasswordFromConnection,
 } from "@/lib/connection/resolve-firebird-connection";
 import { connectionsSelectColumns } from "@/lib/db/connections-query";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
@@ -220,6 +223,19 @@ export async function POST(req: NextRequest) {
         const msg = cfgErr instanceof Error ? cfgErr.message : String(cfgErr);
         return NextResponse.json({ ok: false, error: msg }, { status: 400 });
       }
+      const password = resolveFirebirdPasswordFromConnection(conn);
+      if (!password) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Se requiere contraseña para Firebird. Guardala en la conexión o configurá FLEXXUS_PASSWORD en el servidor.",
+          },
+          { status: 400 }
+        );
+      }
+      fbOpts = { ...fbOpts, password };
+
       const Firebird = require("node-firebird");
       const relationName = firebirdTablePart(tableQualified);
       const bareCol = columnName.trim().replace(/^[^.]*\./, "");
@@ -227,84 +243,124 @@ export async function POST(req: NextRequest) {
         new Set([firebirdColumnPart(columnName), safeIdentFirebird(bareCol), bareCol.toUpperCase()])
       );
 
-      const queryFb = (sql: string): Promise<Record<string, unknown>[]> =>
+      type FbDb = {
+        query: (sql: string, params: unknown[], cb: (err: Error | null, rows: Record<string, unknown>[]) => void) => void;
+        detach?: (cb?: () => void) => void;
+      };
+
+      const withFirebirdDb = async <T>(work: (db: FbDb) => Promise<T>): Promise<T> =>
         new Promise((resolve, reject) => {
-          Firebird.attach(fbOpts, (errAttach: Error | null, db: { query: Function; detach?: Function }) => {
-            if (errAttach) return reject(errAttach);
-            db.query(sql, [], (errQ: Error | null, rows: Record<string, unknown>[]) => {
-              if (db?.detach) try { db.detach(() => {}); } catch (_) {}
-              if (errQ) return reject(errQ);
-              resolve(rows || []);
-            });
+          Firebird.attach(fbOpts, (errAttach: Error | null, db: FbDb) => {
+            if (errAttach) {
+              reject(errAttach);
+              return;
+            }
+            work(db)
+              .then(resolve)
+              .catch(reject)
+              .finally(() => {
+                if (db?.detach) {
+                  try {
+                    db.detach(() => {});
+                  } catch {
+                    /* ignore */
+                  }
+                }
+              });
           });
         });
 
-      let distinctValues: string[] | null = null;
-      for (const fbCol of colCandidates) {
-        // Sin ORDER BY: DISTINCT ya deduplica en el servidor y evita un sort extra sobre toda la tabla.
-        const sql = `SELECT ${fbFirstClause()}DISTINCT ${fbCol} AS value FROM ${relationName} WHERE ${fbCol} IS NOT NULL`;
-        try {
-          const rows = await queryFb(sql);
-          distinctValues = rows
-            .map((r) => {
-              const v = r.value ?? r.VALUE;
-              return v != null && v !== "" ? String(v) : "";
-            })
-            .filter(Boolean);
-          break;
-        } catch {
-          /* probar siguiente variante de nombre de columna */
-        }
-      }
+      const queryFb = (db: FbDb, sql: string): Promise<Record<string, unknown>[]> =>
+        new Promise((resolve, reject) => {
+          db.query(sql, [], (errQ: Error | null, rows: Record<string, unknown>[]) => {
+            if (errQ) return reject(errQ);
+            resolve(rows || []);
+          });
+        });
 
-      if (distinctValues == null) {
-        const seen = new Set<string>();
-        distinctValues = [];
-        const pageSize = Math.min(5_000, DISTINCT_VALUES_CAP);
-        const fbCol = colCandidates[0];
-        let skip = 0;
-        for (;;) {
-          const sql =
-            skip > 0
-              ? `SELECT FIRST ${pageSize} SKIP ${skip} ${fbCol} FROM ${relationName} WHERE ${fbCol} IS NOT NULL`
-              : `SELECT FIRST ${pageSize} ${fbCol} FROM ${relationName} WHERE ${fbCol} IS NOT NULL`;
-          let rows: Record<string, unknown>[];
-          try {
-            rows = await queryFb(sql);
-          } catch (scanErr) {
-            const msg = scanErr instanceof Error ? scanErr.message : String(scanErr);
-            return NextResponse.json(
-              { ok: false, error: formatFirebirdConnectError(scanErr, fbOpts.host) || msg },
-              { status: 400 }
-            );
-          }
-          if (rows.length === 0) break;
-          for (const r of rows) {
-            const key = Object.keys(r).find((k) => k.toLowerCase() === bareCol.toLowerCase()) ?? Object.keys(r)[0];
-            const v = key ? r[key] : null;
-            if (v != null && v !== "") {
-              const s = String(v);
-              if (!seen.has(s)) {
-                seen.add(s);
-                distinctValues.push(s);
-                if (distinctValues.length >= DISTINCT_VALUES_CAP) break;
+      try {
+        let distinctValues: string[] | null = null;
+        let lastColumnError: unknown = null;
+
+        await withFirebirdDb(async (db) => {
+          for (const fbCol of colCandidates) {
+            const sql = `SELECT ${fbFirstClause()}DISTINCT ${fbCol} AS value FROM ${relationName} WHERE ${fbCol} IS NOT NULL`;
+            try {
+              const rows = await queryFb(db, sql);
+              distinctValues = rows
+                .map((r) => {
+                  const v = r.value ?? r.VALUE;
+                  return v != null && v !== "" ? String(v) : "";
+                })
+                .filter(Boolean);
+              return;
+            } catch (err) {
+              if (isFirebirdAuthError(err)) throw err;
+              if (isFirebirdColumnError(err)) {
+                lastColumnError = err;
+                continue;
               }
+              lastColumnError = err;
             }
           }
-          if (distinctValues.length >= DISTINCT_VALUES_CAP) break;
-          if (rows.length < pageSize) break;
-          skip += pageSize;
-        }
-      }
 
-      const values = sortDistinctValues(distinctValues).slice(0, DISTINCT_VALUES_CAP);
-      return NextResponse.json({
-        ok: true,
-        values,
-        total: values.length,
-        capped: values.length >= DISTINCT_VALUES_CAP,
-        cap: DISTINCT_VALUES_CAP,
-      });
+          if (distinctValues != null) return;
+
+          const seen = new Set<string>();
+          distinctValues = [];
+          const pageSize = Math.min(5_000, DISTINCT_VALUES_CAP);
+          const fbCol = colCandidates[0];
+          let skip = 0;
+          for (;;) {
+            const sql =
+              skip > 0
+                ? `SELECT FIRST ${pageSize} SKIP ${skip} ${fbCol} FROM ${relationName} WHERE ${fbCol} IS NOT NULL`
+                : `SELECT FIRST ${pageSize} ${fbCol} FROM ${relationName} WHERE ${fbCol} IS NOT NULL`;
+            let rows: Record<string, unknown>[];
+            try {
+              rows = await queryFb(db, sql);
+            } catch (scanErr) {
+              if (isFirebirdAuthError(scanErr)) throw scanErr;
+              const msg = scanErr instanceof Error ? scanErr.message : String(scanErr);
+              throw new Error(
+                formatFirebirdConnectError(scanErr, fbOpts.host) ||
+                  msg ||
+                  (lastColumnError instanceof Error ? lastColumnError.message : "No se pudieron leer valores distintos de Firebird")
+              );
+            }
+            if (rows.length === 0) break;
+            for (const r of rows) {
+              const key =
+                Object.keys(r).find((k) => k.toLowerCase() === bareCol.toLowerCase()) ??
+                Object.keys(r)[0];
+              const v = key ? r[key] : null;
+              if (v != null && v !== "") {
+                const s = String(v);
+                if (!seen.has(s)) {
+                  seen.add(s);
+                  distinctValues.push(s);
+                  if (distinctValues.length >= DISTINCT_VALUES_CAP) break;
+                }
+              }
+            }
+            if (distinctValues.length >= DISTINCT_VALUES_CAP) break;
+            if (rows.length < pageSize) break;
+            skip += pageSize;
+          }
+        });
+
+        const values = sortDistinctValues(distinctValues ?? []).slice(0, DISTINCT_VALUES_CAP);
+        return NextResponse.json({
+          ok: true,
+          values,
+          total: values.length,
+          capped: values.length >= DISTINCT_VALUES_CAP,
+          cap: DISTINCT_VALUES_CAP,
+        });
+      } catch (fbErr) {
+        const msg = formatFirebirdConnectError(fbErr, fbOpts.host);
+        return NextResponse.json({ ok: false, error: msg }, { status: 400 });
+      }
     }
 
     return NextResponse.json(

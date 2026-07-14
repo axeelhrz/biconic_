@@ -18,6 +18,7 @@ import { DashboardLogoOverlay } from "./DashboardLogoOverlay";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
+import { DEFAULT_FISCAL_YEAR_START_MONTH, normalizeFiscalYearStartMonth } from "@/lib/dashboard/fiscalYear";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
 import {
   expandAnalysisMetricsForFetch,
@@ -65,6 +66,13 @@ import {
   DATE_OPERATORS_WITH_MULTI_VALUE_SQL,
   expandMonthFilterValueWithYear,
 } from "@/lib/dashboard/expandMonthFilterWithYear";
+import {
+  collectDashboardFilterIds,
+  loadPersistedDashboardViewerFilters,
+  mergeDimensionDefaultsFromPersistence,
+  mergeFilterValuesFromPersistence,
+  savePersistedDashboardViewerFilters,
+} from "@/lib/dashboard/persistDashboardViewerFilters";
 import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
 import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
 import { fetchGlobalFilterDistinctValues, normalizeDistinctYearOptions } from "@/lib/dashboard/fetchGlobalFilterDistinctValues";
@@ -734,6 +742,77 @@ export type Widget = DashboardWidgetRendererWidget & {
   zIndex?: number;
 };
 
+function readLayoutFilterDefaults(gfs: AggregationFilter[]): Record<string, unknown> {
+  const initialFv: Record<string, unknown> = {};
+  for (const gf of gfs) {
+    const raw = (gf as AggregationFilter & { value?: unknown }).value;
+    if (raw === "" || raw === null || raw === undefined) continue;
+    if (Array.isArray(raw) && raw.length === 0) continue;
+    let v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
+    v = normalizeYearFilterStoredValue(
+      (gf as AggregationFilter).operator,
+      (gf as AggregationFilter).inputType,
+      v
+    );
+    v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
+    initialFv[gf.id] = v;
+  }
+  return initialFv;
+}
+
+function applyPersistedViewerFilterState(params: {
+  gfs: AggregationFilter[];
+  widgets: Widget[];
+  filterCommitMode: "onChange" | "onButton";
+  dashboardId: string;
+  persistFilters: boolean;
+}): {
+  filterValues: Record<string, unknown>;
+  filterDraft: Record<string, unknown>;
+  filterApplied: Record<string, unknown>;
+  dimensionDefaultFilterValues: Record<string, Record<string, unknown>>;
+  activePageId?: string;
+} {
+  const layoutDefaults = readLayoutFilterDefaults(params.gfs);
+  const persisted = params.persistFilters
+    ? loadPersistedDashboardViewerFilters(params.dashboardId)
+    : null;
+  const validIds = collectDashboardFilterIds(params.gfs, params.widgets);
+  const mergedApplied = mergeFilterValuesFromPersistence(
+    layoutDefaults,
+    persisted?.filters,
+    validIds
+  );
+  const mergedDraft = mergeFilterValuesFromPersistence(
+    layoutDefaults,
+    persisted?.filterDraft ?? persisted?.filters,
+    validIds
+  );
+  const seededDim = seedDimensionDefaultFilterValuesFromWidgets(params.widgets);
+  const dimensionDefaultFilterValues = mergeDimensionDefaultsFromPersistence(
+    seededDim,
+    persisted?.dimensionDefaultFilterValues,
+    params.widgets
+  );
+
+  if (params.filterCommitMode === "onButton") {
+    return {
+      filterValues: {},
+      filterDraft: mergedDraft,
+      filterApplied: mergedApplied,
+      dimensionDefaultFilterValues,
+      activePageId: persisted?.activePageId,
+    };
+  }
+  return {
+    filterValues: mergedApplied,
+    filterDraft: mergedDraft,
+    filterApplied: mergedApplied,
+    dimensionDefaultFilterValues,
+    activePageId: persisted?.activePageId,
+  };
+}
+
 function seedDimensionDefaultFilterValuesFromWidgets(
   widgetList: Widget[]
 ): Record<string, Record<string, unknown>> {
@@ -831,6 +910,10 @@ export interface DashboardViewerProps {
    * `onChange`: recarga al cambiar cada control (comportamiento anterior).
    */
   filterCommitMode?: "onChange" | "onButton";
+  /** Guarda en localStorage la última selección de filtros (por dashboard). */
+  persistFilters?: boolean;
+  /** Fuerza el tema visual de vista cliente (p. ej. viewer con botón volver). */
+  clientTheme?: boolean;
 }
 
 export function DashboardViewer({
@@ -845,7 +928,11 @@ export function DashboardViewer({
   variant = "default",
   hideHeader = false,
   filterCommitMode = "onButton",
+  persistFilters: persistFiltersProp,
+  clientTheme: clientThemeProp,
 }: DashboardViewerProps) {
+  const persistFilters =
+    persistFiltersProp ?? (!isPublic && !(initialWidgets && initialWidgets.length > 0));
   const [title, setTitle] = useState("Dashboard");
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<AggregationFilter[]>([]);
@@ -877,6 +964,7 @@ export function DashboardViewer({
   const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults>(
     () => ({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS })
   );
+  const [fiscalYearStartMonth, setFiscalYearStartMonth] = useState(DEFAULT_FISCAL_YEAR_START_MONTH);
   const stateRef = useRef({ widgets, setWidgets });
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
@@ -954,33 +1042,28 @@ export function DashboardViewer({
       if (initialTitle) setTitle(initialTitle);
       if (initialGlobalFilters) {
         setGlobalFilters(initialGlobalFilters);
-        const initialFv: Record<string, unknown> = {};
-        for (const gf of initialGlobalFilters) {
-          const raw = (gf as AggregationFilter & { value?: unknown }).value;
-          if (raw === "" || raw === null || raw === undefined) continue;
-          if (Array.isArray(raw) && raw.length === 0) continue;
-          let v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
-          v = normalizeYearFilterStoredValue(
-            (gf as AggregationFilter).operator,
-            (gf as AggregationFilter).inputType,
-            v
-          );
-          v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
-          initialFv[gf.id] = v;
-        }
+        const applied = applyPersistedViewerFilterState({
+          gfs: initialGlobalFilters,
+          widgets: initialWidgets,
+          filterCommitMode,
+          dashboardId,
+          persistFilters,
+        });
         if (filterCommitMode === "onButton") {
-          setFilterDraft(initialFv);
-          setFilterApplied(initialFv);
+          setFilterDraft(applied.filterDraft);
+          setFilterApplied(applied.filterApplied);
         } else {
-          setFilterValues(initialFv);
+          setFilterValues(applied.filterValues);
         }
+        setDimensionDefaultFilterValues(applied.dimensionDefaultFilterValues);
       } else if (filterCommitMode === "onButton") {
         setFilterDraft({});
         setFilterApplied({});
+        setDimensionDefaultFilterValues({});
       } else {
         setFilterValues({});
+        setDimensionDefaultFilterValues({});
       }
-      setDimensionDefaultFilterValues(seedDimensionDefaultFilterValuesFromWidgets(initialWidgets));
       setDimensionDefaultDistinctValues({});
       return;
     }
@@ -1004,6 +1087,7 @@ export function DashboardViewer({
       activePageId?: string;
       cardLayoutMode?: DashboardCardLayoutMode;
       dashboardCompareDefaults?: DashboardCompareDefaults;
+      fiscalYearStartMonth?: number;
     } | undefined;
     setCardLayoutMode(normalizeCardLayoutMode(layout?.cardLayoutMode));
     if (layout?.dashboardCompareDefaults) {
@@ -1014,6 +1098,7 @@ export function DashboardViewer({
     } else {
       setDashboardCompareDefaults({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS });
     }
+    setFiscalYearStartMonth(normalizeFiscalYearStartMonth(layout?.fiscalYearStartMonth));
     const pages =
       Array.isArray(layout?.pages) && layout!.pages!.length > 0
         ? layout!.pages!
@@ -1027,6 +1112,10 @@ export function DashboardViewer({
     let activePageId = String(layout?.activePageId ?? firstPageId);
     if (!pageIds.has(activePageId)) activePageId = firstPageId;
 
+    const gfs = Array.isArray(dashboard.global_filters_config)
+      ? (dashboard.global_filters_config as AggregationFilter[])
+      : [];
+
     const normalizeWidgetPageId = (raw: string | undefined): string => {
       const fallback = firstPageId;
       const r = raw ?? fallback;
@@ -1035,7 +1124,6 @@ export function DashboardViewer({
       return fallback;
     };
 
-    setPageLayout({ firstPageId, activePageId, pagesMeta });
     const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
     const loadedWidgets = rawWidgets.map((w, i) => {
       const base = w as Widget;
@@ -1050,37 +1138,41 @@ export function DashboardViewer({
         normalized.type !== "image";
       return { ...normalized, isLoading: needsData };
     });
+
+    const persistedState = applyPersistedViewerFilterState({
+      gfs,
+      widgets: loadedWidgets,
+      filterCommitMode,
+      dashboardId,
+      persistFilters,
+    });
+    if (persistedState.activePageId && pageIds.has(persistedState.activePageId)) {
+      activePageId = persistedState.activePageId;
+    }
+
+    setPageLayout({ firstPageId, activePageId, pagesMeta });
     const loadedTheme = layout?.theme && typeof layout.theme === "object" ? layout.theme : {};
     setWidgets(loadedWidgets);
-    setDimensionDefaultFilterValues(seedDimensionDefaultFilterValuesFromWidgets(loadedWidgets));
+    setDimensionDefaultFilterValues(persistedState.dimensionDefaultFilterValues);
     setDimensionDefaultDistinctValues({});
     setTitle((dashboard.title as string) || "Dashboard");
     setDashboardTheme((prev) => ({ ...DEFAULT_DASHBOARD_THEME, ...prev, ...loadedTheme }));
-    const gfs = Array.isArray(dashboard.global_filters_config)
-      ? (dashboard.global_filters_config as AggregationFilter[])
-      : [];
     setGlobalFilters(gfs);
-    const initialFv: Record<string, unknown> = {};
-    for (const gf of gfs) {
-      const raw = (gf as AggregationFilter & { value?: unknown }).value;
-      if (raw === "" || raw === null || raw === undefined) continue;
-      if (Array.isArray(raw) && raw.length === 0) continue;
-      let v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
-      v = normalizeYearFilterStoredValue(
-        (gf as AggregationFilter).operator,
-        (gf as AggregationFilter).inputType,
-        v
-      );
-      v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
-      initialFv[gf.id] = v;
-    }
     if (filterCommitMode === "onButton") {
-      setFilterDraft(initialFv);
-      setFilterApplied(initialFv);
+      setFilterDraft(persistedState.filterDraft);
+      setFilterApplied(persistedState.filterApplied);
     } else {
-      setFilterValues(initialFv);
+      setFilterValues(persistedState.filterValues);
     }
-  }, [layoutFingerprint, initialWidgets, initialTitle, initialGlobalFilters, filterCommitMode]);
+  }, [
+    layoutFingerprint,
+    initialWidgets,
+    initialTitle,
+    initialGlobalFilters,
+    filterCommitMode,
+    dashboardId,
+    persistFilters,
+  ]);
 
   // Distinct values para filtros globales (multi-fuente cuando hay dataset semántico)
   useEffect(() => {
@@ -1571,6 +1663,7 @@ export function DashboardViewer({
           | DerivedColumnRef[]
           | undefined,
             dashboardCompareDefaults,
+            fiscalYearStartMonth,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -1646,6 +1739,7 @@ export function DashboardViewer({
           | DerivedColumnRef[]
           | undefined,
             dashboardCompareDefaults,
+            fiscalYearStartMonth,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
             rawLimit: 500,
@@ -1716,6 +1810,7 @@ export function DashboardViewer({
       savedMetricsFromEtl,
       derivedColumnsFromEtl,
       dashboardCompareDefaults,
+      fiscalYearStartMonth,
     ]
   );
 
@@ -1835,6 +1930,26 @@ export function DashboardViewer({
     setDimensionDefaultFilterValues({});
     setDimensionDefaultDistinctValues({});
   }, [dashboardId]);
+
+  useEffect(() => {
+    if (!persistFilters || !dashboardId || !initialLoadedRef.current) return;
+    const timer = window.setTimeout(() => {
+      savePersistedDashboardViewerFilters(dashboardId, {
+        filters: filtersForDataLoad,
+        filterDraft: uiFilterValues,
+        dimensionDefaultFilterValues,
+        activePageId: pageLayout?.activePageId,
+      });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [
+    persistFilters,
+    dashboardId,
+    filtersForDataLoad,
+    uiFilterValues,
+    dimensionDefaultFilterValues,
+    pageLayout?.activePageId,
+  ]);
 
   const handleFilterChange = useCallback((widgetId: string, value: unknown) => {
     setUiFilterValues((prev) => ({ ...prev, [widgetId]: value }));
@@ -2011,7 +2126,8 @@ export function DashboardViewer({
 
   const rootClassName = variant === "admin" ? "admin-dashboard-view gap-5" : "gap-0";
   /** Tema cliente: no depende de hideHeader (vista previa admin oculta el h1 pero mantiene branding). */
-  const useClientTheme = variant === "default" && !backHref;
+  const useClientTheme =
+    clientThemeProp ?? (variant === "default" && !backHref);
   // Mismo criterio que AdminDashboardStudio (MetricBlock): fallback true para paridad del lienzo.
   const themeVars = useMemo(() => {
     if (!useClientTheme) return {};
@@ -2034,28 +2150,30 @@ export function DashboardViewer({
     >
       {!hideHeader && (
         <header
-          className={`flex flex-shrink-0 items-center justify-between gap-4 border-b px-4 py-3${useClientTheme ? " client-view-header" : ""}`}
+          className={`flex flex-shrink-0 flex-col gap-2 border-b px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4 sm:py-3${useClientTheme ? " client-view-header" : ""}`}
           style={{
             borderColor: "var(--platform-border, var(--client-border, #e2e8f0))",
             background: "var(--platform-bg-elevated, var(--client-header-bg, transparent))",
           }}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
             {backHref && (
               <Link
                 href={backHref}
-                className="inline-flex items-center gap-1.5 text-sm font-medium"
+                className={`inline-flex shrink-0 items-center gap-1.5 text-sm font-medium${useClientTheme ? " client-view-header-back" : ""}`}
                 style={{ color: "var(--platform-fg-muted, var(--client-text-muted, #64748b))" }}
+                aria-label={backLabel}
               >
                 <ArrowLeft className="h-4 w-4" />
-                {backLabel}
+                <span className="hidden sm:inline">{backLabel}</span>
               </Link>
             )}
-            <h1 className="truncate text-lg font-semibold" style={{ color: "var(--platform-fg, var(--client-text, #0f172a))" }}>
+            <h1 className="min-w-0 truncate text-base font-semibold sm:text-lg" style={{ color: "var(--platform-fg, var(--client-text, #0f172a))" }}>
               {title}
             </h1>
+          </div>
             {variant === "default" && exportableWidgets.length > 0 && (
-              <div className="flex flex-shrink-0 flex-wrap items-center gap-1">
+              <div className="flex flex-shrink-0 flex-wrap items-center gap-1 sm:justify-end">
                 <Button
                   type="button"
                   variant="outline"
@@ -2096,7 +2214,6 @@ export function DashboardViewer({
                 </Button>
               </div>
             )}
-          </div>
         </header>
       )}
 
@@ -2140,7 +2257,7 @@ export function DashboardViewer({
       {(globalFilters.length > 0 ||
         (filterCommitMode === "onButton" && hasFilterWidgetsOnActivePage)) && (
         <div
-          className={`flex flex-shrink-0 flex-wrap items-center gap-4 px-4 py-2${globalFilters.length === 0 ? " justify-end" : ""}`}
+          className={`flex flex-shrink-0 flex-wrap items-center gap-2 px-3 py-2 sm:gap-4 sm:px-4${globalFilters.length === 0 ? " justify-end" : ""}`}
           style={{ background: "var(--platform-bg, var(--client-bg, #f8fafc))", borderBottom: "1px solid var(--platform-border)" }}
         >
           {globalFilters.map((gf) => {
@@ -2178,7 +2295,7 @@ export function DashboardViewer({
             const hasOptions = Array.isArray(options) && options.length > 0;
 
             return (
-              <div key={gf.id} className="flex flex-col gap-1.5 text-sm">
+              <div key={gf.id} className="flex w-full min-w-0 flex-col gap-1.5 text-sm sm:w-auto sm:min-w-[10rem]">
                 <span style={{ color: "var(--platform-fg-muted)" }}>{label}</span>
                 {isMulti && hasOptions ? (
                   <GlobalFilterMultiSelect
@@ -2213,7 +2330,7 @@ export function DashboardViewer({
                 ) : (
                   <input
                     type={(gf as any).inputType === "number" ? "number" : (gf as any).inputType === "date" ? "date" : "text"}
-                    className="rounded-md border px-2 py-1 text-sm w-32"
+                    className="w-full rounded-md border px-2 py-1 text-sm sm:w-32"
                     style={{
                       borderColor: "var(--platform-border)",
                       background: "var(--platform-surface, var(--platform-bg))",

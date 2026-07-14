@@ -5,6 +5,11 @@ import { createClient } from "@/lib/supabase/client";
 import { isOwnBackendEnabled } from "@/lib/api/backend-client";
 import { listAdminConnections } from "@/app/admin/(main)/connections/actions";
 import { AlertCircle, Database, Search } from "lucide-react";
+import {
+  AdminClientGroupSection,
+  AdminResourceCardGrid,
+} from "@/components/admin/AdminClientGroupSections";
+import { groupItemsByClient } from "@/lib/admin/clientGrouping";
 
 type SupabaseConnectionRow = {
   id: string;
@@ -29,6 +34,8 @@ type DataTableMetaRow = {
 
 interface AdminConnectionsGridProps {
   searchQuery?: string;
+  clientId?: string | null;
+  groupByClient?: boolean;
   onConfigure?: (id: string) => void;
   onPreview?: (id: string) => void;
   onDelete?: (id: string, title?: string) => void;
@@ -36,6 +43,8 @@ interface AdminConnectionsGridProps {
 
 export default function AdminConnectionsGrid({
   searchQuery = "",
+  clientId = null,
+  groupByClient = true,
   onConfigure,
   onPreview,
   onDelete,
@@ -174,6 +183,9 @@ export default function AdminConnectionsGrid({
                 id: row.client_id,
                 companyName: clientById.get(row.client_id)?.company_name ?? "Cliente Desconocido",
             } : undefined,
+            clientLabel: row.client_id
+              ? clientById.get(row.client_id)?.company_name ?? "Cliente Desconocido"
+              : undefined,
           };
         });
 
@@ -249,12 +261,16 @@ export default function AdminConnectionsGrid({
   }
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
-  const filteredConnections = connections.filter((conn: any) => {
+  const filteredConnections = connections.filter((conn: Connection) => {
+    const matchesClient = clientId ? (conn.clientId ?? "") === clientId : true;
+    if (!matchesClient) return false;
     if (!normalizedQuery) return true;
+    const clientName = conn.client?.companyName?.toLowerCase() ?? conn.clientLabel?.toLowerCase() ?? "";
     return (
       conn.title.toLowerCase().includes(normalizedQuery) ||
       conn.host.toLowerCase().includes(normalizedQuery) ||
-      conn.databaseName.toLowerCase().includes(normalizedQuery)
+      conn.databaseName.toLowerCase().includes(normalizedQuery) ||
+      clientName.includes(normalizedQuery)
     );
   });
 
@@ -282,19 +298,33 @@ export default function AdminConnectionsGrid({
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {filteredConnections.map((connection: any) => (
-        <DatabaseConnectionCard
-          key={connection.id}
-          connection={connection}
-          onConfigure={onConfigure}
-          onPreview={onPreview}
-          onDelete={onDelete}
-          onRefreshConnections={loadConnections}
-        />
+      <div className="flex flex-col gap-10">
+        {(groupByClient
+          ? groupItemsByClient(filteredConnections)
+          : [{ clientId: null, clientLabel: "", items: filteredConnections }]
+        ).map((group) => (
+          <AdminClientGroupSection
+            key={group.clientId ?? "all"}
+            clientId={group.clientId}
+            clientLabel={groupByClient ? group.clientLabel : "Conexiones"}
+            count={group.items.length}
+          >
+            <AdminResourceCardGrid>
+              {group.items.map((connection) => (
+                <DatabaseConnectionCard
+                  key={connection.id}
+                  connection={connection}
+                  onConfigure={onConfigure}
+                  onPreview={onPreview}
+                  onDelete={onDelete}
+                  onRefreshConnections={loadConnections}
+                />
+              ))}
+            </AdminResourceCardGrid>
+          </AdminClientGroupSection>
         ))}
       </div>
-      {filteredConnections.length === 0 && (
+      {filteredConnections.length === 0 && connections.length > 0 && (
         <div
           className="flex flex-col items-center justify-center rounded-2xl border py-12 px-6 text-center"
           style={{

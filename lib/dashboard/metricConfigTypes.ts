@@ -21,6 +21,8 @@ export type AggregationMetricEdit = {
   condition?: MetricConditionEdit;
   formula?: string;
   expression?: string;
+  /** measure = agregado numérico; attribute = valor de dimensión/campo textual. */
+  displayRole?: "measure" | "attribute";
 };
 
 export type AggregationFilterEdit = {
@@ -134,6 +136,15 @@ export type AggregationConfigEdit = {
   geoOverridesByXLabel?: Record<string, GeoComponentOverrides>;
   tableColumnLabelOverrides?: Record<string, string>;
   chartDetailCard?: ChartDetailCardConfig;
+  /** Tabla: dimensiones/métricas en eje Y (filas / encabezado izquierdo). */
+  tableRowFields?: string[];
+  /** Tabla: dimensiones en eje X (columnas / pivot horizontal). */
+  tableColumnFields?: string[];
+  /** Formato visual de la tabla (filas, columnas, tipografía). */
+  tableStyle?: import("@/lib/dashboard/tableStyle").TableStyleConfig;
+  /** Cálculo rápido sobre valores mostrados (% total, categoría, promedio, máx, mín). */
+  chartQuickCalc?: import("@/lib/dashboard/chartQuickCalcTypes").ChartQuickCalc;
+  chartPercentGroupField?: string;
 };
 
 export type AddMetricFormConfig = {

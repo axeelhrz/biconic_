@@ -80,6 +80,14 @@ function parseCompareSpecObject(raw) {
             })(),
         };
     }
+    if (kind === "comparative") {
+        const relationId = typeof o.relationId === "string" ? o.relationId.trim() : "";
+        const metricAlias = typeof o.metricAlias === "string" ? o.metricAlias.trim() : "";
+        const comparativeField = typeof o.comparativeField === "string" ? o.comparativeField.trim() : "";
+        if (!relationId || !metricAlias || !comparativeField)
+            return null;
+        return { kind: "comparative", relationId, metricAlias, comparativeField };
+    }
     return null;
 }
 function normalizeAggregationCompare(input) {

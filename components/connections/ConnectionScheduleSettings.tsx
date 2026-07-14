@@ -2,22 +2,22 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/Select";
 import { Clock, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { ETL_SCHEDULE_FREQUENCIES, formatScheduleDateTime } from "@/lib/etl/schedule";
+import { formatScheduleDateTime, validateScheduleInput } from "@/lib/etl/schedule";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import {
+  formStateToScheduleInput,
+  ScheduleFrequencyFields,
+  scheduleResponseToFormState,
+  type ScheduleApiData,
+  type ScheduleFormState,
+} from "@/components/schedule/ScheduleFrequencyFields";
 
 export type ConnectionScheduleSettingsProps = {
   connectionId: string;
   connectionType?: string;
 };
-
-const FREQUENCY_OPTIONS = [
-  { value: "", label: "Ninguna (solo manual)" },
-  ...ETL_SCHEDULE_FREQUENCIES.map((f) => ({ value: f.value, label: f.label })),
-];
 
 function isExcelType(type?: string): boolean {
   const t = (type ?? "").toLowerCase();
@@ -28,11 +28,21 @@ export default function ConnectionScheduleSettings({
   connectionId,
   connectionType,
 }: ConnectionScheduleSettingsProps) {
-  const [frequency, setFrequency] = useState("");
+  const [form, setForm] = useState<ScheduleFormState>({
+    frequency: "",
+    runAtTime: "09:00",
+    runOnWeekdays: [1],
+  });
   const [lastRunAt, setLastRunAt] = useState<string | null>(null);
   const [nextExecution, setNextExecution] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  const applyApiData = (d: ScheduleApiData) => {
+    setForm(scheduleResponseToFormState(d));
+    setLastRunAt(d.lastRunAt);
+    setNextExecution(d.nextExecution);
+  };
 
   const loadSchedule = useCallback(async () => {
     setLoading(true);
@@ -44,14 +54,7 @@ export default function ConnectionScheduleSettings({
       if (!res.ok || !data.ok) {
         throw new Error(data?.error || "Error al cargar programación");
       }
-      const d = data.data as {
-        frequency: string | null;
-        lastRunAt: string | null;
-        nextExecution: string;
-      };
-      setFrequency(d.frequency ?? "");
-      setLastRunAt(d.lastRunAt);
-      setNextExecution(d.nextExecution);
+      applyApiData(data.data as ScheduleApiData);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error al cargar");
     } finally {
@@ -64,26 +67,26 @@ export default function ConnectionScheduleSettings({
   }, [loadSchedule]);
 
   const handleSave = async () => {
+    const payload = formStateToScheduleInput(form);
+    const validationError = validateScheduleInput(payload);
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
+
     setSaving(true);
     try {
       const res = await fetch(`/api/connections/${connectionId}/schedule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ frequency: frequency || null }),
+        body: JSON.stringify(payload),
       });
       const data = await safeJsonResponse(res);
       if (!res.ok || !data.ok) {
         throw new Error(data?.error || "Error al guardar");
       }
-      const d = data.data as {
-        frequency: string | null;
-        lastRunAt: string | null;
-        nextExecution: string;
-      };
-      setFrequency(d.frequency ?? "");
-      setLastRunAt(d.lastRunAt);
-      setNextExecution(d.nextExecution);
+      applyApiData(data.data as ScheduleApiData);
       toast.success("Programación guardada");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error al guardar");
@@ -126,18 +129,7 @@ export default function ConnectionScheduleSettings({
         </div>
       ) : (
         <>
-          <div className="max-w-xs">
-            <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>
-              Frecuencia
-            </Label>
-            <Select
-              value={frequency}
-              onChange={(v: string) => setFrequency(v ?? "")}
-              options={FREQUENCY_OPTIONS}
-              placeholder="Elegir frecuencia"
-              disablePortal
-            />
-          </div>
+          <ScheduleFrequencyFields value={form} onChange={setForm} disablePortal />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
             <div>

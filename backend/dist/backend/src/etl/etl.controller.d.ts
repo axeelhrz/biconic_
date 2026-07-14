@@ -14,11 +14,13 @@ export declare class EtlController {
     }): Promise<import("pg").QueryResultRow[]>;
     run(body: {
         etlId: string;
+        userId?: string;
     } & Record<string, unknown>, req: Request & {
-        user: {
+        user?: {
             sub: string;
         };
-    }): Promise<{
+        cronAuth?: boolean;
+    }, authorization?: string, cronHeader?: string): Promise<{
         runId: string;
         status: string;
         destinationTable: string;
@@ -27,20 +29,30 @@ export declare class EtlController {
     runEvents(runId: string): Observable<{
         data: unknown;
     }>;
-    markStale(auth?: string): Promise<{
+    markStale(auth?: string, cronHeader?: string): Promise<{
         marked: number;
     }>;
-    runScheduled(auth?: string): Promise<{
+    runScheduled(auth?: string, cronHeader?: string): Promise<{
         error: string;
+        ok?: undefined;
+        due?: undefined;
+        triggered?: undefined;
+        skippedActive?: undefined;
         enqueued?: undefined;
         jobs?: undefined;
+        connections?: undefined;
     } | {
+        ok: boolean;
+        due: number;
+        triggered: number;
+        skippedActive: number;
         enqueued: number;
         jobs: {
             runId: string;
             status: string;
             destinationTable: string;
         }[];
+        connections: import("@/lib/connection/run-scheduled-connections").RunScheduledConnectionsResult;
         error?: undefined;
     }>;
 }

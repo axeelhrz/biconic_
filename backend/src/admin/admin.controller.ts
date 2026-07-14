@@ -19,9 +19,21 @@ export class AdminController {
     body: {
       name: string;
       type?: string;
+      companyName?: string;
+      individualFullName?: string;
+      identificationType?: string;
+      identificationNumber?: string;
+      countryId?: string;
+      provinceId?: string;
+      capital?: string;
+      address?: string;
+      contactEmail?: string;
+      status?: string;
+      planId?: string;
       adminEmail: string;
       adminPassword: string;
       adminName?: string;
+      adminRole?: string;
     },
     @Req() req: Request & { user: { app_role?: string } }
   ) {

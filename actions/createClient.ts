@@ -1,7 +1,6 @@
 "use server";
 
-import { getBackendApiUrl } from "@/lib/api/backend-config";
-import { getServerAuthUser } from "@/lib/supabase/server-backend";
+import { createClientInDb } from "@/lib/admin/clients-repository";
 
 export type ClientType = "empresa" | "individuo";
 
@@ -31,51 +30,34 @@ export interface NewClientForm {
 
 export async function createNewClient(form: NewClientForm) {
   try {
-    const user = await getServerAuthUser();
-    if (!user) return { ok: false, error: "No autorizado" } as const;
+    const adminEmail = (form.userEmail || form.email || "").trim();
+    const adminPassword = form.userPassword || form.password || "";
+    const adminName =
+      form.userName ||
+      (form.clientType === "individuo"
+        ? form.individualFullName ?? form.companyName ?? ""
+        : form.companyName ?? "");
 
-    const payload = {
-      companyName:
-        form.clientType === "empresa"
-          ? form.companyName ?? form.userName ?? ""
-          : undefined,
-      individualFullName:
-        form.clientType === "individuo"
-          ? form.individualFullName ?? form.companyName ?? form.userName ?? ""
-          : undefined,
-      userEmail: form.userEmail || form.email || "",
-      userPassword: form.userPassword || form.password || undefined,
-      userFullName:
-        form.userName ||
-        (form.clientType === "individuo"
-          ? form.individualFullName ?? form.companyName ?? ""
-          : form.companyName ?? ""),
-    };
-
-    const apiUrl = getBackendApiUrl();
-    const cookieStore = await (await import("next/headers")).cookies();
-    const res = await fetch(`${apiUrl}/admin/clients`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        cookie: cookieStore.toString(),
-      },
-      body: JSON.stringify({
-        name: payload.companyName || payload.individualFullName || "Cliente",
-        type: form.clientType,
-        adminEmail: payload.userEmail,
-        adminPassword: payload.userPassword ?? "TempPass123!",
-        adminName: payload.userFullName,
-      }),
+    const { clientId } = await createClientInDb({
+      clientType: form.clientType,
+      companyName: form.companyName,
+      individualFullName: form.individualFullName,
+      identificationType: form.identificationType,
+      identificationNumber: form.identificationNumber,
+      countryId: form.country,
+      provinceId: form.province,
+      capital: form.capital,
+      address: form.address,
+      contactEmail: form.email,
+      status: form.status,
+      planId: form.planId,
+      adminEmail,
+      adminPassword,
+      adminName,
+      adminRole: form.role ?? form.userJobTitle,
     });
-    const data = await res.json();
-    if (!res.ok) {
-      return {
-        ok: false,
-        error: data?.message ?? data?.error ?? "No se pudo crear el cliente",
-      } as const;
-    }
-    return { ok: true, clientId: data?.clientId } as const;
+
+    return { ok: true, clientId } as const;
   } catch (err: unknown) {
     console.error("Error en createNewClient:", err);
     return {

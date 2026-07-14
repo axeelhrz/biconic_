@@ -30,6 +30,11 @@ export type CompareSpec = {
     timeColumn: string;
     granularity: DateGranularity;
     periodSource?: ComparePeriodSource;
+} | {
+    kind: "comparative";
+    relationId: string;
+    metricAlias: string;
+    comparativeField: string;
 };
 export type LegacyCompareInput = {
     compare?: unknown;

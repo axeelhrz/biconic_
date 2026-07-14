@@ -25,7 +25,7 @@ const ETL_RUN_POLL_INTERVAL_MS = Number(process.env.ETL_RUN_POLL_INTERVAL_MS) > 
     : 5_000;
 const ETL_RUN_MAX_WAIT_MS = Number(process.env.ETL_RUN_MAX_WAIT_MS) > 0
     ? Number(process.env.ETL_RUN_MAX_WAIT_MS)
-    : 2 * 60 * 60 * 1000;
+    : 4 * 60 * 60 * 1000;
 async function waitForRunCompletion(runId) {
     const startedAt = Date.now();
     while (true) {

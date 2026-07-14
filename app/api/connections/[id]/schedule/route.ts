@@ -3,8 +3,11 @@ import postgres, { type JSONValue } from "postgres";
 import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { getServerAuthUser } from "@/lib/supabase/server-backend";
 import {
-  formatNextExecutionDisplay,
-  formatScheduleLabel,
+  buildScheduleApiPayload,
+  parseScheduleRequestBody,
+  validateScheduleInput,
+} from "@/lib/etl/schedule";
+import {
   mergeScheduleIntoConnectionConfig,
   parseScheduleFromConnectionConfig,
   type ConnectionSchedule,
@@ -53,15 +56,9 @@ export async function GET(
       }
 
       const schedule = parseScheduleFromConnectionConfig(row.config) ?? {};
-      const frequency = schedule.frequency?.trim() || null;
       return NextResponse.json({
         ok: true,
-        data: {
-          frequency,
-          lastRunAt: schedule.lastRunAt ?? null,
-          label: formatScheduleLabel(frequency),
-          nextExecution: formatNextExecutionDisplay(schedule.lastRunAt, frequency),
-        },
+        data: buildScheduleApiPayload(schedule),
       });
     } finally {
       await sql.end();
@@ -74,7 +71,7 @@ export async function GET(
 
 /**
  * POST /api/connections/[id]/schedule
- * Body: { frequency: string | null }
+ * Body: { frequency, runAtTime?, runOnWeekdays? }
  */
 export async function POST(
   request: NextRequest,
@@ -92,10 +89,11 @@ export async function POST(
     }
 
     const body = await request.json().catch(() => ({}));
-    const frequency =
-      body.frequency === null || body.frequency === undefined
-        ? null
-        : String(body.frequency).trim();
+    const scheduleInput = parseScheduleRequestBody(body);
+    const validationError = validateScheduleInput(scheduleInput);
+    if (validationError) {
+      return NextResponse.json({ ok: false, error: validationError }, { status: 400 });
+    }
 
     const sql = getSql();
     try {
@@ -110,7 +108,7 @@ export async function POST(
         row.config && typeof row.config === "object" && !Array.isArray(row.config)
           ? row.config
           : {};
-      const mergedConfig = mergeScheduleIntoConnectionConfig(currentConfig, frequency);
+      const mergedConfig = mergeScheduleIntoConnectionConfig(currentConfig, scheduleInput);
 
       await sql`
         UPDATE public.connections
@@ -119,16 +117,9 @@ export async function POST(
       `;
 
       const schedule = (mergedConfig.schedule as ConnectionSchedule | undefined) ?? {};
-      const freq = schedule.frequency?.trim() || null;
-
       return NextResponse.json({
         ok: true,
-        data: {
-          frequency: freq,
-          lastRunAt: schedule.lastRunAt ?? null,
-          label: formatScheduleLabel(freq),
-          nextExecution: formatNextExecutionDisplay(schedule.lastRunAt, freq),
-        },
+        data: buildScheduleApiPayload(schedule),
       });
     } finally {
       await sql.end();
