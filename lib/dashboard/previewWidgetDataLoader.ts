@@ -91,7 +91,21 @@ type SavedMetricLike = {
   aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> };
 };
 
-const PREVIEW_FETCH_TIMEOUT_MS = 25000;
+import { getDataEndpoints } from "@/lib/api/endpoints";
+import { isAbortError, SupersededFetchError } from "@/lib/fetch/abortError";
+
+// Deben quedar por debajo del maxDuration configurado en vercel.json para estas rutas,
+// así el usuario ve un mensaje de error claro en vez de un FUNCTION_INVOCATION_TIMEOUT crudo.
+const PREVIEW_FETCH_TIMEOUT_MS = 35_000;
+const PREVIEW_FETCH_TIMEOUT_MAP_MS = 45_000;
+const PREVIEW_FETCH_TIMEOUT_SERIES_MS = 40_000;
+
+function resolvePreviewFetchTimeoutMs(chartType: string): number {
+  const type = chartType.trim().toLowerCase();
+  if (type === "map") return PREVIEW_FETCH_TIMEOUT_MAP_MS;
+  if (type === "line" || type === "area") return PREVIEW_FETCH_TIMEOUT_SERIES_MS;
+  return PREVIEW_FETCH_TIMEOUT_MS;
+}
 
 export type LoadPreviewWidgetDataParams = {
   widget: WidgetLike;
@@ -112,6 +126,10 @@ export type LoadPreviewWidgetDataParams = {
   rawExtraPayload?: Record<string, unknown>;
   /** Preset de comparación a nivel dashboard (herencia por widget). */
   dashboardCompareDefaults?: DashboardCompareDefaults;
+  /** Mes de inicio del año fiscal del dashboard (1–12). */
+  fiscalYearStartMonth?: number;
+  /** Cancela el fetch si el widget se vuelve a cargar o se desmonta. */
+  fetchSignal?: AbortSignal;
 };
 
 export type LoadedPreviewWidgetData = {
@@ -163,13 +181,30 @@ function extractRowsFromApiResult(result: unknown): Record<string, unknown>[] {
   return [];
 }
 
-async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs = PREVIEW_FETCH_TIMEOUT_MS): Promise<Response> {
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  options?: { timeoutMs?: number; signal?: AbortSignal }
+): Promise<Response> {
+  const timeoutMs = options?.timeoutMs ?? PREVIEW_FETCH_TIMEOUT_MS;
+  const externalSignal = options?.signal;
+  if (externalSignal?.aborted) throw new SupersededFetchError();
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromExternal = () => controller.abort("superseded");
+  externalSignal?.addEventListener("abort", abortFromExternal);
+  const timeoutId = setTimeout(() => controller.abort("timeout"), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (externalSignal?.aborted) throw new SupersededFetchError();
+    if (isAbortError(err)) {
+      throw new Error("La carga del gráfico tardó demasiado. Reintentá en unos segundos.");
+    }
+    throw err;
   } finally {
     clearTimeout(timeoutId);
+    externalSignal?.removeEventListener("abort", abortFromExternal);
   }
 }
 
@@ -183,6 +218,7 @@ function mapField(
 }
 
 export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams): Promise<LoadedPreviewWidgetData> {
+  const endpoints = getDataEndpoints();
   const {
     widget,
     tableName,
@@ -191,8 +227,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     datasetDimensions,
     savedMetrics,
     globalFilters = [],
-    aggregateEndpoint = "/api/dashboard/aggregate-data",
-    rawEndpoint = "/api/dashboard/raw-data",
+    aggregateEndpoint = endpoints.aggregateData,
+    rawEndpoint = endpoints.rawData,
     rawLimit = 500,
     accentColor = "#0ea5e9",
     metricsOverride,
@@ -200,11 +236,15 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     aggregateExtraPayload,
     rawExtraPayload,
     dashboardCompareDefaults,
+    fiscalYearStartMonth,
+    fetchSignal,
   } = params;
 
   const agg = widget.aggregationConfig;
   /** Paridad con `DashboardWidgetRenderer`: evita `chartType: ""` → forzar "bar" y vaciar filas en vista previa. */
   const type = effectiveWidgetChartType(widget);
+  const fetchTimeoutMs = resolvePreviewFetchTimeoutMs(type);
+  const fetchOptions = { timeoutMs: fetchTimeoutMs, signal: fetchSignal };
   const hasAgg = !!(agg?.enabled && ((metricsOverride?.length ?? 0) > 0 || (agg.metrics?.length ?? 0) > 0));
 
   let rows: Record<string, unknown>[] = [];
@@ -257,6 +297,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     const basePayloadParams = {
       tableName,
       etlId,
+      datasetId: typeof (agg as { datasetId?: string }).datasetId === "string" ? (agg as { datasetId: string }).datasetId : undefined,
       chartType: type,
       agg: aggForPayload,
       sourceId,
@@ -265,8 +306,8 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       savedMetrics,
       metricsOverride,
       derivedColumns,
-      forceUnlimited: true,
       skipTemporalFilterExpand: useDualQuery && compareContexts.comparable,
+      fiscalYearStartMonth,
     };
 
     const fetchAggregate = async (filtersOverride: typeof userFiltersBeforeExpand) => {
@@ -281,7 +322,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-      });
+      }, fetchOptions);
       const result = await safeJsonResponse<{ rows?: Record<string, unknown>[] }>(response);
       if (!response.ok) throw new Error(result.error ?? "Error agregando datos");
       return extractRowsFromApiResult(result);
@@ -336,7 +377,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    });
+    }, fetchOptions);
     const result = await safeJsonResponse<{ rows?: Record<string, unknown>[] }>(response);
     if (!response.ok) throw new Error(result.error ?? "Error cargando datos");
     rows = extractRowsFromApiResult(result);

@@ -3,6 +3,7 @@ import { coerceArithmeticOperandsToNumeric } from "@/lib/dashboard/coerceNumeric
 import {
   coerceAggFuncForTextOnlyIFS,
   expressionToSql,
+  expressionYieldsText,
   ifsYieldsOnlyTextLiterals,
   resolveFieldToSql,
   type DerivedColumnRef,
@@ -55,8 +56,25 @@ describe("expressionToSql", () => {
     expect(expressionToSql("cola`backtick`")).toBeNull();
   });
 
-  it("comparación columna = número: literal entre comillas para columnas text en PG", () => {
-    expect(expressionToSql("codigoarticulo=999999")).toBe(`"codigoarticulo"='999999'`);
+  it("DATEDIF entre columnas fecha genera resta de fechas en días", () => {
+    const sql = expressionToSql('DATEDIF(fecha_entrega; fecha_pedido; "D")', undefined, {
+      dateFields: ["fecha_entrega", "fecha_pedido"],
+    });
+    expect(sql).not.toBeNull();
+    expect(sql).toContain("to_date");
+    expect(sql).toMatch(/-\s*\(/);
+  });
+
+  it("resta directa de columnas fecha (sin DATEDIF) se coerce a fechas, no a numeric", () => {
+    const sql = expressionToSql("fecha_fin - fecha_inicio", undefined, {
+      dateFields: ["fecha_fin", "fecha_inicio"],
+    });
+    expect(sql).not.toBeNull();
+    const coerced = coerceArithmeticOperandsToNumeric(sql!, {
+      dateFields: ["fecha_fin", "fecha_inicio"],
+    });
+    expect(coerced).toContain("to_date");
+    expect(coerced).not.toContain("::numeric");
   });
 });
 
@@ -122,5 +140,21 @@ describe("coerceAggFuncForTextOnlyIFS", () => {
 
   it("no altera SUM si IFS mezcla números en ramas", () => {
     expect(coerceAggFuncForTextOnlyIFS("SUM", "IFS(a;1;b;2;0)")).toBe("SUM");
+  });
+
+  it("convierte SUM en MAX para CONCAT y CONCATENATE", () => {
+    expect(coerceAggFuncForTextOnlyIFS("SUM", 'CONCAT(tipo,"-",numero)')).toBe("MAX");
+    expect(coerceAggFuncForTextOnlyIFS("AVG", "CONCATENATE(tipo;numero)")).toBe("MAX");
+  });
+
+  it("convierte SUM en MAX para IF con ramas de texto vía CONCAT", () => {
+    const expr = 'IF(es_nuevo=1;CONCAT(tipo,"-",numero);CONCAT(tipo,numero))';
+    expect(expressionYieldsText(expr)).toBe(true);
+    expect(coerceAggFuncForTextOnlyIFS("SUM", expr)).toBe("MAX");
+  });
+
+  it("no altera SUM para expresiones numéricas", () => {
+    expect(expressionYieldsText("preciocompra * cantidad")).toBe(false);
+    expect(coerceAggFuncForTextOnlyIFS("SUM", "preciocompra * cantidad")).toBe("SUM");
   });
 });

@@ -4,9 +4,9 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 
 function requireAdmin(supabase: Awaited<ReturnType<typeof createClient>>) {
-  return supabase.auth.getUser().then(({ data: { user }, error }) => {
+  return supabase.auth.getUser().then(({ data: { user }, error }: any) => {
     if (error || !user) return { ok: false as const, status: 401, error: "No autorizado" };
-    return supabase.from("profiles").select("app_role").eq("id", user.id).single().then(({ data: profile }) => {
+    return supabase.from("profiles").select("app_role").eq("id", user.id).single().then(({ data: profile }: any) => {
       if ((profile as { app_role?: string })?.app_role !== "APP_ADMIN")
         return { ok: false as const, status: 403, error: "Requiere rol de administrador" };
       return { ok: true as const };
@@ -59,7 +59,7 @@ export async function GET(
     const datasetConfig = layout?.dataset_config && typeof layout.dataset_config === "object" ? layout.dataset_config : undefined;
     const rawDerived = datasetConfig?.derivedColumns ?? datasetConfig?.derived_columns;
     const derivedColumns = Array.isArray(rawDerived)
-      ? rawDerived.map((d) => ({
+      ? rawDerived.map((d: any) => ({
           name: d.name,
           expression: d.expression,
           defaultAggregation: (d as { defaultAggregation?: string }).defaultAggregation ?? (d as { default_aggregation?: string }).default_aggregation ?? "SUM",
@@ -119,6 +119,8 @@ export async function PUT(
         ? (body.datasetConfig as Record<string, unknown>)
         : undefined;
     const datasetName = typeof body.datasetName === "string" ? body.datasetName.trim() || null : undefined;
+    const datasetId = typeof body.datasetId === "string" ? body.datasetId.trim() || null : null;
+    const createDataset = body.createDataset === true;
     const linkedDashboardId = typeof body.dashboardId === "string" ? body.dashboardId : undefined;
     const dashboardFilters = body.dashboardFilters !== undefined && Array.isArray(body.dashboardFilters) ? body.dashboardFilters : undefined;
     const savedAnalyses = body.savedAnalyses !== undefined && Array.isArray(body.savedAnalyses) ? body.savedAnalyses : undefined;
@@ -160,30 +162,90 @@ export async function PUT(
     }
 
     let datasetListUpdated = true;
+    let savedDatasetId: string | undefined;
     if (datasetConfig !== undefined) {
+      const configJson = JSON.parse(JSON.stringify(datasetConfig)) as Json;
+      const now = new Date().toISOString();
       try {
-        const { error: datasetError } = await adminClient
-          .from("dataset")
-          .upsert(
-            {
-              etl_id: etlId,
-              config: JSON.parse(JSON.stringify(datasetConfig)) as Json,
-              updated_at: new Date().toISOString(),
+        if (datasetId) {
+          const { data: existing, error: fetchDsErr } = await adminClient
+            .from("dataset")
+            .select("id, etl_id")
+            .eq("id", datasetId)
+            .maybeSingle();
+          if (fetchDsErr || !existing || (existing as { etl_id: string }).etl_id !== etlId) {
+            return NextResponse.json(
+              { ok: false, error: "Dataset no encontrado para este ETL" },
+              { status: 404 }
+            );
+          }
+          const { error: datasetError } = await adminClient
+            .from("dataset")
+            .update({
+              config: configJson,
+              updated_at: now,
               ...(datasetName !== undefined && { name: datasetName }),
-            },
-            { onConflict: "etl_id" }
-          );
-        if (datasetError) {
-          console.error("[metrics] Error al guardar en tabla dataset:", datasetError.message);
-          datasetListUpdated = false;
+            })
+            .eq("id", datasetId);
+          if (datasetError) {
+            console.error("[metrics] Error al actualizar dataset:", datasetError.message);
+            datasetListUpdated = false;
+          } else {
+            savedDatasetId = datasetId;
+          }
+        } else {
+          // Sin datasetId: solo crear un dataset nuevo si se pidió explícitamente (wizard de /admin/datasets).
+          // Para llamadas legacy (guardar métrica/columna sin datasetId): actualizar el único dataset del ETL si existe;
+          // con varios datasets no se toca la tabla (evita duplicados fantasma y pisar el dataset equivocado).
+          const { data: existingRows } = await adminClient
+            .from("dataset")
+            .select("id")
+            .eq("etl_id", etlId)
+            .order("updated_at", { ascending: false })
+            .limit(2);
+          const existingList = Array.isArray(existingRows) ? existingRows : [];
+          if (createDataset || existingList.length === 0) {
+            const { data: inserted, error: datasetError } = await adminClient
+              .from("dataset")
+              .insert({
+                etl_id: etlId,
+                config: configJson,
+                updated_at: now,
+                name: datasetName ?? null,
+              })
+              .select("id")
+              .single();
+            if (datasetError) {
+              console.error("[metrics] Error al insertar dataset:", datasetError.message);
+              datasetListUpdated = false;
+            } else {
+              savedDatasetId = (inserted as { id: string }).id;
+            }
+          } else if (existingList.length === 1) {
+            const soleId = (existingList[0] as { id: string }).id;
+            const { error: datasetError } = await adminClient
+              .from("dataset")
+              .update({
+                config: configJson,
+                updated_at: now,
+                ...(datasetName !== undefined && { name: datasetName }),
+              })
+              .eq("id", soleId);
+            if (datasetError) {
+              console.error("[metrics] Error al actualizar dataset único:", datasetError.message);
+              datasetListUpdated = false;
+            } else {
+              savedDatasetId = soleId;
+            }
+          }
         }
       } catch (datasetErr) {
-        console.error("[metrics] Error al upsert dataset:", datasetErr);
+        console.error("[metrics] Error al guardar dataset:", datasetErr);
         datasetListUpdated = false;
       }
     }
 
-    return NextResponse.json({ ok: true, datasetListUpdated });
+    return NextResponse.json({ ok: true, datasetListUpdated, ...(savedDatasetId && { datasetId: savedDatasetId }) });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Error al guardar métricas";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
@@ -547,7 +609,7 @@ async function propagateMetricsDeletionToDashboards(
         }
 
         if (Array.isArray(widget.metricIds) && widget.metricIds.length > 0) {
-          const filtered = widget.metricIds.filter((id) => !deletedIdSet.has(String(id).trim()));
+          const filtered = widget.metricIds.filter((id: any) => !deletedIdSet.has(String(id).trim()));
           if (filtered.length !== widget.metricIds.length) {
             widgetsChanged = true;
             nextWidget = { ...nextWidget, metricIds: filtered };
@@ -682,19 +744,19 @@ export async function DELETE(
       return NextResponse.json({ ok: false, error: "Ninguna métrica encontrada para eliminar" }, { status: 404 });
     }
 
-    const deletedIdSet = new Set(deletedPayloads.map((m) => String(m.id ?? "").trim()).filter(Boolean));
-    const nextSavedMetrics = savedMetricsList.filter((m) => {
+    const deletedIdSet = new Set(deletedPayloads.map((m: any) => String(m.id ?? "").trim()).filter(Boolean));
+    const nextSavedMetrics = savedMetricsList.filter((m: any) => {
       const id = typeof (m as { id?: string }).id === "string" ? String((m as { id?: string }).id).trim() : "";
       return !id || !deletedIdSet.has(id);
     });
 
     const nextSavedAnalyses = savedAnalysesList
-      .map((a) => {
-        const metricIdsArr = Array.isArray(a.metricIds) ? a.metricIds.map((x) => String(x).trim()) : [];
-        const filtered = metricIdsArr.filter((mid) => !deletedIdSet.has(mid));
+      .map((a: any) => {
+        const metricIdsArr = Array.isArray(a.metricIds) ? a.metricIds.map((x: any) => String(x).trim()) : [];
+        const filtered = metricIdsArr.filter((mid: any) => !deletedIdSet.has(mid));
         return { ...a, metricIds: filtered };
       })
-      .filter((a) => (Array.isArray(a.metricIds) ? a.metricIds.length > 0 : false));
+      .filter((a: any) => (Array.isArray(a.metricIds) ? a.metricIds.length > 0 : false));
 
     const updatedLayout = {
       ...currentLayout,

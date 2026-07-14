@@ -254,12 +254,6 @@ export function MetricBlock({
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span
-            className="metric-state-badge flex-shrink-0"
-            data-state={state}
-          >
-            {STATE_LABELS[state]}
-          </span>
           {!readOnly && onConfigure ? (
             <Button
               type="button"

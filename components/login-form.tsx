@@ -1,17 +1,15 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
+import { backendClient } from "@/lib/api/backend-client";
 import { Button } from "@/components/ui/button";
-// Removed unused Card imports to keep file clean
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Eye, EyeOff, ChevronRight, Plus } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { PasswordInput } from "./ui/PasswordInput";
-import { SocialButton } from "./ui/SocialButton";
 
 export function LoginForm({
   className,
@@ -21,29 +19,23 @@ export function LoginForm({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const supabase = createClient();
     setIsLoading(true);
     setError(null);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (error) {
-        if (error.message.includes("Invalid login credentials")) {
-          throw new Error("Credenciales de inicio de sesión inválidas.");
-        }
-        throw error;
-      }
-
-      router.push("/dashboard");
+      const { user } = await backendClient.auth.login(email, password);
+      const home =
+        user.app_role === "APP_ADMIN"
+          ? "/admin"
+          : user.app_role === "VIEWER"
+            ? "/viewer"
+            : "/dashboard";
+      router.push(home);
+      router.refresh();
     } catch (error: unknown) {
       const message =
         error instanceof Error
@@ -56,7 +48,7 @@ export function LoginForm({
           message.toLowerCase().includes("err_failed"));
       setError(
         isNetworkError
-          ? "No se pudo conectar con el servidor. Comprueba tu conexión y que el proyecto Supabase esté activo (no pausado)."
+          ? "No se pudo conectar con el servidor. Comprueba que el backend esté corriendo (puerto 4000)."
           : message
       );
     } finally {
@@ -64,48 +56,14 @@ export function LoginForm({
     }
   };
 
-  const handleGoogleLogin = async () => {
-    const supabase = createClient();
-    setIsLoading(true);
-    setError(null);
-    try {
-      const origin =
-        typeof window !== "undefined" ? window.location.origin : "";
-      const redirectTo = `${origin}/auth/callback?next=/dashboard`;
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo,
-          queryParams: {
-            // Recommended to force consent the first time to ensure refresh token
-            // access_type is respected by Google only on first consent
-            access_type: "offline",
-            prompt: "consent",
-          },
-        },
-      });
-      if (error) throw error;
-      // The browser will be redirected by Supabase, so we don't push manually here.
-    } catch (error: unknown) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Ocurrió un error al iniciar con Google."
-      );
-      setIsLoading(false);
-    }
-  };
-
   const buttonClasses = cn(
     "w-full h-10 rounded-full font-semibold flex items-center justify-center",
-    // Altura y separación fluidas para adaptarse a distintos altos/zoom
     "py-[clamp(0.9rem,2.6vh,1.5rem)] gap-2 md:gap-3",
     "bg-[#1B7062] hover:bg-[#155A4E] text-white"
   );
 
   return (
     <div className="flex max-w-7xl w-full items-stretch p-5 gap-6 lg:gap-12 xl:gap-16 2xl:gap-20 relative">
-      {/* Columna izquierda optimizada: solo una div para el contenido */}
       <div className="hidden lg:flex w-1/2 flex-col items-center justify-end py-2">
         <div className="max-w-md xl:max-w-lg 2xl:max-w-xl text-center text-white/90 justify-center">
           <div className="mb-4 flex justify-center">
@@ -136,11 +94,9 @@ export function LoginForm({
         </div>
       </div>
 
-      {/* Columna derecha: tarjeta con formulario */}
       <div className="flex w-full lg:w-1/2 justify-center py-2">
         <div className="w-full max-w-screen shadow-none border-0 rounded-3xl bg-white px-6 md:px-10 lg:px-[60px] xl:px-[60px] 2xl:px-[60px] py-[clamp(0.75rem,3.5vh,3rem)]">
           <div className="flex h-full flex-col">
-            {/* Header: Logo + títulos */}
             <div className="text-center">
               <div className="mb-[clamp(1rem,5vh,10rem)]">
                 <img
@@ -162,7 +118,6 @@ export function LoginForm({
               </div>
             </div>
 
-            {/* Main: Formulario */}
             <div className="mb-[clamp(1rem,5vh,10rem)]">
               <form
                 onSubmit={handleLogin}
@@ -227,14 +182,6 @@ export function LoginForm({
                   )}
                 </Button>
 
-                <SocialButton
-                  type="button"
-                  onClick={handleGoogleLogin}
-                  className="w-full"
-                >
-                  Iniciar sesión con Google
-                </SocialButton>
-
                 <div className="text-center text-sm text-black dark:text-black">
                   ¿No tienes cuenta?{" "}
                   <Link
@@ -247,7 +194,6 @@ export function LoginForm({
               </form>
             </div>
 
-            {/* Footer dentro de la tarjeta */}
             <div className="flex items-center justify-center sm:justify-end text-xs text-black gap-3 sm:gap-6 xl:gap-8">
               <a href="#" className="hover:underline">
                 ©2025

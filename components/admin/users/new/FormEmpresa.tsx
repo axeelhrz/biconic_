@@ -182,19 +182,18 @@ export function FormEmpresa({
       </div>
       <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
         <Field
-          label="Plan Comercial"
+          label="Plan Comercial (opcional)"
           error={(errors as FieldErrors<FieldValues>).planId?.message as string}
         >
           <Controller
             name="planId"
-            rules={{ required: "El plan es requerido" }}
             control={control}
             render={({ field: { value, onChange, name } }) => (
               <Select
                 name={name}
                 value={value as any}
                 onChange={onChange}
-                placeholder="Seleccione un plan"
+                placeholder="Sin plan asignado"
                 options={planOptions}
                 disabled={loadingPlans}
                 className="w-full rounded-xl"

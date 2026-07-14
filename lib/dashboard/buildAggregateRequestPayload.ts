@@ -11,6 +11,8 @@ import {
 } from "@/lib/dashboard/aggregateCompareRequest";
 import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import type { DateGranularity } from "@/lib/dashboard/dateFormatting";
+import { resolvePreviewAggregateFetchPlan } from "@/lib/dashboard/previewFetchLimits";
+import { normalizeFiscalYearStartMonth } from "@/lib/dashboard/fiscalYear";
 
 export type AggregateRequestMetric = {
   id?: string;
@@ -38,6 +40,9 @@ export type AggregateRequestAgg = {
   dateRangeFilter?: { field: string; last?: number; unit?: "days" | "months"; from?: string; to?: string };
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
+  chartRankingMetric?: string;
+  chartRankingDirection?: "asc" | "desc";
+  chartRankingPinnedXValues?: string[];
   chartType?: string;
   analysisDateDisplayFormat?: string;
   dateSlashOrder?: "DMY" | "MDY";
@@ -100,6 +105,7 @@ function buildSavedMetricsPayload(
 export type BuildAggregateRequestPayloadParams = {
   tableName: string;
   etlId?: string | null;
+  datasetId?: string | null;
   chartType: string;
   agg: AggregateRequestAgg;
   sourceId?: string | null;
@@ -112,12 +118,14 @@ export type BuildAggregateRequestPayloadParams = {
   }>;
   metricsOverride?: AggregateRequestMetric[];
   derivedColumns?: Array<{ name: string; expression: string; defaultAggregation?: string }>;
-  /** Paridad ETL fetchPreview: siempre true en vista previa de análisis. */
+  /** Solo ETL preview / diagnóstico: sin tope de filas agregadas. */
   forceUnlimited?: boolean;
   /** Filtros ya fusionados (evita re-merge global+widget). */
   filtersOverride?: Array<{ field?: string; operator?: string; value?: unknown }>;
   /** Dual query dashboard: no expandir filtros para traer buckets de referencia. */
   skipTemporalFilterExpand?: boolean;
+  /** Mes de inicio del año fiscal del dashboard (1–12). */
+  fiscalYearStartMonth?: number;
 };
 
 /**
@@ -127,6 +135,7 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
   const {
     tableName,
     etlId,
+    datasetId,
     chartType,
     agg,
     sourceId,
@@ -135,9 +144,10 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
     savedMetrics,
     metricsOverride,
     derivedColumns,
-    forceUnlimited = true,
+    forceUnlimited = false,
     filtersOverride,
     skipTemporalFilterExpand = false,
+    fiscalYearStartMonth,
   } = params;
 
   const effectiveDims = resolveAnalysisDimensionsFromConfig(agg as Record<string, unknown>);
@@ -233,15 +243,28 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
         }
       : dateRangeRaw;
 
-  const rankingActive = !!agg.chartRankingEnabled && (agg.chartRankingTop ?? 0) > 0;
-  const hasGrouping = dimensionsMapped.length > 0 || !!dimension;
-  const useUnlimited = forceUnlimited || rankingActive || dg.hasDateGroupByEffective || hasGrouping;
+  const fetchPlan = resolvePreviewAggregateFetchPlan({
+    chartType,
+    agg,
+    hasDateGroupBy: dg.hasDateGroupByEffective,
+    metrics: metricsPayload,
+    forceUnlimited,
+  });
 
   const savedMetricsBody = buildSavedMetricsPayload(savedMetrics, metricsPayload);
+
+  const resolvedOrderBy =
+    fetchPlan.orderBy ??
+    (agg.orderBy?.field
+      ? agg.orderBy
+      : dg.defaultTemporalOrderBy
+        ? dg.defaultTemporalOrderBy
+        : undefined);
 
   return {
     tableName,
     etlId: etlId ?? undefined,
+    ...(datasetId ? { datasetId } : {}),
     chartType,
     ...(mappedChartX ? { chartXAxis: mappedChartX } : {}),
     dimension,
@@ -249,18 +272,14 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
     dimension2,
     metrics: metricsPayload,
     filters: mergedFilters.length > 0 ? mergedFilters : undefined,
-    ...(useUnlimited
+    ...(fetchPlan.unlimited
       ? {
           unlimited: true as const,
-          ...(agg.orderBy?.field
-            ? { orderBy: agg.orderBy }
-            : dg.defaultTemporalOrderBy
-              ? { orderBy: dg.defaultTemporalOrderBy }
-              : {}),
+          ...(resolvedOrderBy ? { orderBy: resolvedOrderBy } : {}),
         }
       : {
-          orderBy: agg.orderBy,
-          limit: agg.limit ?? 100,
+          limit: fetchPlan.limit ?? agg.limit ?? 500,
+          ...(resolvedOrderBy ? { orderBy: resolvedOrderBy } : {}),
         }),
     cumulative: agg.cumulative ?? "none",
     comparePeriod: agg.comparePeriod,
@@ -292,5 +311,6 @@ export function buildAggregateRequestPayload(params: BuildAggregateRequestPayloa
       ? { geoOverridesByXLabel: compactGeoOverridesByXLabelForRequest(agg.geoOverridesByXLabel) }
       : {}),
     dateSlashOrder: agg.dateSlashOrder === "MDY" ? "MDY" : "DMY",
+    fiscalYearStartMonth: normalizeFiscalYearStartMonth(fiscalYearStartMonth),
   };
 }

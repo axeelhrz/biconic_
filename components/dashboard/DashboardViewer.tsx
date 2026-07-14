@@ -18,6 +18,7 @@ import { DashboardLogoOverlay } from "./DashboardLogoOverlay";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
+import { DEFAULT_FISCAL_YEAR_START_MONTH, normalizeFiscalYearStartMonth } from "@/lib/dashboard/fiscalYear";
 import type { GeoComponentOverrides } from "@/lib/geo/geo-enrichment";
 import {
   expandAnalysisMetricsForFetch,
@@ -39,9 +40,11 @@ import {
   loadPreviewWidgetData,
   type LoadPreviewWidgetDataParams,
 } from "@/lib/dashboard/previewWidgetDataLoader";
+import { runWithConcurrency } from "@/lib/async/runWithConcurrency";
+import { isSupersededFetchError } from "@/lib/fetch/abortError";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import type { ChartDetailCardConfig } from "@/lib/dashboard/chartDetailCard";
-import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ChevronDown, FileDown, Loader2, Search } from "lucide-react";
 import {
   buildFilterSummaryFromGlobals,
   collectExportWidgetTargets,
@@ -63,9 +66,17 @@ import {
   DATE_OPERATORS_WITH_MULTI_VALUE_SQL,
   expandMonthFilterValueWithYear,
 } from "@/lib/dashboard/expandMonthFilterWithYear";
+import {
+  collectDashboardFilterIds,
+  loadPersistedDashboardViewerFilters,
+  mergeDimensionDefaultsFromPersistence,
+  mergeFilterValuesFromPersistence,
+  savePersistedDashboardViewerFilters,
+} from "@/lib/dashboard/persistDashboardViewerFilters";
 import { resolveAggregationFilterPhysicalField } from "@/lib/dashboard/resolveSemanticDateFilterField";
 import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
-import { fetchGlobalFilterDistinctValues } from "@/lib/dashboard/fetchGlobalFilterDistinctValues";
+import { fetchGlobalFilterDistinctValues, normalizeDistinctYearOptions } from "@/lib/dashboard/fetchGlobalFilterDistinctValues";
+import type { DerivedColumnRef } from "@/lib/dashboard/metricExpressionToSql";
 import { GLOBAL_MONTH_FILTER_VALUES } from "@/lib/dashboard/globalMonthFilterValues";
 import {
   mapDimensionDefaultFiltersToAggregationFilters,
@@ -323,6 +334,292 @@ function filterRecordsEqualShallowJson(a: Record<string, unknown>, b: Record<str
   return true;
 }
 
+function normalizeFilterSearchQuery(q: string): string {
+  return q
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function filterOptionMatchesSearch(label: string, query: string): boolean {
+  const q = normalizeFilterSearchQuery(query);
+  if (!q) return true;
+  return normalizeFilterSearchQuery(label).includes(q);
+}
+
+function optionDisplayLabel(
+  operator: unknown,
+  value: unknown,
+  opts?: { yearMonth?: boolean; day?: boolean }
+): string {
+  if (opts?.yearMonth || isYearMonthOperator(operator)) return yearMonthFilterOptionLabel(value);
+  if (opts?.day || isDayOperator(operator)) return `Día ${value}`;
+  return monthFilterOptionLabel(operator, value);
+}
+
+const filterPopoverPanelStyle: React.CSSProperties = {
+  background: "var(--platform-surface, var(--platform-bg, #fff))",
+  borderColor: "var(--platform-border)",
+  color: "var(--platform-fg)",
+};
+
+const filterTriggerStyle: React.CSSProperties = {
+  borderColor: "var(--platform-border)",
+  color: "var(--platform-fg)",
+  background: "var(--platform-surface, var(--platform-bg))",
+};
+
+function GlobalFilterSearchInput({
+  value,
+  onChange,
+  placeholder = "Buscar…",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div className="relative mb-2">
+      <Search
+        className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 opacity-50"
+        style={{ color: "var(--platform-fg-muted)" }}
+        aria-hidden
+      />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        className="h-8 w-full rounded-md border pl-7 pr-2 text-xs outline-none"
+        style={{
+          borderColor: "var(--platform-border)",
+          background: "var(--platform-bg, var(--platform-surface))",
+          color: "var(--platform-fg)",
+        }}
+        onKeyDown={(e) => e.stopPropagation()}
+      />
+    </div>
+  );
+}
+
+function GlobalFilterMultiSelect({
+  label,
+  operator,
+  options,
+  selectedArray,
+  onChangeSelected,
+}: {
+  label: string;
+  operator: unknown;
+  options: unknown[];
+  selectedArray: string[];
+  onChangeSelected: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(() => {
+    return options.filter((v) =>
+      filterOptionMatchesSearch(optionDisplayLabel(operator, v), search)
+    );
+  }, [options, operator, search]);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setSearch("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 min-w-[10rem] max-w-[14rem] justify-between gap-1 text-xs font-normal rounded-md px-2"
+          style={filterTriggerStyle}
+          aria-haspopup="dialog"
+          aria-label={`${label}: elegir valores`}
+        >
+          <span className="truncate text-left">
+            {globalMultiFilterTriggerLabel(operator, selectedArray, options)}
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-3 border shadow-lg" style={filterPopoverPanelStyle}>
+        <GlobalFilterSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder={`Buscar en ${label}…`}
+        />
+        <div className="flex flex-wrap gap-2 mb-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs rounded-md"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            onClick={() => onChangeSelected(filtered.map(String))}
+          >
+            Seleccionar todo
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs rounded-md"
+            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+            onClick={() => onChangeSelected([])}
+          >
+            Deseleccionar todo
+          </Button>
+        </div>
+        <div className="max-h-60 overflow-y-auto flex flex-col gap-1.5 pr-1">
+          {filtered.length === 0 ? (
+            <p className="px-1 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+              Sin coincidencias
+            </p>
+          ) : (
+            filtered.map((v) => {
+              const s = String(v);
+              const checked = selectedArray.includes(s);
+              return (
+                <label
+                  key={s}
+                  className="flex items-center gap-2 cursor-pointer text-xs py-0.5"
+                  style={{ color: "var(--platform-fg)" }}
+                >
+                  <input
+                    type="checkbox"
+                    className="rounded border shrink-0"
+                    style={{ borderColor: "var(--platform-border)" }}
+                    checked={checked}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                        ? selectedArray.includes(s)
+                          ? selectedArray
+                          : [...selectedArray, s]
+                        : selectedArray.filter((x) => x !== s);
+                      onChangeSelected(next);
+                    }}
+                  />
+                  <span>{optionDisplayLabel(operator, v)}</span>
+                </label>
+              );
+            })
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function GlobalFilterSingleSelect({
+  label,
+  operator,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  operator: unknown;
+  options: unknown[];
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const singleLabel = !value ? "Todos" : optionDisplayLabel(operator, value);
+  const filtered = useMemo(() => {
+    return options.filter((v) =>
+      filterOptionMatchesSearch(optionDisplayLabel(operator, v), search)
+    );
+  }, [options, operator, search]);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setSearch("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 min-w-[8rem] max-w-[14rem] justify-between gap-1 text-xs font-normal rounded-md px-2"
+          style={filterTriggerStyle}
+          aria-haspopup="listbox"
+          aria-label={`${label}: ${singleLabel}`}
+        >
+          <span className="truncate text-left">{singleLabel}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 p-2 border shadow-lg" style={filterPopoverPanelStyle}>
+        <GlobalFilterSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder={`Buscar en ${label}…`}
+        />
+        <div className="max-h-60 overflow-y-auto">
+          <button
+            type="button"
+            className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
+            style={{
+              color: "var(--platform-fg)",
+              background:
+                value === ""
+                  ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
+                  : "transparent",
+            }}
+            onClick={() => {
+              onChange("");
+              setOpen(false);
+            }}
+          >
+            Todos
+          </button>
+          {filtered.length === 0 ? (
+            <p className="px-2.5 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+              Sin coincidencias
+            </p>
+          ) : (
+            filtered.map((v) => {
+              const s = String(v);
+              const selected = value === s;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
+                  style={{
+                    color: "var(--platform-fg)",
+                    background: selected
+                      ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
+                      : "transparent",
+                  }}
+                  onClick={() => {
+                    onChange(s);
+                    setOpen(false);
+                  }}
+                >
+                  {optionDisplayLabel(operator, v)}
+                </button>
+              );
+            })
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // Types compatible with persisted layout and API
 type AggregationFilter = {
   id: string;
@@ -445,6 +742,77 @@ export type Widget = DashboardWidgetRendererWidget & {
   zIndex?: number;
 };
 
+function readLayoutFilterDefaults(gfs: AggregationFilter[]): Record<string, unknown> {
+  const initialFv: Record<string, unknown> = {};
+  for (const gf of gfs) {
+    const raw = (gf as AggregationFilter & { value?: unknown }).value;
+    if (raw === "" || raw === null || raw === undefined) continue;
+    if (Array.isArray(raw) && raw.length === 0) continue;
+    let v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
+    v = normalizeYearFilterStoredValue(
+      (gf as AggregationFilter).operator,
+      (gf as AggregationFilter).inputType,
+      v
+    );
+    v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
+    initialFv[gf.id] = v;
+  }
+  return initialFv;
+}
+
+function applyPersistedViewerFilterState(params: {
+  gfs: AggregationFilter[];
+  widgets: Widget[];
+  filterCommitMode: "onChange" | "onButton";
+  dashboardId: string;
+  persistFilters: boolean;
+}): {
+  filterValues: Record<string, unknown>;
+  filterDraft: Record<string, unknown>;
+  filterApplied: Record<string, unknown>;
+  dimensionDefaultFilterValues: Record<string, Record<string, unknown>>;
+  activePageId?: string;
+} {
+  const layoutDefaults = readLayoutFilterDefaults(params.gfs);
+  const persisted = params.persistFilters
+    ? loadPersistedDashboardViewerFilters(params.dashboardId)
+    : null;
+  const validIds = collectDashboardFilterIds(params.gfs, params.widgets);
+  const mergedApplied = mergeFilterValuesFromPersistence(
+    layoutDefaults,
+    persisted?.filters,
+    validIds
+  );
+  const mergedDraft = mergeFilterValuesFromPersistence(
+    layoutDefaults,
+    persisted?.filterDraft ?? persisted?.filters,
+    validIds
+  );
+  const seededDim = seedDimensionDefaultFilterValuesFromWidgets(params.widgets);
+  const dimensionDefaultFilterValues = mergeDimensionDefaultsFromPersistence(
+    seededDim,
+    persisted?.dimensionDefaultFilterValues,
+    params.widgets
+  );
+
+  if (params.filterCommitMode === "onButton") {
+    return {
+      filterValues: {},
+      filterDraft: mergedDraft,
+      filterApplied: mergedApplied,
+      dimensionDefaultFilterValues,
+      activePageId: persisted?.activePageId,
+    };
+  }
+  return {
+    filterValues: mergedApplied,
+    filterDraft: mergedDraft,
+    filterApplied: mergedApplied,
+    dimensionDefaultFilterValues,
+    activePageId: persisted?.activePageId,
+  };
+}
+
 function seedDimensionDefaultFilterValuesFromWidgets(
   widgetList: Widget[]
 ): Record<string, Record<string, unknown>> {
@@ -483,6 +851,44 @@ function widgetMatchesActivePage(
   return false;
 }
 
+/** Carga inicial / remount: acota para no saturar el backend. */
+const WIDGET_LOAD_CONCURRENCY = 3;
+
+function collectLoadableWidgetIds(
+  widgets: Widget[],
+  pageLayout?: { firstPageId: string; activePageId: string } | null
+): string[] {
+  return widgets
+    .filter((w) => w.type !== "filter" && w.type !== "text" && w.type !== "image")
+    .filter((w) => !pageLayout || widgetMatchesActivePage(w, pageLayout))
+    .map((w) => w.id);
+}
+
+async function loadWidgetsWithConcurrency(
+  widgetIds: string[],
+  loadOne: (widgetId: string) => Promise<void>
+): Promise<void> {
+  if (widgetIds.length === 0) return;
+  await runWithConcurrency(widgetIds, WIDGET_LOAD_CONCURRENCY, (id) => loadOne(id));
+}
+
+/**
+ * Al aplicar filtros: marca todas las tarjetas en loading a la vez y dispara
+ * los fetches en paralelo (no de a N), para que el refresh se vea simultáneo.
+ */
+async function loadWidgetsInParallel(
+  widgetIds: string[],
+  setWidgets: React.Dispatch<React.SetStateAction<Widget[]>>,
+  loadOne: (widgetId: string) => Promise<void>
+): Promise<void> {
+  if (widgetIds.length === 0) return;
+  const idSet = new Set(widgetIds);
+  setWidgets((prev) =>
+    prev.map((w) => (idSet.has(w.id) ? { ...w, isLoading: true } : w))
+  );
+  await Promise.all(widgetIds.map((id) => loadOne(id)));
+}
+
 export interface DashboardViewerProps {
   dashboardId: string;
   apiEndpoints?: {
@@ -504,6 +910,10 @@ export interface DashboardViewerProps {
    * `onChange`: recarga al cambiar cada control (comportamiento anterior).
    */
   filterCommitMode?: "onChange" | "onButton";
+  /** Guarda en localStorage la última selección de filtros (por dashboard). */
+  persistFilters?: boolean;
+  /** Fuerza el tema visual de vista cliente (p. ej. viewer con botón volver). */
+  clientTheme?: boolean;
 }
 
 export function DashboardViewer({
@@ -518,7 +928,11 @@ export function DashboardViewer({
   variant = "default",
   hideHeader = false,
   filterCommitMode = "onButton",
+  persistFilters: persistFiltersProp,
+  clientTheme: clientThemeProp,
 }: DashboardViewerProps) {
+  const persistFilters =
+    persistFiltersProp ?? (!isPublic && !(initialWidgets && initialWidgets.length > 0));
   const [title, setTitle] = useState("Dashboard");
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<AggregationFilter[]>([]);
@@ -532,6 +946,11 @@ export function DashboardViewer({
     Record<string, Record<string, unknown>>
   >({});
   const [dimensionDefaultDistinctValues, setDimensionDefaultDistinctValues] = useState<Record<string, unknown[]>>({});
+  /** Evita recargar todos los widgets dos veces al montar (una vez con config base, otra al llegar savedAnalyses/filtros). */
+  const [etlMetricsReady, setEtlMetricsReady] = useState(false);
+  const filtersReloadKeyRef = useRef<string | null>(null);
+  const savedAnalysesReloadKeyRef = useRef<string | null>(null);
+  const initialLoadedRef = useRef(false);
   const canvasExportRef = useRef<HTMLDivElement>(null);
   const exportRootRef = useRef<HTMLDivElement>(null);
   const [exportBusy, setExportBusy] = useState(false);
@@ -545,9 +964,11 @@ export function DashboardViewer({
   const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults>(
     () => ({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS })
   );
+  const [fiscalYearStartMonth, setFiscalYearStartMonth] = useState(DEFAULT_FISCAL_YEAR_START_MONTH);
   const stateRef = useRef({ widgets, setWidgets });
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
+  const widgetFetchAbortRef = useRef<Record<string, AbortController>>({});
   const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalysisForMerge[]>([]);
   const [savedMetricsFromEtl, setSavedMetricsFromEtl] = useState<SavedMetricForAnalysisMerge[]>([]);
   const [derivedColumnsFromEtl, setDerivedColumnsFromEtl] = useState<
@@ -609,37 +1030,40 @@ export function DashboardViewer({
   useEffect(() => {
     if (initialWidgets?.length) {
       setPageLayout(null);
-      setWidgets(initialWidgets.map((w) => normalizeLoadedDashboardWidget(w)));
+      setWidgets(
+        initialWidgets.map((w) => ({
+          ...normalizeLoadedDashboardWidget(w),
+          isLoading:
+            w.type !== "filter" && w.type !== "text" && w.type !== "image"
+              ? true
+              : false,
+        }))
+      );
       if (initialTitle) setTitle(initialTitle);
       if (initialGlobalFilters) {
         setGlobalFilters(initialGlobalFilters);
-        const initialFv: Record<string, unknown> = {};
-        for (const gf of initialGlobalFilters) {
-          const raw = (gf as AggregationFilter & { value?: unknown }).value;
-          if (raw === "" || raw === null || raw === undefined) continue;
-          if (Array.isArray(raw) && raw.length === 0) continue;
-          let v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
-          v = normalizeYearFilterStoredValue(
-            (gf as AggregationFilter).operator,
-            (gf as AggregationFilter).inputType,
-            v
-          );
-          v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
-          initialFv[gf.id] = v;
-        }
+        const applied = applyPersistedViewerFilterState({
+          gfs: initialGlobalFilters,
+          widgets: initialWidgets,
+          filterCommitMode,
+          dashboardId,
+          persistFilters,
+        });
         if (filterCommitMode === "onButton") {
-          setFilterDraft(initialFv);
-          setFilterApplied(initialFv);
+          setFilterDraft(applied.filterDraft);
+          setFilterApplied(applied.filterApplied);
         } else {
-          setFilterValues(initialFv);
+          setFilterValues(applied.filterValues);
         }
+        setDimensionDefaultFilterValues(applied.dimensionDefaultFilterValues);
       } else if (filterCommitMode === "onButton") {
         setFilterDraft({});
         setFilterApplied({});
+        setDimensionDefaultFilterValues({});
       } else {
         setFilterValues({});
+        setDimensionDefaultFilterValues({});
       }
-      setDimensionDefaultFilterValues(seedDimensionDefaultFilterValuesFromWidgets(initialWidgets));
       setDimensionDefaultDistinctValues({});
       return;
     }
@@ -663,6 +1087,7 @@ export function DashboardViewer({
       activePageId?: string;
       cardLayoutMode?: DashboardCardLayoutMode;
       dashboardCompareDefaults?: DashboardCompareDefaults;
+      fiscalYearStartMonth?: number;
     } | undefined;
     setCardLayoutMode(normalizeCardLayoutMode(layout?.cardLayoutMode));
     if (layout?.dashboardCompareDefaults) {
@@ -673,6 +1098,7 @@ export function DashboardViewer({
     } else {
       setDashboardCompareDefaults({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS });
     }
+    setFiscalYearStartMonth(normalizeFiscalYearStartMonth(layout?.fiscalYearStartMonth));
     const pages =
       Array.isArray(layout?.pages) && layout!.pages!.length > 0
         ? layout!.pages!
@@ -686,6 +1112,10 @@ export function DashboardViewer({
     let activePageId = String(layout?.activePageId ?? firstPageId);
     if (!pageIds.has(activePageId)) activePageId = firstPageId;
 
+    const gfs = Array.isArray(dashboard.global_filters_config)
+      ? (dashboard.global_filters_config as AggregationFilter[])
+      : [];
+
     const normalizeWidgetPageId = (raw: string | undefined): string => {
       const fallback = firstPageId;
       const r = raw ?? fallback;
@@ -694,47 +1124,55 @@ export function DashboardViewer({
       return fallback;
     };
 
-    setPageLayout({ firstPageId, activePageId, pagesMeta });
     const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
     const loadedWidgets = rawWidgets.map((w, i) => {
       const base = w as Widget;
-      return normalizeLoadedDashboardWidget({
+      const normalized = normalizeLoadedDashboardWidget({
         ...base,
         gridOrder: base.gridOrder ?? i,
         pageId: normalizeWidgetPageId(base.pageId),
       });
+      const needsData =
+        normalized.type !== "filter" &&
+        normalized.type !== "text" &&
+        normalized.type !== "image";
+      return { ...normalized, isLoading: needsData };
     });
+
+    const persistedState = applyPersistedViewerFilterState({
+      gfs,
+      widgets: loadedWidgets,
+      filterCommitMode,
+      dashboardId,
+      persistFilters,
+    });
+    if (persistedState.activePageId && pageIds.has(persistedState.activePageId)) {
+      activePageId = persistedState.activePageId;
+    }
+
+    setPageLayout({ firstPageId, activePageId, pagesMeta });
     const loadedTheme = layout?.theme && typeof layout.theme === "object" ? layout.theme : {};
     setWidgets(loadedWidgets);
-    setDimensionDefaultFilterValues(seedDimensionDefaultFilterValuesFromWidgets(loadedWidgets));
+    setDimensionDefaultFilterValues(persistedState.dimensionDefaultFilterValues);
     setDimensionDefaultDistinctValues({});
     setTitle((dashboard.title as string) || "Dashboard");
     setDashboardTheme((prev) => ({ ...DEFAULT_DASHBOARD_THEME, ...prev, ...loadedTheme }));
-    const gfs = Array.isArray(dashboard.global_filters_config)
-      ? (dashboard.global_filters_config as AggregationFilter[])
-      : [];
     setGlobalFilters(gfs);
-    const initialFv: Record<string, unknown> = {};
-    for (const gf of gfs) {
-      const raw = (gf as AggregationFilter & { value?: unknown }).value;
-      if (raw === "" || raw === null || raw === undefined) continue;
-      if (Array.isArray(raw) && raw.length === 0) continue;
-      let v = normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, raw);
-      v = normalizeYearFilterStoredValue(
-        (gf as AggregationFilter).operator,
-        (gf as AggregationFilter).inputType,
-        v
-      );
-      v = normalizeDayFilterStoredValueForUi((gf as AggregationFilter).operator, v);
-      initialFv[gf.id] = v;
-    }
     if (filterCommitMode === "onButton") {
-      setFilterDraft(initialFv);
-      setFilterApplied(initialFv);
+      setFilterDraft(persistedState.filterDraft);
+      setFilterApplied(persistedState.filterApplied);
     } else {
-      setFilterValues(initialFv);
+      setFilterValues(persistedState.filterValues);
     }
-  }, [layoutFingerprint, initialWidgets, initialTitle, initialGlobalFilters, filterCommitMode]);
+  }, [
+    layoutFingerprint,
+    initialWidgets,
+    initialTitle,
+    initialGlobalFilters,
+    filterCommitMode,
+    dashboardId,
+    persistFilters,
+  ]);
 
   // Distinct values para filtros globales (multi-fuente cuando hay dataset semántico)
   useEffect(() => {
@@ -788,7 +1226,10 @@ export function DashboardViewer({
     const etlIds = new Set<string>();
     if ((etlData as { etl?: { id?: string } }).etl?.id) etlIds.add((etlData as { etl: { id: string } }).etl.id);
     (etlData as { dataSources?: { etlId: string }[] }).dataSources?.forEach((s) => etlIds.add(s.etlId));
-    if (etlIds.size === 0) return;
+    if (etlIds.size === 0) {
+      setEtlMetricsReady(true);
+      return;
+    }
     etlMetricsFetchedRef.current = true;
     let cancelled = false;
     (async () => {
@@ -829,6 +1270,7 @@ export function DashboardViewer({
           return newOnes.length > 0 ? [...prev, ...newOnes] : prev.length > 0 ? prev : allDerived;
         });
       }
+      setEtlMetricsReady(true);
     })();
     return () => {
       cancelled = true;
@@ -840,6 +1282,9 @@ export function DashboardViewer({
     setSavedAnalyses([]);
     setSavedMetricsFromEtl([]);
     setDerivedColumnsFromEtl([]);
+    setEtlMetricsReady(false);
+    filtersReloadKeyRef.current = null;
+    savedAnalysesReloadKeyRef.current = null;
   }, [dashboardId]);
 
   const getTableNameForWidget = useCallback(
@@ -873,6 +1318,9 @@ export function DashboardViewer({
       genMap[widgetId] = (genMap[widgetId] ?? 0) + 1;
       const myGen = genMap[widgetId]!;
       const isStale = () => widgetLoadGenRef.current[widgetId] !== myGen;
+      widgetFetchAbortRef.current[widgetId]?.abort();
+      const loadAbort = new AbortController();
+      widgetFetchAbortRef.current[widgetId] = loadAbort;
 
       const etlId = (etlData as any)?.etl?.id;
       let fullTableName = getTableNameForWidget(widget);
@@ -1216,12 +1664,16 @@ export function DashboardViewer({
             datasetDimensions,
             savedMetrics: savedMetricsPool.length > 0 ? savedMetricsPool : layoutSavedMetrics,
             globalFilters: [...mappedGlobalFilters, ...dimensionDefaultFiltersMapped],
-            derivedColumns: derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined,
+            derivedColumns: (derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined) as
+          | DerivedColumnRef[]
+          | undefined,
             dashboardCompareDefaults,
+            fiscalYearStartMonth,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
             rawLimit: 500,
             accentColor: chartAccent,
+            fetchSignal: loadAbort.signal,
           });
 
           if (isStale()) return;
@@ -1288,13 +1740,17 @@ export function DashboardViewer({
             sourceId: widgetSourceId,
             datasetDimensions,
             globalFilters: mergedForRaw,
-            derivedColumns: derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined,
+            derivedColumns: (derivedColumnsFromEtl.length > 0 ? derivedColumnsFromEtl : undefined) as
+          | DerivedColumnRef[]
+          | undefined,
             dashboardCompareDefaults,
+            fiscalYearStartMonth,
             aggregateEndpoint: apiEndpoints?.aggregateData ?? "/api/dashboard/aggregate-data",
             rawEndpoint: apiEndpoints?.rawData ?? "/api/dashboard/raw-data",
             rawLimit: 500,
             accentColor: chartAccent,
             rawExtraPayload: rawPayload,
+            fetchSignal: loadAbort.signal,
           });
 
           if (isStale()) return;
@@ -1336,7 +1792,8 @@ export function DashboardViewer({
             );
           }
         }
-      } catch {
+      } catch (err) {
+        if (isStale() || isSupersededFetchError(err)) return;
         if (!isStale()) {
           setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
         }
@@ -1358,40 +1815,58 @@ export function DashboardViewer({
       savedMetricsFromEtl,
       derivedColumnsFromEtl,
       dashboardCompareDefaults,
+      fiscalYearStartMonth,
     ]
   );
 
   useEffect(() => {
-    if (!etlData || savedAnalyses.length === 0 || widgets.length === 0) return;
+    // Solo recarga por cambios de CONTENIDO de savedAnalyses/savedMetrics posteriores a la carga inicial.
+    // `loadDataForWidget` cambia de identidad con cada cambio de filtro (depende de filtersForDataLoad),
+    // así que sin esta comparación por contenido este efecto también dispararía una recarga extra al
+    // aplicar filtros, duplicando la del efecto de filtros de más abajo.
+    if (!initialLoadedRef.current || !etlData || savedAnalyses.length === 0 || widgets.length === 0) return;
+    const key = JSON.stringify({ a: savedAnalyses, m: savedMetricsFromEtl });
+    if (savedAnalysesReloadKeyRef.current === null || savedAnalysesReloadKeyRef.current === key) {
+      savedAnalysesReloadKeyRef.current = key;
+      return;
+    }
+    savedAnalysesReloadKeyRef.current = key;
     const timer = window.setTimeout(() => {
-      stateRef.current.widgets.forEach((w) => {
-        if (w.type === "filter" || w.type === "text" || w.type === "image") return;
-        if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
-        loadDataForWidget(w.id);
-      });
+      void loadWidgetsWithConcurrency(
+        collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
+        loadDataForWidget
+      );
     }, 150);
     return () => window.clearTimeout(timer);
   }, [savedAnalyses, savedMetricsFromEtl, etlData, pageLayout, loadDataForWidget, widgets.length]);
 
   const reloadAll = useCallback(() => {
-    stateRef.current.widgets.forEach((w) => {
-      if (w.type === "filter" || w.type === "text" || w.type === "image") return;
-      if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
-      loadDataForWidget(w.id);
-    });
+    void loadWidgetsWithConcurrency(
+      collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
+      loadDataForWidget
+    );
   }, [loadDataForWidget, pageLayout]);
 
   useEffect(() => {
     if (!etlData || widgets.length === 0) return;
+    // Ignora el primer valor (seed inicial de filtros/dimension defaults al montar): sólo recarga
+    // ante cambios reales del usuario, para no duplicar la carga inicial de widgets.
+    const key = JSON.stringify({ f: filtersForDataLoad, d: dimensionDefaultFilterValues });
+    if (filtersReloadKeyRef.current === null) {
+      filtersReloadKeyRef.current = key;
+      return;
+    }
+    if (filtersReloadKeyRef.current === key) return;
+    filtersReloadKeyRef.current = key;
     const timer = setTimeout(() => {
-      stateRef.current.widgets.forEach((w) => {
-        if (w.type === "filter" || w.type === "text" || w.type === "image") return;
-        if (pageLayout && !widgetMatchesActivePage(w, pageLayout)) return;
-        loadDataForWidget(w.id);
-      });
+      void loadWidgetsInParallel(
+        collectLoadableWidgetIds(stateRef.current.widgets, pageLayout),
+        setWidgets,
+        loadDataForWidget
+      );
     }, 300);
     return () => clearTimeout(timer);
-  }, [filtersForDataLoad, dimensionDefaultFilterValues, loadDataForWidget, etlData, pageLayout]);
+  }, [filtersForDataLoad, dimensionDefaultFilterValues, loadDataForWidget, etlData, pageLayout, widgets.length]);
 
   useEffect(() => {
     const dataSources = (etlData as { dataSources?: { id: string; schema?: string; tableName?: string }[] } | undefined)
@@ -1446,13 +1921,12 @@ export function DashboardViewer({
     };
   }, [etlData, widgets, apiEndpoints?.distinctValues]);
 
-  const initialLoadedRef = useRef(false);
   useEffect(() => {
-    if (!initialLoadedRef.current && widgets.length > 0 && etlData) {
+    if (!initialLoadedRef.current && widgets.length > 0 && etlData && etlMetricsReady) {
       initialLoadedRef.current = true;
       reloadAll();
     }
-  }, [widgets, etlData, reloadAll]);
+  }, [widgets, etlData, etlMetricsReady, reloadAll]);
 
   useEffect(() => {
     initialLoadedRef.current = false;
@@ -1461,6 +1935,26 @@ export function DashboardViewer({
     setDimensionDefaultFilterValues({});
     setDimensionDefaultDistinctValues({});
   }, [dashboardId]);
+
+  useEffect(() => {
+    if (!persistFilters || !dashboardId || !initialLoadedRef.current) return;
+    const timer = window.setTimeout(() => {
+      savePersistedDashboardViewerFilters(dashboardId, {
+        filters: filtersForDataLoad,
+        filterDraft: uiFilterValues,
+        dimensionDefaultFilterValues,
+        activePageId: pageLayout?.activePageId,
+      });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [
+    persistFilters,
+    dashboardId,
+    filtersForDataLoad,
+    uiFilterValues,
+    dimensionDefaultFilterValues,
+    pageLayout?.activePageId,
+  ]);
 
   const handleFilterChange = useCallback((widgetId: string, value: unknown) => {
     setUiFilterValues((prev) => ({ ...prev, [widgetId]: value }));
@@ -1637,7 +2131,8 @@ export function DashboardViewer({
 
   const rootClassName = variant === "admin" ? "admin-dashboard-view gap-5" : "gap-0";
   /** Tema cliente: no depende de hideHeader (vista previa admin oculta el h1 pero mantiene branding). */
-  const useClientTheme = variant === "default" && !backHref;
+  const useClientTheme =
+    clientThemeProp ?? (variant === "default" && !backHref);
   // Mismo criterio que AdminDashboardStudio (MetricBlock): fallback true para paridad del lienzo.
   const themeVars = useMemo(() => {
     if (!useClientTheme) return {};
@@ -1660,28 +2155,30 @@ export function DashboardViewer({
     >
       {!hideHeader && (
         <header
-          className={`flex flex-shrink-0 items-center justify-between gap-4 border-b px-4 py-3${useClientTheme ? " client-view-header" : ""}`}
+          className={`flex flex-shrink-0 flex-col gap-2 border-b px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4 sm:py-3${useClientTheme ? " client-view-header" : ""}`}
           style={{
             borderColor: "var(--platform-border, var(--client-border, #e2e8f0))",
             background: "var(--platform-bg-elevated, var(--client-header-bg, transparent))",
           }}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
             {backHref && (
               <Link
                 href={backHref}
-                className="inline-flex items-center gap-1.5 text-sm font-medium"
+                className={`inline-flex shrink-0 items-center gap-1.5 text-sm font-medium${useClientTheme ? " client-view-header-back" : ""}`}
                 style={{ color: "var(--platform-fg-muted, var(--client-text-muted, #64748b))" }}
+                aria-label={backLabel}
               >
                 <ArrowLeft className="h-4 w-4" />
-                {backLabel}
+                <span className="hidden sm:inline">{backLabel}</span>
               </Link>
             )}
-            <h1 className="truncate text-lg font-semibold" style={{ color: "var(--platform-fg, var(--client-text, #0f172a))" }}>
+            <h1 className="min-w-0 truncate text-base font-semibold sm:text-lg" style={{ color: "var(--platform-fg, var(--client-text, #0f172a))" }}>
               {title}
             </h1>
+          </div>
             {variant === "default" && exportableWidgets.length > 0 && (
-              <div className="flex flex-shrink-0 flex-wrap items-center gap-1">
+              <div className="flex flex-shrink-0 flex-wrap items-center gap-1 sm:justify-end">
                 <Button
                   type="button"
                   variant="outline"
@@ -1722,7 +2219,6 @@ export function DashboardViewer({
                 </Button>
               </div>
             )}
-          </div>
         </header>
       )}
 
@@ -1766,7 +2262,7 @@ export function DashboardViewer({
       {(globalFilters.length > 0 ||
         (filterCommitMode === "onButton" && hasFilterWidgetsOnActivePage)) && (
         <div
-          className={`flex flex-shrink-0 flex-wrap items-center gap-4 px-4 py-2${globalFilters.length === 0 ? " justify-end" : ""}`}
+          className={`flex flex-shrink-0 flex-wrap items-center gap-2 px-3 py-2 sm:gap-4 sm:px-4${globalFilters.length === 0 ? " justify-end" : ""}`}
           style={{ background: "var(--platform-bg, var(--client-bg, #f8fafc))", borderBottom: "1px solid var(--platform-border)" }}
         >
           {globalFilters.map((gf) => {
@@ -1784,7 +2280,9 @@ export function DashboardViewer({
                 : [...GLOBAL_MONTH_FILTER_VALUES]
               : isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf
                 ? getGlobalDayFilterOptions(gf.field!, globalFilters, uiFilterValues)
-                : rawDistinct;
+                : isYearOperator((gf as AggregationFilter).operator) && Array.isArray(rawDistinct)
+                  ? normalizeDistinctYearOptions(rawDistinct)
+                  : rawDistinct;
             const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
             const isYearOp = isYearOperator((gf as AggregationFilter).operator);
             const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
@@ -1802,112 +2300,27 @@ export function DashboardViewer({
             const hasOptions = Array.isArray(options) && options.length > 0;
 
             return (
-              <div key={gf.id} className="flex flex-col gap-1.5 text-sm">
+              <div key={gf.id} className="flex w-full min-w-0 flex-col gap-1.5 text-sm sm:w-auto sm:min-w-[10rem]">
                 <span style={{ color: "var(--platform-fg-muted)" }}>{label}</span>
                 {isMulti && hasOptions ? (
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 min-w-[10rem] max-w-[14rem] justify-between gap-1 text-xs font-normal rounded-md px-2"
-                        style={{
-                          borderColor: "var(--platform-border)",
-                          color: "var(--platform-fg)",
-                          background: "var(--platform-bg)",
-                        }}
-                        aria-haspopup="dialog"
-                        aria-label={`${label}: elegir valores`}
-                      >
-                        <span className="truncate text-left">
-                          {globalMultiFilterTriggerLabel((gf as AggregationFilter).operator, selectedArray, options)}
-                        </span>
-                        <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      align="start"
-                      className="w-72 p-3"
-                      style={{
-                        background: "var(--platform-bg, var(--popover))",
-                        borderColor: "var(--platform-border)",
-                        color: "var(--platform-fg)",
-                      }}
-                    >
-                      <div className="flex flex-wrap gap-2 mb-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs rounded-md"
-                          style={{ borderColor: "var(--platform-border)" }}
-                          onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: [...options].map(String) }))}
-                        >
-                          Seleccionar todo
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs rounded-md"
-                          style={{ borderColor: "var(--platform-border)" }}
-                          onClick={() => setUiFilterValues((prev) => ({ ...prev, [gf.id]: [] }))}
-                        >
-                          Deseleccionar todo
-                        </Button>
-                      </div>
-                      <div className="max-h-60 overflow-y-auto flex flex-col gap-1.5 pr-1">
-                        {options.map((v) => {
-                          const s = String(v);
-                          const checked = selectedArray.includes(s);
-                          return (
-                            <label
-                              key={s}
-                              className="flex items-center gap-2 cursor-pointer text-xs py-0.5"
-                              style={{ color: "var(--platform-fg)" }}
-                            >
-                              <input
-                                type="checkbox"
-                                className="rounded border shrink-0"
-                                style={{ borderColor: "var(--platform-border)" }}
-                                checked={checked}
-                                onChange={(e) => {
-                                  setUiFilterValues((prev) => {
-                                    const cur = globalMultiPrevToSelectedStrings(
-                                      (gf as AggregationFilter).operator,
-                                      prev[gf.id]
-                                    );
-                                    const next = e.target.checked
-                                      ? cur.includes(s)
-                                        ? cur
-                                        : [...cur, s]
-                                      : cur.filter((x) => x !== s);
-                                    return { ...prev, [gf.id]: next };
-                                  });
-                                }}
-                              />
-                              <span>
-                                {isYearMonthOp
-                                  ? yearMonthFilterOptionLabel(v)
-                                  : isDayOperator((gf as AggregationFilter).operator)
-                                    ? `Día ${v}`
-                                    : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
+                  <GlobalFilterMultiSelect
+                    label={String(label)}
+                    operator={(gf as AggregationFilter).operator}
+                    options={options as unknown[]}
+                    selectedArray={selectedArray}
+                    onChangeSelected={(next) =>
+                      setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))
+                    }
+                  />
                 ) : (((gf as any).inputType === "select" ||
                   isYearOp ||
                   isYearMonthOp ||
                   (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf)) &&
                   hasOptions) ? (
-                  <select
-                    className="rounded-md border px-2 py-1 text-sm min-w-[8rem]"
-                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
+                  <GlobalFilterSingleSelect
+                    label={String(label)}
+                    operator={(gf as AggregationFilter).operator}
+                    options={options as unknown[]}
                     value={
                       isYearOp
                         ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
@@ -1917,24 +2330,17 @@ export function DashboardViewer({
                             ? dayFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
                             : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
                     }
-                    onChange={(e) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: e.target.value }))}
-                  >
-                    <option value="">Todos</option>
-                    {(options as unknown[]).map((v) => (
-                      <option key={String(v)} value={String(v)}>
-                        {isYearMonthOp
-                          ? yearMonthFilterOptionLabel(v)
-                          : isDayOperator((gf as AggregationFilter).operator)
-                            ? `Día ${v}`
-                            : monthFilterOptionLabel((gf as AggregationFilter).operator, v)}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(next) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))}
+                  />
                 ) : (
                   <input
                     type={(gf as any).inputType === "number" ? "number" : (gf as any).inputType === "date" ? "date" : "text"}
-                    className="rounded-md border px-2 py-1 text-sm w-32"
-                    style={{ borderColor: "var(--platform-border)" }}
+                    className="w-full rounded-md border px-2 py-1 text-sm sm:w-32"
+                    style={{
+                      borderColor: "var(--platform-border)",
+                      background: "var(--platform-surface, var(--platform-bg))",
+                      color: "var(--platform-fg)",
+                    }}
                     value={String(uiFilterValues[gf.id] ?? "")}
                     onChange={(e) =>
                       setUiFilterValues((prev) => ({

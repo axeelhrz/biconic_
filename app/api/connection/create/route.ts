@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { encryptConnectionPassword } from "@/lib/connection-secret";
+import { createServiceRoleClient } from "@/lib/supabase/service";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import {
+  buildConnectionInsertRow,
+  getConnectionsTableColumns,
+} from "@/lib/connection/connection-persistence";
 
 export async function POST(req: NextRequest) {
   try {
     const supabase = await createClient();
     const {
       data: { user: currentUser },
-      error: authError,
     } = await supabase.auth.getUser();
-    if (authError || !currentUser) {
+    if (!currentUser) {
       return NextResponse.json(
         { ok: false, error: "No autorizado" },
         { status: 401 }
@@ -61,31 +65,63 @@ export async function POST(req: NextRequest) {
     let db_password_encrypted: string | null = null;
     if (passwordPlain) {
       try {
+        const { encryptConnectionPassword } = await import("@/lib/connection-secret");
         db_password_encrypted = encryptConnectionPassword(passwordPlain);
-      } catch (e: any) {
+      } catch (e: unknown) {
         return NextResponse.json(
-          { ok: false, error: e?.message || "No se pudo guardar la contraseña. Configurá ENCRYPTION_KEY en .env." },
+          {
+            ok: false,
+            error:
+              e instanceof Error
+                ? e.message
+                : "No se pudo guardar la contraseña. Configurá ENCRYPTION_KEY en .env.",
+          },
           { status: 500 }
         );
       }
     }
 
-    const { data: newConn, error } = await supabase
-      .from("connections")
-      .insert({
+    const adminClient = shouldUseOwnBackend() ? createServiceRoleClient() : null;
+    const dbClient = adminClient ?? supabase;
+    const columns = adminClient?._sql
+      ? await getConnectionsTableColumns(adminClient._sql)
+      : new Set([
+          "name",
+          "user_id",
+          "client_id",
+          "type",
+          "db_host",
+          "db_name",
+          "db_user",
+          "db_port",
+          "db_password_encrypted",
+          "db_password_secret_id",
+          "original_file_name",
+          "storage_object_path",
+        ]);
+
+    const insertRow = buildConnectionInsertRow(
+      columns,
+      {
         name: connectionName.trim(),
         user_id: currentUser.id,
         client_id: activeClientId,
         type: normalizedType,
-        db_host: host.trim(),
-        db_name: database.trim(),
-        db_user: dbUser.trim(),
-        db_port: portNum,
-        db_password_secret_id: null,
-        db_password_encrypted: db_password_encrypted ?? null,
-        original_file_name: null,
         storage_object_path: null,
-      })
+        original_file_name: null,
+      },
+      {
+        host: host.trim(),
+        database: database.trim(),
+        user: dbUser.trim(),
+        port: portNum,
+        passwordEncrypted: db_password_encrypted,
+      }
+    );
+
+    const { data: newConn, error } = await dbClient
+      .from("connections")
+      .insert(insertRow)
       .select("id, name, type")
       .single();
 
@@ -101,15 +137,21 @@ export async function POST(req: NextRequest) {
       data: { id: newConn.id, name: newConn.name, type: newConn.type },
       message: "Conexión creada correctamente.",
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json(
-      { ok: false, error: err?.message || "Error creando la conexión" },
+      {
+        ok: false,
+        error: err instanceof Error ? err.message : "Error creando la conexión",
+      },
       { status: 500 }
     );
   }
 }
 
-async function getActiveClientId(supabase: Awaited<ReturnType<typeof createClient>>, userId: string): Promise<string | null> {
+async function getActiveClientId(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string
+): Promise<string | null> {
   const { data } = await supabase
     .from("client_members")
     .select("client_id")

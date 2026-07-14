@@ -1,13 +1,21 @@
 "use client";
 import { useEffect, useState } from "react";
 import DashboardCard, { Dashboard } from "@/components/dashboard/DashboardCard";
-// @ts-ignore
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
 import { DeleteDashboardDialog } from "./dashboard/DeleteDashboardDialog";
 import { SearchX, LayoutDashboard } from "lucide-react";
 import { toast } from "sonner";
-import { publishDashboardAdmin } from "@/app/admin/(main)/dashboard/actions";
+import {
+  listAdminDashboardsForGrid,
+  publishDashboardAdmin,
+} from "@/app/admin/(main)/dashboard/actions";
 import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
+import {
+  AdminClientGroupSection,
+  AdminResourceCardGrid,
+} from "@/components/admin/AdminClientGroupSections";
+import { groupItemsByClient, clientDisplayName } from "@/lib/admin/clientGrouping";
 
 // Shape for mapping Supabase rows
 type SupabaseDashboardRow = {
@@ -34,6 +42,8 @@ interface AdminDashboardGridProps {
   /** Base path for dashboard links, e.g., "/admin/dashboard" */
   basePath?: string;
   clientId?: string | null;
+  /** Agrupar tarjetas por empresa/cliente (orden alfabético). */
+  groupByClient?: boolean;
 }
 
 export default function AdminDashboardGrid({
@@ -41,6 +51,7 @@ export default function AdminDashboardGrid({
   filter = "todos",
   basePath = "/admin/dashboard",
   clientId,
+  groupByClient = true,
 }: AdminDashboardGridProps) {
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,54 +67,66 @@ export default function AdminDashboardGrid({
       try {
         setLoading(true);
 
-        // Fetch ALL dashboards (Admin View)
-        let query = supabase.from("dashboard").select("*");
-        
-        // Optimize fetching if clientId is provided? 
-        // We handle filtering client-side for "searchQuery" but clientId can be server-side filtered too.
-        // But for consistency with search, let's keep fetching all or filter if simple.
-        // Given we fetch all, let's filter client-side to avoid re-fetching on every filter change if manageable,
-        // BUT user might have many dashboards. Ideally server-side.
-        // However, existing code fetches ALL. Let's stick to client-side filter for now to match pattern,
-        // unless performance is concern.
-        
-        const { data, error } = await query;
+        if (isOwnBackendEnabled()) {
+          const mapped = await listAdminDashboardsForGrid();
+          if (!isMounted) return;
+          setDashboards(mapped);
+          setError(null);
+          return;
+        }
 
+        const { data, error } = await supabase.from("dashboard").select("*");
         if (error) throw error;
 
-        const rows = (data as SupabaseDashboardRow[] | null) ?? [];
+        const rows = Array.isArray(data) ? (data as SupabaseDashboardRow[]) : [];
 
-        // Fetch owners for all dashboards
         const ownerIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
+        const clientIds = Array.from(new Set(rows.map((r) => r.client_id).filter(Boolean))) as string[];
         let ownerById = new Map<string, { full_name: string | null }>();
+        let clientById = new Map<string, string>();
 
         if (ownerIds.length > 0) {
-            const { data: owners } = await supabase
+          const { data: owners } = await supabase
             .from("profiles")
             .select("id, full_name")
             .in("id", ownerIds);
-            
-            ownerById = new Map((owners ?? []).map((o) => [o.id, o]));
+
+          const ownerList = Array.isArray(owners) ? owners : owners ? [owners] : [];
+          ownerById = new Map(ownerList.map((o) => [o.id, o]));
+        }
+
+        if (clientIds.length > 0) {
+          const { data: clientRows } = await supabase
+            .from("clients")
+            .select("id, company_name, individual_full_name, type")
+            .in("id", clientIds);
+          clientById = new Map(
+            (clientRows ?? []).map((c: { id: string; company_name?: string | null; individual_full_name?: string | null; type?: string | null }) => [
+              c.id,
+              clientDisplayName(c),
+            ])
+          );
         }
 
         const mapped: Dashboard[] = rows.map((row) => {
-            const status = dashboardPublishedStatusFromRow(row);
+          const status = dashboardPublishedStatusFromRow(row);
+          const ownerProfile = row.user_id ? ownerById.get(row.user_id) : undefined;
+          const cid = row.client_id ?? undefined;
 
-            const ownerProfile = row.user_id ? ownerById.get(row.user_id) : undefined;
-
-            return {
-              id: String(row.id),
-              title: row.title ?? row.name ?? "Sin título",
-              imageUrl: row.image_url ?? row.thumbnail_url ?? "/Image.svg",
-              status,
-              description: row.description ?? "",
-              views: typeof row.views === "number" ? row.views : 0,
-              owner: { fullName: ownerProfile?.full_name ?? "Desconocido" },
-              clientId: row.client_id ?? undefined,
-              ownerId: row.user_id,
-              layout: row.layout ?? undefined,
-            } satisfies Dashboard;
-          });
+          return {
+            id: String(row.id),
+            title: row.title ?? row.name ?? "Sin título",
+            imageUrl: row.image_url ?? row.thumbnail_url ?? "/Image.svg",
+            status,
+            description: row.description ?? "",
+            views: typeof row.views === "number" ? row.views : 0,
+            owner: { fullName: ownerProfile?.full_name ?? "Desconocido" },
+            clientId: cid,
+            clientLabel: cid ? clientById.get(cid) : undefined,
+            ownerId: row.user_id,
+            layout: row.layout ?? undefined,
+          } satisfies Dashboard;
+        });
 
         if (!isMounted) return;
         setDashboards(mapped);
@@ -208,16 +231,43 @@ export default function AdminDashboardGrid({
   });
 
   return (
-    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {(filtered.length > 0 ? filtered : []).map((dashboard) => (
-        <DashboardCard
-          key={dashboard.id}
-          dashboard={dashboard}
-          href={`${basePath}/${dashboard.id}`}
-          onDelete={handleDeleteClick}
-          onPublish={handlePublish}
-        />
-      ))}
+    <>
+      {groupByClient ? (
+        <div className="flex flex-col gap-10">
+          {groupItemsByClient(filtered).map((group) => (
+            <AdminClientGroupSection
+              key={group.clientId ?? "unassigned"}
+              clientId={group.clientId}
+              clientLabel={group.clientLabel}
+              count={group.items.length}
+            >
+              <AdminResourceCardGrid>
+                {group.items.map((dashboard) => (
+                  <DashboardCard
+                    key={dashboard.id}
+                    dashboard={dashboard}
+                    href={`${basePath}/${dashboard.id}`}
+                    onDelete={handleDeleteClick}
+                    onPublish={handlePublish}
+                  />
+                ))}
+              </AdminResourceCardGrid>
+            </AdminClientGroupSection>
+          ))}
+        </div>
+      ) : (
+        <AdminResourceCardGrid>
+          {filtered.map((dashboard) => (
+            <DashboardCard
+              key={dashboard.id}
+              dashboard={dashboard}
+              href={`${basePath}/${dashboard.id}`}
+              onDelete={handleDeleteClick}
+              onPublish={handlePublish}
+            />
+          ))}
+        </AdminResourceCardGrid>
+      )}
       <DeleteDashboardDialog 
         open={deleteDialogOpen} 
         onOpenChange={setDeleteDialogOpen}
@@ -269,6 +319,6 @@ export default function AdminDashboardGrid({
           </p>
         </div>
       )}
-    </div>
+    </>
   );
 }

@@ -1,4 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelPhysicalTableForConnection,
+} from "@/lib/excel-import/excel-metadata";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
@@ -58,7 +63,7 @@ type CastQueryBody = {
 
 function buildWhereClausePg(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = `"${c.column.replace(/"/g, '""')}"`;
     switch (c.operator) {
       case "is null":
@@ -75,16 +80,16 @@ function buildWhereClausePg(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} ILIKE $${params.length}`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
         return `${col} IN (${idxs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
@@ -102,7 +107,7 @@ function buildWhereClausePg(conds: FilterCondition[]) {
 
 function buildWhereClauseMy(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = `\`${c.column.replace(/`/g, "``")}\``;
     switch (c.operator) {
       case "is null":
@@ -119,13 +124,13 @@ function buildWhereClauseMy(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} LIKE ?`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} IN (${qs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} NOT IN (${qs.join(", ")})`;
@@ -338,21 +343,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // Excel branch using internal Postgres DW
     if (type === ("excel" as any)) {
-      const { data: meta, error: metaError } = await supabase
+      const { data: metaRows, error: metaError } = await supabase
         .from("data_tables")
-        .select("physical_table_name")
-        .eq("connection_id", String(connectionId))
-        .single();
-      if (metaError || !meta) {
+        .select("physical_table_name, table_name")
+        .eq("connection_id", String(connectionId));
+      const rows = normalizeExcelDataTableRows(metaRows);
+      if (metaError || rows.length === 0) {
         return NextResponse.json(
           { ok: false, error: "Metadatos de Excel no encontrados" },
           { status: 404 }
         );
       }
-      const tableNamePhysical =
-        (meta as any).physical_table_name ||
-        `import_${String(connectionId).replaceAll("-", "_")}`;
-      const dbUrl = process.env.SUPABASE_DB_URL;
+      const tableNamePhysical = resolveExcelPhysicalTableForConnection(
+        String(connectionId),
+        table,
+        rows
+      );
+      const dbUrl = getInternalDbUrl();
       if (!dbUrl) {
         return NextResponse.json(
           {
@@ -383,7 +390,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const castMap = new Map<string, CastConversion>();
       for (const cv of conversions) castMap.set(cv.column, cv);
       const allCols = cols
-        .map((c) => {
+        .map((c: any) => {
           const cv = castMap.get(c);
           if (cv) {
             const expr = pgCastExpr(c, cv.targetType);
@@ -463,7 +470,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const castMap = new Map<string, CastConversion>();
       for (const cv of conversions) castMap.set(cv.column, cv);
       const allCols = cols
-        .map((c) => {
+        .map((c: any) => {
           const cv = castMap.get(c);
           if (cv) {
             const expr = pgCastExpr(c, cv.targetType);
@@ -522,13 +529,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           [sch, tbl]
         );
         cols = Array.isArray(metaCols)
-          ? (metaCols as any[]).map((r) => r.column_name)
+          ? (metaCols as any[]).map((r: any) => r.column_name)
           : [];
       }
       const castMap = new Map<string, CastConversion>();
       for (const cv of conversions) castMap.set(cv.column, cv);
       const allCols = cols
-        .map((c) => {
+        .map((c: any) => {
           const cv = castMap.get(c);
           if (cv) {
             const expr = myCastExpr(c, cv.targetType);

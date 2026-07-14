@@ -1,0 +1,8 @@
+backend/
+backend/**
+docker-compose.yml
+docker-compose.coolify.yml
+/data/
+scripts/
+docs/
+migrations/

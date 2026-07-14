@@ -68,6 +68,8 @@ type AdminOverviewPanelProps = {
   statsCounts: StatsCounts;
   /** Lista de dashboards cargada en el servidor para que Publicados/Borradores y modales muestren datos correctos */
   initialAllDashboards?: DashboardRow[];
+  /** Clientes con conteos cargados en el servidor (backend propio) */
+  initialClients?: ClientWithCounts[];
 };
 
 const CHART_COLORS = [
@@ -78,11 +80,15 @@ const CHART_COLORS = [
   "#a855f7",
 ];
 
-export default function AdminOverviewPanel({ statsCounts, initialAllDashboards = [] }: AdminOverviewPanelProps) {
+export default function AdminOverviewPanel({
+  statsCounts,
+  initialAllDashboards = [],
+  initialClients,
+}: AdminOverviewPanelProps) {
   const router = useRouter();
-  const [clients, setClients] = useState<ClientWithCounts[]>([]);
+  const [clients, setClients] = useState<ClientWithCounts[]>(initialClients ?? []);
   const [allDashboards, setAllDashboards] = useState<DashboardRow[]>(initialAllDashboards);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(initialClients === undefined);
   const [modalClient, setModalClient] = useState<ClientWithCounts | null>(null);
   const [clientDashboards, setClientDashboards] = useState<DashboardRow[]>([]);
   const [loadingClientDashboards, setLoadingClientDashboards] = useState(false);
@@ -95,6 +101,12 @@ export default function AdminOverviewPanel({ statsCounts, initialAllDashboards =
   }, [initialAllDashboards]);
 
   useEffect(() => {
+    if (initialClients !== undefined) {
+      setClients(initialClients);
+      setLoading(false);
+      return;
+    }
+
     let active = true;
     async function load() {
       const supabase = createClient();
@@ -113,7 +125,11 @@ export default function AdminOverviewPanel({ statsCounts, initialAllDashboards =
         )
         .order("company_name", { ascending: true });
 
-      if (clientsErr || !active) return;
+      if (!active) return;
+      if (clientsErr) {
+        setLoading(false);
+        return;
+      }
       const mapped: ClientWithCounts[] = (clientsData ?? []).map((row: any) => ({
         id: row.id,
         company_name: row.company_name ?? "Sin nombre",
@@ -149,7 +165,7 @@ export default function AdminOverviewPanel({ statsCounts, initialAllDashboards =
     return () => {
       active = false;
     };
-  }, []);
+  }, [initialClients, initialAllDashboards.length]);
 
   const openClientModal = (client: ClientWithCounts) => {
     setModalClient(client);

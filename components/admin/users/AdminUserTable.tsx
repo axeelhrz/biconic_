@@ -275,15 +275,21 @@ export default function AdminUserTable({ search, filter }: Props) {
       </Dialog>
 
       <div
-        className="w-full overflow-hidden rounded-xl border shadow-sm"
+        className="w-full rounded-xl border shadow-sm"
         style={{
           borderColor: "var(--platform-border)",
           background: "var(--platform-surface)",
         }}
       >
-      <div className="w-full overflow-x-auto">
+      <div className="w-full overflow-x-auto overflow-y-visible">
         <table className="min-w-[800px] w-full table-fixed">
-          <thead style={{ background: "var(--platform-bg-elevated)" }}>
+          <thead
+            className="sticky top-0 z-20"
+            style={{
+              background: "var(--platform-bg-elevated)",
+              boxShadow: "0 1px 0 var(--platform-border)",
+            }}
+          >
             <tr className="text-left text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--platform-fg-muted)" }}>
               <Th className="w-12 px-3 py-3" />
               <Th className="w-[200px] px-3 py-3">Usuario</Th>
@@ -360,7 +366,7 @@ export default function AdminUserTable({ search, filter }: Props) {
                       )}
                     </div>
                   </Td>
-                  <Td style={{ borderColor: "var(--platform-border)" }}>
+                  <Td className="overflow-visible" style={{ borderColor: "var(--platform-border)" }}>
                     <Select
                       value={u.status}
 onChange={async (next: string) => {
@@ -388,10 +394,9 @@ onChange={async (next: string) => {
                       ]}
                       className="min-w-[100px]"
                       buttonClassName="h-9 rounded-xl text-sm font-medium border w-full justify-between px-3"
-                      disablePortal
                     />
                   </Td>
-                  <Td style={{ borderColor: "var(--platform-border)" }}>
+                  <Td className="overflow-visible" style={{ borderColor: "var(--platform-border)" }}>
                     <Select
                       value={u.app_role || ""}
                       onChange={async (nextRole: string) => {
@@ -420,7 +425,6 @@ onChange={async (next: string) => {
                       ]}
                       className="min-w-[120px]"
                       buttonClassName="h-9 rounded-xl text-sm font-medium border w-full justify-between px-3"
-                      disablePortal
                     />
                   </Td>
                   <Td style={{ borderColor: "var(--platform-border)" }}>
@@ -509,7 +513,12 @@ function Th({
   children?: React.ReactNode;
 }) {
   return (
-    <th className={cn("whitespace-nowrap px-4 py-2", className)} style={style}>{children}</th>
+    <th
+      className={cn("whitespace-nowrap px-4 py-2", className)}
+      style={{ background: "var(--platform-bg-elevated)", ...style }}
+    >
+      {children}
+    </th>
   );
 }
 

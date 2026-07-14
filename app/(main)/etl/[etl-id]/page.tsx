@@ -86,7 +86,7 @@ export default async function EtlByIdPage({ params }: PageProps) {
             .select("id")
             .eq("user_id", user.id);
             
-         const memberIds = memberParams?.map(m => m.id) || [];
+         const memberIds = memberParams?.map((m: any) => m.id) || [];
          console.log("[ETL Page] Member IDs found:", memberIds);
          
          if (memberIds.length > 0) {

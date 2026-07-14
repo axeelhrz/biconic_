@@ -14,9 +14,12 @@ import {
 } from "@/app/admin/(main)/users/actions";
 import { createClient } from "@/lib/supabase/client";
 import type { Database } from "@/lib/supabase/database.types";
+import { useCompanyOptions } from "@/hooks/useCompanyOptions";
+import { CLIENT_ROLE_OPTIONS } from "@/lib/admin/client-role-options";
 import { Camera, User } from "lucide-react";
 
 type AppRole = Database["public"]["Enums"]["app_role"];
+type ClientRole = Database["public"]["Enums"]["client_role"];
 
 function Field({
   label,
@@ -53,6 +56,9 @@ export default function EditUserPage() {
   const [appRole, setAppRole] = useState<AppRole>("VIEWER");
   const [status, setStatus] = useState<"activo" | "inactivo">("activo");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [clientId, setClientId] = useState("");
+  const [clientRole, setClientRole] = useState<ClientRole>("viewer");
+  const { options: companyOptions, loading: loadingCompanies } = useCompanyOptions();
 
   // Load user data
   useEffect(() => {
@@ -70,6 +76,8 @@ export default function EditUserPage() {
           res.data.avatar_url ||
             `https://secure.gravatar.com/avatar/${userId}?d=mp&s=200`
         );
+        setClientId(res.data.clientId ?? "");
+        setClientRole(res.data.clientRole ?? "viewer");
       } else {
         toast.error(res.error ?? "No se pudo cargar el usuario");
         router.push("/admin/users");
@@ -168,6 +176,8 @@ export default function EditUserPage() {
       full_name: fullName,
       job_title: jobTitle,
       app_role: appRole,
+      clientId: clientId || null,
+      clientRole: clientId ? clientRole : undefined,
       // role: status === "inactivo" ? "inactive" : "viewer", // Error: constraint profiles_role_check
       role: "user", // Fallback seguro. TODO: Ajustar constraint en DB para soportar 'inactive'
     });
@@ -316,6 +326,30 @@ export default function EditUserPage() {
                 { label: "Creator", value: "CREATOR" },
                 { label: "App Admin", value: "APP_ADMIN" },
               ]}
+              className="rounded-xl"
+            />
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+          <Field label="Empresa">
+            <Select
+              value={clientId}
+              onChange={(val: string) => setClientId(val)}
+              placeholder={loadingCompanies ? "Cargando empresas…" : "Sin empresa asignada"}
+              options={[
+                { label: "Sin empresa", value: "" },
+                ...companyOptions,
+              ]}
+              className="rounded-xl"
+            />
+          </Field>
+          <Field label="Rol en la empresa">
+            <Select
+              value={clientRole}
+              onChange={(val: string) => setClientRole(val as ClientRole)}
+              placeholder="Seleccioná un rol"
+              disabled={!clientId}
+              options={CLIENT_ROLE_OPTIONS}
               className="rounded-xl"
             />
           </Field>

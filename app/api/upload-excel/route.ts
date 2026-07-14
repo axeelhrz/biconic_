@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as ExcelJS from "exceljs";
 import { createClient } from "@/lib/supabase/server";
+import {
+  EXCEL_UPLOAD_MAX_BYTES,
+  EXCEL_UPLOAD_MAX_MB,
+} from "@/lib/excel-import/upload-limits";
 
 // Asegurar runtime Node para manejar uploads grandes correctamente
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const MAX_UPLOAD_BYTES = 60 * 1024 * 1024; // 60MB
 
 export async function POST(req: NextRequest) {
   try {
@@ -44,11 +46,11 @@ export async function POST(req: NextRequest) {
     }
 
     // Validar tamaño del archivo
-    if (typeof file.size === "number" && file.size > MAX_UPLOAD_BYTES) {
+    if (typeof file.size === "number" && file.size > EXCEL_UPLOAD_MAX_BYTES) {
       return NextResponse.json(
         {
           ok: false,
-          error: "El archivo es demasiado grande. Máximo permitido: 60MB",
+          error: `El archivo es demasiado grande. Máximo permitido: ${EXCEL_UPLOAD_MAX_MB}MB`,
         },
         { status: 413 }
       );

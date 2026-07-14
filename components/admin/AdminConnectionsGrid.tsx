@@ -2,7 +2,14 @@
 import { useCallback, useEffect, useState } from "react";
 import DatabaseConnectionCard, { Connection } from "@/components/connections/ConnectionsCard";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
+import { listAdminConnections } from "@/app/admin/(main)/connections/actions";
 import { AlertCircle, Database, Search } from "lucide-react";
+import {
+  AdminClientGroupSection,
+  AdminResourceCardGrid,
+} from "@/components/admin/AdminClientGroupSections";
+import { groupItemsByClient } from "@/lib/admin/clientGrouping";
 
 type SupabaseConnectionRow = {
   id: string;
@@ -27,6 +34,8 @@ type DataTableMetaRow = {
 
 interface AdminConnectionsGridProps {
   searchQuery?: string;
+  clientId?: string | null;
+  groupByClient?: boolean;
   onConfigure?: (id: string) => void;
   onPreview?: (id: string) => void;
   onDelete?: (id: string, title?: string) => void;
@@ -34,6 +43,8 @@ interface AdminConnectionsGridProps {
 
 export default function AdminConnectionsGrid({
   searchQuery = "",
+  clientId = null,
+  groupByClient = true,
   onConfigure,
   onPreview,
   onDelete,
@@ -43,14 +54,17 @@ export default function AdminConnectionsGrid({
   const [error, setError] = useState<string | null>(null);
 
   const loadConnections = useCallback(async () => {
-    const supabase = createClient();
-      console.log("[AdminGrid] 1. Iniciando carga de conexiones...");
-      
       try {
         setLoading(true);
-        
-        // 1. Fetch de conexiones
-        console.log("[AdminGrid] 2. Consultando tabla 'connections'...");
+
+        if (isOwnBackendEnabled()) {
+          const mapped = await listAdminConnections();
+          setConnections(mapped);
+          setError(null);
+          return;
+        }
+
+        const supabase = createClient();
         const { data, error } = await supabase
           .from("connections")
           .select(
@@ -58,18 +72,13 @@ export default function AdminConnectionsGrid({
           )
           .order("created_at", { ascending: false });
 
-        if (error) {
-          console.error("[AdminGrid] ❌ Error en query connections:", error);
-          throw error;
-        }
-
-        console.log(`[AdminGrid] 3. Conexiones encontradas: ${data?.length || 0}`, data);
+        if (error) throw error;
 
         const rows = (data as SupabaseConnectionRow[]) ?? [];
 
         // 2. Fetch creators (users) & owners (clients)
-        const userIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
-        const clientIds = Array.from(new Set(rows.map((r) => r.client_id).filter(Boolean))) as string[];
+        const userIds = Array.from(new Set(rows.map((r: any) => r.user_id).filter(Boolean))) as string[];
+        const clientIds = Array.from(new Set(rows.map((r: any) => r.client_id).filter(Boolean))) as string[];
         
         let userById = new Map<string, { full_name: string | null }>();
         let clientById = new Map<string, { id: string; company_name: string | null }>();
@@ -81,8 +90,8 @@ export default function AdminConnectionsGrid({
               .select("id, full_name")
               .in("id", userIds);
             
-            if (userError) console.error("[AdminGrid] ⚠️ Error buscando profiles:", userError);
-            userById = new Map((users ?? []).map((u) => [u.id, u]));
+            const userList = Array.isArray(users) ? users : users ? [users] : [];
+            userById = new Map(userList.map((u: any) => [u.id, u]));
         }
 
         // Fetch clients
@@ -93,16 +102,14 @@ export default function AdminConnectionsGrid({
                 .in("id", clientIds);
 
              if (clientError) console.error("[AdminGrid] ⚠️ Error buscando clients:", clientError);
-             clientById = new Map((clients ?? []).map((c) => [c.id, c]));
+             clientById = new Map<string, any>((clients ?? []).map((c: any) => [c.id, c]));
         }
 
 
         // 3. Cargar metadatos
         let metaByConnId = new Map<string, DataTableMetaRow>();
         if (rows.length > 0) {
-          const ids = rows.map((r) => r.id);
-          console.log("[AdminGrid] 5. Buscando metadatos en 'data_tables' para:", ids);
-          
+          const ids = rows.map((r: any) => r.id);
           const { data: metas, error: metaErr } = await supabase
             .from("data_tables")
             .select(
@@ -115,9 +122,7 @@ export default function AdminConnectionsGrid({
              throw metaErr;
           }
 
-          console.log(`[AdminGrid] 6. Metadatos encontrados: ${metas?.length || 0}`, metas);
-
-          (metas as DataTableMetaRow[] | null)?.forEach((m) => {
+          (metas as DataTableMetaRow[] | null)?.forEach((m: any) => {
             metaByConnId.set(m.connection_id, m);
           });
         }
@@ -151,7 +156,7 @@ export default function AdminConnectionsGrid({
         };
 
         // 4. Mapeo final
-        const mappedConnections: Connection[] = rows.map((row) => {
+        const mappedConnections: Connection[] = rows.map((row: any) => {
           const meta = metaByConnId.get(row.id);
           const isExcel = row.type === "excel_file" || row.type === "excel";
           // const ownerProfile = row.user_id ? ownerById.get(row.user_id) : undefined; 
@@ -178,10 +183,11 @@ export default function AdminConnectionsGrid({
                 id: row.client_id,
                 companyName: clientById.get(row.client_id)?.company_name ?? "Cliente Desconocido",
             } : undefined,
+            clientLabel: row.client_id
+              ? clientById.get(row.client_id)?.company_name ?? "Cliente Desconocido"
+              : undefined,
           };
         });
-
-        console.log("[AdminGrid] ✅ Mapeo finalizado. Total:", mappedConnections.length, mappedConnections);
 
         setConnections(mappedConnections);
         setError(null);
@@ -255,12 +261,16 @@ export default function AdminConnectionsGrid({
   }
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
-  const filteredConnections = connections.filter((conn) => {
+  const filteredConnections = connections.filter((conn: Connection) => {
+    const matchesClient = clientId ? (conn.clientId ?? "") === clientId : true;
+    if (!matchesClient) return false;
     if (!normalizedQuery) return true;
+    const clientName = conn.client?.companyName?.toLowerCase() ?? conn.clientLabel?.toLowerCase() ?? "";
     return (
       conn.title.toLowerCase().includes(normalizedQuery) ||
       conn.host.toLowerCase().includes(normalizedQuery) ||
-      conn.databaseName.toLowerCase().includes(normalizedQuery)
+      conn.databaseName.toLowerCase().includes(normalizedQuery) ||
+      clientName.includes(normalizedQuery)
     );
   });
 
@@ -288,19 +298,33 @@ export default function AdminConnectionsGrid({
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {filteredConnections.map((connection) => (
-        <DatabaseConnectionCard
-          key={connection.id}
-          connection={connection}
-          onConfigure={onConfigure}
-          onPreview={onPreview}
-          onDelete={onDelete}
-          onRefreshConnections={loadConnections}
-        />
+      <div className="flex flex-col gap-10">
+        {(groupByClient
+          ? groupItemsByClient(filteredConnections)
+          : [{ clientId: null, clientLabel: "", items: filteredConnections }]
+        ).map((group) => (
+          <AdminClientGroupSection
+            key={group.clientId ?? "all"}
+            clientId={group.clientId}
+            clientLabel={groupByClient ? group.clientLabel : "Conexiones"}
+            count={group.items.length}
+          >
+            <AdminResourceCardGrid>
+              {group.items.map((connection) => (
+                <DatabaseConnectionCard
+                  key={connection.id}
+                  connection={connection}
+                  onConfigure={onConfigure}
+                  onPreview={onPreview}
+                  onDelete={onDelete}
+                  onRefreshConnections={loadConnections}
+                />
+              ))}
+            </AdminResourceCardGrid>
+          </AdminClientGroupSection>
         ))}
       </div>
-      {filteredConnections.length === 0 && (
+      {filteredConnections.length === 0 && connections.length > 0 && (
         <div
           className="flex flex-col items-center justify-center rounded-2xl border py-12 px-6 text-center"
           style={{

@@ -4,10 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
-import { Plus, Check, BarChart2, Pencil, ImageIcon } from "lucide-react";
+import { Plus, Check, BarChart2, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select } from "@/components/ui/Select";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +18,11 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  isDashboardDateFilterOperator,
+  isDashboardFilterDateField,
+  resolveDashboardFilterOperator,
+} from "@/lib/dashboard/isDashboardFilterDateField";
 import { useAdminDashboardEtlData } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { searchEtls, addDashboardDataSource, removeDashboardDataSource } from "@/app/admin/(main)/dashboard/actions";
@@ -30,7 +38,6 @@ import {
 } from "@/types/dashboard";
 import { StudioHeader, type DashboardStatus, type StudioMode } from "./StudioHeader";
 import { StudioCardLayoutToolbar } from "./StudioCardLayoutToolbar";
-import { StudioAppearanceBar } from "./StudioAppearanceBar";
 import { StudioPageTabs } from "./StudioPageTabs";
 import { StudioEmptyState } from "./StudioEmptyState";
 import { MetricBlock, type MetricBlockState } from "./MetricBlock";
@@ -47,10 +54,13 @@ import {
 } from "@/lib/dashboard/buildChartConfig";
 import type { ChartLabelDisplayMode, ChartPercentBasis, ChartStyleConfig } from "@/lib/dashboard/chartOptions";
 import { loadPreviewWidgetData } from "@/lib/dashboard/previewWidgetDataLoader";
-import { DashboardCompareDefaultsSection } from "@/components/admin/dashboard/DashboardCompareDefaultsSection";
+import { runWithConcurrency } from "@/lib/async/runWithConcurrency";
+import { formatFetchErrorMessage, isSupersededFetchError } from "@/lib/fetch/abortError";
+import { StudioDashboardSettingsPanel } from "@/components/admin/dashboard/StudioDashboardSettingsPanel";
+import { StudioGlobalFiltersBar } from "@/components/admin/dashboard/StudioGlobalFiltersBar";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
 import { EMPTY_DASHBOARD_COMPARE_DEFAULTS } from "@/types/dashboard";
-import { DashboardDatasetDiagnostics } from "./DashboardDatasetDiagnostics";
+import { DEFAULT_FISCAL_YEAR_START_MONTH, normalizeFiscalYearStartMonth } from "@/lib/dashboard/fiscalYear";
 import { resolveGlobalFilterPhysicalField } from "@/lib/dashboard/applyGlobalFiltersToWidget";
 import {
   buildGlobalFilterFieldOptions,
@@ -467,6 +477,8 @@ export function AdminDashboardStudio({
   const [dashboardCompareDefaults, setDashboardCompareDefaults] = useState<DashboardCompareDefaults>(
     () => ({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS })
   );
+  const [fiscalYearStartMonth, setFiscalYearStartMonth] = useState(DEFAULT_FISCAL_YEAR_START_MONTH);
+  const [dashboardSettingsOpen, setDashboardSettingsOpen] = useState(false);
   /** Valores en vivo de filtros globales (por id) y widgets tipo filter en el lienzo. */
   const [studioFilterValues, setStudioFilterValues] = useState<Record<string, unknown>>({});
   const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>({ ...DEFAULT_DASHBOARD_THEME });
@@ -507,6 +519,7 @@ export function AdminDashboardStudio({
   const filtersDataKeyRef = useRef<string | null>(null);
   /** Evita que una respuesta antigua de fetch pise datos de una petición más reciente del mismo widget. */
   const widgetLoadGenRef = useRef<Record<string, number>>({});
+  const widgetFetchAbortRef = useRef<Record<string, AbortController>>({});
   const layoutHydratedForAnalysisRef = useRef(false);
   const widgetsRef = useRef<StudioWidget[]>([]);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -563,19 +576,22 @@ export function AdminDashboardStudio({
       ? `Creado ${new Date(createdAt).toLocaleDateString("es-AR")}`
       : undefined;
 
-  // Cargar layout desde DB
+  // Cargar layout vía API Next (mismo origen); el shim browser a /v1/dashboards falla en producción.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const supabase = createClient();
-        const { data, error } = await supabase
-          .from("dashboard")
-          .select("layout, global_filters_config")
-          .eq("id", dashboardId)
-          .maybeSingle();
-        if (error) throw error;
-        if (!data || cancelled) return;
+        const res = await fetch(`/api/dashboard/${dashboardId}/layout`, { credentials: "include" });
+        const json = await safeJsonResponse<{
+          ok?: boolean;
+          error?: string;
+          data?: { layout?: unknown; global_filters_config?: GlobalFilter[] };
+        }>(res);
+        if (!res.ok || !json.ok) {
+          throw new Error(json.error || "No se pudo cargar el dashboard");
+        }
+        const data = json.data;
+        if (cancelled || !data) return;
         const rawLayout = (data as {
           layout?: {
             widgets?: unknown[];
@@ -584,6 +600,7 @@ export function AdminDashboardStudio({
             activePageId?: string;
             cardLayoutMode?: DashboardCardLayoutMode;
             dashboardCompareDefaults?: DashboardCompareDefaults;
+            fiscalYearStartMonth?: number;
           };
         }).layout;
         const loadedGlobalFilters = (data as unknown as { global_filters_config?: GlobalFilter[] }).global_filters_config || [];
@@ -601,6 +618,7 @@ export function AdminDashboardStudio({
             savedMetrics?: SavedMetric[];
             datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] };
             dashboardCompareDefaults?: DashboardCompareDefaults;
+            fiscalYearStartMonth?: number;
           };
           if (Array.isArray(layout.pages) && layout.pages.length > 0) {
             loadedPages = layout.pages;
@@ -609,16 +627,22 @@ export function AdminDashboardStudio({
           const firstPageId = loadedPages[0].id;
           const loadedCardLayoutMode = normalizeCardLayoutMode(layout.cardLayoutMode);
           if (Array.isArray(layout.widgets)) {
-            loadedWidgets = layout.widgets.map((w: unknown, i: number) =>
-              normalizeLoadedStudioWidget(
+            loadedWidgets = layout.widgets.map((w: unknown, i: number) => {
+              const normalized = normalizeLoadedStudioWidget(
                 {
                   ...(w as object),
                   gridOrder: (w as StudioWidget).gridOrder ?? i,
                   gridSpan: (w as StudioWidget).gridSpan ?? 2,
                   pageId: (w as StudioWidget).pageId ?? firstPageId,
                 } as StudioWidget
-              )
-            );
+              );
+              const needsData =
+                normalized.type !== "filter" &&
+                normalized.type !== "text" &&
+                normalized.type !== "image" &&
+                !!normalized.aggregationConfig?.enabled;
+              return { ...normalized, isLoading: needsData };
+            });
           }
           if (layout.theme) loadedTheme = mergeTheme(layout.theme);
           if (!cancelled) {
@@ -635,6 +659,7 @@ export function AdminDashboardStudio({
             savedMetrics?: SavedMetric[];
             datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] };
             dashboardCompareDefaults?: DashboardCompareDefaults;
+            fiscalYearStartMonth?: number;
           } | undefined;
           setSavedMetrics(Array.isArray(layout?.savedMetrics) ? layout.savedMetrics : []);
           setDerivedColumnsFromLayout(Array.isArray(layout?.datasetConfig?.derivedColumns) ? layout.datasetConfig.derivedColumns : []);
@@ -643,10 +668,13 @@ export function AdminDashboardStudio({
               ? { ...EMPTY_DASHBOARD_COMPARE_DEFAULTS, ...layout.dashboardCompareDefaults }
               : { ...EMPTY_DASHBOARD_COMPARE_DEFAULTS }
           );
+          setFiscalYearStartMonth(normalizeFiscalYearStartMonth(layout?.fiscalYearStartMonth));
           setLayoutLoaded(true);
         }
       } catch (e) {
-        if (!cancelled) toast.error("No se pudo cargar el dashboard");
+        if (!cancelled) {
+          toast.error(e instanceof Error ? e.message : "No se pudo cargar el dashboard");
+        }
       }
       loadedOnce.current = true;
     };
@@ -656,7 +684,11 @@ export function AdminDashboardStudio({
 
   // Cargar métricas reutilizables y columnas derivadas de los ETLs del dashboard (solo tras cargar layout)
   useEffect(() => {
-    if (!layoutLoaded || !etlData || etlLoading || etlMetricsMergedRef.current) return;
+    if (!layoutLoaded || etlLoading || etlMetricsMergedRef.current) return;
+    if (!etlData) {
+      if (etlError) setEtlSidecarReady(true);
+      return;
+    }
     const etlIds = new Set<string>();
     if (etlData.etl?.id) etlIds.add(etlData.etl.id);
     etlData.dataSources?.forEach((s) => etlIds.add(s.etlId));
@@ -703,7 +735,7 @@ export function AdminDashboardStudio({
     return () => {
       cancelled = true;
     };
-  }, [layoutLoaded, etlData, etlLoading]);
+  }, [layoutLoaded, etlData, etlLoading, etlError]);
 
   const saveDashboard = useCallback(async (overrides?: { widgets?: StudioWidget[]; silent?: boolean }) => {
     setIsSaving(true);
@@ -738,6 +770,7 @@ export function AdminDashboardStudio({
         cardLayoutMode,
         savedMetrics,
         dashboardCompareDefaults,
+        fiscalYearStartMonth: normalizeFiscalYearStartMonth(fiscalYearStartMonth),
         ...(datasetConfig && { datasetConfig }),
         ...((etlData as { dashboardDataset?: import("@/lib/dashboard/dashboardDataset").DashboardDataset })?.dashboardDataset && {
           dashboardDataset: (etlData as { dashboardDataset: import("@/lib/dashboard/dashboardDataset").DashboardDataset }).dashboardDataset,
@@ -767,7 +800,7 @@ export function AdminDashboardStudio({
     } finally {
       setIsSaving(false);
     }
-  }, [globalFilters, dashboardTheme, dashboardId, pages, activePageId, cardLayoutMode, savedMetrics, dashboardCompareDefaults, etlData?.etl?.id, etlData?.dataSources]);
+  }, [globalFilters, dashboardTheme, dashboardId, pages, activePageId, cardLayoutMode, savedMetrics, dashboardCompareDefaults, fiscalYearStartMonth, etlData?.etl?.id, etlData?.dataSources]);
 
   useEffect(() => {
     widgetsRef.current = widgets;
@@ -873,6 +906,9 @@ export function AdminDashboardStudio({
       genMap[widgetId] = (genMap[widgetId] ?? 0) + 1;
       const myGen = genMap[widgetId]!;
       const isStale = () => widgetLoadGenRef.current[widgetId] !== myGen;
+      widgetFetchAbortRef.current[widgetId]?.abort();
+      const loadAbort = new AbortController();
+      widgetFetchAbortRef.current[widgetId] = loadAbort;
       if (effectiveWidget.type === "image" || effectiveWidget.type === "text") {
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...effectiveWidget, isLoading: false } : w)));
         return;
@@ -1210,7 +1246,7 @@ export function AdminDashboardStudio({
             savedMetrics: savedByLinkedIds.length > 0 ? savedByLinkedIds : savedMetrics,
             metricsOverride: metricsPayload as Parameters<typeof buildAggregateRequestPayload>[0]["metricsOverride"],
             derivedColumns: derivedColumnsFromLayout.length > 0 ? derivedColumnsFromLayout : undefined,
-            forceUnlimited: true,
+            fiscalYearStartMonth,
           });
           setWidgets((prev) =>
             prev.map((w) =>
@@ -1245,10 +1281,12 @@ export function AdminDashboardStudio({
             metricsOverride: metricsPayload as Parameters<typeof loadPreviewWidgetData>[0]["metricsOverride"],
             derivedColumns: derivedColumnsFromLayout.length > 0 ? derivedColumnsFromLayout : undefined,
             dashboardCompareDefaults,
+            fiscalYearStartMonth,
             aggregateEndpoint: "/api/dashboard/aggregate-data",
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,
             accentColor: (widget as { color?: string }).color ?? "",
+            fetchSignal: loadAbort.signal,
           });
           if (isStale()) return;
           if (!loaded.hasData) {
@@ -1307,11 +1345,13 @@ export function AdminDashboardStudio({
             datasetDimensions: etlData.datasetDimensions,
             globalFilters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters],
             dashboardCompareDefaults,
+            fiscalYearStartMonth,
             aggregateEndpoint: "/api/dashboard/aggregate-data",
             rawEndpoint: "/api/dashboard/raw-data",
             rawLimit: 500,
             accentColor: (widget as { color?: string }).color ?? "",
             rawExtraPayload: rawPayload,
+            fetchSignal: loadAbort.signal,
           });
           if (isStale()) return;
           if (!loaded.hasData) {
@@ -1347,13 +1387,13 @@ export function AdminDashboardStudio({
           }
         }
       } catch (err) {
-        if (!isStale()) {
-          toast.error(err instanceof Error ? err.message : "Error al cargar datos");
-          setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
-        }
+        if (isStale() || isSupersededFetchError(err)) return;
+        const message = formatFetchErrorMessage(err, "Error al cargar datos del gráfico");
+        if (message) toast.error(message);
+        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, savedAnalyses, activePageId, dashboardCompareDefaults]
+    [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, savedAnalyses, activePageId, dashboardCompareDefaults, fiscalYearStartMonth]
   );
 
   useEffect(() => {
@@ -1477,14 +1517,11 @@ export function AdminDashboardStudio({
       (w) => (w.pageId ?? "page-1") === pageId && w.aggregationConfig?.enabled && w.type !== "image" && w.type !== "text"
     );
     if (toLoad.length === 0) return;
-    const sid = selectedId;
-    void (async () => {
-      if (sid && toLoad.some((w) => w.id === sid)) {
-        await loadMetricData(sid);
-      }
-      await Promise.all(toLoad.filter((w) => w.id !== sid).map((w) => loadMetricData(w.id)));
-    })();
-  }, [widgets, activePageId, loadMetricData, selectedId]);
+    const ids = new Set(toLoad.map((w) => w.id));
+    // Marcar todas en loading a la vez y disparar fetches en paralelo (no secuencial ni de a N).
+    setWidgets((prev) => prev.map((w) => (ids.has(w.id) ? { ...w, isLoading: true } : w)));
+    void Promise.all(toLoad.map((w) => loadMetricData(w.id)));
+  }, [widgets, activePageId, loadMetricData]);
 
   const handleStudioFilterChange = useCallback((widgetId: string, value: unknown) => {
     setStudioFilterValues((prev) => ({ ...prev, [widgetId]: value }));
@@ -1513,9 +1550,9 @@ export function AdminDashboardStudio({
         etlData,
         derivedColumns: derivedColumnsFromLayout,
         savedMetrics,
-        excludeFields: globalFilters.map((f) => f.field),
+        // Permitir la misma columna en varios filtros (p. ej. Año + Mes sobre fecha).
       }),
-    [etlData, derivedColumnsFromLayout, savedMetrics, globalFilters]
+    [etlData, derivedColumnsFromLayout, savedMetrics]
   );
 
   const globalFilterFieldOptionsForEdit = useMemo(
@@ -1528,10 +1565,50 @@ export function AdminDashboardStudio({
     [etlData, derivedColumnsFromLayout, savedMetrics]
   );
 
+  const filterDateFieldCtx = useMemo(
+    () => ({
+      etlDateFields: etlData?.fields?.date ?? [],
+      dataSourceDateFields: (etlData?.dataSources ?? []).map((ds) => ds.fields?.date ?? []),
+    }),
+    [etlData]
+  );
+
+  const handleAddGlobalFilter = useCallback(
+    (field: string) => {
+      if (!etlData) return;
+      const label = globalFilterFieldLabel(field, etlData, derivedColumnsFromLayout);
+      const isDate = isDashboardFilterDateField(field, filterDateFieldCtx);
+      setGlobalFilters((prev) => [
+        ...prev,
+        {
+          id: `gf-${Date.now()}`,
+          field,
+          operator: isDate ? "YEAR" : "=",
+          value: "",
+          label,
+          inputType: "select",
+          applyTo: "all",
+        },
+      ]);
+      setIsDirty(true);
+    },
+    [etlData, derivedColumnsFromLayout, filterDateFieldCtx]
+  );
+
+  useEffect(() => {
+    if (mode !== "disenar") {
+      setDashboardSettingsOpen(false);
+      if (mode === "presentar") setSelectedId(null);
+    }
+  }, [mode]);
+
+  const studioSelectButtonClass =
+    "h-10 w-full justify-between rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)] px-3 text-sm font-medium text-[var(--studio-fg)] shadow-none hover:bg-[var(--studio-bg)]";
+
   const filtersDataFingerprint = useMemo(
     () =>
-      `${globalFiltersFingerprint}\x1e${studioFiltersFingerprint}\x1e${JSON.stringify(dashboardCompareDefaults ?? null)}`,
-    [globalFiltersFingerprint, studioFiltersFingerprint, dashboardCompareDefaults]
+      `${globalFiltersFingerprint}\x1e${studioFiltersFingerprint}\x1e${JSON.stringify(dashboardCompareDefaults ?? null)}\x1e${fiscalYearStartMonth}`,
+    [globalFiltersFingerprint, studioFiltersFingerprint, dashboardCompareDefaults, fiscalYearStartMonth]
   );
 
   useEffect(() => {
@@ -1561,7 +1638,7 @@ export function AdminDashboardStudio({
     (async () => {
       setIsRunning(true);
       try {
-        await Promise.all(toLoad.map((w) => loadMetricData(w.id)));
+        await runWithConcurrency(toLoad, 3, (w) => loadMetricData(w.id));
       } finally {
         setIsRunning(false);
       }
@@ -2322,11 +2399,21 @@ export function AdminDashboardStudio({
 
   const addMetricCellStyle = studioBlockCellChromeStyle(themeResolved);
 
+  const closeWidgetPanel = useCallback(() => {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    if (isDirty && layoutPersistReadyRef.current) {
+      void saveDashboard({ silent: true });
+    }
+    setSelectedId(null);
+  }, [isDirty, saveDashboard]);
+
+  const showWidgetConfigPanel =
+    !embeddedPreview &&
+    mode === "disenar" &&
+    Boolean(selectedWidgetForPanel && selectedWidgetForPanel.type !== "filter");
+
   return (
     <div className="admin-dashboard-studio flex h-full flex-col min-h-0 text-[var(--studio-fg)]" style={bgStyle}>
-      {!embeddedPreview && (
-        <StudioAppearanceBar theme={dashboardTheme} onThemeChange={updateTheme} />
-      )}
       {!embeddedPreview && (
         <StudioHeader
           dashboardId={dashboardId}
@@ -2346,161 +2433,60 @@ export function AdminDashboardStudio({
           hideRunButton
         />
       )}
-      {!embeddedPreview && etlData?.etl?.id && widgetsForCurrentPage.length > 0 && (
-        <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-accent-dim)]/50">
-          <span className="text-xs font-medium text-[var(--studio-fg-muted)]">
-            Este dashboard se sincroniza desde las métricas del ETL. Para añadir o editar métricas, usá la página de métricas.
-          </span>
-          <Link
-            href={`/admin/etl/${etlData.etl.id}/metrics`}
-            className="shrink-0 text-xs font-semibold text-[var(--studio-accent)] hover:underline"
-          >
-            Ir a métricas →
-          </Link>
-        </div>
-      )}
-      {!embeddedPreview && etlData?.dataSources && etlData.dataSources.length > 0 && (
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]">
-          <span className="text-xs font-medium text-[var(--studio-fg-muted)]">Fuentes de datos:</span>
-          <div className="flex flex-wrap items-center gap-2">
-            {etlData.dataSources.map((s) => (
-              <span
-                key={s.id}
-                className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
-              >
-                {s.alias} ({s.etlName})
-                <button
-                  type="button"
-                  onClick={() => handleRemoveDataSource(s.id)}
-                  className="ml-0.5 rounded p-0.5 hover:bg-[var(--studio-accent)]/20"
-                  aria-label={`Quitar ${s.alias}`}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-            <button
-              type="button"
-              onClick={() => setAddSourceOpen(true)}
-              className="text-xs font-medium text-[var(--studio-accent)] hover:underline"
-            >
-              + Añadir fuente
-            </button>
-          </div>
-        </div>
-      )}
-      {!embeddedPreview && etlData && (
-        <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]/80">
-          <span className="text-xs font-medium text-[var(--studio-fg-muted)]">Filtros globales:</span>
-          {globalFilters.map((gf) => (
-            <span
-              key={gf.id}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-[var(--studio-surface)] border border-[var(--studio-border)]"
-            >
-              <button
-                type="button"
-                onClick={() => setEditingFilterId(gf.id)}
-                className="flex items-center gap-1 rounded hover:bg-[var(--studio-bg-elevated)] px-0.5 -mx-0.5"
-                aria-label="Configurar filtro"
-              >
-                <Pencil className="h-3 w-3 text-[var(--studio-fg-muted)]" />
-                {(gf as GlobalFilter).label || gf.field}
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setGlobalFilters((prev) => prev.filter((f) => f.id !== gf.id));
-                  setIsDirty(true);
-                }}
-                className="ml-0.5 rounded p-0.5 hover:bg-red-500/20 hover:text-red-600"
-                aria-label="Quitar filtro"
-              >
-                ×
-              </button>
-            </span>
-          ))}
+      {!embeddedPreview && !etlLoading && etlError && (
+        <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-amber-500/40 bg-amber-500/10">
+          <span className="text-xs text-amber-900 dark:text-amber-100">{etlError}</span>
           <button
             type="button"
-            onClick={() => addImageWidgetToDashboard()}
-            className="inline-flex items-center gap-1 rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 py-1 text-xs font-medium text-[var(--studio-fg)] hover:bg-[var(--studio-bg-elevated)]"
+            onClick={() => void refetchEtlData()}
+            className="shrink-0 text-xs font-semibold text-amber-900 underline dark:text-amber-100"
           >
-            <ImageIcon className="h-3.5 w-3.5" aria-hidden />
-            Añadir imagen
-          </button>
-          <select
-            className="rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1 text-xs text-[var(--studio-fg)]"
-            value=""
-            onChange={(e) => {
-              const value = e.target.value;
-              e.target.value = "";
-              if (!value) return;
-              const label = globalFilterFieldLabel(value, etlData, derivedColumnsFromLayout);
-              setGlobalFilters((prev) => [
-                ...prev,
-                {
-                  id: `gf-${Date.now()}`,
-                  field: value,
-                  operator: "=",
-                  value: "",
-                  label,
-                  inputType: "select",
-                  applyTo: "all",
-                },
-              ]);
-              setIsDirty(true);
-            }}
-          >
-            <option value="">+ Añadir filtro</option>
-            {globalFilterFieldOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => setShowDiagnostics((prev) => !prev)}
-            className={cn(
-              "ml-auto rounded-md border px-2 py-1 text-xs font-medium transition-colors",
-              showDiagnostics
-                ? "border-[var(--studio-accent)] text-[var(--studio-accent)] bg-[var(--studio-accent-dim)]"
-                : "border-[var(--studio-border)] text-[var(--studio-fg-muted)] hover:text-[var(--studio-fg)]"
-            )}
-          >
-            {showDiagnostics ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
+            Reintentar
           </button>
         </div>
+      )}
+      {!embeddedPreview && etlData && mode !== "presentar" && (
+        <StudioGlobalFiltersBar
+          mode={mode}
+          globalFilters={globalFilters}
+          filterFieldOptions={globalFilterFieldOptions}
+          settingsOpen={dashboardSettingsOpen}
+          onToggleSettings={() => setDashboardSettingsOpen((o) => !o)}
+          onEditFilter={setEditingFilterId}
+          onRemoveFilter={(id) => {
+            setGlobalFilters((prev) => prev.filter((f) => f.id !== id));
+            setIsDirty(true);
+          }}
+          onAddFilter={handleAddGlobalFilter}
+          onAddImage={() => addImageWidgetToDashboard()}
+          etlId={etlData.etl?.id ?? etlData.dataSources?.[0]?.etlId ?? null}
+        />
       )}
       {!embeddedPreview && etlData && mode === "disenar" && (
-        <div className="px-4 py-2 border-b border-[var(--studio-border)] bg-[var(--studio-bg)]">
-          <DashboardCompareDefaultsSection
-            defaults={dashboardCompareDefaults}
-            onChange={(next) => {
-              setDashboardCompareDefaults(next);
-              setIsDirty(true);
-            }}
-            globalFilters={globalFilters}
-            filterValues={studioFilterValues}
-            dateFields={etlData?.dataSources?.[0]?.fields?.date ?? []}
-          />
-        </div>
-      )}
-      {showDiagnostics && etlData?.dashboardDataset && etlData.dataSources && etlData.dataSources.length > 1 && (
-        <div className="px-4 pb-2">
-          <DashboardDatasetDiagnostics
-            dashboardId={dashboardId}
-            dataset={etlData.dashboardDataset}
-            dataSources={etlData.dataSources.map((s) => ({
-              id: s.id,
-              alias: s.alias,
-              etlName: s.etlName,
-              fields: s.fields,
-            }))}
-            warnings={etlData.datasetWarnings}
-            onUpdated={() => void refetchEtlData()}
-          />
-        </div>
+        <StudioDashboardSettingsPanel
+          open={dashboardSettingsOpen}
+          etlData={etlData}
+          dashboardTheme={dashboardTheme}
+          onThemeChange={updateTheme}
+          fiscalYearStartMonth={fiscalYearStartMonth}
+          onFiscalYearStartMonthChange={(month) => {
+            setFiscalYearStartMonth(month);
+            setIsDirty(true);
+          }}
+          dashboardCompareDefaults={dashboardCompareDefaults}
+          onDashboardCompareDefaultsChange={(next) => {
+            setDashboardCompareDefaults(next);
+            setIsDirty(true);
+          }}
+          globalFilters={globalFilters}
+          studioFilterValues={studioFilterValues}
+          showDiagnostics={showDiagnostics}
+          onToggleDiagnostics={() => setShowDiagnostics((prev) => !prev)}
+          onRemoveDataSource={handleRemoveDataSource}
+          onAddDataSource={() => setAddSourceOpen(true)}
+          onRefetchEtl={refetchEtlData}
+          dashboardId={dashboardId}
+        />
       )}
       <Dialog
         open={!!editingFilterId}
@@ -2508,244 +2494,306 @@ export function AdminDashboardStudio({
           if (!open) setEditingFilterId(null);
         }}
       >
-        <DialogContent className="sm:max-w-md border border-[var(--studio-border)]">
+        <DialogContent className="sm:max-w-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]">
           <DialogHeader>
             <DialogTitle className="text-[var(--studio-fg)]">Configurar filtro</DialogTitle>
             <DialogDescription className="text-[var(--studio-fg-muted)]">
-              Tipo de filtro, etiqueta y a qué gráficos se aplica.
+              Campo, nivel temporal (si es fecha), tipo de control y a qué gráficos aplica.
             </DialogDescription>
           </DialogHeader>
           {editFilterForm && etlData && (
-            <div className="py-4 space-y-4">
-              <div>
-                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Campo</label>
-                <select
-                  value={editFilterForm.field}
-                  onChange={(e) => {
-                    const newField = e.target.value;
-                    const willBeDate =
-                      newField === "date" ||
-                      (etlData?.fields?.date ?? []).includes(newField) ||
-                      (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(newField));
-                    const dateOps = ["YEAR", "MONTH", "DAY", "YEAR_MONTH", "SEMESTER", "QUARTER"];
-                    setEditFilterForm((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            field: newField,
-                            ...(willBeDate && prev.operator && !dateOps.includes(prev.operator)
-                              ? { operator: "YEAR" as const }
-                              : {}),
-                          }
-                        : null
-                    );
-                  }}
-                  className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
-                >
-                  {globalFilterFieldOptionsForEdit.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Etiqueta (opcional)</label>
-                <Input
-                  value={editFilterForm.label ?? ""}
-                  onChange={(e) => setEditFilterForm((prev) => (prev ? { ...prev, label: e.target.value } : null))}
-                  placeholder={editFilterForm.field}
-                  className="border border-[var(--studio-border)] bg-[var(--studio-bg)]"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Tipo de filtro</label>
-                <select
-                  value={editFilterForm.inputType ?? "select"}
-                  onChange={(e) => {
-                    const v = e.target.value as GlobalFilter["inputType"];
-                    const isDate =
-                      editFilterForm.field === "date" ||
-                      (etlData?.fields?.date ?? []).includes(editFilterForm.field) ||
-                      (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(editFilterForm.field));
-                    setEditFilterForm((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            inputType: v,
-                            operator: v === "multi" && !isDate ? "IN" : prev.operator ?? (isDate ? "YEAR" : "="),
-                          }
-                        : null
-                    );
-                  }}
-                  className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
-                >
-                  <option value="select">Lista desplegable</option>
-                  <option value="multi">Selección múltiple</option>
-                  <option value="search">Campo de búsqueda (escribir valores)</option>
-                  <option value="number">Número</option>
-                  <option value="date">Fecha</option>
-                </select>
-              </div>
+            <div className="space-y-5 py-2">
               {(() => {
-                const isDateField =
-                  editFilterForm.field === "date" ||
-                  (etlData?.fields?.date ?? []).includes(editFilterForm.field) ||
-                  (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(editFilterForm.field));
+                const isDateMode = isDashboardFilterDateField(editFilterForm.field, {
+                  ...filterDateFieldCtx,
+                  inputType: editFilterForm.inputType,
+                });
+                const temporalOp = isDashboardDateFilterOperator(editFilterForm.operator)
+                  ? String(editFilterForm.operator).toUpperCase()
+                  : "YEAR";
+                const compareOp = editFilterForm.operator ?? "=";
+                const applyTo = editFilterForm.applyTo ?? "all";
+
                 return (
-                  <div>
-                    <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">
-                      {isDateField ? "Nivel de filtrado (fecha)" : "Condición"}
-                    </label>
-                    <select
-                      value={
-                        isDateField
-                          ? ["YEAR", "MONTH", "DAY", "YEAR_MONTH", "SEMESTER", "QUARTER"].includes(
-                              editFilterForm.operator ?? ""
-                            )
-                            ? editFilterForm.operator
-                            : "YEAR"
-                          : editFilterForm.operator ?? "="
-                      }
-                      onChange={(e) =>
-                        setEditFilterForm((prev) => (prev ? { ...prev, operator: e.target.value } : null))
-                      }
-                      className="w-full rounded-md border border-[var(--studio-border)] bg-[var(--studio-bg)] px-2 py-1.5 text-sm text-[var(--studio-fg)]"
-                    >
-                      {isDateField ? (
-                        <>
-                          <option value="YEAR">AÑO</option>
-                          <option value="MONTH">MES</option>
-                          <option value="DAY">DÍA</option>
-                          <option value="YEAR_MONTH">AÑO/MES</option>
-                          <option value="DAY">AÑO/MES/DÍA</option>
-                          <option value="SEMESTER">SEMESTRE</option>
-                          <option value="QUARTER">TRIMESTRE</option>
-                        </>
+                  <>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Campo</Label>
+                      <Select
+                        value={editFilterForm.field}
+                        searchable
+                        searchPlaceholder="Buscar campo…"
+                        disablePortal
+                        options={globalFilterFieldOptionsForEdit}
+                        buttonClassName={studioSelectButtonClass}
+                        onChange={(newField: string) => {
+                          const willBeDate = isDashboardFilterDateField(newField, {
+                            ...filterDateFieldCtx,
+                            inputType: editFilterForm.inputType === "date" ? "date" : undefined,
+                          });
+                          setEditFilterForm((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  field: newField,
+                                  ...(willBeDate && !isDashboardDateFilterOperator(prev.operator)
+                                    ? { operator: "YEAR" }
+                                    : {}),
+                                }
+                              : null
+                          );
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">
+                        Etiqueta (opcional)
+                      </Label>
+                      <Input
+                        value={editFilterForm.label ?? ""}
+                        onChange={(e) =>
+                          setEditFilterForm((prev) => (prev ? { ...prev, label: e.target.value } : null))
+                        }
+                        placeholder={editFilterForm.field}
+                        className="h-10 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)] text-[var(--studio-fg)]"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">
+                        Tipo de filtro
+                      </Label>
+                      <Select
+                        value={editFilterForm.inputType ?? "select"}
+                        disablePortal
+                        buttonClassName={studioSelectButtonClass}
+                        options={[
+                          { value: "select", label: "Lista desplegable" },
+                          { value: "multi", label: "Selección múltiple" },
+                          { value: "search", label: "Campo de búsqueda" },
+                          { value: "number", label: "Número" },
+                          { value: "date", label: "Fecha" },
+                        ]}
+                        onChange={(v: string) => {
+                          const nextType = v as GlobalFilter["inputType"];
+                          setEditFilterForm((prev) => {
+                            if (!prev) return null;
+                            const nextIsDate = isDashboardFilterDateField(prev.field, {
+                              ...filterDateFieldCtx,
+                              inputType: nextType,
+                            });
+                            let operator = prev.operator ?? (nextIsDate ? "YEAR" : "=");
+                            if (nextType === "multi" && !nextIsDate) operator = "IN";
+                            else if (nextIsDate && !isDashboardDateFilterOperator(operator)) operator = "YEAR";
+                            return { ...prev, inputType: nextType, operator };
+                          });
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">
+                        {isDateMode ? "Nivel temporal" : "Condición"}
+                      </Label>
+                      {isDateMode ? (
+                        <Select
+                          value={temporalOp}
+                          disablePortal
+                          buttonClassName={studioSelectButtonClass}
+                          options={[
+                            { value: "YEAR", label: "Año" },
+                            { value: "MONTH", label: "Mes" },
+                            { value: "DAY", label: "Día" },
+                            { value: "YEAR_MONTH", label: "Año / Mes" },
+                            { value: "SEMESTER", label: "Semestre" },
+                            { value: "QUARTER", label: "Trimestre" },
+                          ]}
+                          onChange={(op: string) =>
+                            setEditFilterForm((prev) => (prev ? { ...prev, operator: op } : null))
+                          }
+                        />
                       ) : (
-                        <>
-                          <option value="=">Igual</option>
-                          <option value="!=">Distinto</option>
-                          <option value="CONTAINS">Contiene</option>
-                          <option value="STARTS_WITH">Comienza por</option>
-                          <option value="ENDS_WITH">Termina en</option>
-                          <option value=">">Mayor que</option>
-                          <option value=">=">Mayor o igual</option>
-                          <option value="<">Menor que</option>
-                          <option value="<=">Menor o igual</option>
-                        </>
+                        <Select
+                          value={compareOp}
+                          disablePortal
+                          buttonClassName={studioSelectButtonClass}
+                          options={[
+                            { value: "=", label: "Igual" },
+                            { value: "!=", label: "Distinto" },
+                            { value: "CONTAINS", label: "Contiene" },
+                            { value: "STARTS_WITH", label: "Comienza por" },
+                            { value: "ENDS_WITH", label: "Termina en" },
+                            { value: ">", label: "Mayor que" },
+                            { value: ">=", label: "Mayor o igual" },
+                            { value: "<", label: "Menor que" },
+                            { value: "<=", label: "Menor o igual" },
+                          ]}
+                          onChange={(op: string) =>
+                            setEditFilterForm((prev) => (prev ? { ...prev, operator: op } : null))
+                          }
+                        />
                       )}
-                    </select>
-                  </div>
+                      {isDateMode ? (
+                        <p className="text-[11px] leading-relaxed text-[var(--studio-fg-muted)]">
+                          Define cómo se agrupa la fecha al filtrar (por ejemplo Año para elegir 2024, 2025…).
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Aplicar a</Label>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {(
+                          [
+                            { id: "all" as const, title: "Todos los gráficos", hint: "El filtro afecta a toda la página" },
+                            {
+                              id: "selected" as const,
+                              title: "Solo seleccionados",
+                              hint: "Elegí en qué tarjetas aplica",
+                            },
+                          ] as const
+                        ).map((opt) => {
+                          const selected = applyTo === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() =>
+                                setEditFilterForm((prev) =>
+                                  prev
+                                    ? {
+                                        ...prev,
+                                        applyTo: opt.id,
+                                        applyToWidgetIds: opt.id === "all" ? undefined : prev.applyToWidgetIds ?? [],
+                                      }
+                                    : null
+                                )
+                              }
+                              className={cn(
+                                "rounded-lg border px-3 py-2.5 text-left transition-colors",
+                                selected
+                                  ? "border-[var(--studio-accent,#0ea5e9)] bg-[color-mix(in_srgb,var(--studio-accent,#0ea5e9)_12%,transparent)]"
+                                  : "border-[var(--studio-border)] bg-[var(--studio-bg)] hover:border-[var(--studio-fg-muted)]"
+                              )}
+                            >
+                              <span className="block text-sm font-medium text-[var(--studio-fg)]">{opt.title}</span>
+                              <span className="mt-0.5 block text-[11px] text-[var(--studio-fg-muted)]">{opt.hint}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {applyTo === "selected" && (
+                        <div className="mt-1 max-h-44 space-y-1 overflow-y-auto rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)] p-2">
+                          {widgets
+                            .filter((w) => w.type !== "filter")
+                            .map((w) => {
+                              const checked = (editFilterForm.applyToWidgetIds ?? []).includes(w.id);
+                              return (
+                                <label
+                                  key={w.id}
+                                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm hover:bg-[color-mix(in_srgb,var(--studio-fg)_4%,transparent)]"
+                                >
+                                  <Checkbox
+                                    checked={checked}
+                                    onCheckedChange={(state) => {
+                                      const nextChecked = state === true;
+                                      setEditFilterForm((prev) => {
+                                        if (!prev) return null;
+                                        const ids = prev.applyToWidgetIds ?? [];
+                                        const next = nextChecked
+                                          ? ids.includes(w.id)
+                                            ? ids
+                                            : [...ids, w.id]
+                                          : ids.filter((id) => id !== w.id);
+                                        return { ...prev, applyToWidgetIds: next };
+                                      });
+                                    }}
+                                    className="border-[var(--studio-border)] data-[state=checked]:border-[var(--studio-accent,#0ea5e9)] data-[state=checked]:bg-[var(--studio-accent,#0ea5e9)]"
+                                  />
+                                  <span className="min-w-0 truncate text-[var(--studio-fg)]">
+                                    {w.title || w.id || "Sin título"}
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          {widgets.filter((w) => w.type !== "filter").length === 0 && (
+                            <p className="px-2 py-1 text-xs text-[var(--studio-fg-muted)]">
+                              No hay gráficos en el dashboard.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {applyTo === "selected" &&
+                        (() => {
+                          const dataSources = (
+                            etlData as { dataSources?: { id: string; fields?: { all?: string[] } }[] }
+                          )?.dataSources;
+                          const datasetDimensions = (
+                            etlData as {
+                              datasetDimensions?: Record<string, Record<string, string>>;
+                              primarySourceId?: string;
+                            }
+                          )?.datasetDimensions;
+                          const primarySourceId =
+                            (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
+                          const selectedIds = editFilterForm.applyToWidgetIds ?? [];
+                          const incompatible: { id: string; title: string }[] = [];
+                          if (dataSources?.length && selectedIds.length > 0) {
+                            for (const widgetId of selectedIds) {
+                              const w = widgets.find((x) => x.id === widgetId);
+                              if (!w || w.type === "filter") continue;
+                              const widgetSourceId = w.dataSourceId ?? primarySourceId ?? dataSources[0]?.id;
+                              const source = dataSources.find((s) => s.id === widgetSourceId) ?? dataSources[0];
+                              const sourceFieldsAll = (source?.fields?.all ?? []).map((c: string) =>
+                                (c || "").toLowerCase()
+                              );
+                              const resolvePhysical = (sem: string) => {
+                                const bySource = datasetDimensions?.[sem];
+                                if (bySource && widgetSourceId && bySource[widgetSourceId]) {
+                                  return bySource[widgetSourceId];
+                                }
+                                return sem;
+                              };
+                              const physical = resolvePhysical(editFilterForm.field);
+                              const hasField =
+                                physical &&
+                                sourceFieldsAll.some((c: string) => c === (physical || "").toLowerCase());
+                              if (!hasField) {
+                                incompatible.push({ id: w.id, title: w.title || w.id || "Sin título" });
+                              }
+                            }
+                          }
+                          if (incompatible.length === 0) return null;
+                          return (
+                            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+                              Los siguientes gráficos no contienen el campo &quot;{editFilterForm.field}&quot;:{" "}
+                              {incompatible.map((x) => x.title).join(", ")}. El filtro no tendrá efecto en ellos.
+                            </div>
+                          );
+                        })()}
+                    </div>
+                  </>
                 );
               })()}
-              <div>
-                <label className="text-xs font-medium text-[var(--studio-fg-muted)] block mb-1">Aplicar a</label>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="applyTo"
-                      checked={(editFilterForm.applyTo ?? "all") === "all"}
-                      onChange={() =>
-                        setEditFilterForm((prev) => (prev ? { ...prev, applyTo: "all" as const, applyToWidgetIds: undefined } : null))
-                      }
-                    />
-                    <span className="text-sm">Todos los gráficos</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="applyTo"
-                      checked={(editFilterForm.applyTo ?? "all") === "selected"}
-                      onChange={() =>
-                        setEditFilterForm((prev) => (prev ? { ...prev, applyTo: "selected" as const, applyToWidgetIds: [] } : null))
-                      }
-                    />
-                    <span className="text-sm">Solo gráficos seleccionados</span>
-                  </label>
-                </div>
-                {(editFilterForm.applyTo ?? "all") === "selected" && (
-                  <div className="mt-2 max-h-40 overflow-y-auto rounded border border-[var(--studio-border)] p-2 space-y-1">
-                    {widgets
-                      .filter((w) => w.type !== "filter")
-                      .map((w) => {
-                        const checked = (editFilterForm.applyToWidgetIds ?? []).includes(w.id);
-                        return (
-                          <label key={w.id} className="flex items-center gap-2 cursor-pointer text-sm">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => {
-                                setEditFilterForm((prev) => {
-                                  if (!prev) return null;
-                                  const ids = prev.applyToWidgetIds ?? [];
-                                  const next = checked ? ids.filter((id) => id !== w.id) : [...ids, w.id];
-                                  return { ...prev, applyToWidgetIds: next };
-                                });
-                              }}
-                            />
-                            <span className="truncate">{w.title || w.id || "Sin título"}</span>
-                          </label>
-                        );
-                      })}
-                    {widgets.filter((w) => w.type !== "filter").length === 0 && (
-                      <p className="text-xs text-[var(--studio-fg-muted)]">No hay gráficos en el dashboard.</p>
-                    )}
-                  </div>
-                )}
-                {(editFilterForm.applyTo ?? "all") === "selected" &&
-                  (() => {
-                    const dataSources = (etlData as { dataSources?: { id: string; fields?: { all?: string[] } }[] })?.dataSources;
-                    const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>>; primarySourceId?: string })?.datasetDimensions;
-                    const primarySourceId = (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSources?.[0]?.id;
-                    const selectedIds = editFilterForm.applyToWidgetIds ?? [];
-                    const incompatible: { id: string; title: string }[] = [];
-                    if (dataSources?.length && selectedIds.length > 0) {
-                      for (const widgetId of selectedIds) {
-                        const w = widgets.find((x) => x.id === widgetId);
-                        if (!w || w.type === "filter") continue;
-                        const widgetSourceId = w.dataSourceId ?? primarySourceId ?? dataSources[0]?.id;
-                        const source = dataSources.find((s) => s.id === widgetSourceId) ?? dataSources[0];
-                        const sourceFieldsAll = (source?.fields?.all ?? []).map((c: string) => (c || "").toLowerCase());
-                        const resolvePhysical = (sem: string) => {
-                          const bySource = datasetDimensions?.[sem];
-                          if (bySource && widgetSourceId && bySource[widgetSourceId]) return bySource[widgetSourceId];
-                          return sem;
-                        };
-                        const physical = resolvePhysical(editFilterForm.field);
-                        const hasField = physical && sourceFieldsAll.some((c: string) => c === (physical || "").toLowerCase());
-                        if (!hasField) incompatible.push({ id: w.id, title: w.title || w.id || "Sin título" });
-                      }
-                    }
-                    if (incompatible.length === 0) return null;
-                    return (
-                      <div className="mt-2 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-200">
-                        Los siguientes gráficos no contienen el campo &quot;{editFilterForm.field}&quot;:{" "}
-                        {incompatible.map((x) => x.title).join(", ")}. El filtro no tendrá efecto en ellos.
-                      </div>
-                    );
-                  })()}
-              </div>
             </div>
           )}
           {editFilterForm && (
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 border-t border-[var(--studio-border)] pt-4">
               <Button variant="outline" onClick={() => setEditingFilterId(null)}>
                 Cancelar
               </Button>
               <Button
                 onClick={() => {
                   if (!editFilterForm) return;
-                  const isDate =
-                    editFilterForm.field === "date" ||
-                    (etlData?.fields?.date ?? []).includes(editFilterForm.field) ||
-                    (etlData?.dataSources ?? []).some((ds) => (ds.fields?.date ?? []).includes(editFilterForm.field));
-                  const dateOps = ["YEAR", "MONTH", "DAY", "YEAR_MONTH", "SEMESTER", "QUARTER"];
-                  const operator =
-                    isDate && editFilterForm.operator && !dateOps.includes(editFilterForm.operator)
-                      ? "YEAR"
-                      : (editFilterForm.operator ?? "=");
+                  const operator = resolveDashboardFilterOperator({
+                    field: editFilterForm.field,
+                    operator: editFilterForm.operator,
+                    inputType: editFilterForm.inputType,
+                    etlDateFields: filterDateFieldCtx.etlDateFields,
+                    dataSourceDateFields: filterDateFieldCtx.dataSourceDateFields,
+                  });
                   setGlobalFilters((prev) =>
                     prev.map((f) =>
                       f.id === editingFilterId ? { ...editFilterForm, id: f.id, operator } : f
@@ -2820,17 +2868,20 @@ export function AdminDashboardStudio({
           </div>
         </DialogContent>
       </Dialog>
-      <StudioPageTabs
-        pages={pages}
-        activePageId={activePageId}
-        onSelectPage={setActivePageId}
-        onAddPage={addPage}
-        onRenamePage={renamePage}
-        onDeletePage={deletePage}
-        readOnly={embeddedPreview}
-      />
-      <main className="studio-main flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
+      <main className="studio-main flex min-h-0 flex-1 flex-row overflow-hidden">
+        <div className="studio-workspace flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {!embeddedPreview && (
+            <StudioPageTabs
+              pages={pages}
+              activePageId={activePageId}
+              onSelectPage={setActivePageId}
+              onAddPage={addPage}
+              onRenamePage={renamePage}
+              onDeletePage={deletePage}
+              readOnly={embeddedPreview}
+            />
+          )}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
         {widgetsForCurrentPage.length === 0 && sortedWidgets.length === 0 ? (
           <StudioEmptyState
             onAddMetrics={openAddMetricList}
@@ -2847,7 +2898,7 @@ export function AdminDashboardStudio({
                 Analizando métricas…
               </div>
             )}
-            {!embeddedPreview && mode !== "presentar" ? (
+            {!embeddedPreview && mode === "disenar" ? (
               <StudioCardLayoutToolbar
                 mode={cardLayoutMode}
                 onModeChange={handleCardLayoutModeChange}
@@ -2901,7 +2952,7 @@ export function AdminDashboardStudio({
                 const canMoveDownReorder =
                   cardLayoutMode === "auto" && orderIdx >= 0 && orderIdx < packedPlacements.length - 1;
                 const onDragHandleStart =
-                  cardLayoutMode === "manual" && !embeddedPreview && w.fixedGrid
+                  cardLayoutMode === "manual" && !embeddedPreview && mode === "disenar" && w.fixedGrid
                     ? (e: React.PointerEvent) => {
                         e.stopPropagation();
                         e.preventDefault();
@@ -2945,7 +2996,7 @@ export function AdminDashboardStudio({
                     {w.cardTheme?.logoUrl?.trim() ? (
                       <DashboardLogoOverlay theme={effectiveTheme} />
                     ) : null}
-                    {isSelected && !embeddedPreview && (
+                    {isSelected && !embeddedPreview && mode === "disenar" && (
                       <>
                         <div
                           role="presentation"
@@ -2974,29 +3025,29 @@ export function AdminDashboardStudio({
                       chartType={chartType}
                       isLoading={w.isLoading}
                       isSelected={embeddedPreview ? false : isSelected}
-                      readOnly={embeddedPreview}
+                      readOnly={embeddedPreview || mode !== "disenar"}
                       onConfigure={
-                        embeddedPreview || w.type === "filter"
+                        embeddedPreview || mode !== "disenar" || w.type === "filter"
                           ? undefined
                           : () => setSelectedId(w.id)
                       }
-                      onRun={embeddedPreview ? undefined : () => loadMetricData(w.id)}
+                      onRun={embeddedPreview || mode !== "disenar" ? undefined : () => loadMetricData(w.id)}
                       onMoveOrder={
-                        embeddedPreview || cardLayoutMode === "manual"
+                        embeddedPreview || mode !== "disenar" || cardLayoutMode === "manual"
                           ? undefined
                           : (dir) => moveWidgetGridOrder(w.id, dir)
                       }
                       canMoveUp={canMoveUpReorder}
                       canMoveDown={canMoveDownReorder}
-                      showDragHandle={cardLayoutMode === "manual" && !embeddedPreview}
+                      showDragHandle={cardLayoutMode === "manual" && !embeddedPreview && mode === "disenar"}
                       onDragHandleStart={onDragHandleStart}
                       isDragging={draggingWidgetId === w.id}
-                      onDelete={embeddedPreview ? undefined : () => deleteMetric(w.id)}
+                      onDelete={embeddedPreview || mode !== "disenar" ? undefined : () => deleteMetric(w.id)}
                       kpiValue={kpiValue}
                       tableRows={w.rows as Record<string, unknown>[] | undefined}
                       gridSpan={span}
                       minHeight={minH}
-                      onSizeChange={embeddedPreview ? undefined : (patch) => updateWidgetSize(w.id, patch)}
+                      onSizeChange={embeddedPreview || mode !== "disenar" ? undefined : (patch) => updateWidgetSize(w.id, patch)}
                       chartGridXDisplay={(w.aggregationConfig as { chartGridXDisplay?: boolean })?.chartGridXDisplay}
                       chartGridYDisplay={(w.aggregationConfig as { chartGridYDisplay?: boolean })?.chartGridYDisplay}
                       chartGridColor={(w.aggregationConfig as { chartGridColor?: string })?.chartGridColor}
@@ -3071,7 +3122,7 @@ export function AdminDashboardStudio({
                   </div>
                 );
               })}
-              {!embeddedPreview && (
+              {!embeddedPreview && mode === "disenar" && (
               <div
                 className="studio-block-cell studio-add-metric-cell"
                 style={{
@@ -3098,107 +3149,86 @@ export function AdminDashboardStudio({
             </div>
           </div>
         )}
+          </div>
         </div>
-      </main>
 
-      {!embeddedPreview && mode !== "presentar" && (
-        <Dialog
-          open={Boolean(selectedWidgetForPanel && selectedWidgetForPanel.type !== "filter")}
-          onOpenChange={(open) => {
-            if (!open) {
-              if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-              if (isDirty && layoutPersistReadyRef.current) {
-                void saveDashboard({ silent: true });
+        {showWidgetConfigPanel && selectedWidgetForPanel && selectedWidgetForPanel.type !== "filter" && (
+          <aside className="studio-widget-panel flex w-[min(100%,28rem)] shrink-0 flex-col border-l border-[var(--studio-border)] bg-[var(--studio-bg-elevated)] shadow-[-8px_0_24px_rgba(0,0,0,0.25)]">
+            <MetricConfigPanel
+              dashboardTheme={dashboardTheme}
+              dashboardCompareDefaults={dashboardCompareDefaults}
+              previewChartDatasetLabels={
+                selectedWidgetForPanel.config?.datasets
+                  ?.map((d) => String((d as { label?: string }).label ?? "").trim())
+                  .filter(Boolean) ?? []
               }
-              setSelectedId(null);
-            }
-          }}
-        >
-          <DialogContent
-            showCloseButton={false}
-            aria-describedby={undefined}
-            className="studio-metric-config-dialog border border-[var(--studio-border)] bg-[var(--studio-bg-elevated)] p-0 gap-0 shadow-2xl sm:max-w-3xl w-[min(100vw-1.5rem,42rem)] max-h-[min(92vh,880px)] overflow-hidden flex flex-col"
-          >
-            <DialogHeader className="sr-only">
-              <DialogTitle>Configurar métrica</DialogTitle>
-            </DialogHeader>
-            {selectedWidgetForPanel && selectedWidgetForPanel.type !== "filter" && (
-              <MetricConfigPanel
-                dashboardTheme={dashboardTheme}
-                dashboardCompareDefaults={dashboardCompareDefaults}
-                previewChartDatasetLabels={
-                  selectedWidgetForPanel.config?.datasets
-                    ?.map((d) => String((d as { label?: string }).label ?? "").trim())
-                    .filter(Boolean) ?? []
-                }
-                previewChartLabels={
-                  (selectedWidgetForPanel.config?.labels as string[] | undefined)?.map((s) =>
-                    String(s ?? "").trim()
-                  ).filter(Boolean) ?? []
-                }
-                previewChartRawCategoryKeys={
-                  (selectedWidgetForPanel.config?.xRawCategoryKeys as string[] | undefined)?.map((s) =>
-                    String(s ?? "").trim()
-                  ).filter(Boolean) ?? []
-                }
-                previewRows={selectedWidgetForPanel.rows}
-                kpiUserTimeScope={
-                  (selectedWidgetForPanel as { kpiUserTimeScope?: KpiUserTimeScopeOptions | null }).kpiUserTimeScope ?? null
-                }
-                widget={{
-                  id: selectedWidgetForPanel.id,
-                  type: selectedWidgetForPanel.type,
-                  title: selectedWidgetForPanel.title,
-                  gridSpan: selectedWidgetForPanel.gridSpan,
-                  minHeight: selectedWidgetForPanel.minHeight,
-                  aggregationConfig: (selectedWidgetForPanel.aggregationConfig ?? {
-                    enabled: false,
-                    metrics: [],
-                  }) as AggregationConfigEdit,
-                  labelDisplayMode: selectedWidgetForPanel.labelDisplayMode,
-                  chartPercentBasis: selectedWidgetForPanel.chartPercentBasis,
-                  chartPercentGroupField: selectedWidgetForPanel.chartPercentGroupField,
-                  chartPercentDenominatorMetric: selectedWidgetForPanel.chartPercentDenominatorMetric,
-                  chartPercentDenominatorScope: selectedWidgetForPanel.chartPercentDenominatorScope,
-                  chartPercentDenominatorGrandTotal: selectedWidgetForPanel.chartPercentDenominatorGrandTotal,
-                  color: selectedWidgetForPanel.color as string | undefined,
-                  kpiSecondaryLabel: selectedWidgetForPanel.kpiSecondaryLabel,
-                  kpiSecondaryValue: selectedWidgetForPanel.kpiSecondaryValue,
-                  kpiCaption: selectedWidgetForPanel.kpiCaption,
-                  excludeGlobalFilters: selectedWidgetForPanel.excludeGlobalFilters,
-                  dataSourceId: selectedWidgetForPanel.dataSourceId,
-                  cardTheme: selectedWidgetForPanel.cardTheme,
-                  imageUrl: selectedWidgetForPanel.imageUrl,
-                  imageConfig: selectedWidgetForPanel.imageConfig,
-                  fixedGrid: selectedWidgetForPanel.fixedGrid,
-                  zIndex: selectedWidgetForPanel.zIndex,
-                  headerIconUrl: selectedWidgetForPanel.headerIconUrl,
-                  headerIconKey: selectedWidgetForPanel.headerIconKey,
-                  contentIconPosition: selectedWidgetForPanel.contentIconPosition,
-                  contentIconSize: selectedWidgetForPanel.contentIconSize,
-                  hideWidgetHeader: selectedWidgetForPanel.hideWidgetHeader,
-                  content: selectedWidgetForPanel.content,
-                }}
-                etlData={etlData}
-                etlLoading={etlLoading}
-                metricDataLoading={!!selectedWidgetForPanel.isLoading}
-                cardLayoutMode={cardLayoutMode}
-                onCardLayoutModeChange={handleCardLayoutModeChange}
-                onReorganizeAuto={reorganizeAutoLayout}
-                onUpdate={handleMetricPanelUpdate}
-                onLoadData={() => void loadMetricData(selectedWidgetForPanel.id)}
-                onClose={() => setSelectedId(null)}
-                savedMetrics={savedMetrics.map((s) => ({
-                  id: s.id,
-                  name: s.name,
-                  metric: s.metric,
-                  aggregationConfig: s.aggregationConfig,
-                }))}
-              />
-            )}
-          </DialogContent>
-        </Dialog>
-      )}
+              previewChartLabels={
+                (selectedWidgetForPanel.config?.labels as string[] | undefined)?.map((s) =>
+                  String(s ?? "").trim()
+                ).filter(Boolean) ?? []
+              }
+              previewChartRawCategoryKeys={
+                (selectedWidgetForPanel.config?.xRawCategoryKeys as string[] | undefined)?.map((s) =>
+                  String(s ?? "").trim()
+                ).filter(Boolean) ?? []
+              }
+              previewRows={selectedWidgetForPanel.rows}
+              kpiUserTimeScope={
+                (selectedWidgetForPanel as { kpiUserTimeScope?: KpiUserTimeScopeOptions | null }).kpiUserTimeScope ?? null
+              }
+              widget={{
+                id: selectedWidgetForPanel.id,
+                type: selectedWidgetForPanel.type,
+                title: selectedWidgetForPanel.title,
+                gridSpan: selectedWidgetForPanel.gridSpan,
+                minHeight: selectedWidgetForPanel.minHeight,
+                aggregationConfig: (selectedWidgetForPanel.aggregationConfig ?? {
+                  enabled: false,
+                  metrics: [],
+                }) as AggregationConfigEdit,
+                labelDisplayMode: selectedWidgetForPanel.labelDisplayMode,
+                chartPercentBasis: selectedWidgetForPanel.chartPercentBasis,
+                chartPercentGroupField: selectedWidgetForPanel.chartPercentGroupField,
+                chartPercentDenominatorMetric: selectedWidgetForPanel.chartPercentDenominatorMetric,
+                chartPercentDenominatorScope: selectedWidgetForPanel.chartPercentDenominatorScope,
+                chartPercentDenominatorGrandTotal: selectedWidgetForPanel.chartPercentDenominatorGrandTotal,
+                color: selectedWidgetForPanel.color as string | undefined,
+                kpiSecondaryLabel: selectedWidgetForPanel.kpiSecondaryLabel,
+                kpiSecondaryValue: selectedWidgetForPanel.kpiSecondaryValue,
+                kpiCaption: selectedWidgetForPanel.kpiCaption,
+                excludeGlobalFilters: selectedWidgetForPanel.excludeGlobalFilters,
+                dataSourceId: selectedWidgetForPanel.dataSourceId,
+                cardTheme: selectedWidgetForPanel.cardTheme,
+                imageUrl: selectedWidgetForPanel.imageUrl,
+                imageConfig: selectedWidgetForPanel.imageConfig,
+                fixedGrid: selectedWidgetForPanel.fixedGrid,
+                zIndex: selectedWidgetForPanel.zIndex,
+                headerIconUrl: selectedWidgetForPanel.headerIconUrl,
+                headerIconKey: selectedWidgetForPanel.headerIconKey,
+                contentIconPosition: selectedWidgetForPanel.contentIconPosition,
+                contentIconSize: selectedWidgetForPanel.contentIconSize,
+                hideWidgetHeader: selectedWidgetForPanel.hideWidgetHeader,
+                content: selectedWidgetForPanel.content,
+              }}
+              etlData={etlData}
+              etlLoading={etlLoading}
+              metricDataLoading={!!selectedWidgetForPanel.isLoading}
+              cardLayoutMode={cardLayoutMode}
+              onCardLayoutModeChange={handleCardLayoutModeChange}
+              onReorganizeAuto={reorganizeAutoLayout}
+              onUpdate={handleMetricPanelUpdate}
+              onLoadData={() => void loadMetricData(selectedWidgetForPanel.id)}
+              onClose={closeWidgetPanel}
+              savedMetrics={savedMetrics.map((s) => ({
+                id: s.id,
+                name: s.name,
+                metric: s.metric,
+                aggregationConfig: s.aggregationConfig,
+              }))}
+            />
+          </aside>
+        )}
+      </main>
 
       <Dialog
         open={addMetricOpen}
@@ -3209,31 +3239,85 @@ export function AdminDashboardStudio({
         }}
       >
         <DialogContent className="studio-modal-content border-0 p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col">
-          <div className="studio-modal-inner p-6 pb-4">
+          <div className="studio-modal-inner p-6 pb-4 overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Añadir análisis</DialogTitle>
+              <DialogTitle>Añadir al dashboard</DialogTitle>
               <DialogDescription>
-                Elegí un análisis ya creado para agregar al dashboard. Los análisis son gráficos configurados (métricas + dimensiones + tipo). Para crear nuevos, andá a Métricas del ETL y guardá un análisis en el paso C o D.
+                Elegí una métrica guardada o un análisis completo. Las métricas de «Calculadas» ya incluyen tipo de gráfico y configuración; los análisis combinan varias métricas con dimensiones.
               </DialogDescription>
             </DialogHeader>
-            {savedAnalyses.length > 0 ? (
-              <div className="mt-4 space-y-2 max-h-[280px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
-                {savedAnalyses.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => addSavedAnalysisToDashboard(a)}
-                    className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
-                    style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
-                  >
-                    <span className="font-medium truncate">{a.name}</span>
-                    <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir al dashboard</span>
-                  </button>
-                ))}
+            {savedMetrics.length > 0 && (
+              <div className="mt-4">
+                <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--studio-fg-muted)" }}>
+                  Métricas guardadas
+                </p>
+                <div className="space-y-2 max-h-[220px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
+                  {savedMetrics.map((m) => {
+                    const expr = (m.metric as { expression?: string })?.expression?.trim();
+                    const formula = (m.metric as { formula?: string })?.formula?.trim();
+                    const func = (m.metric as { func?: string })?.func;
+                    const field = (m.metric as { field?: string })?.field;
+                    const subtitle =
+                      expr || formula
+                        ? `${expr || formula}${func ? ` · ${func}` : ""}`
+                        : field
+                          ? `${func ?? "SUM"}(${field})`
+                          : "";
+                    const chartType = String(
+                      (m.aggregationConfig as { chartType?: string } | undefined)?.chartType ??
+                        (m as { chartType?: string }).chartType ??
+                        "bar"
+                    );
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => addSavedMetricToDashboard(m)}
+                        className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
+                        style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="font-medium block truncate">{m.name}</span>
+                          {subtitle ? (
+                            <span className="text-xs block truncate mt-0.5 font-mono" style={{ color: "var(--studio-fg-muted)" }}>
+                              {subtitle}
+                            </span>
+                          ) : null}
+                          <span className="text-xs block mt-0.5" style={{ color: "var(--studio-fg-muted)" }}>
+                            Tipo: {chartType}
+                          </span>
+                        </span>
+                        <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            ) : (
+            )}
+            {savedAnalyses.length > 0 && (
+              <div className={savedMetrics.length > 0 ? "mt-5" : "mt-4"}>
+                <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--studio-fg-muted)" }}>
+                  Análisis guardados
+                </p>
+                <div className="space-y-2 max-h-[220px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--studio-border)" }}>
+                  {savedAnalyses.map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => addSavedAnalysisToDashboard(a)}
+                      className="w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
+                      style={{ background: "var(--studio-surface-hover)", color: "var(--studio-fg)" }}
+                    >
+                      <span className="font-medium truncate">{a.name}</span>
+                      <span className="text-sm shrink-0" style={{ color: "var(--studio-accent)" }}>Añadir</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {savedMetrics.length === 0 && savedAnalyses.length === 0 && (
               <p className="mt-3 text-sm" style={{ color: "var(--studio-fg-muted)" }}>
-                No hay análisis guardados para este ETL. En la página de métricas del ETL, completá el paso C (Análisis) o D (Gráfico) y usá «Guardar como análisis» para que aparezcan aquí.
+                No hay métricas ni análisis guardados para este ETL. Creá una métrica en la página de métricas del ETL y volvé acá para añadirla al dashboard.
               </p>
             )}
           </div>
@@ -3246,7 +3330,7 @@ export function AdminDashboardStudio({
                 onClick={() => setAddMetricOpen(false)}
               >
                 <BarChart2 className="h-4 w-4" />
-                Ir a métricas del ETL para crear nuevas
+                Ir a métricas del ETL
               </Link>
             ) : (
               <p className="text-sm" style={{ color: "var(--studio-fg-muted)" }}>

@@ -22,11 +22,16 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdminFieldSelector from "@/components/admin/dashboard/AdminFieldSelector";
 import { DashboardWidgetRenderer } from "@/components/dashboard/DashboardWidgetRenderer";
+import ChartQuickCalcFields from "@/components/dashboard/ChartQuickCalcFields";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { getColumnDisplayLabel, resolveColumnDisplayKey } from "@/lib/etl/column-display-keys";
+import { getDataEndpoints } from "@/lib/api/endpoints";
 import EtlScheduleSettings from "@/components/etl/EtlScheduleSettings";
 import { buildChartConfig, getProcessedRowsForChart, type BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
 import { formatValue, toChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import type { ChartQuickCalc } from "@/lib/dashboard/chartQuickCalcTypes";
+import { chartQuickCalcUsesPercentDisplay, normalizeChartQuickCalc } from "@/lib/dashboard/chartQuickCalc";
 import {
   dateSlashOrderForNamedColumn,
   formatDateByGranularity,
@@ -45,6 +50,12 @@ import { normalizeAggregationCompare, deriveLegacyTransformCompare } from "@/lib
 import { compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
 import { ensureDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import { CompareSpecFields } from "@/components/admin/dashboard/CompareSpecFields";
+import { ComparativeRelationWizard } from "@/components/etl/comparative-relation/ComparativeRelationWizard";
+import {
+  type ComparativeRelation,
+  parseComparativeRelationsFromConfig,
+  comparativeOutputColumns,
+} from "@/lib/dataset/comparativeRelation";
 import { resolveEffectiveDateGroupByForFetch } from "@/lib/dashboard/aggregateCompareRequest";
 import { expandAggregationFiltersForTemporalCompare } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import type { SavedMetricForm, SavedMetricAggregationConfig, AggregationMetricEdit, AggregationFilterEdit } from "@/components/admin/dashboard/AddMetricConfigForm";
@@ -210,7 +221,7 @@ const KNOWN_FORMULA_IDENTIFIERS = new Set([
   "MOD", "POWER", "SQRT", "SIGN", "EXP", "LN", "LOG", "LOG10", "PI", "SIN", "COS", "TAN", "INT",
   "UPPER", "LOWER", "TRIM", "LENGTH", "LEN", "LEFT", "RIGHT", "SUBSTRING", "MID", "CONCAT", "CONCATENATE",
   "REPLACE", "SUBSTITUTE", "DATE", "TODAY", "NOW", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND",
-  "EOMONTH", "DATEDIF", "DATEVALUE", "TIMEVALUE", "VALUE", "TEXT", "REPT", "FIND", "SEARCH", "PROPER",
+  "EOMONTH", "DATEDIF", "EDATE", "DATEVALUE", "TIMEVALUE", "VALUE", "TEXT", "REPT", "FIND", "SEARCH", "PROPER",
   "AND", "OR", "NOT", "TRUE", "FALSE",
 ]);
 
@@ -507,16 +518,66 @@ function buildEtlDataFromMetricsResponse(res: MetricsDataResponse["data"]): ETLD
 export type DerivedColumn = { name: string; expression: string; defaultAggregation: string };
 
 type ConnectionOption = { id: string; title: string; type: string };
-type DatasetRelation = {
-  id: string;
-  connectionId: string;
-  connectionTitle: string;
-  tableKey: string;
-  tableLabel: string;
-  thisColumn: string;
-  otherColumn: string;
-  joinType: "INNER" | "LEFT";
+
+type ParsedDatasetConfig = {
+  grainOption: string;
+  grainCustomColumns: string[];
+  datasetHasTime: boolean;
+  timeColumn: string;
+  periodicity: string;
+  periodicityOverrides: Record<string, string>;
+  columnRoles: Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>;
+  comparativeRelations: ComparativeRelation[];
+  derivedColumns: DerivedColumn[];
 };
+
+/** Valores iniciales del wizard de Dataset desde la config guardada (edición); defaults si no hay config (creación). */
+function parseInitialDatasetConfig(cfg: Record<string, unknown> | null | undefined): ParsedDatasetConfig {
+  const out: ParsedDatasetConfig = {
+    grainOption: "",
+    grainCustomColumns: [],
+    datasetHasTime: true,
+    timeColumn: "",
+    periodicity: "Diaria",
+    periodicityOverrides: {},
+    columnRoles: {},
+    comparativeRelations: [],
+    derivedColumns: [],
+  };
+  if (!cfg || typeof cfg !== "object") return out;
+  if (typeof cfg.grainOption === "string") out.grainOption = cfg.grainOption;
+  if (Array.isArray(cfg.grainCustomColumns)) out.grainCustomColumns = cfg.grainCustomColumns as string[];
+  if (typeof cfg.datasetHasTime === "boolean") out.datasetHasTime = cfg.datasetHasTime;
+  if (typeof cfg.timeColumn === "string") out.timeColumn = cfg.timeColumn;
+  if (typeof cfg.periodicity === "string" && cfg.periodicity) out.periodicity = cfg.periodicity;
+  if (cfg.periodicityOverrides != null && typeof cfg.periodicityOverrides === "object") {
+    out.periodicityOverrides = cfg.periodicityOverrides as Record<string, string>;
+  }
+  if (cfg.columnRoles && typeof cfg.columnRoles === "object") {
+    out.columnRoles = cfg.columnRoles as ParsedDatasetConfig["columnRoles"];
+  }
+  out.comparativeRelations = parseComparativeRelationsFromConfig(cfg);
+  const derivedRaw = (cfg as { derivedColumns?: unknown; derived_columns?: unknown }).derivedColumns
+    ?? (cfg as { derived_columns?: unknown }).derived_columns;
+  if (Array.isArray(derivedRaw)) {
+    out.derivedColumns = derivedRaw
+      .filter((d) => d && typeof d === "object")
+      .map((d) => {
+        const obj = d as Record<string, unknown>;
+        const name = typeof obj.name === "string" ? obj.name : "";
+        const expression = typeof obj.expression === "string" ? obj.expression : "";
+        const defaultAggregation =
+          typeof obj.defaultAggregation === "string"
+            ? obj.defaultAggregation
+            : typeof obj.default_aggregation === "string"
+              ? obj.default_aggregation
+              : "SUM";
+        return { name, expression, defaultAggregation };
+      })
+      .filter((d) => d.name && d.expression);
+  }
+  return out;
+}
 
 export type EtlMetricsClientProps = {
   etlId: string;
@@ -532,9 +593,15 @@ export type EtlMetricsClientProps = {
   onDatasetSaved?: () => void;
   /** Si true y datasetOnly, el wizard está dentro del modal de /admin/datasets: se oculta el link "Volver a Datasets" (el cierre es con la X del modal). */
   embeddedInDatasetsModal?: boolean;
+  /** ID del dataset en edición; omitir al crear uno nuevo (insert en lugar de upsert por etl_id). */
+  datasetId?: string | null;
+  /** Nombre inicial del dataset (edición). */
+  initialDatasetName?: string | null;
+  /** Configuración inicial del dataset (edición); evita cargar la del ETL compartido. */
+  initialDatasetConfig?: Record<string, unknown> | null;
 };
 
-export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false, onDatasetSaved, embeddedInDatasetsModal = false }: EtlMetricsClientProps) {
+export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, connections: connectionsProp = [], datasetOnly = false, hideDatasetTab = false, onDatasetSaved, embeddedInDatasetsModal = false, datasetId: propDatasetId = null, initialDatasetName = null, initialDatasetConfig = null }: EtlMetricsClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
@@ -550,11 +617,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartXAxis, setChartXAxis] = useState<string>("");
   const [chartYAxes, setChartYAxes] = useState<string[]>([]);
   const [chartSeriesField, setChartSeriesField] = useState<string>("");
+  /** Tabla: campos en eje Y (filas) y eje X (columnas / pivot). */
+  const [tableRowFields, setTableRowFields] = useState<string[]>([]);
+  const [tableColumnFields, setTableColumnFields] = useState<string[]>([]);
   /** Dimensiones opcionales: vacío = KPI único agregado; 1+ = GROUP BY por esas columnas. */
   const [formDimensions, setFormDimensions] = useState<string[]>([]);
   const [formMetrics, setFormMetrics] = useState<AggregationMetricEdit[]>([
     { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" },
   ]);
+  const [metricKind, setMetricKind] = useState<"measure" | "attribute">("measure");
   const [formFilters, setFormFilters] = useState<AggregationFilterEdit[]>([]);
   const [dimensionDefaultFiltersForm, setDimensionDefaultFiltersForm] = useState<DimensionDefaultFilterEdit[]>([]);
   const [formOrderBy, setFormOrderBy] = useState<{ field: string; direction: "ASC" | "DESC" } | null>(null);
@@ -570,15 +641,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [wizard, setWizard] = useState<"A" | "B" | "C" | "D">(hideDatasetTab ? "B" : "A");
   const [wizardStep, setWizardStep] = useState(0);
   const [rawTableData, setRawTableData] = useState<Record<string, unknown>[]>([]);
-  const [datasetHasTime, setDatasetHasTime] = useState(true);
-  const [timeColumn, setTimeColumn] = useState("");
-  const [periodicity, setPeriodicity] = useState("Diaria");
+  /** Config inicial parseada una sola vez al montar (edición de dataset); el remonte por key garantiza frescura. */
+  const [initialParsedConfig] = useState<ParsedDatasetConfig>(() => parseInitialDatasetConfig(initialDatasetConfig));
+  const [datasetHasTime, setDatasetHasTime] = useState(initialParsedConfig.datasetHasTime);
+  const [timeColumn, setTimeColumn] = useState(initialParsedConfig.timeColumn);
+  const [periodicity, setPeriodicity] = useState(initialParsedConfig.periodicity);
   /** Sobrescrituras de periodicidad por columna (editable en paso Tiempo); se persisten en layout. */
-  const [periodicityOverrides, setPeriodicityOverrides] = useState<Record<string, string>>({});
-  const [grainOption, setGrainOption] = useState<string>("");
+  const [periodicityOverrides, setPeriodicityOverrides] = useState<Record<string, string>>(initialParsedConfig.periodicityOverrides);
+  const [grainOption, setGrainOption] = useState<string>(initialParsedConfig.grainOption);
   /** Columnas elegidas cuando el grain es "Personalizado" (clave única = concatenación de estas columnas). */
-  const [grainCustomColumns, setGrainCustomColumns] = useState<string[]>([]);
-  const [columnRoles, setColumnRoles] = useState<Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>>({});
+  const [grainCustomColumns, setGrainCustomColumns] = useState<string[]>(initialParsedConfig.grainCustomColumns);
+  const [columnRoles, setColumnRoles] = useState<Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>>(initialParsedConfig.columnRoles);
   const [, setCalcType] = useState<"simple" | "count" | "ratio" | "formula">("formula");
   const [metricAdditivity, setMetricAdditivity] = useState<"additive" | "semi" | "non">("additive");
   const [analysisTimeRange, setAnalysisTimeRange] = useState("0");
@@ -598,7 +671,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [savingAnalysis, setSavingAnalysis] = useState(false);
   const [savingDatasetConfig, setSavingDatasetConfig] = useState(false);
   /** Nombre opcional del dataset (paso Publicar); se persiste en la tabla dataset. */
-  const [datasetName, setDatasetName] = useState("");
+  const [datasetName, setDatasetName] = useState(initialDatasetName ?? "");
   /** Nombre al guardar una nueva métrica desde el paso B (Preview). */
   const [metricNameToSave, setMetricNameToSave] = useState("");
   /** Lista de datasets (solo cuando hideDatasetTab) para mostrar "Dataset a utilizar" y habilitar/deshabilitar Nueva métrica. */
@@ -622,6 +695,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [chartCurrencySymbol, setChartCurrencySymbol] = useState("$");
   const [chartThousandSep, setChartThousandSep] = useState(true);
   const [chartDecimals, setChartDecimals] = useState(2);
+  const [chartQuickCalc, setChartQuickCalc] = useState<ChartQuickCalc>("none");
+  const [chartPercentGroupField, setChartPercentGroupField] = useState("");
   const [chartSortDirection, setChartSortDirection] = useState<"none" | "asc" | "desc">("none");
   const [chartSortBy, setChartSortBy] = useState<"series" | "axis">("series");
   const [chartAxisOrder, setChartAxisOrder] = useState<"alpha" | "date_asc" | "date_desc">("alpha");
@@ -741,23 +816,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [filterListSearch, setFilterListSearch] = useState("");
   /** Nivel de jerarquía de fecha por filtro (id del filtro → day|month|quarter|semester|year). */
   const [filterDateLevel, setFilterDateLevel] = useState<Record<string, string>>({});
-  const [datasetRelations, setDatasetRelations] = useState<DatasetRelation[]>([]);
-  const [relationFormConnectionId, setRelationFormConnectionId] = useState("");
-  const [relationFormTableKey, setRelationFormTableKey] = useState("");
-  const [relationFormThisColumn, setRelationFormThisColumn] = useState("");
-  const [relationFormOtherColumn, setRelationFormOtherColumn] = useState("");
-  const [relationFormJoinType, setRelationFormJoinType] = useState<"INNER" | "LEFT">("LEFT");
-  const [connectionTables, setConnectionTables] = useState<{ schema: string; name: string; columns: { name: string }[] }[]>([]);
-  const [connectionTablesLoading, setConnectionTablesLoading] = useState(false);
+  const [comparativeRelations, setComparativeRelations] = useState<ComparativeRelation[]>(initialParsedConfig.comparativeRelations);
+  const [comparativeRelationsCanAdvance, setComparativeRelationsCanAdvance] = useState(true);
   /** Límite de filas para profiling del dataset: 200, 500, 5000, 200k, 500k o "unlimited" (muestra completa en backend). */
   const [profileRowLimit, setProfileRowLimit] = useState<200 | 500 | 5000 | 200000 | 500000 | "unlimited">(500);
-  const [otherTableColumnsLoaded, setOtherTableColumnsLoaded] = useState<string[]>([]);
-  const [otherTableColumnsLoading, setOtherTableColumnsLoading] = useState(false);
   const formulaInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const [creatingColumn, setCreatingColumn] = useState(false);
   const [formulasHelpOpen, setFormulasHelpOpen] = useState(false);
   /** Columnas calculadas (ej. factura = CANTIDAD * PRECIO_UNITARIO); se guardan en dataset y aparecen como medidas. */
-  const [derivedColumns, setDerivedColumns] = useState<DerivedColumn[]>([]);
+  const [derivedColumns, setDerivedColumns] = useState<DerivedColumn[]>(initialParsedConfig.derivedColumns);
   const [deleteTarget, setDeleteTarget] = useState<{ type: "metric"; id: string; name: string } | { type: "derived"; name: string } | null>(null);
   /** Evita que el paso Mapeo conserve ejes de un gráfico anterior cuando cambia el tipo o la selección de métricas del análisis. */
   const lastChartTypeForMappingRef = useRef<string | null>(null);
@@ -774,6 +841,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartXAxis("");
     setChartYAxes([]);
     setChartSeriesField("");
+    setTableRowFields([]);
+    setTableColumnFields([]);
     setChartLabelOverrides({});
     setChartDatasetLabelOverrides({});
     setLabelOverrideRawDrafts({});
@@ -812,17 +881,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartAxisYVisible(true);
     setShowDataLabels(true);
     setLabelVisibilityMode("auto");
+    setChartQuickCalc("none");
+    setChartPercentGroupField("");
     setPreviewDateOrder("asc");
     lastChartTypeForMappingRef.current = null;
     prevAnalysisSelectionSigRef.current = "";
   }, []);
 
-  const startNewAnalysis = useCallback(() => {
+  const startNewAnalysis = useCallback((opts?: { metricIds?: string[]; wizardStep?: number }) => {
     resetChartWizardState();
     clearAnalysisDraft();
     setEditingId(null);
     setEditingSavedAnalysisId(null);
-    setAnalysisSelectedMetricIds([]);
+    setAnalysisSelectedMetricIds(opts?.metricIds ?? []);
     setFormDimensions([]);
     setFormFilters([]);
     setDimensionDefaultFiltersForm([]);
@@ -845,12 +916,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setAnalysisNameToSave("");
     setPreviewData(null);
     setWizard("C");
-    setWizardStep(0);
+    setWizardStep(opts?.wizardStep ?? 0);
     setShowForm(true);
   }, [resetChartWizardState, clearAnalysisDraft]);
 
   const WIZARD_STEPS: Record<"A" | "B" | "C" | "D", string[]> = {
-    A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relaciones", "Publicar"],
+    A: ["Profiling", "Grain", "Tiempo", "Roles BI", "Relación Comparativa", "Publicar"],
     B: ["Cálculo", "Propiedades", "Filtros base", "Preview"],
     C: ["Identidad", "Métricas", "Dimensiones y Tiempo", "Filtros", "Transformaciones", "Preview"],
     D: ["Tipo visual", "Mapeo", "Formato y colores", "Guardar"],
@@ -887,6 +958,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       let url = unlimited
         ? `/api/etl/${etlId}/metrics-data?unlimited=1`
         : `/api/etl/${etlId}/metrics-data?sampleRows=${cappedSample}`;
+      const activeDatasetId = hideDatasetTab ? selectedDatasetId : propDatasetId;
+      if (activeDatasetId) url += `&datasetId=${encodeURIComponent(activeDatasetId)}`;
       if (opts?.bustCache) url += `&_t=${Date.now()}`;
       const res = await fetch(url);
       const json = await safeJsonResponse<MetricsDataResponse>(res);
@@ -903,7 +976,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     } finally {
       setLoading(false);
     }
-  }, [etlId]);
+  }, [etlId, hideDatasetTab, selectedDatasetId, propDatasetId]);
 
   useEffect(() => {
     fetchData();
@@ -986,7 +1059,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
   const datasetConfigHydratedRef = useRef(false);
   useEffect(() => {
-    if (hideDatasetTab) return;
+    // En el modal de /admin/datasets (datasetOnly) la fuente de verdad es initialDatasetConfig (ya aplicada como estado inicial).
+    if (hideDatasetTab || datasetOnly) return;
     const cfg = data?.datasetConfig;
     if (!cfg || typeof cfg !== "object") return;
     if (!datasetConfigHydratedRef.current) {
@@ -998,10 +1072,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (typeof cfg.periodicity === "string" && cfg.periodicity) setPeriodicity(cfg.periodicity);
       if (cfg.periodicityOverrides != null && typeof cfg.periodicityOverrides === "object") setPeriodicityOverrides(cfg.periodicityOverrides as Record<string, string>);
       if (cfg.columnRoles && typeof cfg.columnRoles === "object") setColumnRoles(cfg.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>);
-      if (Array.isArray(cfg.datasetRelations)) setDatasetRelations(cfg.datasetRelations as DatasetRelation[]);
+      setComparativeRelations(parseComparativeRelationsFromConfig(cfg));
     }
     if (Array.isArray((cfg as { derivedColumns?: DerivedColumn[] }).derivedColumns)) setDerivedColumns((cfg as { derivedColumns: DerivedColumn[] }).derivedColumns);
-  }, [data?.datasetConfig, hideDatasetTab]);
+  }, [data?.datasetConfig, hideDatasetTab, datasetOnly]);
 
   /** Construye el objeto completo de configuración del dataset desde el estado actual (para persistir y reutilizar). */
   const buildFullDatasetConfig = useCallback((): Record<string, unknown> => {
@@ -1013,10 +1087,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       periodicity,
       periodicityOverrides: Object.keys(periodicityOverrides).length ? periodicityOverrides : undefined,
       columnRoles: Object.keys(columnRoles).length ? columnRoles : undefined,
-      datasetRelations: datasetRelations.length ? datasetRelations : undefined,
+      comparativeRelations: comparativeRelations.length ? comparativeRelations : undefined,
       derivedColumns: derivedColumns.map((d) => ({ name: d.name, expression: d.expression, defaultAggregation: d.defaultAggregation || "SUM" })),
     };
-  }, [grainOption, grainCustomColumns, datasetHasTime, timeColumn, periodicity, periodicityOverrides, columnRoles, datasetRelations, derivedColumns]);
+  }, [grainOption, grainCustomColumns, datasetHasTime, timeColumn, periodicity, periodicityOverrides, columnRoles, comparativeRelations, derivedColumns]);
 
   /** Guarda la configuración del dataset en el servidor y luego pasa al wizard de Métrica o redirige a Datasets (según datasetOnly). */
   const saveDatasetConfigAndGoToMetric = useCallback(async () => {
@@ -1028,6 +1102,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           datasetConfig,
+          ...(propDatasetId && { datasetId: propDatasetId }),
+          // Solo el wizard de /admin/datasets crea datasets nuevos explícitamente.
+          ...(!propDatasetId && embeddedInDatasetsModal && { createDataset: true }),
           ...(datasetName.trim() && { datasetName: datasetName.trim() }),
         }),
       });
@@ -1037,7 +1114,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         return;
       }
       if (json.datasetListUpdated === false) {
-        toast.warning("Configuración guardada; la lista de Datasets no se pudo actualizar (revisar tabla en Supabase).");
+        toast.warning("Configuración guardada; la lista de Datasets no se pudo actualizar (falta la tabla dataset en Postgres — migración 006_dataset.sql).");
       } else {
         toast.success("Configuración del dataset guardada. Podés crear métricas sin volver a configurar.");
       }
@@ -1057,108 +1134,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     } finally {
       setSavingDatasetConfig(false);
     }
-  }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName, onDatasetSaved]);
-
-  const connectionOptions = connectionsProp.map((c) => ({ value: String(c.id), label: `${c.title || c.id} (${c.type || ""})` }));
-
-  useEffect(() => {
-    if (!relationFormConnectionId) {
-      setConnectionTables([]);
-      setRelationFormTableKey("");
-      return;
-    }
-    setConnectionTablesLoading(true);
-    setRelationFormTableKey("");
-    type MetadataRes = { metadata?: { tables?: { schema?: string; name?: string; columns?: { name: string }[] }[] } };
-    fetch("/api/connection/metadata", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ connectionId: relationFormConnectionId, discoverTables: true }),
-    })
-      .then((r) => safeJsonResponse<MetadataRes>(r))
-      .then((json) => {
-        if (json?.metadata?.tables && Array.isArray(json.metadata.tables)) {
-          setConnectionTables(
-            json.metadata.tables.map((t) => ({
-              schema: t.schema ?? "",
-              name: t.name ?? "",
-              columns: t.columns ?? [],
-            }))
-          );
-        } else {
-          setConnectionTables([]);
-        }
-      })
-      .catch(() => setConnectionTables([]))
-      .finally(() => setConnectionTablesLoading(false));
-  }, [relationFormConnectionId]);
-
-  const loadTableColumns = useCallback((connId: string, tableKey: string): Promise<string[]> => {
-    if (!tableKey) return Promise.resolve([]);
-    type MetadataRes = { metadata?: { tables?: { schema?: string; name?: string; columns?: { name: string }[] }[] } };
-    return fetch("/api/connection/metadata", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ connectionId: connId, tableName: tableKey }),
-    })
-      .then((r) => safeJsonResponse<MetadataRes>(r))
-      .then((json) => {
-        if (json?.metadata?.tables?.[0]?.columns) {
-          return json.metadata.tables[0].columns.map((c) => c.name);
-        }
-        return [] as string[];
-      })
-      .catch(() => [] as string[]);
-  }, []);
-
-  useEffect(() => {
-    if (!relationFormConnectionId || !relationFormTableKey) {
-      setOtherTableColumnsLoaded([]);
-      return;
-    }
-    setOtherTableColumnsLoading(true);
-    loadTableColumns(relationFormConnectionId, relationFormTableKey)
-      .then((cols) => setOtherTableColumnsLoaded(cols || []))
-      .catch(() => setOtherTableColumnsLoaded([]))
-      .finally(() => setOtherTableColumnsLoading(false));
-  }, [relationFormConnectionId, relationFormTableKey, loadTableColumns]);
-
-  const addRelation = () => {
-    if (!relationFormConnectionId || !relationFormTableKey || !relationFormThisColumn || !relationFormOtherColumn) {
-      toast.error("Completá conexión, tabla y ambas columnas.");
-      return;
-    }
-    const conn = connectionsProp.find((c) => String(c.id) === relationFormConnectionId);
-    const tableLabel = connectionTables.find(
-      (t) => `${t.schema}.${t.name}` === relationFormTableKey || t.name === relationFormTableKey
-    )
-      ? `${relationFormTableKey}`
-      : relationFormTableKey;
-    setDatasetRelations((prev) => [
-      ...prev,
-      {
-        id: `rel-${Date.now()}`,
-        connectionId: relationFormConnectionId,
-        connectionTitle: conn?.title || relationFormConnectionId,
-        tableKey: relationFormTableKey,
-        tableLabel,
-        thisColumn: relationFormThisColumn,
-        otherColumn: relationFormOtherColumn,
-        joinType: relationFormJoinType,
-      },
-    ]);
-    setRelationFormConnectionId("");
-    setRelationFormTableKey("");
-    setRelationFormThisColumn("");
-    setRelationFormOtherColumn("");
-    setRelationFormJoinType("LEFT");
-    setConnectionTables([]);
-    toast.success("Relación agregada");
-  };
-
-  const removeRelation = (id: string) => {
-    setDatasetRelations((prev) => prev.filter((r) => r.id !== id));
-  };
+  }, [etlId, buildFullDatasetConfig, datasetOnly, router, datasetName, onDatasetSaved, propDatasetId, embeddedInDatasetsModal]);
 
   // Refrescar datos del ETL al entrar al paso Profiling (Dataset) para mostrar filas/columnas actualizadas (solo fetchData aquí; fetchPreview se usa en un useEffect más abajo)
   useEffect(() => {
@@ -1239,6 +1215,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const currentDataset = hideDatasetTab
     ? (selectedDatasetId ? datasetsList.find((d) => d.id === selectedDatasetId) : datasetsList.find((d) => d.etl_id === etlId)) ?? null
     : null;
+  /** Dataset activo para persistir configuración (evita crear datasets duplicados al guardar métricas/columnas). */
+  const activeDatasetIdForSave = hideDatasetTab ? (currentDataset?.id ?? null) : propDatasetId;
+
+  const activeComparativeRelations = useMemo(() => {
+    if (hideDatasetTab && currentDataset?.config) {
+      return parseComparativeRelationsFromConfig(currentDataset.config);
+    }
+    if (data?.datasetConfig) {
+      return parseComparativeRelationsFromConfig(data.datasetConfig);
+    }
+    return comparativeRelations;
+  }, [hideDatasetTab, currentDataset?.config, data?.datasetConfig, comparativeRelations]);
 
   const datasetConfigHydratedDatasetIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -1256,7 +1244,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     if (typeof cfgObj.grainOption === "string") setGrainOption(cfgObj.grainOption as string);
     if (Array.isArray(cfgObj.grainCustomColumns)) setGrainCustomColumns(cfgObj.grainCustomColumns as string[]);
     if (typeof cfgObj.datasetHasTime === "boolean") setDatasetHasTime(cfgObj.datasetHasTime);
-    if (typeof cfgObj.timeColumn === "string") setTimeColumn(cfgObj.timeColumn);
+    // No pisar la columna de tiempo si hay una métrica/análisis abierto en edición (openEdit/loadSavedAnalysis ya la setearon).
+    if (typeof cfgObj.timeColumn === "string" && !(showForm && (editingId || editingSavedAnalysisId))) setTimeColumn(cfgObj.timeColumn);
     if (typeof cfgObj.periodicity === "string") setPeriodicity(cfgObj.periodicity);
     if (cfgObj.periodicityOverrides != null && typeof cfgObj.periodicityOverrides === "object") {
       setPeriodicityOverrides(cfgObj.periodicityOverrides as Record<string, string>);
@@ -1264,7 +1253,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     if (cfgObj.columnRoles && typeof cfgObj.columnRoles === "object") {
       setColumnRoles(cfgObj.columnRoles as Record<string, { role: ColumnRole; aggregation: string; label: string; visible: boolean; geoType?: GeoType }>);
     }
-    if (Array.isArray(cfgObj.datasetRelations)) setDatasetRelations(cfgObj.datasetRelations as DatasetRelation[]);
+    setComparativeRelations(parseComparativeRelationsFromConfig(cfgObj));
 
     const derivedRaw = cfgObj.derivedColumns ?? cfgObj.derived_columns;
     if (Array.isArray(derivedRaw)) {
@@ -1401,19 +1390,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return null;
   }, [formMetrics]);
 
-  const getColumnDisplayKey = (col: string): string => {
-    const cd = data?.columnDisplay;
-    if (!cd) return col;
-    if (cd[col] !== undefined) return col;
-    const found = Object.keys(cd).find((k) => k.toLowerCase() === col.toLowerCase());
-    return found ?? col;
-  };
+  const getColumnDisplayKey = (col: string): string =>
+    resolveColumnDisplayKey(col, data?.columnDisplay);
 
-  const getSampleDisplayLabel = (col: string): string => {
-    const key = getColumnDisplayKey(col);
-    const label = data?.columnDisplay?.[key]?.label?.trim();
-    return label || col;
-  };
+  const getSampleDisplayLabel = (col: string): string =>
+    getColumnDisplayLabel(col, data?.columnDisplay);
 
   const getFilterSelectedValues = (f: AggregationFilterEdit): string[] =>
     Array.isArray(f.value) ? f.value : (f.value != null && f.value !== "" ? [String(f.value)] : []);
@@ -1541,6 +1522,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setFormChartType("bar");
     setFormDimensions([]);
     setFormMetrics([{ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado", expression: "" } as AggregationMetricEdit]);
+    setMetricKind("measure");
     setFormFilters([]);
     setDimensionDefaultFiltersForm([]);
     setChartRankingPinnedXValues([]);
@@ -1580,10 +1562,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setAnalysisSelectedMetricIds([]);
     setFormulaFromSavedMetricIds([]);
     setFormulaFromReuseExpr("metric_0 / NULLIF(metric_1, 0)");
-    setMetricNameToSave("");
+    setMetricNameToSave(saved.name || "");
     setAnalysisNameToSave("");
     const cfg = saved.aggregationConfig as SavedMetricAggregationConfig | undefined;
-    setFormChartType((cfg as { chartType?: string })?.chartType ?? (saved as { chartType?: string }).chartType ?? "bar");
+    const savedChartType = (cfg as { chartType?: string })?.chartType ?? (saved as { chartType?: string }).chartType ?? "bar";
+    setFormChartType(savedChartType);
+    // Al entrar al paso Mapeo en edición, no tratar el tipo cargado como "cambio de gráfico" (evita pisar el mapeo guardado).
+    lastChartTypeForMappingRef.current = savedChartType;
     if (cfg) {
       const dims = Array.isArray(cfg.dimensions) ? cfg.dimensions : [cfg.dimension, cfg.dimension2].filter((d): d is string => typeof d === "string" && d !== "");
       setFormDimensions(dims.length > 0 ? dims : []);
@@ -1603,6 +1588,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setFormLimit(cfg.limit ?? 100);
       setChartXAxis(cfg.chartXAxis ?? "");
       setChartYAxes(Array.isArray(cfg.chartYAxes) ? cfg.chartYAxes : []);
+      setTableRowFields(Array.isArray(cfg.tableRowFields) ? cfg.tableRowFields : []);
+      setTableColumnFields(Array.isArray(cfg.tableColumnFields) ? cfg.tableColumnFields : []);
       setChartSeriesField(cfg.chartSeriesField ?? "");
       const cfgFormat = cfg as { chartValueType?: string; chartValueScale?: string; chartNumberFormat?: string };
       if (cfgFormat.chartValueType != null && ["number", "currency", "percent"].includes(String(cfgFormat.chartValueType))) {
@@ -1628,6 +1615,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartCurrencySymbol(cfg.chartCurrencySymbol ?? "$");
       setChartThousandSep(cfg.chartThousandSep !== false);
       setChartDecimals(cfg.chartDecimals ?? 2);
+      setChartQuickCalc(normalizeChartQuickCalc((cfg as { chartQuickCalc?: string }).chartQuickCalc));
+      setChartPercentGroupField(String((cfg as { chartPercentGroupField?: string }).chartPercentGroupField ?? ""));
       setChartSortDirection(
         (["none", "asc", "desc"] as const).includes(cfg.chartSortDirection as "none" | "asc" | "desc")
           ? (cfg.chartSortDirection as "none" | "asc" | "desc")
@@ -1771,11 +1760,35 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setGeoComponentOverrides(coerceGeoComponentOverrides((cfg as { geoComponentOverrides?: unknown }).geoComponentOverrides) ?? {});
       setGeoOverridesByXLabel(coerceGeoOverridesByXLabel((cfg as { geoOverridesByXLabel?: unknown }).geoOverridesByXLabel) ?? {});
       setEtlGeoXLabelDrafts({});
+      // Restaurar el modo "Reutilizar métricas existentes (ratio)": selecciones y fórmula guardadas.
+      if ((cfg as { ratioReuseMode?: boolean }).ratioReuseMode === true) {
+        const metricsList = (cfg.metrics ?? []) as AggregationMetricEdit[];
+        const formulaMetric = [...metricsList].reverse().find((m) => String(m.func ?? "").trim().toUpperCase() === "FORMULA");
+        if (formulaMetric && typeof (formulaMetric as { formula?: string }).formula === "string" && (formulaMetric as { formula?: string }).formula!.trim()) {
+          setFormulaFromReuseExpr((formulaMetric as { formula: string }).formula.trim());
+        }
+        const baseIds = metricsList
+          .filter((m) => String(m.func ?? "").trim().toUpperCase() !== "FORMULA")
+          .map((m) => {
+            const alias = String((m as { alias?: string }).alias ?? "").trim().toLowerCase();
+            return savedMetrics.find((s) => (s.name || "").trim().toLowerCase() === alias)?.id;
+          })
+          .filter((x): x is string => typeof x === "string" && x !== "");
+        if (baseIds.length >= 2) setFormulaFromSavedMetricIds(baseIds);
+      }
       const first = (cfg.metrics ?? [saved.metric])[0];
+      const isAttr =
+        String(first?.func ?? "").trim().toUpperCase() === "ATTRIBUTE" ||
+        (first as { displayRole?: string })?.displayRole === "attribute";
+      setMetricKind(isAttr ? "attribute" : "measure");
       setFormMetric(first ? { ...first, id: first.id || `m-${Date.now()}` } : { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" });
     } else {
       setFormDimensions([]);
       setFormMetrics([{ ...saved.metric, id: saved.metric.id || `m-${Date.now()}` }]);
+      const isAttr =
+        String(saved.metric?.func ?? "").trim().toUpperCase() === "ATTRIBUTE" ||
+        saved.metric?.displayRole === "attribute";
+      setMetricKind(isAttr ? "attribute" : "measure");
       setFormFilters([]);
       setDimensionDefaultFiltersForm([]);
       setChartRankingPinnedXValues([]);
@@ -1790,6 +1803,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartCurrencySymbol("$");
       setChartThousandSep(true);
       setChartDecimals(2);
+      setChartQuickCalc("none");
+      setChartPercentGroupField("");
       setChartSortDirection("none");
       setChartSortBy("series");
       setChartAxisOrder("alpha");
@@ -1893,6 +1908,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     return [...new Set(keys.map((k) => String(k).trim()).filter(Boolean))];
   }, [effectiveFormMetrics, formDimensions]);
 
+  const comparativeMetricOptions = useMemo(() => {
+    return effectiveFormMetrics.map((m, i) => ({
+      alias: aggregationResultColumnKey(m, i),
+      label: m.alias || m.field || `Métrica ${i + 1}`,
+      valueType: chartValueType === "percent" ? ("percent" as const) : ("absolute" as const),
+    }));
+  }, [effectiveFormMetrics, chartValueType]);
+
   /** Al reabrir una métrica guardada, ratioReuseMode en config fuerza el mismo modo visual que al guardar. */
   const editingSavedAggregationConfig = useMemo(() => {
     if (!editingId) return null;
@@ -1987,7 +2010,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setPreviewData(null);
     try {
       type MetricsDataRes = { data?: { schema?: string; tableName?: string; datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation?: string }[]; derived_columns?: { name: string; expression: string; default_aggregation?: string }[] } } };
-      const metricsRes = await fetch(`/api/etl/${etlId}/metrics-data`);
+      const activeDatasetId = hideDatasetTab ? selectedDatasetId : propDatasetId;
+      let metricsDataUrl = `/api/etl/${etlId}/metrics-data?sampleRows=500`;
+      if (activeDatasetId) metricsDataUrl += `&datasetId=${encodeURIComponent(activeDatasetId)}`;
+      const metricsRes = await fetch(metricsDataUrl);
       const metricsJson = await safeJsonResponse<MetricsDataRes>(metricsRes);
       const freshSchema = metricsJson?.data?.schema;
       const freshTableName = metricsJson?.data?.tableName;
@@ -2054,6 +2080,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           field: fieldStr || "",
           func,
           alias: m.alias || m.field || fieldStr || "valor",
+          ...(m.displayRole ? { displayRole: m.displayRole } : {}),
           ...(m.condition ? { condition: m.condition } : {}),
           ...(m.formula ? { formula: m.formula } : {}),
           ...(effectiveExpr ? { expression: effectiveExpr } : {}),
@@ -2144,8 +2171,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           : useAnalysisConfig && dg?.defaultTemporalOrderBy
             ? dg.defaultTemporalOrderBy
             : undefined,
-        unlimited: true,
-        ...(formLimit != null && formLimit > 0 ? { limit: formLimit } : {}),
+        ...(formChartType === "map"
+          ? { limit: 500 }
+          : {
+              unlimited: true,
+              ...(formLimit != null && formLimit > 0 ? { limit: formLimit } : {}),
+            }),
       };
       if (derivedToSend.length > 0) {
         body.derivedColumns = derivedToSend.map((d) => ({
@@ -2174,6 +2205,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (useAnalysisConfig && analysisCompare.kind !== "none") {
         body.compare = analysisCompare as unknown as Record<string, unknown>;
       }
+      const datasetIdForCompare = activeDatasetIdForSave ?? propDatasetId ?? selectedDatasetId;
+      if (datasetIdForCompare) {
+        (body as Record<string, unknown>).datasetId = datasetIdForCompare;
+      }
       if (useAnalysisConfig && transformShowAccum) {
         body.cumulative = "running_sum";
       }
@@ -2181,6 +2216,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         body.chartType = formChartType;
         if (chartXAxis) body.chartXAxis = chartXAxis;
         body.dateSlashOrder = dateSlashOrderForNamedColumn(data?.columnDisplay, timeColumn || undefined);
+        if (dateFields.length > 0) body.dateFields = dateFields;
         if (geoHints && Object.keys(geoHints).length > 0) body.geoHints = geoHints;
         if (formChartType === "map" && mapDefaultCountry.trim()) body.mapDefaultCountry = mapDefaultCountry.trim();
         if (formChartType === "map") {
@@ -2190,14 +2226,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           if (gxl) (body as Record<string, unknown>).geoOverridesByXLabel = gxl;
         }
       }
-      const res = await fetch("/api/dashboard/aggregate-data", {
+      const res = await fetch(getDataEndpoints().aggregateData, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(body),
       });
       const json = await safeJsonResponse(res);
       if (!res.ok) {
-        const msg = (json?.error ?? "Error al cargar previsualización") as string;
+        const errBody = json as { error?: string; message?: string | string[] };
+        const msg =
+          typeof errBody?.error === "string"
+            ? errBody.error
+            : typeof errBody?.message === "string"
+              ? errBody.message
+              : Array.isArray(errBody?.message)
+                ? errBody.message.join(", ")
+                : "Error al cargar previsualización";
         toast.error(msg);
         return;
       }
@@ -2214,6 +2259,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     }
   }, [
     etlId,
+    hideDatasetTab,
+    selectedDatasetId,
+    propDatasetId,
     tableNameForPreview,
     formDimensions,
     effectiveFormMetrics,
@@ -2241,6 +2289,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     geoOverridesByXLabel,
     data?.columnDisplay,
     dimensionDefaultFiltersForm,
+    activeDatasetIdForSave,
+    propDatasetId,
+    selectedDatasetId,
   ]);
 
   const fetchPreviewRef = useRef(fetchPreview);
@@ -2325,20 +2376,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
   const chartAutoSelectedRef = useRef(false);
   useEffect(() => {
-    if (editingId) return;
+    if (editingId || editingSavedAnalysisId) return;
     if (wizard === "D" && wizardStep === 0 && !chartAutoSelectedRef.current) {
       chartAutoSelectedRef.current = true;
       setFormChartType(suggestedChartType);
     }
     if (wizard !== "D") chartAutoSelectedRef.current = false;
-  }, [wizard, wizardStep, suggestedChartType, editingId]);
+  }, [wizard, wizardStep, suggestedChartType, editingId, editingSavedAnalysisId]);
 
   useEffect(() => {
-    if (editingId) return;
+    if (editingId || editingSavedAnalysisId) return;
     if (wizard !== "D" || wizardStep !== 0) return;
     const { hasGeo } = chartTypeRestrictions;
     if (formChartType === "map" && !hasGeo) setFormChartType(suggestedChartType);
-  }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType, editingId]);
+  }, [wizard, wizardStep, formChartType, chartTypeRestrictions, suggestedChartType, editingId, editingSavedAnalysisId]);
 
   const previewPipelineWidget = useMemo<BuildChartConfigWidget>(() => {
     const metrics = effectiveFormMetrics.map((m, idx) => ({
@@ -2394,6 +2445,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartSortByMetric,
         chartAxisOrder,
         labelVisibilityMode,
+        chartQuickCalc: chartQuickCalc !== "none" ? chartQuickCalc : undefined,
+        chartPercentGroupField: chartPercentGroupField.trim() || undefined,
+        tableRowFields: tableRowFields.length > 0 ? tableRowFields : undefined,
+        tableColumnFields: tableColumnFields.length > 0 ? tableColumnFields : undefined,
         dateSlashOrder: dateSlashOrderForNamedColumn(data?.columnDisplay, timeColumn || undefined),
       },
     };
@@ -2423,6 +2478,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartSortByMetric,
     chartAxisOrder,
     labelVisibilityMode,
+    chartQuickCalc,
+    chartPercentGroupField,
+    tableRowFields,
+    tableColumnFields,
     geoHints,
     ratioReuseDisplayMode,
   ]);
@@ -2548,6 +2607,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartType: formChartType,
         chartXAxis,
         chartYAxes,
+        tableRowFields: tableRowFields.length > 0 ? tableRowFields : undefined,
+        tableColumnFields: tableColumnFields.length > 0 ? tableColumnFields : undefined,
         geoHints,
         chartSeriesField,
         dateDimension: timeColumn || undefined,
@@ -2576,6 +2637,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         showDataLabels,
         labelVisibilityMode,
         chartComboSyncAxes,
+        chartQuickCalc: chartQuickCalc !== "none" ? chartQuickCalc : undefined,
+        chartPercentGroupField: chartPercentGroupField.trim() || undefined,
         ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
         ...(formChartType === "map" && compactGeoComponentOverridesForRequest(geoComponentOverrides)
           ? { geoComponentOverrides: compactGeoComponentOverridesForRequest(geoComponentOverrides) }
@@ -2586,15 +2649,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         ...(formChartType === "map" ? { ...mapVisualFields } : {}),
       },
       chartStyle: toChartStyleConfig({
-        valueType: chartValueType,
+        valueType: chartQuickCalcUsesPercentDisplay(chartQuickCalc) ? "percent" : chartValueType,
         valueScale: chartValueScale,
         currencySymbol: chartCurrencySymbol,
         decimals: chartDecimals,
         thousandSep: chartThousandSep,
       }),
       chartMetricStyles: metricFormats,
-      labelDisplayMode: "percent" as const,
-      chartPercentBasis: "chart_visible_total" as const,
+      labelDisplayMode: chartQuickCalcUsesPercentDisplay(chartQuickCalc) ? ("percent" as const) : ("value" as const),
+      chartPercentBasis: chartQuickCalcUsesPercentDisplay(chartQuickCalc) ? undefined : ("chart_visible_total" as const),
+      chartPercentGroupField: chartPercentGroupField.trim() || undefined,
       minHeight: 320,
     };
   }, [
@@ -2609,11 +2673,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartCurrencySymbol,
     chartDecimals,
     chartThousandSep,
+    chartQuickCalc,
+    chartPercentGroupField,
     formChartType,
     formName,
     chartXAxis,
     geoHints,
     chartSeriesField,
+    tableRowFields,
+    tableColumnFields,
     chartRankingEnabled,
     chartRankingTop,
     chartRankingMetric,
@@ -2743,8 +2811,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         if (rowKeysSet.has(`${alias}_ytd_run`)) requested.push(`${alias}_ytd_run`);
       }
     }
+    if (analysisCompare.kind === "comparative") {
+      const rel = activeComparativeRelations.find((r) => r.id === analysisCompare.relationId);
+      const field = rel?.comparativeFields.find((f) => f.column === analysisCompare.comparativeField);
+      const cols = comparativeOutputColumns(analysisCompare.metricAlias, field?.valueType ?? "absolute");
+      for (const col of cols) {
+        if (rowKeysSet.has(col)) requested.push(col);
+      }
+    }
     return requested;
-  }, [previewData, formDimensions, wizard, analysisDisplayMetricAliases, effectiveFormMetrics, analysisCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum, ratioReuseDisplayMode, ratioReuseResultMetricAlias, ratioReuseResultMetricIndex]);
+  }, [previewData, formDimensions, wizard, analysisDisplayMetricAliases, effectiveFormMetrics, analysisCompare, transformShowDelta, transformShowDeltaPct, transformShowAccum, ratioReuseDisplayMode, ratioReuseResultMetricAlias, ratioReuseResultMetricIndex, activeComparativeRelations]);
 
   const chartAvailableColumns = useMemo(() => {
     if (!previewData?.[0]) return [];
@@ -2791,8 +2867,34 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
   const chartNumericColumns = useMemo(() => {
     const dimKeys = new Set(chartDimensionColumns.map((d) => d.key));
-    return chartAvailableColumns.filter((c) => !dimKeys.has(c.key));
-  }, [chartAvailableColumns, chartDimensionColumns]);
+    return chartAvailableColumns.filter((c) => !dimKeys.has(c.key)).map((c) => {
+      const metricIdx = c.key.match(/^metric_(\d+)$/)?.[1];
+      const metric = metricIdx != null ? effectiveFormMetrics[Number(metricIdx)] : effectiveFormMetrics.find((m) => (m.alias || m.field) === c.key);
+      const isAttr =
+        String(metric?.func ?? "").trim().toUpperCase() === "ATTRIBUTE" ||
+        metric?.displayRole === "attribute";
+      return isAttr ? { ...c, label: `${c.label} (atributo)` } : c;
+    });
+  }, [chartAvailableColumns, chartDimensionColumns, effectiveFormMetrics]);
+
+  const setTableFieldAxis = useCallback((fieldKey: string, axis: "none" | "row" | "column" | "value") => {
+    setTableRowFields((prev) => prev.filter((k) => k !== fieldKey));
+    setTableColumnFields((prev) => prev.filter((k) => k !== fieldKey));
+    setChartYAxes((prev) => prev.filter((k) => k !== fieldKey));
+    if (axis === "row") setTableRowFields((prev) => [...prev, fieldKey]);
+    else if (axis === "column") setTableColumnFields((prev) => [...prev, fieldKey]);
+    else if (axis === "value") setChartYAxes((prev) => [...prev, fieldKey]);
+  }, []);
+
+  const resolveTableFieldAxis = useCallback(
+    (fieldKey: string): "none" | "row" | "column" | "value" => {
+      if (tableRowFields.includes(fieldKey)) return "row";
+      if (tableColumnFields.includes(fieldKey)) return "column";
+      if (chartYAxes.includes(fieldKey)) return "value";
+      return "none";
+    },
+    [tableRowFields, tableColumnFields, chartYAxes]
+  );
 
   /** Quita ejes Y que ya no existen en el preview; si queda vacío, aplica el mismo criterio que el autocompletado del paso Mapeo. */
   useEffect(() => {
@@ -2870,7 +2972,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       return undefined;
     })();
     const chartTypeChanged = lastChartTypeForMappingRef.current !== formChartType;
-    const emptyMapping = !chartXAxis && chartYAxes.length === 0;
+    const emptyMapping =
+      formChartType === "table"
+        ? tableRowFields.length === 0 && tableColumnFields.length === 0 && chartYAxes.length === 0
+        : !chartXAxis && chartYAxes.length === 0;
     const shouldRemap =
       chartTypeChanged || emptyMapping || (analysisSelectionChanged && !editingId && !editingSavedAnalysisId);
     prevAnalysisSelectionSigRef.current = selectionSig;
@@ -2894,6 +2999,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             : []
       );
       setChartSeriesField("");
+    } else if (formChartType === "table") {
+      setChartXAxis("");
+      setChartSeriesField("");
+      if (tableRowFields.length === 0 && tableColumnFields.length === 0 && chartYAxes.length === 0) {
+        setTableColumnFields(dims.map((d) => d.key));
+        setTableRowFields([]);
+        setChartYAxes(
+          formulaResultKey
+            ? [formulaResultKey]
+            : nums.map((c) => c.key)
+        );
+      }
     } else {
       if (!chartXAxis && dims.length > 0) setChartXAxis(dims[0]!.key);
       if (chartYAxes.length === 0 && nums.length > 0) {
@@ -2919,6 +3036,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     editingSavedAnalysisId,
     effectiveFormMetrics,
     analysisSelectedMetricIds,
+    tableRowFields.length,
+    tableColumnFields.length,
   ]);
 
   useEffect(() => {
@@ -2989,6 +3108,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartXAxis?: string;
         chartYAxes?: string[];
         chartSeriesField?: string;
+        tableRowFields?: string[];
+        tableColumnFields?: string[];
+        chartQuickCalc?: string;
+        chartPercentGroupField?: string;
         analysisNameToSave?: string;
         chartDatasetLabelOverrides?: Record<string, string>;
         chartCategoryColorMode?: "varied" | "uniform";
@@ -3005,6 +3128,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (typeof parsed.chartXAxis === "string") setChartXAxis(parsed.chartXAxis);
       if (Array.isArray(parsed.chartYAxes)) setChartYAxes(parsed.chartYAxes);
       if (typeof parsed.chartSeriesField === "string") setChartSeriesField(parsed.chartSeriesField);
+      if (Array.isArray(parsed.tableRowFields)) setTableRowFields(parsed.tableRowFields);
+      if (Array.isArray(parsed.tableColumnFields)) setTableColumnFields(parsed.tableColumnFields);
+      if (typeof parsed.chartQuickCalc === "string") setChartQuickCalc(normalizeChartQuickCalc(parsed.chartQuickCalc));
+      if (typeof parsed.chartPercentGroupField === "string") setChartPercentGroupField(parsed.chartPercentGroupField);
       if (typeof parsed.analysisNameToSave === "string") setAnalysisNameToSave(parsed.analysisNameToSave);
       if (parsed.chartDatasetLabelOverrides && typeof parsed.chartDatasetLabelOverrides === "object") {
         setChartDatasetLabelOverrides(parsed.chartDatasetLabelOverrides);
@@ -3039,6 +3166,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartXAxis,
       chartYAxes,
       chartSeriesField,
+      tableRowFields,
+      tableColumnFields,
+      chartQuickCalc,
+      chartPercentGroupField,
       analysisNameToSave,
       chartDatasetLabelOverrides,
       chartCategoryColorMode,
@@ -3062,8 +3193,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartXAxis,
     chartYAxes,
     chartSeriesField,
-    analysisNameToSave,
-    chartDatasetLabelOverrides,
+      tableRowFields,
+      tableColumnFields,
+      chartQuickCalc,
+      chartPercentGroupField,
+      analysisNameToSave,
+      chartDatasetLabelOverrides,
     chartCategoryColorMode,
     chartPrimaryColor,
   ]);
@@ -3412,6 +3547,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
       chartSeriesField: chartSeriesField || undefined,
+      tableRowFields: tableRowFields.length > 0 ? tableRowFields : undefined,
+      tableColumnFields: tableColumnFields.length > 0 ? tableColumnFields : undefined,
+      chartQuickCalc: chartQuickCalc !== "none" ? chartQuickCalc : undefined,
+      chartPercentGroupField: chartPercentGroupField.trim() || undefined,
       chartValueType: chartValueType !== "number" ? chartValueType : undefined,
       chartValueScale: chartValueScale !== "none" ? chartValueScale : undefined,
       chartNumberFormat: chartValueScale !== "none" ? chartValueScale : chartValueType !== "number" ? chartValueType : undefined,
@@ -3551,6 +3690,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         body: JSON.stringify({
           savedMetrics: next,
           datasetConfig: datasetConfigToSave,
+          ...(activeDatasetIdForSave && { datasetId: activeDatasetIdForSave }),
           ...(targetDashboardId ? { dashboardId: targetDashboardId } : linkedDashboardId ? { dashboardId: linkedDashboardId } : {}),
         }),
       });
@@ -3626,7 +3766,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ savedMetrics: savedMetrics, datasetConfig: datasetConfigToSave }),
+        body: JSON.stringify({
+          savedMetrics: savedMetrics,
+          datasetConfig: datasetConfigToSave,
+          ...(activeDatasetIdForSave && { datasetId: activeDatasetIdForSave }),
+        }),
       });
       const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
@@ -3664,6 +3808,21 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       const formulaMetric: AggregationMetricEdit = { id: `m-formula-${Date.now()}`, field: "", func: "FORMULA", alias: name, formula: formulaFromReuseExpr.trim() };
       metricsToStore = [...baseMetrics, formulaMetric];
       metricToSave = formulaMetric;
+    } else if (metricKind === "attribute") {
+      const firstMetric = formMetrics[0];
+      if (!firstMetric?.field?.trim()) {
+        toast.error("Seleccioná una dimensión/campo para la métrica atributo.");
+        return;
+      }
+      metricToSave = {
+        ...firstMetric,
+        id: firstMetric.id || `m-${Date.now()}`,
+        func: "ATTRIBUTE",
+        displayRole: "attribute",
+        alias: name,
+        expression: undefined,
+      };
+      metricsToStore = [metricToSave];
     } else {
       const firstMetric = formMetrics[0];
       if (!firstMetric) return;
@@ -3711,6 +3870,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartXAxis: chartXAxis || undefined,
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
       chartSeriesField: chartSeriesField || undefined,
+      tableRowFields: tableRowFields.length > 0 ? tableRowFields : undefined,
+      tableColumnFields: tableColumnFields.length > 0 ? tableColumnFields : undefined,
+      chartQuickCalc: chartQuickCalc !== "none" ? chartQuickCalc : undefined,
+      chartPercentGroupField: chartPercentGroupField.trim() || undefined,
       chartValueType: chartValueType !== "number" ? chartValueType : undefined,
       chartValueScale: chartValueScale !== "none" ? chartValueScale : undefined,
       chartNumberFormat: chartValueScale !== "none" ? chartValueScale : chartValueType !== "number" ? chartValueType : undefined,
@@ -3898,6 +4061,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartYAxes: chartYAxes.length > 0 ? chartYAxes : undefined,
       geoHints,
       chartSeriesField: chartSeriesField || undefined,
+      tableRowFields: tableRowFields.length > 0 ? tableRowFields : undefined,
+      tableColumnFields: tableColumnFields.length > 0 ? tableColumnFields : undefined,
+      chartQuickCalc: chartQuickCalc !== "none" ? chartQuickCalc : undefined,
+      chartPercentGroupField: chartPercentGroupField.trim() || undefined,
       chartLabelOverrides: Object.keys(chartLabelOverrides).length > 0 ? chartLabelOverrides : undefined,
       chartDatasetLabelOverrides:
         Object.keys(chartDatasetLabelOverrides).length > 0 ? chartDatasetLabelOverrides : undefined,
@@ -3987,6 +4154,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
             ),
           }
         : {}),
+      ...(activeDatasetIdForSave ? { datasetId: activeDatasetIdForSave } : {}),
     };
   }, [
     analysisDateFormat,
@@ -4160,10 +4328,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           ? (a.dimensions as string[])
           : [a.dimension, a.dimension2].filter((d): d is string => typeof d === "string" && d !== "");
       setFormDimensions(dims);
-      setFormChartType(typeof a.chartType === "string" && a.chartType ? a.chartType : "bar");
+      const savedAnalysisChartType = typeof a.chartType === "string" && a.chartType ? a.chartType : "bar";
+      setFormChartType(savedAnalysisChartType);
       setChartXAxis(typeof a.chartXAxis === "string" ? a.chartXAxis : "");
       setChartYAxes(Array.isArray(a.chartYAxes) ? (a.chartYAxes as string[]) : []);
       setChartSeriesField(typeof a.chartSeriesField === "string" ? a.chartSeriesField : "");
+      setTableRowFields(Array.isArray(a.tableRowFields) ? (a.tableRowFields as string[]) : []);
+      setTableColumnFields(Array.isArray(a.tableColumnFields) ? (a.tableColumnFields as string[]) : []);
+      setChartQuickCalc(normalizeChartQuickCalc(a.chartQuickCalc));
+      setChartPercentGroupField(typeof a.chartPercentGroupField === "string" ? a.chartPercentGroupField : "");
       setChartLabelOverrides(
         a.chartLabelOverrides && typeof a.chartLabelOverrides === "object"
           ? (a.chartLabelOverrides as Record<string, string>)
@@ -4278,7 +4451,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setGeoOverridesByXLabel(coerceGeoOverridesByXLabel((a as { geoOverridesByXLabel?: unknown }).geoOverridesByXLabel) ?? {});
       setEtlGeoXLabelDrafts({});
       prevAnalysisSelectionSigRef.current = [...(Array.isArray(a.metricIds) ? (a.metricIds as string[]) : [])].sort().join("|");
-      lastChartTypeForMappingRef.current = null;
+      // No tratar el tipo cargado como "cambio de gráfico" al entrar a Mapeo (evita pisar el mapeo guardado).
+      lastChartTypeForMappingRef.current = savedAnalysisChartType;
       setWizard("D");
       setWizardStep(0);
       setShowForm(true);
@@ -4337,13 +4511,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ savedMetrics: savedMetrics, datasetConfig: datasetConfigToSave }),
-      });
-      const json = await safeJsonResponse(res);
-      if (!res.ok || !json.ok) {
-        toast.error(json.error ?? "Error al eliminar la columna calculada");
-        return;
-      }
+          body: JSON.stringify({
+            savedMetrics: savedMetrics,
+            datasetConfig: datasetConfigToSave,
+            ...(activeDatasetIdForSave && { datasetId: activeDatasetIdForSave }),
+          }),
+        });
+        const json = await safeJsonResponse(res);
+        if (!res.ok || !json.ok) {
+          toast.error(json.error ?? "Error al eliminar la columna calculada");
+          return;
+        }
       setDerivedColumns(nextDerived);
       setData((prev) => (prev ? { ...prev, datasetConfig: datasetConfigToSave } : null));
       toast.success("Columna calculada eliminada");
@@ -4448,7 +4626,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                 variant="outline"
                 className="rounded-xl"
                 style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-                onClick={startNewAnalysis}
+                onClick={() => startNewAnalysis()}
                 disabled={hideDatasetTab && !currentDataset}
               >
                 <BarChart2 className="h-4 w-4 mr-2" />
@@ -5083,89 +5261,43 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                   </div>
                   <div className="flex justify-between">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Relaciones</Button>
+                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Relación Comparativa</Button>
                   </div>
                 </section>
               )}
 
-              {/* Wizard A4: Relaciones — conectar con tablas de otras conexiones */}
+              {/* Wizard A4: Relación Comparativa */}
               {wizard === "A" && wizardStep === 4 && (
                 <section className="rounded-xl border p-6" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
-                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Relaciones entre datasets (joins)</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Opcional: definí cómo se combina este dataset con tablas de otras conexiones para análisis multi-dataset.</p>
+                  <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Relación Comparativa</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
+                    Vinculá este dataset (base) con otro dataset de objetivos, presupuesto, forecast o benchmark procesado en la plataforma.
+                  </p>
                   <div className="rounded-lg border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Dataset actual</p>
-                    <p className="font-medium text-sm" style={{ color: "var(--platform-fg)" }}>{etlTitle}</p>
+                    <p className="text-xs font-medium mb-2" style={{ color: "var(--platform-fg-muted)" }}>Dataset base</p>
+                    <p className="font-medium text-sm" style={{ color: "var(--platform-fg)" }}>{datasetName || etlTitle}</p>
                     <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>{data?.schema}.{data?.tableName} · {data?.rowCount ?? 0} filas</p>
                   </div>
-                  {datasetRelations.length > 0 && (
-                    <div className="rounded-xl border mb-4 overflow-hidden" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <table className="w-full text-sm border-collapse">
-                        <thead style={{ background: "var(--platform-surface)", borderBottom: "1px solid var(--platform-border)" }}>
-                          <tr>
-                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Conexión / Tabla</th>
-                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna este dataset</th>
-                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Columna otra tabla</th>
-                            <th className="text-left px-3 py-2 font-medium" style={{ color: "var(--platform-fg-muted)", fontSize: "11px" }}>Join</th>
-                            <th className="w-10" />
-                          </tr>
-                        </thead>
-                        <tbody style={{ color: "var(--platform-fg)" }}>
-                          {datasetRelations.map((r) => (
-                            <tr key={r.id} className="border-b last:border-b-0" style={{ borderColor: "var(--platform-border)" }}>
-                              <td className="px-3 py-2">{r.connectionTitle} · {r.tableLabel}</td>
-                              <td className="px-3 py-2">{getSampleDisplayLabel(r.thisColumn)}</td>
-                              <td className="px-3 py-2">{r.otherColumn}</td>
-                              <td className="px-3 py-2">{r.joinType}</td>
-                              <td className="px-2 py-2">
-                                <button type="button" onClick={() => removeRelation(r.id)} className="text-xs rounded px-2 py-1 hover:bg-red-500/10 text-red-600" aria-label="Quitar relación">Quitar</button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  <div className="rounded-xl border p-4 mb-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                    <p className="text-xs font-medium mb-3" style={{ color: "var(--platform-fg-muted)" }}>Agregar relación</p>
-                    <div className="flex flex-wrap items-end gap-3">
-                      <div className="min-w-[180px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
-                        <Select value={relationFormConnectionId} onChange={(v: string) => setRelationFormConnectionId(v)} options={[{ value: "", label: "Elegir conexión" }, ...connectionOptions]} placeholder="Conexión" className="text-sm" buttonClassName="h-9" disablePortal />
-                      </div>
-                      <div className="min-w-[160px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
-                        <Select
-                          value={relationFormTableKey}
-                          onChange={(v: string) => setRelationFormTableKey(v)}
-                          options={[{ value: "", label: connectionTablesLoading ? "Cargando…" : "Elegir tabla" }, ...connectionTables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))]}
-                          placeholder="Tabla"
-                          className="text-sm"
-                          buttonClassName="h-9"
-                          disablePortal
-                        />
-                      </div>
-                      <div className="min-w-[140px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Columna (este dataset)</Label>
-                        <Select value={relationFormThisColumn} onChange={(v: string) => setRelationFormThisColumn(v)} options={[{ value: "", label: "Columna" }, ...fields.map((c) => ({ value: c, label: getSampleDisplayLabel(c) }))]} placeholder="Columna" className="text-sm" buttonClassName="h-9" disablePortal />
-                      </div>
-                      <div className="min-w-[140px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Columna (otra tabla)</Label>
-                        <Select value={relationFormOtherColumn} onChange={(v: string) => setRelationFormOtherColumn(v)} options={[{ value: "", label: otherTableColumnsLoading ? "Cargando…" : "Columna" }, ...otherTableColumnsLoaded.map((c) => ({ value: c, label: c }))]} placeholder="Columna" className="text-sm" buttonClassName="h-9" disablePortal />
-                      </div>
-                      <div className="min-w-[100px]">
-                        <Label className="text-xs block mb-1" style={{ color: "var(--platform-fg-muted)" }}>Tipo join</Label>
-                        <Select value={relationFormJoinType} onChange={(v: string) => setRelationFormJoinType(v as "INNER" | "LEFT")} options={[{ value: "LEFT", label: "LEFT" }, { value: "INNER", label: "INNER" }]} buttonClassName="h-9" disablePortal />
-                      </div>
-                      <Button type="button" variant="outline" size="sm" className="rounded-lg h-9" style={{ borderColor: "var(--platform-border)" }} onClick={addRelation}>Agregar</Button>
-                    </div>
-                  </div>
-                  {connectionsProp.length === 0 && (
-                    <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>No hay otras conexiones disponibles. Creá conexiones en Admin para poder relacionar tablas.</p>
-                  )}
-                  <div className="flex justify-between">
+                  <ComparativeRelationWizard
+                    currentDatasetId={propDatasetId}
+                    baseFields={fields}
+                    baseDateFields={dateFields}
+                    formatFieldLabel={getSampleDisplayLabel}
+                    relations={comparativeRelations}
+                    onRelationsChange={setComparativeRelations}
+                    onCanAdvanceChange={setComparativeRelationsCanAdvance}
+                  />
+                  <div className="flex justify-between mt-6">
                     <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                    <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext}>Siguiente: Publicar</Button>
+                    <Button
+                      type="button"
+                      className="rounded-xl"
+                      style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                      onClick={goNext}
+                      disabled={!comparativeRelationsCanAdvance}
+                    >
+                      Siguiente: Publicar
+                    </Button>
                   </div>
                 </section>
               )}
@@ -5250,15 +5382,18 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       </div>
                     )}
                     <div className="rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Relaciones (joins)</p>
-                      {datasetRelations.length > 0 ? (
+                      <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--platform-fg-muted)" }}>Relaciones comparativas</p>
+                      {comparativeRelations.length > 0 ? (
                         <ul className="space-y-1.5 text-sm" style={{ color: "var(--platform-fg)" }}>
-                          {datasetRelations.map((r) => (
-                            <li key={r.id} className="flex items-center gap-2"><span style={{ color: "var(--platform-accent)" }}>✓</span> {r.connectionTitle} · {r.tableLabel}: {getSampleDisplayLabel(r.thisColumn)} = {r.otherColumn} ({r.joinType})</li>
+                          {comparativeRelations.map((r) => (
+                            <li key={r.id} className="flex items-center gap-2">
+                              <span style={{ color: "var(--platform-accent)" }}>✓</span>
+                              {r.name}: vs {r.comparativeDatasetName || r.comparativeDatasetId} · {r.fieldMappings.length} mapeo(s) · {r.comparativeFields.length} campo(s) comparativo(s)
+                            </li>
                           ))}
                         </ul>
                       ) : (
-                        <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Ninguna (solo este dataset)</p>
+                        <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Ninguna (solo dataset base)</p>
                       )}
                     </div>
                   </div>
@@ -5276,6 +5411,86 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
               {wizard === "B" && wizardStep === 0 && (
                 <section className="rounded-xl border p-6 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Cálculo de la métrica</h3>
+                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
+                    Elegí si querés una <strong>medida</strong> (agregado numérico) o un <strong>atributo</strong> (valor de dimensión para mostrar en gráficos/tablas en lugar de un conteo).
+                  </p>
+
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {[
+                      { value: "measure" as const, label: "Medida (número)" },
+                      { value: "attribute" as const, label: "Atributo (dimensión)" },
+                    ].map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => {
+                          setMetricKind(opt.value);
+                          if (opt.value === "attribute") {
+                            setFormMetrics((prev) => {
+                              const current = prev[0] ?? { id: `m-${Date.now()}`, field: "", func: "ATTRIBUTE", alias: "" };
+                              return [{
+                                ...current,
+                                func: "ATTRIBUTE",
+                                displayRole: "attribute",
+                                expression: undefined,
+                              }];
+                            });
+                          } else {
+                            setFormMetrics((prev) => {
+                              const current = prev[0] ?? { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" };
+                              return [{ ...current, func: "SUM", displayRole: undefined }];
+                            });
+                          }
+                        }}
+                        className="px-3 py-2 rounded-xl text-sm border transition-colors"
+                        style={{
+                          borderColor: metricKind === opt.value ? "var(--platform-accent)" : "var(--platform-border)",
+                          background: metricKind === opt.value ? "var(--platform-accent-dim)" : "var(--platform-surface)",
+                          color: "var(--platform-fg)",
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {metricKind === "attribute" ? (
+                    <div className="rounded-lg border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                      <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Campo atributo</Label>
+                      <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                        Se mostrará el valor de esta dimensión/campo en tablas, KPI y etiquetas de gráficos (en lugar de un número agregado como conteo o suma).
+                      </p>
+                      <select
+                        value={formMetrics[0]?.field ?? ""}
+                        onChange={(e) => {
+                          const field = e.target.value;
+                          setFormMetrics((prev) => {
+                            const current = prev[0] ?? { id: `m-${Date.now()}`, field: "", func: "ATTRIBUTE", alias: "" };
+                            return [{
+                              ...current,
+                              field,
+                              func: "ATTRIBUTE",
+                              displayRole: "attribute",
+                              alias: current.alias || field,
+                            }];
+                          });
+                        }}
+                        className="w-full h-9 rounded-lg border px-3 text-sm"
+                        style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                      >
+                        <option value="">— Elegir dimensión —</option>
+                        {fields
+                          .filter((c) => {
+                            const role = columnRoles[c]?.role ?? "dimension";
+                            return role === "dimension" || role === "key" || role === "time" || role === "geo";
+                          })
+                          .map((c) => (
+                            <option key={c} value={c}>{getSampleDisplayLabel(c)}</option>
+                          ))}
+                      </select>
+                    </div>
+                  ) : (
+                  <>
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Escribí la fórmula con nombres de columnas (estilo Excel). Podés usar números, literales entre comillas e IF(condición, valor_si_verdadero, valor_si_falso). Diferenciá entre cálculo por fila y cálculo agregado.</p>
 
                   {afterSaveInB && (
@@ -5546,6 +5761,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     </div>
                     );
                   })()}
+
+                  </>
+                  )}
 
                   {/* Previsualización del resultado en el paso Cálculo */}
                   <div className="mt-6 rounded-xl border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
@@ -6357,6 +6575,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     compareColumnCandidates={compareColumnCandidates}
                     fixedValue={transformCompareFixedValue}
                     onFixedValueChange={setTransformCompareFixedValue}
+                    comparativeRelations={activeComparativeRelations}
+                    comparativeMetricOptions={comparativeMetricOptions}
+                    analysisDateGranularity={(analysisGranularity || "month") as DateGranularity}
+                    chartValueType={chartValueType}
                     onMissingTimeColumn={() =>
                       toast.error(
                         "No hay columna de fecha: definí el eje temporal en el paso anterior o agregá una columna fecha al dataset."
@@ -6366,7 +6588,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       toast.error("No hay columnas candidatas (agregá métricas o dimensiones).")
                     }
                   />
-                  {analysisCompare.kind !== "none" && (
+                  {analysisCompare.kind !== "none" && analysisCompare.kind !== "comparative" && (
                     <div
                       className="rounded-lg border p-3 space-y-2"
                       style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
@@ -6412,7 +6634,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
               {/* Wizard C5: Vista previa (tabla) */}
               {wizard === "C" && wizardStep === 5 && (() => {
-                const hasValidMetrics = effectiveFormMetrics.some((m) => m.field || (m as { expression?: string }).expression || m.formula);
+                const hasValidMetrics = effectiveFormMetrics.some(
+                  (m) =>
+                    m.field ||
+                    (m as { expression?: string }).expression ||
+                    m.formula ||
+                    String(m.func ?? "").trim().toUpperCase() === "ATTRIBUTE" ||
+                    m.displayRole === "attribute"
+                );
                 const transformLabel =
                   analysisCompare.kind === "none"
                     ? null
@@ -6916,6 +7145,59 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       </div>
 
                       <div className="space-y-5">
+                        {formChartType === "table" ? (
+                          <div className="rounded-lg border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                            <div>
+                              <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg)" }}>Asignación de ejes para tabla</Label>
+                              <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                                <strong>Eje Y (filas):</strong> encabezados de fila. <strong>Eje X (columnas):</strong> encabezados de columna; con filas + columnas + métricas se arma una tabla pivot. <strong>Valor:</strong> métricas a mostrar.
+                              </p>
+                            </div>
+                            <div className="overflow-auto max-h-[320px] rounded-lg border" style={{ borderColor: "var(--platform-border)" }}>
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="border-b text-left text-xs" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg-muted)" }}>
+                                    <th className="py-2 px-3 font-medium">Campo</th>
+                                    <th className="py-2 px-2 font-medium text-center">Eje Y (filas)</th>
+                                    <th className="py-2 px-2 font-medium text-center">Eje X (columnas)</th>
+                                    <th className="py-2 px-2 font-medium text-center">Valor</th>
+                                    <th className="py-2 px-2 font-medium text-center">—</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {chartAvailableColumns.map((col) => {
+                                    const isDim = chartDimensionColumns.some((d) => d.key === col.key);
+                                    const axis = resolveTableFieldAxis(col.key);
+                                    return (
+                                      <tr key={col.key} className="border-b" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}>
+                                        <td className="py-2 px-3">
+                                          {col.label}
+                                          <span className="ml-2 text-[10px] uppercase" style={{ color: "var(--platform-fg-muted)" }}>{isDim ? "dim" : "métrica"}</span>
+                                        </td>
+                                        {(["row", "column", "value", "none"] as const).map((opt) => (
+                                          <td key={opt} className="py-2 px-2 text-center">
+                                            <input
+                                              type="radio"
+                                              name={`table-axis-${col.key}`}
+                                              checked={axis === opt}
+                                              disabled={opt !== "value" && opt !== "none" && !isDim}
+                                              onChange={() => setTableFieldAxis(col.key, opt)}
+                                              className="rounded-full"
+                                            />
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                            {tableRowFields.length > 0 && tableColumnFields.length > 0 && chartYAxes.length === 0 && (
+                              <p className="text-xs" style={{ color: "var(--platform-accent)" }}>Seleccioná al menos una métrica en «Valor» para completar el pivot.</p>
+                            )}
+                          </div>
+                        ) : (
+                        <>
                         <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                           <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg)" }}>1. Eje X — Categorías o tiempo</Label>
                           <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Columna que define las etiquetas (ej. vendedor, fecha, región). En KPI no se usa.</p>
@@ -6931,7 +7213,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
 
                         <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                           <Label className="text-sm font-medium mb-1 block" style={{ color: "var(--platform-fg)" }}>2. Eje Y — Valores a graficar</Label>
-                          <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná una o más métricas (columnas numéricas) que se mostrarán en el gráfico.</p>
+                          <p className="text-xs mb-3" style={{ color: "var(--platform-fg-muted)" }}>Seleccioná métricas numéricas o atributos (dimensión). Los atributos se muestran como texto en etiquetas/KPI; en barras usá «Mostrar etiquetas de datos».</p>
                           {chartNumericColumns.length === 0 ? (
                             <p className="text-xs py-2" style={{ color: "var(--platform-accent)" }}>No hay métricas en los datos. Revisá el paso Cálculo y definí al menos una métrica para el análisis.</p>
                           ) : (
@@ -6963,20 +7245,44 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                             </select>
                           </div>
                         )}
+                        </>
+                        )}
                       </div>
 
                       <div className="mt-5 rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                         <p className="text-xs font-medium uppercase mb-2" style={{ color: "var(--platform-fg-muted)" }}>Resumen del mapeo</p>
                         <div className="flex flex-wrap gap-4 text-sm" style={{ color: "var(--platform-fg)" }}>
+                          {formChartType === "table" ? (
+                            <>
+                              <span><strong>Y (filas):</strong> {tableRowFields.length ? tableRowFields.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k).join(", ") : "—"}</span>
+                              <span><strong>X (columnas):</strong> {tableColumnFields.length ? tableColumnFields.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k).join(", ") : "—"}</span>
+                              <span><strong>Valores:</strong> {chartYAxes.length ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k).join(", ") : "—"}</span>
+                            </>
+                          ) : (
+                            <>
                           <span><strong>X:</strong> {chartXAxis ? chartAvailableColumns.find((c) => c.key === chartXAxis)?.label ?? chartXAxis : "— (KPI)"}</span>
                           <span><strong>Y:</strong> {chartYAxes.length > 0 ? chartYAxes.map((k) => chartAvailableColumns.find((c) => c.key === k)?.label ?? k).join(", ") : "—"}</span>
                           {chartSeriesField && <span><strong>Serie:</strong> {chartAvailableColumns.find((c) => c.key === chartSeriesField)?.label ?? chartSeriesField}</span>}
+                            </>
+                          )}
                         </div>
                       </div>
 
                       <div className="mt-6 flex justify-between">
                         <Button type="button" variant="outline" className="rounded-xl" style={{ borderColor: "var(--platform-border)" }} onClick={goPrev}>Anterior</Button>
-                        <Button type="button" className="rounded-xl" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={goNext} disabled={chartNumericColumns.length > 0 && chartYAxes.length === 0}>Siguiente: Formato</Button>
+                        <Button
+                          type="button"
+                          className="rounded-xl"
+                          style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }}
+                          onClick={goNext}
+                          disabled={
+                            formChartType === "table"
+                              ? chartYAxes.length === 0 && chartNumericColumns.length > 0
+                              : chartNumericColumns.length > 0 && chartYAxes.length === 0
+                          }
+                        >
+                          Siguiente: Formato
+                        </Button>
                       </div>
                     </>
                   )}
@@ -6990,6 +7296,20 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                   <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>Solo afecta la presentación visual. No cambia filas ni valores del análisis.</p>
 
                   <div className="space-y-5">
+                    {!["text", "image", "filter"].includes(formChartType) && (
+                      <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                        <ChartQuickCalcFields
+                          value={chartQuickCalc}
+                          onChange={setChartQuickCalc}
+                          groupField={chartPercentGroupField}
+                          onGroupFieldChange={setChartPercentGroupField}
+                          columnOptions={[
+                            ...formDimensions,
+                            ...chartYAxes.filter((k) => !formDimensions.includes(k)),
+                          ]}
+                        />
+                      </div>
+                    )}
                     {!["kpi", "table", "map", "text", "image", "filter"].includes(formChartType) && (
                       <div className="rounded-lg border p-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                         <Label className="text-sm font-medium mb-2 block" style={{ color: "var(--platform-fg)" }}>Etiquetas de datos</Label>
@@ -7588,31 +7908,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                             <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>{chartYAxes[0] ? (chartAvailableColumns.find((c) => c.key === chartYAxes[0])?.label ?? chartYAxes[0]) : effectiveFormMetrics[0]?.alias || effectiveFormMetrics[0]?.field || ""}</span>
                           </div>
                         )}
-                        {formChartType === "table" && (
-                          <div className="overflow-auto max-h-[280px] text-sm">
-                            <table className="w-full">
-                              <thead><tr style={{ borderBottom: "1px solid var(--platform-border)", color: "var(--platform-fg-muted)" }}>{previewVisibleKeys.map((k, i) => (<th key={k} className="text-left py-2 px-3 font-medium">{previewDisplayHeaders[i] ?? k}</th>))}</tr></thead>
-                              <tbody style={{ color: "var(--platform-fg)" }}>{previewChronologicalRows.slice(0, 50).map((row, idx) => {
-                                const raw = row as Record<string, unknown>;
-                                return (<tr key={idx} style={{ borderBottom: "1px solid var(--platform-border)" }}>{previewVisibleKeys.map((k, i) => {
-                                  const v = raw[k];
-                                  const dateDisplay = formatPreviewDateValue(v, k);
-                                  const num = typeof v === "number" ? v : (v != null && v !== "" ? Number(v) : NaN);
-                                  const display = dateDisplay ?? (!isNaN(num) ? formatNumber(num) : String(v ?? ""));
-                                  return (<td key={i} className="py-2 px-3 tabular-nums">{display}</td>);
-                                })}</tr>);
-                              })}</tbody>
-                            </table>
-                          </div>
-                        )}
-                        {previewWidgetForRenderer && formChartType !== "kpi" && formChartType !== "table" && (
-                          <div className="h-[320px] w-full">
+                        {previewWidgetForRenderer && formChartType !== "kpi" && (
+                          <div className={formChartType === "table" ? "min-h-[280px] w-full" : "h-[320px] w-full"}>
                             <DashboardWidgetRenderer
-                              key={`pv-${chartCategoryColorMode}-${chartPrimaryColor}-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartRankingPinnedXValues.join("\x1e")}-${chartRankingShowRankInLabel}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}`}
+                              key={`pv-${formChartType}-${chartCategoryColorMode}-${chartPrimaryColor}-${chartRankingEnabled}-${chartRankingTop}-${chartRankingMetric}-${chartRankingDirection}-${chartRankingPinnedXValues.join("\x1e")}-${chartRankingShowRankInLabel}-${chartSortDirection}-${chartSortBy}-${chartSortByMetric}-${tableRowFields.join("\x1e")}-${tableColumnFields.join("\x1e")}-${chartYAxes.join("\x1e")}`}
                               widget={previewWidgetForRenderer}
                               isLoading={false}
                               hideHeader
-                              minHeight={320}
+                              minHeight={formChartType === "table" ? 280 : 320}
                               className="!border-0 !p-0 !shadow-none h-full"
                             />
                           </div>
@@ -7808,6 +8111,19 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     </span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    {hasData && !datasetOnly && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="rounded-xl hidden sm:inline-flex"
+                        style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
+                        onClick={() => startNewAnalysis({ metricIds: [s.id], wizardStep: 1 })}
+                        disabled={hideDatasetTab && !currentDataset}
+                      >
+                        Crear análisis
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="ghost"
@@ -7858,7 +8174,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
               size="sm"
               className="rounded-xl shrink-0"
               style={{ borderColor: "var(--platform-accent)", color: "var(--platform-accent)" }}
-              onClick={startNewAnalysis}
+              onClick={() => startNewAnalysis()}
               disabled={savedMetrics.length === 0 || (hideDatasetTab && !currentDataset)}
             >
               <Plus className="h-3.5 w-3.5 mr-1" />
@@ -7977,7 +8293,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--platform-fg)" }}>Dashboard</h2>
                 <p className="text-xs mt-1" style={{ color: "var(--platform-fg-muted)" }}>
-                  Para añadir gráficos al dashboard, guardá un análisis en el paso Análisis o Gráfico y luego, en el Dashboard, usá «Añadir análisis».
+                  En el dashboard podés añadir métricas guardadas directamente, o guardar un análisis (varias métricas + dimensiones) con «Crear análisis» arriba y usarlo desde el estudio.
                 </p>
               </div>
               {linkedDashboardId && (

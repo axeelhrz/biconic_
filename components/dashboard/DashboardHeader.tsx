@@ -75,7 +75,7 @@ export default function DashboardHeader() {
         const { createClient } = await import("@/lib/supabase/client");
         const supabase = createClient();
         const { data: sub } = supabase.auth.onAuthStateChange(
-          (event, _session) => {
+          (event: any, _session: any) => {
             if (!mounted) return;
             if (event === "TOKEN_REFRESHED") return;
             setIsUserLoading(true);
@@ -127,7 +127,7 @@ export default function DashboardHeader() {
 
       {/* Navegación */}
       <nav className="flex items-center gap-5">
-        {navLinks.map((link) => {
+        {navLinks.map((link: any) => {
           const isActive = pathname.startsWith(link.href);
           const baseClasses =
             "px-4 py-2 text-sm font-normal rounded-full transition-colors duration-300";

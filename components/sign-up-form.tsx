@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
+import { backendClient } from "@/lib/api/backend-client";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -34,11 +34,9 @@ export function SignUpForm({
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
-    const supabase = createClient();
     setIsLoading(true);
     setError(null);
 
-    // Validación de contraseñas
     if (password !== confirmPassword) {
       setError("Las contraseñas no coinciden.");
       setIsLoading(false);
@@ -46,22 +44,25 @@ export function SignUpForm({
     }
 
     try {
-      const { data, error } = await supabase.auth.signUp({
+      await backendClient.auth.register(
         email,
         password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/protected`,
-          data: {
-            first_name: firstName,
-            last_name: lastName,
-          },
-        },
-      });
-
-      if (error) throw error;
-      router.push("/auth/sign-up-success");
+        `${firstName} ${lastName}`.trim() || undefined
+      );
+      router.push("/dashboard");
+      router.refresh();
     } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "Ocurrió un error inesperado.");
+      const message =
+        error instanceof Error ? error.message : "Ocurrió un error inesperado.";
+      const isServerDown =
+        message.includes("fetch") ||
+        message.includes("500") ||
+        message.toLowerCase().includes("internal");
+      setError(
+        isServerDown
+          ? "No se pudo registrar. Comprueba que el backend (puerto 4000) y Postgres estén activos."
+          : message
+      );
     } finally {
       setIsLoading(false);
     }

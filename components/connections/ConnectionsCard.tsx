@@ -29,6 +29,8 @@ export interface Connection {
     companyName: string;
     logoUrl?: string | null;
   };
+  /** Nombre del cliente para agrupación en listados admin */
+  clientLabel?: string;
 }
 
 // Tipo con color por tecnología

@@ -1,8 +1,9 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { getBackendApiUrl, shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { cookies } from "next/headers";
-import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 import { Database } from "@/lib/supabase/database.types";
 
 // --- Types ---
@@ -23,19 +24,7 @@ export type DashboardPermissionItem = {
 
 // --- Helper: Service Role Client for Admins ---
 async function getServiceRoleClient() {
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-
-  if (!serviceRoleKey || !url) {
-    throw new Error("Missing Supabase Service Role configuration");
-  }
-
-  return createSupabaseClient(url, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
+  return createServiceRoleClient();
 }
 
 /**
@@ -70,7 +59,7 @@ export async function getDashboardPermissionsAction(dashboardId: string) {
     }
 
     // 2. Fetch Client Members
-    const clientMemberIds = perms.map((p) => p.client_member_id).filter(Boolean) as string[];
+    const clientMemberIds = perms.map((p: any) => p.client_member_id).filter(Boolean) as string[];
 
     if (clientMemberIds.length === 0) {
        return { ok: true, data: [] };
@@ -87,7 +76,7 @@ export async function getDashboardPermissionsAction(dashboardId: string) {
     }
 
     // 3. Fetch Profiles
-    const userIds = members?.map((m) => m.user_id).filter(Boolean) as string[];
+    const userIds = members?.map((m: any) => m.user_id).filter(Boolean) as string[];
     const { data: profiles, error: profilesErr } = await supabase
       .from("profiles")
       .select("id, full_name, email, app_role, role")
@@ -99,10 +88,10 @@ export async function getDashboardPermissionsAction(dashboardId: string) {
     }
 
     // 4. Map Data
-    const memberMap = new Map((members ?? []).map((m) => [m.id, m]));
-    const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
+    const memberMap = new Map<string, any>((members ?? []).map((m: any) => [m.id, m]));
+    const profileMap = new Map<string, any>((profiles ?? []).map((p: any) => [p.id, p]));
 
-    const mapped: DashboardPermissionItem[] = perms.map((item) => {
+    const mapped: DashboardPermissionItem[] = perms.map((item: any) => {
       // Manual type guard or casting because permission_type from DB can be string but we expect specific enum
       const permissionType = (item.permission_type === "UPDATE" ? "UPDATE" : "VIEW") as AppPermissionType;
       
@@ -203,7 +192,7 @@ export async function getDashboardCandidatesAction(dashboardId: string, ownerId:
 
             if (profilesErr) throw profilesErr;
 
-            const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
+            const profileMap = new Map<string, any>((profiles ?? []).map((p: any) => [p.id, p]));
 
             candidates = members.map((m: any) => {
                 const p = profileMap.get(m.user_id);
@@ -372,6 +361,19 @@ export async function removeDashboardPermissionAction(permissionId: string) {
  *    Replaces client-side fetching in DashboardGrid.
  */
 export async function getDashboardsAction() {
+    if (shouldUseOwnBackend()) {
+      const cookieStore = await cookies();
+      const res = await fetch(`${getBackendApiUrl()}/dashboards`, {
+        headers: { cookie: cookieStore.toString() },
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        return { ok: false, error: "No autenticado o error al cargar dashboards" };
+      }
+      const data = await res.json();
+      return { ok: true, data: Array.isArray(data) ? data : [] };
+    }
+
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     
@@ -417,7 +419,7 @@ export async function getDashboardsAction() {
             
             if (members && members.length > 0) {
                 // --- Shared Explicitly ---
-                const memberIds = members.map(m => m.id);
+                const memberIds = members.map((m: any) => m.id);
                 const { data: perms } = await supabase
                     .from("dashboard_has_client_permissions")
                     .select("dashboard_id")
@@ -425,7 +427,7 @@ export async function getDashboardsAction() {
                     .in("client_member_id", memberIds);
                 
                 if (perms && perms.length > 0) {
-                    const dashboardIds = Array.from(new Set(perms.map(p => p.dashboard_id).filter(Boolean))) as string[];
+                    const dashboardIds = Array.from(new Set(perms.map((p: any) => p.dashboard_id).filter(Boolean))) as string[];
                     if (dashboardIds.length > 0) {
                         const { data: shared, error: sharedErr } = await supabase
                             .from("dashboard")
@@ -440,8 +442,8 @@ export async function getDashboardsAction() {
                 // --- Client Admin Access ---
                 // Identify clients where user is 'admin' or 'ADMIN'
                 const adminClientIds = members
-                    .filter(m => (m.role as string) === 'admin' || (m.role as string) === 'ADMIN')
-                    .map(m => m.client_id)
+                    .filter((m: any) => (m.role as string) === 'admin' || (m.role as string) === 'ADMIN')
+                    .map((m: any) => m.client_id)
                     .filter(Boolean) as string[];
 
                 if (adminClientIds.length > 0) {

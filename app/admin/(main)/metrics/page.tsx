@@ -16,6 +16,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { ClientFilter } from "@/components/admin/dashboard/ClientFilter";
+import { AdminClientGroupSection } from "@/components/admin/AdminClientGroupSections";
+import { groupItemsByClient } from "@/lib/admin/clientGrouping";
 
 type SavedMetric = { id: string; name: string; metric: { func?: string; field?: string; alias?: string } };
 type SavedAnalysisBrief = { id?: string; name?: string; chartType?: string; metricIds?: string[] };
@@ -23,6 +26,8 @@ type EtlWithMetrics = {
   id: string;
   title: string;
   name: string;
+  clientId?: string | null;
+  clientLabel?: string | null;
   savedMetrics: SavedMetric[];
   savedAnalyses?: SavedAnalysisBrief[];
 };
@@ -43,6 +48,8 @@ export default function AdminMetricsPage() {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
 
   const selectionKey = (etlId: string, metricId: string) => `${etlId}:::${metricId}`;
 
@@ -220,6 +227,28 @@ export default function AdminMetricsPage() {
     (e) => (e.savedMetrics?.length ?? 0) > 0 || (e.savedAnalyses?.length ?? 0) > 0
   );
 
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredEtls = etlsWithContent.filter((e) => {
+    const matchesClient = selectedClientId ? e.clientId === selectedClientId : true;
+    if (!matchesClient) return false;
+    if (!normalizedQuery) return true;
+    const haystack = [
+      e.title,
+      e.name,
+      e.clientLabel ?? "",
+      ...(e.savedMetrics ?? []).map((m) => m.name),
+      ...(e.savedAnalyses ?? []).map((a) => a.name ?? ""),
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
+
+  const clientGroups = groupItemsByClient(filteredEtls, {
+    sortItems: (a, b) =>
+      (a.title || a.name || "").localeCompare(b.title || b.name || "", "es", { sensitivity: "base" }),
+  });
+
   return (
     <div className="flex w-full flex-col min-h-0">
       {/* Hero: mismo estilo que /admin/dashboard */}
@@ -258,6 +287,32 @@ export default function AdminMetricsPage() {
           </Button>
         </div>
       </section>
+
+      {/* Toolbar */}
+      {!loading && etlsWithContent.length > 0 ? (
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4 w-full">
+            <div className="relative flex-1 sm:max-w-[320px]">
+              <Search
+                className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2"
+                style={{ color: "var(--platform-fg-muted)" }}
+              />
+              <Input
+                placeholder="Buscar métrica, análisis, ETL o cliente..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="h-11 rounded-xl border pl-11 text-sm"
+                style={{
+                  background: "var(--platform-surface)",
+                  borderColor: "var(--platform-border)",
+                  color: "var(--platform-fg)",
+                }}
+              />
+            </div>
+            <ClientFilter onSelect={setSelectedClientId} />
+          </div>
+        </div>
+      ) : null}
 
       {createOpen && (
         <div
@@ -351,7 +406,7 @@ export default function AdminMetricsPage() {
                 </div>
               ) : (
                 <ul className="space-y-1.5 py-1">
-                  {datasetFiltered.map((ds) => (
+                  {datasetFiltered.map((ds: any) => (
                     <li key={ds.id}>
                       <button
                         type="button"
@@ -532,15 +587,28 @@ export default function AdminMetricsPage() {
             Crear métrica
           </Button>
         </div>
+      ) : filteredEtls.length === 0 ? (
+        <div
+          className="rounded-xl border p-8 text-center"
+          style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
+        >
+          <BarChart3 className="h-12 w-12 mx-auto mb-4" style={{ color: "var(--platform-fg-muted)" }} />
+          <p className="text-base font-medium mb-1" style={{ color: "var(--platform-fg)" }}>
+            Sin resultados
+          </p>
+          <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+            No hay métricas ni análisis que coincidan con la búsqueda o el cliente seleccionado.
+          </p>
+        </div>
       ) : (
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-10">
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
             <p className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
               {totalMetrics} métrica{totalMetrics !== 1 ? "s" : ""}
               {totalAnalyses > 0
                 ? ` · ${totalAnalyses} análisis guardado${totalAnalyses !== 1 ? "s" : ""}`
                 : ""}{" "}
-              en {etlsWithContent.length} ETL{etlsWithContent.length !== 1 ? "s" : ""}.
+              en {filteredEtls.length} ETL{filteredEtls.length !== 1 ? "s" : ""}.
               {selectedKeys.size > 0 ? (
                 <span className="ml-1 font-medium" style={{ color: "var(--platform-fg)" }}>
                   ({selectedKeys.size} seleccionada{selectedKeys.size !== 1 ? "s" : ""})
@@ -582,7 +650,15 @@ export default function AdminMetricsPage() {
               </Button>
             </div>
           </div>
-          {etlsWithContent.map((etl) => {
+          {clientGroups.map((group) => (
+            <AdminClientGroupSection
+              key={group.clientId ?? "unassigned"}
+              clientId={group.clientId}
+              clientLabel={group.clientLabel}
+              count={group.items.length}
+            >
+              <div className="flex flex-col gap-4">
+          {group.items.map((etl) => {
             const analyses = etl.savedAnalyses ?? [];
             const metrics = etl.savedMetrics ?? [];
             return (
@@ -613,7 +689,7 @@ export default function AdminMetricsPage() {
               </div>
               {metrics.length > 0 ? (
               <ul className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
-                {metrics.map((m) => (
+                {metrics.map((m: any) => (
                   <li
                     key={m.id}
                     className="flex items-center justify-between gap-4 px-4 py-3"
@@ -671,7 +747,7 @@ export default function AdminMetricsPage() {
                     </p>
                   </div>
                   <ul className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
-                    {analyses.map((raw) => {
+                    {analyses.map((raw: any) => {
                       const aid = String(raw.id ?? "");
                       const label = raw.name?.trim() || "Sin nombre";
                       return (
@@ -707,6 +783,9 @@ export default function AdminMetricsPage() {
             </section>
             );
           })}
+              </div>
+            </AdminClientGroupSection>
+          ))}
         </div>
       )}
     </div>

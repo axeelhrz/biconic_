@@ -2,7 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { createServiceRoleClient } from "@/lib/supabase/service";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
+import { EXCEL_PHYSICAL_SCHEMA } from "@/lib/db/internal-db-url";
+import { buildExcelMetadataTables, resolveExcelPhysicalTableFromSelection } from "@/lib/excel-import/excel-metadata";
+import { resolveConnectionType } from "@/lib/connection/resolve-connection-type";
+import {
+  readConnectionTablesFromRow,
+  readCredentialsFromConnectionRow,
+} from "@/lib/connection/connection-persistence";
+import { connectionsSelectColumns } from "@/lib/db/connections-query";
 
 type ConnectionBody = {
   type?: "mysql" | "postgres" | "postgresql" | "excel" | "firebird";
@@ -33,6 +43,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     let { type, host, database, user, password, port, ssl, connectionId, tableName: bodyTableName, discoverTables } =
       body;
     let connectionTables: string[] | null = null;
+    let conn: Record<string, unknown> | null = null;
     if (connectionId != null) {
       console.log("[metadata] Using connectionId=", String(connectionId));
     }
@@ -49,43 +60,43 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
+    const dbClient = shouldUseOwnBackend() ? createServiceRoleClient() : supabase;
+
     // If connectionId is provided, load credentials from Supabase to avoid exposing them client-side
     if (connectionId != null) {
-      const { data: conn, error: connError } = await supabase
+      const { data: connRow, error: connError } = await dbClient
         .from("connections")
-        .select(
-          "id, user_id, type, db_host, db_name, db_user, db_port, original_file_name, db_password_encrypted, connection_tables"
-        )
+        .select(connectionsSelectColumns())
         .eq("id", String(connectionId))
         .maybeSingle();
-      if (connError || !conn) {
+      if (connError || !connRow) {
         return NextResponse.json(
           { ok: false, error: connError?.message || "Conexión no encontrada" },
           { status: 404 }
         );
       }
-      host = (conn as any)?.db_host ?? host;
-      database = (conn as any)?.db_name ?? database;
-      user = (conn as any)?.db_user ?? user;
-      port = (conn as any)?.db_port ?? port;
-      if (!password && (conn as any)?.db_password_encrypted) {
+      conn = connRow as Record<string, unknown>;
+      const creds = readCredentialsFromConnectionRow(conn);
+      host = creds.host || host;
+      database = creds.database || database;
+      user = creds.user || user;
+      port = creds.port || port;
+      if (!password && creds.passwordEncrypted) {
         try {
-          password = decryptConnectionPassword((conn as any).db_password_encrypted);
+          password = decryptConnectionPassword(creds.passwordEncrypted);
         } catch {}
       }
       if (!password && (conn as any)?.type === "firebird") {
         password = process.env.FLEXXUS_PASSWORD ?? undefined;
       }
+      type = resolveConnectionType((conn as any)?.type, type);
       if (
         (conn as any)?.type === "excel_file" ||
         (conn as any)?.type === "excel"
       ) {
         type = "excel";
       }
-      if ((conn as any)?.type === "firebird") {
-        type = "firebird";
-      }
-      const rawTables = (conn as any)?.connection_tables;
+      const rawTables = readConnectionTablesFromRow(conn);
       connectionTables = discoverTables
         ? null
         : Array.isArray(rawTables)
@@ -109,48 +120,84 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         connectionId
       );
 
-      const { data: meta, error: metaError } = await supabase
+      const { data: metaRows, error: metaError } = await dbClient
         .from("data_tables")
-        .select("columns, physical_table_name, total_rows, updated_at")
-        .eq("connection_id", String(connectionId))
-        .single();
+        .select(
+          "columns, physical_table_name, physical_schema_name, table_name, total_rows, updated_at, import_status"
+        )
+        .eq("connection_id", String(connectionId));
 
-      if (metaError || !meta) {
+      const rows = Array.isArray(metaRows)
+        ? metaRows
+        : metaRows
+          ? [metaRows]
+          : [];
+
+      if (metaError || rows.length === 0) {
         return NextResponse.json(
-          { ok: false, error: "Metadatos de Excel no encontrados" },
+          {
+            ok: false,
+            error:
+              rows.length === 0 && !metaError
+                ? "El archivo Excel aún se está importando o no tiene tablas. Esperá a que termine el procesamiento."
+                : "Metadatos de Excel no encontrados",
+          },
           { status: 404 }
         );
       }
 
-      const schemas = ["data_warehouse"];
-      const tableName =
-        meta.physical_table_name ||
-        `import_${String(connectionId).replaceAll("-", "_")}`;
-      const columns = Array.isArray((meta as any).columns)
-        ? (meta as any).columns.map((c: any) => ({
-            name: c.name || c.original_name || "col",
-            dataType: c.type || "text",
-            nullable: true,
-            defaultValue: null,
-            isPrimaryKey: c.name === "_import_id",
-          }))
-        : [];
-      const tables = [
-        {
-          schema: "data_warehouse",
-          name: tableName,
-          columns,
-        },
-      ];
+      const fileName = (conn as { original_file_name?: string | null })?.original_file_name;
+      let tables = await buildExcelMetadataTables(rows, {
+        connectionId: String(connectionId),
+        fileName,
+      });
+
+      if (connectionTables && connectionTables.length > 0 && !discoverTables) {
+        const allowed = new Set(
+          connectionTables.map((t: string) => String(t).trim().toLowerCase())
+        );
+        tables = tables.filter((t) => {
+          const qualified = `${t.schema}.${t.name}`.toLowerCase();
+          const bare = t.name.toLowerCase();
+          const label = (t.label || "").toLowerCase();
+          return (
+            allowed.has(qualified) ||
+            allowed.has(bare) ||
+            (label && allowed.has(label))
+          );
+        });
+      }
+
+      if (typeof bodyTableName === "string" && bodyTableName.trim()) {
+        const wanted = bodyTableName.trim().toLowerCase();
+        const wantedBare = wanted.includes(".")
+          ? wanted.split(".").slice(1).join(".")
+          : wanted;
+        const match =
+          tables.find((t) => `${t.schema}.${t.name}`.toLowerCase() === wanted) ??
+          tables.find((t) => t.name.toLowerCase() === wantedBare) ??
+          tables.find((t) => (t.label || "").toLowerCase() === wantedBare);
+        tables = match
+          ? [match]
+          : tables.filter(
+              (t) =>
+                t.name.toLowerCase() === wantedBare ||
+                `${t.schema}.${t.name}`.toLowerCase() === wanted ||
+                (t.label || "").toLowerCase() === wantedBare
+            );
+      }
+
+      const primary = rows[0] as { total_rows?: number | null; import_status?: string | null };
 
       return NextResponse.json({
         ok: true,
         metadata: {
           dbVersion: "Excel Import",
-          schemas,
+          schemas: [EXCEL_PHYSICAL_SCHEMA],
           tables,
-          totalRows: (meta as any).total_rows ?? undefined,
-          fileName: undefined,
+          totalRows: primary.total_rows ?? undefined,
+          importStatus: primary.import_status ?? undefined,
+          fileName: fileName ?? undefined,
         },
       });
     }
@@ -163,7 +210,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // Si la conexión tiene tablas configuradas manualmente, devolverlas sin conectar (evita timeout con muchas tablas).
       // Si además piden columnas de una tabla (tableName), no devolver aquí; más abajo se conecta y se devuelve esa tabla con columnas.
       if (connectionTables && connectionTables.length > 0 && !(typeof bodyTableName === "string" && bodyTableName.trim())) {
-        const tables = connectionTables.map((t) => {
+        const tables = connectionTables.map((t: any) => {
           const s = String(t).trim();
           const parts = s.split(".");
           const schema = parts.length > 1 ? parts[0] : "PUBLIC";
@@ -362,7 +409,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const [schemaRows] = await connection.query<any[]>(
         "SELECT SCHEMA_NAME AS schema_name FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys')"
       );
-      const schemas: string[] = schemaRows.map((r) => r.schema_name);
+      const schemas: string[] = schemaRows.map((r: any) => r.schema_name);
 
       // Tables
       const [tableRows] = await connection.query<any[]>(
@@ -382,7 +429,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       await connection.end();
 
       const pkSet = new Set(
-        pkRows.map((r) => `${r.table_schema}.${r.table_name}.${r.column_name}`)
+        pkRows.map((r: any) => `${r.table_schema}.${r.table_name}.${r.column_name}`)
       );
 
       const tableMap = new Map<string, any>();
@@ -484,7 +531,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const schemasRes = await client.query(
         `SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') ORDER BY schema_name`
       );
-      const schemas: string[] = schemasRes.rows.map((r) => r.schema_name);
+      const schemas: string[] = schemasRes.rows.map((r: any) => r.schema_name);
 
       // Tables
       const tablesRes = await client.query(

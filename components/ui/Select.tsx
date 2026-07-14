@@ -8,6 +8,23 @@ import { Check, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const PANEL_MAX_HEIGHT = 260;
+const PANEL_MIN_WIDTH = 280;
+const PANEL_MAX_WIDTH = 640;
+
+type PanelAnchorRect = Pick<DOMRect, "top" | "left" | "width" | "height">;
+
+function computePanelLayout(rect: PanelAnchorRect | null, options: SelectOption[]) {
+  if (typeof window === "undefined" || !rect) {
+    return { width: PANEL_MIN_WIDTH, left: 0 };
+  }
+  const viewportPad = 16;
+  const viewportMax = window.innerWidth - viewportPad * 2;
+  const longestChars = options.reduce((max, o) => Math.max(max, o.label.length), 0);
+  const estimatedByLabel = Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, longestChars * 7));
+  const width = Math.min(viewportMax, Math.max(rect.width, estimatedByLabel, 320));
+  const left = Math.max(viewportPad, Math.min(rect.left, window.innerWidth - width - viewportPad));
+  return { width, left };
+}
 
 export type SelectOption = {
   label: string;
@@ -83,21 +100,9 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
     };
 
     const buttonRef = React.useRef<HTMLButtonElement | null>(null);
-    const [buttonWidth, setButtonWidth] = React.useState<number>(0);
-    const [anchorRect, setAnchorRect] = React.useState<{ top: number; left: number; width: number; height: number } | null>(null);
+    const [anchorRect, setAnchorRect] = React.useState<PanelAnchorRect | null>(null);
     const [listboxOpen, setListboxOpen] = React.useState(false);
     const [searchQuery, setSearchQuery] = React.useState("");
-
-    React.useEffect(() => {
-      const updateSize = () => {
-        if (buttonRef.current) {
-          setButtonWidth(buttonRef.current.offsetWidth || 0);
-        }
-      };
-      updateSize();
-      window.addEventListener("resize", updateSize);
-      return () => window.removeEventListener("resize", updateSize);
-    }, []);
 
     const updateAnchorRect = React.useCallback(() => {
       if (buttonRef.current) {
@@ -146,6 +151,8 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
             ? options.filter((o: SelectOption) => o.label.toLowerCase().includes(searchQuery.trim().toLowerCase()))
             : options;
 
+          const panelLayout = computePanelLayout(rect, filteredOptions);
+
           const optionsPanel = (
             <Transition
               show={open}
@@ -166,13 +173,13 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                 )}
                 style={{
                   zIndex: 9999,
-                  width: disablePortal ? undefined : (rect ? rect.width : buttonWidth || undefined),
-                  minWidth: 200,
-                  maxWidth: disablePortal ? undefined : 320,
+                  width: disablePortal ? undefined : panelLayout.width,
+                  minWidth: disablePortal ? undefined : PANEL_MIN_WIDTH,
+                  maxWidth: disablePortal ? undefined : `min(${PANEL_MAX_WIDTH}px, calc(100vw - 32px))`,
                   maxHeight: disablePortal ? PANEL_MAX_HEIGHT : Math.max(120, panelMaxHeight),
                   ...(disablePortal
                     ? { top: "100%" }
-                    : { top: panelTop, left: rect ? rect.left : 0 }),
+                    : { top: panelTop, left: panelLayout.left }),
                   borderColor: "var(--platform-border)",
                   background: "var(--platform-surface)",
                   boxShadow: "0 10px 40px rgba(0,0,0,0.08)",
@@ -196,7 +203,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                     />
                   </div>
                 )}
-                <div className={cn(searchable ? "max-h-[200px]" : "max-h-[220px]", "overflow-y-auto overflow-x-hidden rounded-xl -mx-1 px-1 py-2")} style={{ background: "var(--platform-bg)" }}>
+                <div className={cn(searchable ? "max-h-[200px]" : "max-h-[220px]", "overflow-y-auto overflow-x-auto rounded-xl -mx-1 px-1 py-2")} style={{ background: "var(--platform-bg)" }}>
                   <div className="flex flex-col gap-0.5 py-0.5">
                     {filteredOptions.length === 0 ? (
                       <div className="py-4 text-center text-sm" style={{ color: "var(--platform-fg-muted)" }}>
@@ -208,18 +215,19 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                         key={option.value}
                         className={({ selected }) =>
                           cn(
-                            "flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2.5 text-sm text-left transition-all",
+                            "flex w-full cursor-pointer items-start justify-between gap-2 rounded-lg px-3 py-2.5 text-sm text-left transition-all",
                             selected && "ring-2 ring-inset ring-[var(--platform-accent)]",
                             selected ? "bg-[var(--platform-accent-dim)] text-[var(--platform-accent)]" : "bg-transparent text-[var(--platform-fg)]",
                             optionClassName
                           )
                         }
                         value={option.value}
+                        title={option.label}
                       >
                         {({ selected }) => (
                           <>
-                            <span className="truncate">{option.label}</span>
-                            {selected && <Check className="h-4 w-4 shrink-0" strokeWidth={2.5} />}
+                            <span className="min-w-0 flex-1 break-words whitespace-normal leading-snug">{option.label}</span>
+                            {selected && <Check className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2.5} />}
                           </>
                         )}
                       </Listbox.Option>
@@ -244,7 +252,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                 }}
                 name={name}
                 className={cn(
-                  "flex h-11 w-full items-center justify-between gap-2 rounded-xl border px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]",
+                  "flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]",
                   disabled && "opacity-50 cursor-not-allowed",
                   buttonClassName
                 )}
@@ -255,7 +263,10 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                 }}
                 {...rest}
               >
-                <span className="truncate">
+                <span
+                  className="min-w-0 flex-1 text-left line-clamp-2 break-words leading-snug"
+                  title={selectedOption ? selectedOption.label : placeholder}
+                >
                   {selectedOption ? selectedOption.label : placeholder}
                 </span>
                 <ChevronDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />

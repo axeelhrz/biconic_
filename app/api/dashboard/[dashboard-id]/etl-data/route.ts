@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { shouldUseOwnBackend } from "@/lib/api/backend-proxy";
 import {
   loadDashboardEtlContext,
   persistDashboardDatasetIfNeeded,
@@ -25,14 +26,25 @@ export async function GET(
     const awaitedParams = await params;
     const dashboardId = awaitedParams["dashboard-id"];
 
-    const { data: dashboard, error: dashboardError } = await supabase
+    const dashboardSelect = shouldUseOwnBackend() ? "*" : "*, etl:etl_id (id, title, name)";
+    const { data: dashboardRow, error: dashboardError } = await supabase
       .from("dashboard")
-      .select("*, etl:etl_id (id, title, name)")
+      .select(dashboardSelect)
       .eq("id", dashboardId)
       .maybeSingle();
 
-    if (dashboardError || !dashboard) {
+    if (dashboardError || !dashboardRow) {
       return NextResponse.json({ ok: false, error: "Dashboard no encontrado" }, { status: 404 });
+    }
+
+    const dashboard = dashboardRow as Record<string, unknown> & { id: string; etl_id?: string | null };
+    if (shouldUseOwnBackend() && dashboard.etl_id) {
+      const { data: etlRow } = await supabase
+        .from("etl")
+        .select("id, title, name")
+        .eq("id", String(dashboard.etl_id))
+        .maybeSingle();
+      if (etlRow) dashboard.etl = etlRow;
     }
 
     const ctx = await loadDashboardEtlContext(supabase, dashboard as Record<string, unknown> & { id: string });

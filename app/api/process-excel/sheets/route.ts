@@ -1,10 +1,41 @@
-import { createClient } from "@supabase/supabase-js";
-import { NextResponse } from "next/server";
 import path from "path";
+import fs from "fs";
+import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
+import { createImportAdminClient } from "@/lib/excel-import/import-admin-client";
+import {
+  getLocalExcelAbsolutePath,
+  hasLocalExcelFile,
+} from "@/lib/storage/excel-upload-storage";
+import { getPresignedDownloadUrl } from "@/lib/storage/s3-excel-storage";
+import { getServerAuthUser } from "@/lib/supabase/server-backend";
 
 const getExtensionFromPath = (filePath: string) =>
   path.extname(filePath || "").replace(".", "").toLowerCase();
+
+async function loadWorkbookBuffer(
+  storagePath: string,
+  cookieHeader?: string | null
+): Promise<Buffer> {
+  if (hasLocalExcelFile(storagePath)) {
+    return fs.promises.readFile(getLocalExcelAbsolutePath(storagePath));
+  }
+
+  try {
+    const url = await getPresignedDownloadUrl(storagePath, { cookieHeader });
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Error descargando archivo: ${res.status}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  } catch (err) {
+    throw new Error(
+      err instanceof Error
+        ? err.message
+        : "Archivo no encontrado en almacenamiento."
+    );
+  }
+}
 
 export async function POST(req: Request) {
   try {
@@ -13,21 +44,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Falta connectionId" }, { status: 400 });
     }
 
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      return NextResponse.json(
-        { error: "Configuración del servidor incompleta." },
-        { status: 503 }
-      );
+    const authUser = await getServerAuthUser();
+    if (!authUser?.id) {
+      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
 
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
-
-    const { data: connection, error: connectionError } = await supabaseAdmin
+    const admin = createImportAdminClient();
+    const { data: connection, error: connectionError } = await admin
       .from("connections")
-      .select("storage_object_path, original_file_name")
+      .select("storage_object_path, original_file_name, user_id")
       .eq("id", body.connectionId)
       .single();
 
@@ -38,58 +63,36 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: signedData, error: signErr } = await supabaseAdmin.storage
-      .from("excel-uploads")
-      .createSignedUrl(connection.storage_object_path, 300);
-
-    if (signErr || !signedData?.signedUrl) {
-      return NextResponse.json(
-        { error: "No se pudo generar URL firmada del archivo." },
-        { status: 500 }
-      );
+    if (
+      connection.user_id &&
+      connection.user_id !== authUser.id &&
+      authUser.app_role !== "APP_ADMIN"
+    ) {
+      return NextResponse.json({ error: "No autorizado" }, { status: 403 });
     }
 
-    const response = await fetch(signedData.signedUrl);
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: "No se pudo descargar el archivo." },
-        { status: 500 }
-      );
-    }
+    const storagePath = connection.storage_object_path as string;
+    const buffer = await loadWorkbookBuffer(storagePath, req.headers.get("cookie"));
+    const ext = getExtensionFromPath(storagePath);
+    const originalFileName =
+      (connection.original_file_name as string | null) ?? storagePath;
 
-    const extension = getExtensionFromPath(
-      connection.original_file_name || connection.storage_object_path
-    );
-    if (extension === "csv") {
-      return NextResponse.json({
-        sheets: ["CSV"],
-        defaultSheet: "CSV",
-      });
-    }
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-    const sheets = Array.isArray(workbook.SheetNames)
-      ? workbook.SheetNames.filter(Boolean)
-      : [];
-
-    if (sheets.length === 0) {
-      return NextResponse.json(
-        { error: "No se encontraron hojas legibles en el archivo." },
-        { status: 400 }
-      );
+    let sheetNames: string[] = [];
+    if (ext === "csv") {
+      sheetNames = ["Sheet1"];
+    } else {
+      const workbook = XLSX.read(buffer, { type: "buffer", bookSheets: true });
+      sheetNames = workbook.SheetNames ?? [];
     }
 
     return NextResponse.json({
-      sheets,
-      defaultSheet: sheets[0],
-      degraded: false,
+      sheets: sheetNames,
+      originalFileName,
+      storagePath,
     });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Error al inspeccionar hojas.";
-    return NextResponse.json(
-      { error: message },
-      { status: 500 }
-    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[process-excel/sheets]", message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

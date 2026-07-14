@@ -1,121 +1,68 @@
 "use server";
 
-// Server Action to invoke the Supabase Edge Function `create-client`.
-// It validates auth, maps form values to the function payload, and returns a
-// consistent Spanish response shape.
+import { createClientInDb } from "@/lib/admin/clients-repository";
 
 export type ClientType = "empresa" | "individuo";
 
 export interface NewClientForm {
   clientType: ClientType;
-  companyName?: string; // Used when clientType = 'empresa'
-  companyId?: string; // For individuo belonging to a company
-  individualFullName?: string; // Used when clientType = 'individuo'
-  identificationType?: string; // cc | nit | pasaporte
+  companyName?: string;
+  companyId?: string;
+  individualFullName?: string;
+  identificationType?: string;
   identificationNumber?: string;
   country?: string;
   province?: string;
   capital?: string;
   address?: string;
-  // Optional login-like fields collected in the form; we fallback to these if user* are missing
   email?: string;
   password?: string;
-  // Commercial plan & status
-  planId?: string; // UUID expected by the Edge Function
+  planId?: string;
   status?: "activo" | "inactivo";
-  // Limits
   maxUsers?: number;
   maxProjects?: number;
-  // Initial member
-  userName?: string; // Full name
-  userJobTitle?: string; // Cargo (optional)
-  role?: "ver" | "editar" | "admin"; // If UI uses role for cargo, we map it to job title
+  userName?: string;
+  userJobTitle?: string;
+  role?: "ver" | "editar" | "admin";
   userEmail?: string;
   userPassword?: string;
 }
 
 export async function createNewClient(form: NewClientForm) {
   try {
-    const supabase = await (
-      await import("@/lib/supabase/server")
-    ).createClient();
+    const adminEmail = (form.userEmail || form.email || "").trim();
+    const adminPassword = form.userPassword || form.password || "";
+    const adminName =
+      form.userName ||
+      (form.clientType === "individuo"
+        ? form.individualFullName ?? form.companyName ?? ""
+        : form.companyName ?? "");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { ok: false, error: "No autorizado" } as const;
-
-    // Build payload expected by the Edge Function
-      const payload = {
+    const { clientId } = await createClientInDb({
       clientType: form.clientType,
-      companyName:
-        form.clientType === "empresa"
-          ? form.companyName ?? form.userName ?? ""
-          : undefined,
-      individualFullName:
-        form.clientType === "individuo"
-          ? form.individualFullName ?? form.companyName ?? form.userName ?? ""
-          : undefined,
-      identificationType: form.identificationType ?? "",
-      identificationNumber: form.identificationNumber ?? "",
-      countryId: form.country ?? "",
-      provinceId: form.province ?? "",
-      capital: form.capital ?? "",
-      address: form.address ?? "",
-      planId: form.planId ?? "",
-      
-      // ELIMINADO: maxUsers y maxProjects ya no se pasan
-      contactEmail: form.email || "", 
-      userEmail: form.userEmail || form.email || "",
-      userPassword: form.userPassword || form.password || undefined,
-      userFullName:
-        form.userName ||
-        (form.clientType === "individuo"
-          ? form.individualFullName ?? form.companyName ?? ""
-          : form.companyName ?? ""),
-      userJobTitle: form.userJobTitle || form.role,
-    };
-
-    // Call the Edge Function via Supabase Functions API (server-side, no CORS concerns)
-    const { data, error } = await supabase.functions.invoke("create-client", {
-      body: payload,
+      companyName: form.companyName,
+      individualFullName: form.individualFullName,
+      identificationType: form.identificationType,
+      identificationNumber: form.identificationNumber,
+      countryId: form.country,
+      provinceId: form.province,
+      capital: form.capital,
+      address: form.address,
+      contactEmail: form.email,
+      status: form.status,
+      planId: form.planId,
+      adminEmail,
+      adminPassword,
+      adminName,
+      adminRole: form.role ?? form.userJobTitle,
     });
 
-    if (error) {
-      console.error("Function Invoke Error:", error);
-
-      let message = error.message || "No se pudo crear el cliente";
-      let details = "";
-      let code = "";
-
-      // The 'context' property of FunctionsHttpError is the actual Response object.
-      // We need to parse it to get the custom JSON we sent from the Edge Function.
-      const context = (error as any).context;
-      if (context && typeof context.json === 'function') {
-        try {
-          // If body is not used yet, we can parse it.
-          // Note: createClient/invoke might have already tried to read it? 
-          // The user logs said "bodyUsed: false", so we are good.
-          const errorBody = await context.json();
-          message = errorBody.error || message;
-          details = errorBody.details || "";
-          code = errorBody.code || "";
-        } catch (jsonErr) {
-          console.error("Failed to parse edge function error response:", jsonErr);
-        }
-      }
-
-      return {
-        ok: false,
-        error: message,
-        details,
-        code,
-      } as const;
-    }
-
-    return { ok: true, clientId: (data as any)?.clientId } as const;
-  } catch (err: any) {
+    return { ok: true, clientId } as const;
+  } catch (err: unknown) {
     console.error("Error en createNewClient:", err);
-    return { ok: false, error: err?.message ?? "Error interno" } as const;
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Error interno",
+    } as const;
   }
 }

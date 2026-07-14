@@ -29,9 +29,26 @@ import { Connection as ServerConnection } from "@/components/connections/Connect
 import { Select } from "@/components/ui/Select";
 import { toast } from "sonner";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { deriveColumnTypesFromSample } from "@/lib/derive-column-types";
-import { mergeScheduleIntoGuidedConfig } from "@/lib/etl/schedule";
+import { ETL_DISTINCT_VALUES_MAX_DEFAULT, ETL_TRANSFORM_SAMPLE_LIMIT } from "@/lib/etl/limits";
+import {
+  deriveColumnMetadataFromSample,
+  inferColumnMetadata,
+  inferFormatForColumn,
+  mergeColumnInferredFormat,
+  mergeColumnInferredType,
+  type InferredColumnFormat,
+  type InferredColumnType,
+} from "@/lib/derive-column-types";
+import { mergeScheduleIntoGuidedConfig, type ScheduleInput } from "@/lib/etl/schedule";
+import {
+  ETL_PREVIEW_JOIN_INSTANT_LIMIT,
+  ETL_PREVIEW_TABLE_LIMIT,
+} from "@/lib/etl/limits";
 import EtlScheduleSettings from "@/components/etl/EtlScheduleSettings";
+import {
+  parseDateLike,
+  dateSlashOrderForNamedColumn,
+} from "@/lib/dashboard/dateFormatting";
 
 const STEPS = [
   { id: "conexion", label: "Conexión", icon: Link2 },
@@ -42,6 +59,175 @@ const STEPS = [
   { id: "destino", label: "Destino", icon: Table },
   { id: "ejecutar", label: "Ejecutar", icon: Play },
 ] as const;
+
+function normalizeConfigColumnKey(configKey: string): string {
+  const k = (configKey || "").trim();
+  const wronglyPrefixed = k.match(/^primary\.(join_\d+\..+)$/i);
+  if (wronglyPrefixed) return wronglyPrefixed[1];
+  return k;
+}
+
+function parseFilterColumnsFromGuidedConfig(cols: string[]): {
+  primaryCols: string[];
+  joinColsByIdx: Record<number, string[]>;
+  legacyUnprefixed: string[];
+} {
+  const primaryCols: string[] = [];
+  const joinColsByIdx: Record<number, string[]> = {};
+  const legacyUnprefixed: string[] = [];
+  for (const raw of cols) {
+    const c = (raw || "").trim();
+    if (!c) continue;
+    if (/^primary\./i.test(c)) {
+      primaryCols.push(c.replace(/^primary\./i, ""));
+    } else if (/^join_\d+\./i.test(c)) {
+      const m = c.match(/^join_(\d+)\.(.*)$/i);
+      if (m) {
+        const idx = parseInt(m[1], 10);
+        if (!joinColsByIdx[idx]) joinColsByIdx[idx] = [];
+        joinColsByIdx[idx].push(m[2]);
+      }
+    } else {
+      legacyUnprefixed.push(c);
+    }
+  }
+  return { primaryCols, joinColsByIdx, legacyUnprefixed };
+}
+
+/** Convierte refs del guiado (primary.col, join_0.col) a claves de fila (primary_col, join_0_col). */
+function configColToPreviewRowKey(configKey: string): string {
+  return (configKey || "")
+    .trim()
+    .replace(/^primary\./i, "primary_")
+    .replace(/^join_(\d+)\./i, (_, d) => `join_${parseInt(d, 10)}_`);
+}
+
+function resolvePreviewRowDataKey(configOrRowKey: string, rowKeys: string[]): string {
+  if (rowKeys.includes(configOrRowKey)) return configOrRowKey;
+  const byCi = rowKeys.find((r) => r.toLowerCase() === configOrRowKey.toLowerCase());
+  if (byCi) return byCi;
+  const guess = configColToPreviewRowKey(configOrRowKey);
+  const byGuess = rowKeys.find((r) => r.toLowerCase() === guess.toLowerCase());
+  if (byGuess) return byGuess;
+  const bare = configOrRowKey.includes(".") ? configOrRowKey.split(".").slice(1).join(".") : configOrRowKey;
+  const byBare = rowKeys.find((r) => r.toLowerCase() === bare.toLowerCase());
+  return byBare ?? guess;
+}
+
+function sortPreviewRowKeys(keys: string[]): string[] {
+  const rank = (k: string): [number, number, string] => {
+    const pm = k.match(/^primary_(.*)$/i);
+    if (pm) return [0, 0, pm[1]];
+    const jm = k.match(/^join_(\d+)_(.*)$/i);
+    if (jm) return [1, parseInt(jm[1], 10), jm[2]];
+    return [2, 0, k];
+  };
+  return [...keys].sort((a, b) => {
+    const [ga, ia, na] = rank(a);
+    const [gb, ib, nb] = rank(b);
+    if (ga !== gb) return ga - gb;
+    if (ia !== ib) return ia - ib;
+    return na.localeCompare(nb);
+  });
+}
+
+function buildPreviewColumnPlan(
+  configKeys: string[],
+  rowKeys: string[],
+): { configKey: string; dataKey: string }[] {
+  const plan: { configKey: string; dataKey: string }[] = [];
+  const used = new Set<string>();
+  for (const rawKey of configKeys) {
+    const configKey = normalizeConfigColumnKey(rawKey);
+    const dataKey = resolvePreviewRowDataKey(configKey, rowKeys);
+    const actual = rowKeys.find((r) => r.toLowerCase() === dataKey.toLowerCase());
+    if (!actual || used.has(actual.toLowerCase())) continue;
+    used.add(actual.toLowerCase());
+    plan.push({ configKey, dataKey: actual });
+  }
+  return plan;
+}
+
+/** Valores únicos de una columna en filas de vista previa (respeta primary.* / join_N.*). */
+function extractDistinctValuesForColumn(
+  rows: Record<string, unknown>[],
+  column: string,
+): string[] {
+  if (!rows.length || !column.trim()) return [];
+  const rowKeys = Object.keys(rows[0]);
+  const dataKey = resolvePreviewRowDataKey(column, rowKeys);
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const row of rows) {
+    const key = Object.keys(row).find((k) => k.toLowerCase() === dataKey.toLowerCase()) ?? dataKey;
+    const v = row[key];
+    if (v != null && v !== "") {
+      const s = String(v);
+      if (!seen.has(s)) {
+        seen.add(s);
+        values.push(s);
+      }
+    }
+  }
+  values.sort((a, b) => a.localeCompare(b, "es"));
+  return values;
+}
+
+type DistinctValueQuery = {
+  connectionId: string | number;
+  table: string;
+  column: string;
+};
+
+/** Orígenes en BD para valores distintos de «Excluir filas» (no vista previa). */
+function resolveDistinctValueQueries(
+  distinctColumn: string,
+  connectionId: string | number,
+  selectedTable: string,
+  effectiveJoinItems: Array<{ connectionId?: string | number; table: string }>,
+  unionRightItems: Array<{ connectionId: string | number; table: string; columns: string[] }>,
+  useUnion: boolean,
+): DistinctValueQuery[] {
+  const primaryMatch = distinctColumn.match(/^primary\.(.+)$/i);
+  if (primaryMatch) {
+    return [{ connectionId, table: selectedTable, column: primaryMatch[1] }];
+  }
+
+  const joinMatch = distinctColumn.match(/^join_(\d+)\.(.+)$/i);
+  if (joinMatch) {
+    const idx = parseInt(joinMatch[1], 10);
+    const item = effectiveJoinItems[idx];
+    if (item?.connectionId != null && item.table) {
+      return [{ connectionId: item.connectionId, table: item.table, column: joinMatch[2] }];
+    }
+    return [];
+  }
+
+  const bareColumn = distinctColumn.includes(".")
+    ? distinctColumn.split(".").pop() ?? distinctColumn
+    : distinctColumn;
+
+  if (useUnion && unionRightItems.length > 0) {
+    const queries: DistinctValueQuery[] = [
+      { connectionId, table: selectedTable, column: bareColumn },
+    ];
+    for (const item of unionRightItems) {
+      const hasCol = item.columns?.some(
+        (c) => c.toLowerCase() === bareColumn.toLowerCase()
+      );
+      if (hasCol) {
+        queries.push({
+          connectionId: item.connectionId,
+          table: item.table,
+          column: bareColumn,
+        });
+      }
+    }
+    return queries;
+  }
+
+  return [{ connectionId, table: selectedTable, column: bareColumn }];
+}
 
 type StepId = (typeof STEPS)[number]["id"];
 
@@ -178,7 +364,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const router = useRouter();
   const [step, setStep] = useState<StepId>(initialStep);
   const [connectionId, setConnectionId] = useState<string | number | null>(null);
-  const [tables, setTables] = useState<{ schema: string; name: string; columns: { name: string }[] }[]>([]);
+  const [tables, setTables] = useState<{ schema: string; name: string; label?: string; columns: { name: string; label?: string }[] }[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
   /** Por cada columna: nombre para mostrar, formato y tipo (override manual). */
@@ -201,6 +387,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [outputTableName, setOutputTableName] = useState("");
   const [outputMode, setOutputMode] = useState<"overwrite" | "append">("overwrite");
   const [scheduleFrequency, setScheduleFrequency] = useState<string>("");
+  const [scheduleRunAtTime, setScheduleRunAtTime] = useState<string>("09:00");
+  const [scheduleRunOnWeekdays, setScheduleRunOnWeekdays] = useState<number[]>([1]);
   const [scheduleLastRunAt, setScheduleLastRunAt] = useState<string | undefined>(undefined);
   const [loadingMeta, setLoadingMeta] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState<string | null>(null);
@@ -276,6 +464,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const [previewSortKey, setPreviewSortKey] = useState<string | null>(null);
   const [previewSortDir, setPreviewSortDir] = useState<"asc" | "desc">("asc");
   const [previewUnlimited, setPreviewUnlimited] = useState(false);
+  /** Muestra de hasta 10k filas para duplicados (paso Transformación). */
+  const [transformSampleRows, setTransformSampleRows] = useState<Record<string, unknown>[] | null>(null);
+  const [loadingTransformSample, setLoadingTransformSample] = useState(false);
+  const [transformSampleError, setTransformSampleError] = useState<string | null>(null);
+  /** Valores distintos por columna (normalizar / correcciones), desde BD. */
+  const [columnValueOptions, setColumnValueOptions] = useState<Record<string, string[]>>({});
+  const [loadingColumnValuesKey, setLoadingColumnValuesKey] = useState<string | null>(null);
+  const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewLoadedOnceRef = useRef<boolean>(false);
@@ -284,11 +480,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   const previewRowsFilteredByExcluded = useMemo(() => {
     if (!previewRows || previewRows.length === 0) return previewRows ?? [];
     if (excludedValues.length === 0) return previewRows;
+    const rowKeys = Object.keys(previewRows[0] as Record<string, unknown>);
     return previewRows.filter((row) => {
       const r = row as Record<string, unknown>;
       for (const { column, excluded } of excludedValues) {
         if (excluded.length === 0) continue;
-        const key = Object.keys(r).find((k) => k.toLowerCase() === column.toLowerCase()) ?? column;
+        const dataKey = resolvePreviewRowDataKey(column, rowKeys);
+        const key = Object.keys(r).find((k) => k.toLowerCase() === dataKey.toLowerCase()) ?? dataKey;
         const val = String(r[key] ?? "").trim();
         if (excluded.some((ex) => String(ex).trim() === val)) return false;
       }
@@ -313,13 +511,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     });
   }, [previewRowsFilteredByExcluded, previewSortKey, previewSortDir]);
 
-  /** Tipos inferidos desde la vista previa (para columnas join que la BD devuelve como texto). */
-  const inferredTypesFromPreview = useMemo(() => {
-    if (!previewRows?.length) return {} as Record<string, "Fecha" | "Número" | "Texto">;
-    const derived = deriveColumnTypesFromSample(previewRows as Record<string, unknown>[]);
-    const byNormalized: Record<string, "Fecha" | "Número" | "Texto"> = {};
-    for (const [key, type] of Object.entries(derived)) {
-      byNormalized[key.toLowerCase()] = type as "Fecha" | "Número" | "Texto";
+  /** Tipos y formatos inferidos desde la vista previa (join, Excel como texto, etc.). */
+  const inferredMetadataFromPreview = useMemo(() => {
+    if (!previewRows?.length) return {} as Record<string, { type: InferredColumnType; format?: InferredColumnFormat }>;
+    const derived = deriveColumnMetadataFromSample(previewRows as Record<string, unknown>[]);
+    const byNormalized: Record<string, { type: InferredColumnType; format?: InferredColumnFormat }> = {};
+    for (const [key, meta] of Object.entries(derived)) {
+      byNormalized[key.toLowerCase()] = meta;
     }
     return byNormalized;
   }, [previewRows]);
@@ -337,11 +535,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   const skipClearSelectedTableRef = useRef(false);
   const restoringFromConfigRef = useRef(false);
+  /** Columnas restauradas desde guided_config; loadColumnsForTable no debe pisarlas. */
+  const restoredColumnsRef = useRef<string[] | null>(null);
   // Restaurar estado desde configuración guardada (al editar un ETL ya ejecutado)
   useEffect(() => {
     const cfg = initialGuidedConfig as GuidedConfig | undefined | null;
     restoringFromConfigRef.current = true;
-    if (!cfg || typeof cfg !== "object") return;
+    if (!cfg || typeof cfg !== "object") {
+      queueMicrotask(() => {
+        restoringFromConfigRef.current = false;
+      });
+      return;
+    }
     const connId = cfg.connectionId ?? (cfg.union?.left as { connectionId?: string | number })?.connectionId ?? (cfg.join as { primaryConnectionId?: string | number })?.primaryConnectionId;
     if (connId != null && typeof connId !== "object") setConnectionId(connId);
     const filter = cfg.filter;
@@ -350,9 +555,21 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setSelectedTable(String(filter.table).trim());
     }
     const cols = filter?.columns;
-    if (Array.isArray(cols) && cols.length > 0) {
-      const primaryCols = cols.filter((c: string) => c.startsWith("primary.")).map((c: string) => c.replace(/^primary\./, ""));
-      setColumns(primaryCols.length > 0 ? primaryCols : cols);
+    const parsedCols = Array.isArray(cols) && cols.length > 0 ? parseFilterColumnsFromGuidedConfig(cols) : null;
+    if (parsedCols) {
+      const { primaryCols, joinColsByIdx, legacyUnprefixed } = parsedCols;
+      const hasJoinRefs = Object.keys(joinColsByIdx).length > 0;
+      if (primaryCols.length > 0) {
+        restoredColumnsRef.current = [...primaryCols];
+        setColumns(primaryCols);
+      } else if (!hasJoinRefs && legacyUnprefixed.length > 0) {
+        restoredColumnsRef.current = [...legacyUnprefixed];
+        setColumns(legacyUnprefixed);
+      }
+      // Si el config guardado solo trae join_N.*, no contaminar `columns` con esas refs.
+      if (hasJoinRefs) {
+        (cfg as { __parsedJoinColsByIdx?: Record<number, string[]> }).__parsedJoinColsByIdx = joinColsByIdx;
+      }
     }
     const conds = filter?.conditions ?? [];
     const notInConds = conds.filter((c: { operator?: string }) => c.operator === "not in");
@@ -388,6 +605,10 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (end?.mode) setOutputMode(end.mode);
     const sched = cfg.schedule;
     setScheduleFrequency(sched?.frequency ? String(sched.frequency) : "");
+    setScheduleRunAtTime(sched?.runAtTime ? String(sched.runAtTime) : "09:00");
+    setScheduleRunOnWeekdays(
+      Array.isArray(sched?.runOnWeekdays) ? sched.runOnWeekdays.map((d) => Number(d)) : [1]
+    );
     setScheduleLastRunAt(sched?.lastRunAt ? String(sched.lastRunAt) : undefined);
     const union = cfg.union;
     if (union) {
@@ -401,6 +622,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       })));
     }
     const join = cfg.join;
+    const parsedJoinColsByIdx = (cfg as { __parsedJoinColsByIdx?: Record<number, string[]> }).__parsedJoinColsByIdx;
     if (join?.joins?.length) {
       setUseJoin(true);
       type JoinItem = { id?: string; secondaryConnectionId?: string | number; secondaryTable?: string; joinType?: string; primaryColumn?: string; secondaryColumn?: string; secondaryColumns?: string[]; conditions?: Array<{ primaryColumn: string; secondaryColumn: string }> };
@@ -410,13 +632,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
           : (j.primaryColumn != null || j.secondaryColumn != null)
             ? [{ leftColumn: j.primaryColumn ?? "", rightColumn: j.secondaryColumn ?? "" }]
             : [{ leftColumn: "", rightColumn: "" }];
+        const fromFilter = parsedJoinColsByIdx?.[i];
         return {
           id: j.id ?? `join_${i}_${Date.now()}`,
           connectionId: j.secondaryConnectionId ?? "",
           table: j.secondaryTable ?? "",
           joinType: (j.joinType ?? "INNER") as "INNER" | "LEFT" | "RIGHT" | "FULL",
           conditions,
-          rightColumns: j.secondaryColumns ?? [],
+          rightColumns: fromFilter?.length ? fromFilter : (j.secondaryColumns ?? []),
         };
       }));
     }
@@ -443,6 +666,54 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     });
   }, [initialGuidedConfig]);
 
+  const applyColumnLabelsToDisplay = useCallback(
+    (
+      columnRows: {
+        name: string;
+        label?: string;
+        inferredType?: "Fecha" | "Número" | "Texto";
+        inferredFormat?: string;
+        dataType?: string;
+      }[]
+    ) => {
+      setColumnDisplay((prev) => {
+        const next = { ...prev };
+        for (const col of columnRows) {
+          const displayLabel = col.label?.trim() || col.name;
+          const meta = inferColumnMetadata({
+            columnName: col.name,
+            schemaDataType: col.dataType,
+            sampleInferred: col.inferredType,
+          });
+          const inferredType = meta.type;
+          const inferredFormat =
+            col.inferredFormat?.trim() ||
+            meta.format ||
+            inferFormatForColumn(col.name, inferredType);
+          if (!next[col.name]) {
+            next[col.name] = {
+              label: displayLabel,
+              format: inferredFormat,
+              type: inferredType,
+            };
+          } else {
+            if (!next[col.name].label?.trim()) {
+              next[col.name] = { ...next[col.name], label: displayLabel };
+            }
+            if (!next[col.name].type) {
+              next[col.name] = { ...next[col.name], type: inferredType };
+            }
+            if (!next[col.name].format?.trim()) {
+              next[col.name] = { ...next[col.name], format: inferredFormat };
+            }
+          }
+        }
+        return next;
+      });
+    },
+    []
+  );
+
   // Cargar tablas al elegir conexión
   useEffect(() => {
     if (!connectionId) {
@@ -456,10 +727,17 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       .then((res) => safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { schema: string; name: string; columns: { name: string }[] }[] }; error?: string }>(res))
       .then((data) => {
         if (cancelled || !data.ok || !data.metadata?.tables) return;
-        setTables(data.metadata.tables || []);
+        const loadedTables = (data.metadata.tables || []) as {
+          schema: string;
+          name: string;
+          label?: string;
+          columns: { name: string; label?: string }[];
+        }[];
+        setTables(loadedTables);
         if (!skipClearSelectedTableRef.current) {
           setSelectedTable(null);
           setColumns([]);
+          setColumnDisplay({});
         } else {
           skipClearSelectedTableRef.current = false;
         }
@@ -473,7 +751,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return () => {
       cancelled = true;
     };
-  }, [connectionId]);
+  }, [connectionId, applyColumnLabelsToDisplay]);
 
   // Cargar columnas al elegir tabla (si la tabla viene con columnas vacías, pedirlas)
   const selectedTableInfo = tables.find(
@@ -499,6 +777,58 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     return found ?? previewKey;
   }, [columnDisplay]);
 
+  const resolveInferredType = useCallback(
+    (columnName: string, schemaDataType?: string, sampleInferred?: InferredColumnType): InferredColumnType =>
+      mergeColumnInferredType({ columnName, schemaDataType, sampleInferred }),
+    [],
+  );
+
+  const previewInferredForColumn = useCallback(
+    (columnName: string): InferredColumnType | undefined => {
+      const norm = columnName.replace(/\./g, "_").toLowerCase();
+      return (
+        inferredMetadataFromPreview[norm]?.type ??
+        inferredMetadataFromPreview[columnName.toLowerCase()]?.type
+      );
+    },
+    [inferredMetadataFromPreview],
+  );
+
+  const previewFormatForColumn = useCallback(
+    (columnName: string, type: InferredColumnType): InferredColumnFormat => {
+      const norm = columnName.replace(/\./g, "_").toLowerCase();
+      const fromPreview =
+        inferredMetadataFromPreview[norm]?.format ??
+        inferredMetadataFromPreview[columnName.toLowerCase()]?.format;
+      return mergeColumnInferredFormat({
+        columnName,
+        type,
+        sampleFormat: fromPreview,
+      });
+    },
+    [inferredMetadataFromPreview],
+  );
+
+  const resolveInferredMetadata = useCallback(
+    (columnName: string, schemaDataType?: string): { type: InferredColumnType; format: InferredColumnFormat } => {
+      const sampleType = previewInferredForColumn(columnName);
+      const meta = inferColumnMetadata({
+        columnName,
+        schemaDataType,
+        sampleInferred: sampleType,
+      });
+      return {
+        type: meta.type,
+        format: mergeColumnInferredFormat({
+          columnName,
+          type: meta.type,
+          sampleFormat: meta.format,
+        }),
+      };
+    },
+    [previewInferredForColumn],
+  );
+
   /** Tipo efectivo por columna (override manual o inferido) para formatear la vista previa. */
   const getColumnType = useCallback((key: string): "Fecha" | "Número" | "Texto" => {
     const disp = columnDisplay[key];
@@ -507,46 +837,49 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     const displayKeyByNorm = Object.keys(columnDisplay).find((k) => k.replace(/\./g, "_").toLowerCase() === keyLower);
     if (displayKeyByNorm && (columnDisplay[displayKeyByNorm] as { type?: string })?.type)
       return (columnDisplay[displayKeyByNorm] as { type: "Fecha" | "Número" | "Texto" }).type;
-    if (/^primary_/i.test(key) || /^join_\d+_/i.test(key)) {
-      const fromPreview = inferredTypesFromPreview[keyLower];
-      if (fromPreview) return fromPreview;
-    }
-    const col = selectedTableInfo?.columns?.find((c: { name: string }) => c.name.toLowerCase() === keyLower);
-    return dataTypeToLabel((col as { inferredType?: string; dataType?: string })?.inferredType ?? (col as { dataType?: string })?.dataType);
-  }, [columnDisplay, selectedTableInfo?.columns, inferredTypesFromPreview]);
+    const bareName = key.replace(/^(primary|join_\d+)[._]/i, "");
+    const col = selectedTableInfo?.columns?.find(
+      (c: { name: string }) => c.name.toLowerCase() === keyLower || c.name.toLowerCase() === bareName.toLowerCase(),
+    );
+    return resolveInferredType(
+      key,
+      (col as { dataType?: string })?.dataType,
+      previewInferredForColumn(key),
+    );
+  }, [columnDisplay, selectedTableInfo?.columns, previewInferredForColumn, resolveInferredType]);
 
-  /** Para fechas ISO en UTC (ej. 2025-10-01T00:00:00.000Z) usa componentes UTC para mostrar la fecha de calendario correcta (1/10, no 30/09 en UTC-3). */
-  const dateComponentsForPreview = (date: Date, val: unknown): { d: number; m: number; y: number; monthIndex: number } => {
-    const isIsoDateOnly =
-      typeof val === "string" &&
-      /^\d{4}-\d{2}-\d{2}/.test(val.trim()) &&
-      (val.length === 10 || /T00:00:00(\.0*)?Z?$/i.test(val.trim()));
-    if (isIsoDateOnly) {
-      return { d: date.getUTCDate(), m: date.getUTCMonth() + 1, y: date.getUTCFullYear(), monthIndex: date.getUTCMonth() };
+  /** Componentes de calendario para mostrar una fecha parseada (UTC para strings; local para Date nativo). */
+  const calendarPartsForValue = (date: Date, raw: unknown): { d: number; m: number; y: number; monthIndex: number } => {
+    if (raw instanceof Date) {
+      return { d: date.getDate(), m: date.getMonth() + 1, y: date.getFullYear(), monthIndex: date.getMonth() };
     }
-    return { d: date.getDate(), m: date.getMonth() + 1, y: date.getFullYear(), monthIndex: date.getMonth() };
+    return { d: date.getUTCDate(), m: date.getUTCMonth() + 1, y: date.getUTCFullYear(), monthIndex: date.getUTCMonth() };
   };
 
   /** Formatea un valor de celda para la vista previa según tipo y formato de la columna. */
   const formatPreviewCell = useCallback((key: string, value: unknown): string => {
     const disp = columnDisplay[key];
-    const format = disp?.format?.trim();
     const tipo = getColumnType(key);
+    const format = disp?.format?.trim() || previewFormatForColumn(key, tipo);
     if (value === null || value === undefined) return "";
-    if (tipo === "Fecha" && format) {
-      let date: Date | null = null;
-      if (value instanceof Date) date = value;
-      else if (typeof value === "number") date = value > 1e10 ? new Date(value) : new Date(1899, 11, 30 + (value | 0));
-      else if (typeof value === "string") date = new Date(value);
-      if (date && !isNaN(date.getTime())) {
-        const { d, m, y, monthIndex } = dateComponentsForPreview(date, value);
+    if (tipo === "Fecha") {
+      const effectiveFormat = format || "DD/MM/YYYY";
+      const parseOpts = { slashDateOrder: dateSlashOrderForNamedColumn(columnDisplay, key) };
+      const date =
+        value instanceof Date
+          ? Number.isNaN(value.getTime())
+            ? null
+            : value
+          : parseDateLike(value, parseOpts);
+      if (date && !Number.isNaN(date.getTime())) {
+        const { d, m, y, monthIndex } = calendarPartsForValue(date, value);
         const pad = (n: number) => String(n).padStart(2, "0");
         const months = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-        if (format === "DD/MM/YYYY") return `${pad(d)}/${pad(m)}/${y}`;
-        if (format === "MM/DD/YYYY") return `${pad(m)}/${pad(d)}/${y}`;
-        if (format === "YYYY-MM-DD") return `${y}-${pad(m)}-${pad(d)}`;
-        if (format === "DD-MM-YYYY") return `${pad(d)}-${pad(m)}-${y}`;
-        if (format === "DD MMM YYYY") return `${pad(d)} ${months[monthIndex]} ${y}`;
+        if (effectiveFormat === "DD/MM/YYYY") return `${pad(d)}/${pad(m)}/${y}`;
+        if (effectiveFormat === "MM/DD/YYYY") return `${pad(m)}/${pad(d)}/${y}`;
+        if (effectiveFormat === "YYYY-MM-DD") return `${y}-${pad(m)}-${pad(d)}`;
+        if (effectiveFormat === "DD-MM-YYYY") return `${pad(d)}-${pad(m)}-${y}`;
+        if (effectiveFormat === "DD MMM YYYY") return `${pad(d)} ${months[monthIndex]} ${y}`;
       }
     }
     if (tipo === "Número" && (typeof value === "number" || (typeof value === "string" && /^-?\d+([.,]\d+)?$/.test(String(value).trim())))) {
@@ -558,7 +891,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       }
     }
     return String(value);
-  }, [columnDisplay, getColumnType]);
+  }, [columnDisplay, getColumnType, previewFormatForColumn]);
 
   // Normalizar selectedTable cuando viene de config guardada: si la lista de tablas usa otro casing (ej. public.clientes vs PUBLIC.CLIENTES), usar la clave real para que el <select> muestre la tabla y selectedTableInfo exista
   useEffect(() => {
@@ -569,26 +902,32 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     if (normalized) setSelectedTable(`${normalized.schema}.${normalized.name}`);
   }, [tables, selectedTable, selectedTableInfo]);
 
-  // Cargar valores distintos automáticamente al seleccionar la columna en "Excluir filas"
-  useEffect(() => {
-    if (!distinctColumn || !connectionId || !selectedTable) return;
-    setLoadingDistinct(true);
-    setDistinctValuesList([]);
-    fetch("/api/connection/distinct-values", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ connectionId, table: selectedTable, column: distinctColumn }),
-    })
-      .then((res) => safeJsonResponse(res))
-      .then((data) => {
-        if (data.ok && Array.isArray(data.values)) setDistinctValuesList(data.values);
-        else if (data?.error) toast.error(data.error);
-      })
-      .catch(() => toast.error("Error al cargar valores"))
-      .finally(() => setLoadingDistinct(false));
-  }, [distinctColumn, connectionId, selectedTable]);
+  // Cargar valores distintos desde la BD: ver useEffect tras datasetColumnOptions.
 
   const hasColumns = (selectedTableInfo?.columns?.length ?? 0) > 0;
+
+  const getColumnDisplayLabel = useCallback(
+    (col: { name: string; label?: string }) =>
+      columnDisplay[col.name]?.label?.trim() || col.label?.trim() || col.name,
+    [columnDisplay]
+  );
+
+  const columnsLoadKeyRef = useRef<string>("");
+
+  const handleSelectedTableChange = useCallback((v: string) => {
+    const next = v.trim() || null;
+    columnsLoadKeyRef.current = "";
+    setSelectedTable(next);
+    setColumns([]);
+    setConditions([]);
+    setExcludedValues([]);
+    setDistinctColumn("");
+    setPreviewRows(null);
+    setPreviewError(null);
+    setPreviewRowsProcessed(null);
+    previewLoadedOnceRef.current = false;
+    didInferOnColumnasTiposRef.current = null;
+  }, []);
 
   const loadColumnsForTable = useCallback(() => {
     if (!connectionId || !selectedTable) return;
@@ -603,13 +942,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         const tablesList = data.metadata.tables as { schema: string; name: string; columns?: { name: string; dataType?: string }[] }[];
         const match = tablesList.find((t: { schema: string; name: string }) => `${t.schema}.${t.name}` === selectedTable)
           ?? tablesList.find((t: { schema: string; name: string }) => `${t.schema}.${t.name}`.toLowerCase() === selectedTable.toLowerCase());
-        const tableColumns = match?.columns ?? data.metadata.tables[0]?.columns;
-        if (!tableColumns?.length) {
+        const tableColumns = match?.columns;
+        if (!match || !tableColumns?.length) {
           setLoadingColumns(null);
           return;
         }
         const cols = tableColumns.map((c: { name: string }) => c.name);
-        let columnsWithInferred = tableColumns as { name: string; dataType?: string; inferredType?: "Fecha" | "Número" | "Texto" }[];
+        let columnsWithInferred = tableColumns as {
+          name: string;
+          label?: string;
+          dataType?: string;
+          inferredType?: "Fecha" | "Número" | "Texto";
+        }[];
         try {
           const inferRes = await fetch("/api/connection/infer-column-types", {
             method: "POST",
@@ -621,10 +965,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
             const getInferred = (colName: string) =>
               ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
-            columnsWithInferred = tableColumns.map((c: { name: string; dataType?: string }) => ({
-              ...c,
-              inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
-            }));
+            columnsWithInferred = tableColumns.map((c: { name: string; dataType?: string }) => {
+              const meta = inferColumnMetadata({
+                columnName: c.name,
+                schemaDataType: c.dataType,
+                sampleInferred: getInferred(c.name),
+              });
+              return {
+                ...c,
+                inferredType: meta.type,
+                inferredFormat: meta.format,
+              };
+            });
           }
         } catch (err) {
           console.warn("[ETL] Inferencia de tipos fallida:", err);
@@ -637,14 +989,40 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               : t
           )
         );
-        setColumns((prev) => (prev.length ? prev : cols));
+        const allTableCols = cols;
+        setColumns((prev) => {
+          const fromRestore = restoredColumnsRef.current;
+          if (fromRestore?.length) {
+            const valid = fromRestore.filter((c) =>
+              allTableCols.some((tc) => tc.toLowerCase() === c.toLowerCase())
+            );
+            restoredColumnsRef.current = null;
+            if (valid.length > 0) return valid;
+          }
+          if (prev.length > 0) {
+            const valid = prev.filter((c) =>
+              allTableCols.some((tc) => tc.toLowerCase() === c.toLowerCase())
+            );
+            if (valid.length > 0) return valid;
+          }
+          return allTableCols;
+        });
+        applyColumnLabelsToDisplay(columnsWithInferred);
       })
       .finally(() => setLoadingColumns(null));
-  }, [connectionId, selectedTable]);
+  }, [connectionId, selectedTable, applyColumnLabelsToDisplay, resolveInferredType]);
 
   useEffect(() => {
-    if (selectedTable && !hasColumns && !loadingColumns) loadColumnsForTable();
-  }, [selectedTable, hasColumns, loadColumnsForTable, loadingColumns]);
+    if (!connectionId || !selectedTable) return;
+    const key = `${connectionId}::${selectedTable}`;
+    if (columnsLoadKeyRef.current === key) return;
+    columnsLoadKeyRef.current = key;
+    loadColumnsForTable();
+  }, [connectionId, selectedTable, loadColumnsForTable]);
+
+  useEffect(() => {
+    columnsLoadKeyRef.current = "";
+  }, [connectionId]);
 
   // Al entrar en "Columnas y tipos", inferir tipos desde los datos si hay columnas (por si se cargaron sin inferencia, p. ej. al editar ETL)
   const didInferOnColumnasTiposRef = useRef<{ connectionId: string | number; table: string } | null>(null);
@@ -675,10 +1053,18 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
         const ct = inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
         const getInferred = (colName: string) =>
           ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
-        const columnsWithInferred = tableColumns.map((c) => ({
-          ...c,
-          inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
-        }));
+        const columnsWithInferred = tableColumns.map((c) => {
+          const meta = inferColumnMetadata({
+            columnName: c.name,
+            schemaDataType: c.dataType,
+            sampleInferred: getInferred(c.name),
+          });
+          return {
+            ...c,
+            inferredType: meta.type,
+            inferredFormat: meta.format,
+          };
+        });
         setTables((prev) =>
           prev.map((t) =>
             `${t.schema}.${t.name}` === selectedTable ? { ...t, columns: columnsWithInferred } : t
@@ -687,7 +1073,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       })
       .catch((err) => console.warn("[ETL] Inferencia de tipos al entrar al paso:", err))
       .finally(() => setInferringTypes(false));
-  }, [step, connectionId, selectedTable, selectedTableInfo?.columns, selectedTableInfo?.columns?.length]);
+  }, [step, connectionId, selectedTable, selectedTableInfo?.columns, selectedTableInfo?.columns?.length, resolveInferredType]);
 
   // Reset transformación al cambiar conexión o tabla (no cuando acabamos de restaurar desde config)
   useEffect(() => {
@@ -732,9 +1118,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (item.availableColumns?.length) return;
       try {
         const res = await fetchMetadata(item.connectionId, item.table);
-        const data = await safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { columns?: { name: string }[] }[] }; error?: string }>(res);
-        const colNames = data?.metadata?.tables?.[0]?.columns?.map((c: { name: string }) => c.name) ?? [];
-        let availableColumns: { name: string; inferredType?: string; dataType?: string }[] = colNames.map((n: string) => ({ name: n }));
+        const data = await safeJsonResponse<{ ok?: boolean; metadata?: { tables?: { columns?: { name: string; dataType?: string }[] }[] }; error?: string }>(res);
+        const metaCols = data?.metadata?.tables?.[0]?.columns ?? [];
+        let availableColumns: { name: string; inferredType?: string; dataType?: string }[] = metaCols.map(
+          (c: { name: string; dataType?: string }) => ({ name: c.name, dataType: c.dataType }),
+        );
         try {
           const inferRes = await fetch("/api/connection/infer-column-types", {
             method: "POST",
@@ -746,10 +1134,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
             const ct = inferData.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
             const getInferred = (colName: string) =>
               ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
-            availableColumns = colNames.map((n: string) => ({
-              name: n,
-              inferredType: getInferred(n) ?? undefined,
-            }));
+            availableColumns = metaCols.map((c: { name: string; dataType?: string }) => {
+              const meta = inferColumnMetadata({
+                columnName: c.name,
+                schemaDataType: c.dataType,
+                sampleInferred: getInferred(c.name),
+              });
+              return {
+                name: c.name,
+                dataType: c.dataType,
+                inferredType: meta.type,
+                inferredFormat: meta.format,
+              };
+            });
           }
         } catch {
           // keep availableColumns with names only
@@ -817,7 +1214,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       joinItems.length > 0
         ? joinItems
         : joinSecondaryConnectionId && joinSecondaryTable && joinLeftColumn && joinRightColumn
-          ? [{ id: "join_0", table: joinSecondaryTable, conditions: [{ leftColumn: joinLeftColumn, rightColumn: joinRightColumn }], rightColumns: joinRightColumns, availableColumns: joinRightTableInfo?.columns ?? [] }]
+          ? [{
+              id: "join_0",
+              connectionId: joinSecondaryConnectionId,
+              table: joinSecondaryTable,
+              joinType: "INNER" as const,
+              conditions: [{ leftColumn: joinLeftColumn, rightColumn: joinRightColumn }],
+              rightColumns: joinRightColumns,
+              availableColumns: joinRightTableInfo?.columns ?? [],
+            }]
           : [],
     [joinItems, joinSecondaryConnectionId, joinSecondaryTable, joinLeftColumn, joinRightColumn, joinRightColumns, joinRightTableInfo?.columns]
   );
@@ -845,7 +1250,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
 
   /** Columnas finales del dataset (tras selección, UNION y JOIN). Refleja exactamente la estructura que se guardará. */
   const finalColumnsForTypes = useMemo(() => {
-    const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
+    const rawEffective =
+      columns.length > 0
+        ? columns
+        : (selectedTableInfo?.columns ?? []).map((c: { name: string }) => c.name);
+    const effectiveColumns = rawEffective
+      .map((colName: string) => colName.replace(/^primary\./i, "").trim())
+      .filter((colName: string) => colName.length > 0 && !/^join_\d+\./i.test(colName));
     const effectiveJoinItems =
       joinItems.length > 0
         ? joinItems
@@ -878,6 +1289,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       const meta = selectedTableInfo?.columns?.find((c: { name: string }) => c.name === colName);
       return {
         name: colName,
+        label: (meta as { label?: string })?.label,
         dataType: (meta as { dataType?: string })?.dataType,
         inferredType: (meta as { inferredType?: string })?.inferredType,
       };
@@ -894,6 +1306,225 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     joinType,
     joinRightTableInfo?.columns,
   ]);
+
+  /** Orden estable de columnas en vista previa (primary.* luego join_N.*), alineado con el payload del ETL. */
+  const previewColumnConfigKeys = useMemo(() => {
+    return finalColumnsForTypes.map((c) => c.name);
+  }, [finalColumnsForTypes]);
+
+  /** Columnas del dataset final (principal + JOIN / sin prefijo sin JOIN), con etiquetas para selects. */
+  const datasetColumnOptions = useMemo(() => {
+    if (columns.length === 0) return [];
+    return finalColumnsForTypes.map((col) => {
+      const name = col.name;
+      if (/^primary\./i.test(name)) {
+        return { value: name, label: `Principal · ${name.replace(/^primary\./i, "")}` };
+      }
+      const joinMatch = name.match(/^join_(\d+)\.(.*)$/i);
+      if (joinMatch) {
+        const joinIdx = parseInt(joinMatch[1], 10);
+        const colName = joinMatch[2];
+        const joinItem = effectiveJoinItemsForOptions[joinIdx];
+        const tableLabel = joinItem?.table?.split(".").pop() || `Join ${joinIdx}`;
+        return { value: name, label: `${tableLabel} · ${colName}` };
+      }
+      const displayLabel = columnDisplay[name]?.label?.trim() || (col as { label?: string }).label?.trim();
+      return { value: name, label: displayLabel || name };
+    });
+  }, [columns.length, finalColumnsForTypes, effectiveJoinItemsForOptions, columnDisplay]);
+
+  const datasetColumnKeys = useMemo(
+    () => datasetColumnOptions.map((o) => o.value),
+    [datasetColumnOptions]
+  );
+
+  const columnOptionLabel = useCallback(
+    (colKey: string) => datasetColumnOptions.find((o) => o.value === colKey)?.label ?? colKey,
+    [datasetColumnOptions]
+  );
+
+  /** Duplicados compuestos (≥2 columnas) en muestra de transformación o vista previa. */
+  const dedupeAnalysisRows = transformSampleRows?.length ? transformSampleRows : previewRows;
+  const dedupeValidation = useMemo(() => {
+    const cols = dedupe?.keyColumns ?? [];
+    if (cols.length < 2 || !dedupeAnalysisRows?.length) return null;
+    const rowKeys = Object.keys(dedupeAnalysisRows[0] as Record<string, unknown>);
+    const keys = dedupeAnalysisRows.map((row) => {
+      const r = row as Record<string, unknown>;
+      return cols
+        .map((col) => {
+          const dataKey = resolvePreviewRowDataKey(col, rowKeys);
+          const key =
+            Object.keys(r).find((k) => k.toLowerCase() === dataKey.toLowerCase()) ?? dataKey;
+          return String(r[key] ?? "\x00");
+        })
+        .join("\x01");
+    });
+    const uniqueKeys = new Set(keys).size;
+    return {
+      duplicateRows: keys.length - uniqueKeys,
+      uniqueKeys,
+      totalRows: keys.length,
+      fromTransformSample: Boolean(transformSampleRows?.length),
+    };
+  }, [dedupe?.keyColumns, dedupeAnalysisRows, transformSampleRows?.length]);
+
+  useEffect(() => {
+    if (!distinctColumn) return;
+    const stillValid = datasetColumnOptions.some((o) => o.value === distinctColumn);
+    if (!stillValid) {
+      setDistinctColumn(null);
+      setDistinctValuesList([]);
+      setDistinctSearch("");
+    }
+  }, [distinctColumn, datasetColumnOptions]);
+
+  useEffect(() => {
+    if (!distinctColumn || !connectionId || !selectedTable) return;
+
+    const columnForExclude = distinctColumn;
+    const queries = resolveDistinctValueQueries(
+      distinctColumn,
+      connectionId,
+      selectedTable,
+      effectiveJoinItemsForOptions,
+      unionRightItems,
+      useUnion
+    );
+
+    if (queries.length === 0) {
+      setDistinctValuesList([]);
+      setLoadingDistinct(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDistinctValuesList([]);
+    setLoadingDistinct(true);
+
+    const cancelExcludeSelection = () => {
+      setDistinctColumn(null);
+      setDistinctValuesList([]);
+      setDistinctSearch("");
+      setExcludedValues((prev) => prev.filter((e) => e.column !== columnForExclude));
+    };
+
+    Promise.all(
+      queries.map((q) =>
+        fetch("/api/connection/distinct-values", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            connectionId: q.connectionId,
+            table: q.table,
+            column: q.column,
+          }),
+        }).then((res) => safeJsonResponse(res))
+      )
+    )
+      .then((results) => {
+        if (cancelled) return;
+        const merged = new Set<string>();
+        const values: string[] = [];
+        let hitCap = false;
+        let hadError = false;
+        let anyOk = false;
+        for (const data of results) {
+          if (data.ok && Array.isArray(data.values)) {
+            anyOk = true;
+            if (data.capped) hitCap = true;
+            for (const v of data.values) {
+              const s = String(v);
+              if (!merged.has(s)) {
+                merged.add(s);
+                values.push(s);
+                if (values.length >= ETL_DISTINCT_VALUES_MAX_DEFAULT) {
+                  hitCap = true;
+                  break;
+                }
+              }
+            }
+          } else if (data?.error) {
+            hadError = true;
+            toast.error(data.error);
+          }
+          if (values.length >= ETL_DISTINCT_VALUES_MAX_DEFAULT) break;
+        }
+        if (hadError && !anyOk) {
+          cancelExcludeSelection();
+          return;
+        }
+        values.sort((a, b) => a.localeCompare(b, "es"));
+        setDistinctValuesList(values.slice(0, ETL_DISTINCT_VALUES_MAX_DEFAULT));
+        if (hitCap) {
+          toast.info(
+            `Se muestran los primeros ${ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} valores distintos. Usá el buscador o agregá filtros en pasos anteriores para acotar la lista.`
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          toast.error("Error al cargar valores");
+          cancelExcludeSelection();
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDistinct(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    distinctColumn,
+    connectionId,
+    selectedTable,
+    effectiveJoinItemsForOptions,
+    unionRightItems,
+    useUnion,
+  ]);
+
+  // Sugerir tipo y formato (moneda, %, fecha) al entrar en Columnas y tipos o cuando llega la vista previa.
+  useEffect(() => {
+    if (step !== "columnas_tipos" || finalColumnsForTypes.length === 0) return;
+    setColumnDisplay((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const c of finalColumnsForTypes) {
+        const meta = resolveInferredMetadata(c.name, c.dataType);
+        const labelFallback = c.name.replace(/^(primary|join_\d+)\./, "");
+        const existing = next[c.name];
+        if (!existing) {
+          next[c.name] = {
+            label: labelFallback,
+            type: meta.type,
+            format: meta.format,
+          };
+          changed = true;
+          continue;
+        }
+        const patch = { ...existing };
+        let colChanged = false;
+        if (!existing.type) {
+          patch.type = meta.type;
+          colChanged = true;
+        }
+        if (!existing.format?.trim()) {
+          patch.format = meta.format;
+          colChanged = true;
+        }
+        if (!existing.label?.trim()) {
+          patch.label = labelFallback;
+          colChanged = true;
+        }
+        if (colChanged) {
+          next[c.name] = patch;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [step, finalColumnsForTypes, resolveInferredMetadata, previewRows?.length]);
 
   useEffect(() => {
     if (!joinSecondaryTable || !joinSecondaryConnectionId) {
@@ -957,7 +1588,9 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   /** Construye el objeto guided_config (connectionId, filter, union, join, clean, end) para guardar o ejecutar. Permite parcial (solo conexión) para que al guardar quede algo persistido. */
   const buildGuidedConfigBody = useCallback((): Record<string, unknown> | null => {
     if (!connectionId) return null;
-    const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
+    const effectiveColumns = columns
+      .map((c) => c.replace(/^primary\./i, "").trim())
+      .filter((c) => c.length > 0 && !/^join_\d+\./i.test(c));
     const filterConditions = allFilterConditions();
     const cleanConfig = buildCleanConfig();
     const tableName = selectedTable || undefined;
@@ -1099,6 +1732,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     outputTableName,
     outputMode,
     scheduleFrequency,
+    scheduleRunAtTime,
+    scheduleRunOnWeekdays,
     distinctColumn,
     keyColumns,
     useUnion,
@@ -1119,7 +1754,142 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
     dateFilterExactDatesText,
   ]);
 
-  /** Preview y run comparten el mismo contrato base (buildGuidedConfigBody: filter con dateFilter, conditions, join). Diferencias: preview usa limit 1000 o unlimited y no envía end; run envía end y waitForCompletion. */
+  const fetchColumnDistinctValues = useCallback(
+    async (columnKey: string) => {
+      if (!connectionId || !selectedTable || !columnKey.trim()) return;
+      setLoadingColumnValuesKey(columnKey);
+      try {
+        const queries = resolveDistinctValueQueries(
+          columnKey,
+          connectionId,
+          selectedTable,
+          effectiveJoinItemsForOptions,
+          unionRightItems,
+          useUnion
+        );
+        if (queries.length === 0) {
+          toast.error("No se pudo resolver la columna en la conexión");
+          return;
+        }
+        const results = await Promise.all(
+          queries.map((q) =>
+            fetch("/api/connection/distinct-values", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                connectionId: q.connectionId,
+                table: q.table,
+                column: q.column,
+              }),
+            }).then((res) => safeJsonResponse(res))
+          )
+        );
+        const merged = new Set<string>();
+        const values: string[] = [];
+        let hitCap = false;
+        for (const data of results) {
+          if (data.ok && Array.isArray(data.values)) {
+            if (data.capped) hitCap = true;
+            for (const v of data.values) {
+              const s = String(v);
+              if (!merged.has(s)) {
+                merged.add(s);
+                values.push(s);
+                if (values.length >= ETL_DISTINCT_VALUES_MAX_DEFAULT) {
+                  hitCap = true;
+                  break;
+                }
+              }
+            }
+          } else if (data?.error) {
+            toast.error(data.error);
+            return;
+          }
+          if (values.length >= ETL_DISTINCT_VALUES_MAX_DEFAULT) break;
+        }
+        values.sort((a, b) => a.localeCompare(b, "es"));
+        setColumnValueOptions((prev) => ({
+          ...prev,
+          [columnKey]: values.slice(0, ETL_DISTINCT_VALUES_MAX_DEFAULT),
+        }));
+        if (hitCap) {
+          toast.info(
+            `Se cargaron los primeros ${ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} valores. Usá filtros para acotar.`
+          );
+        } else {
+          toast.success(`${values.length.toLocaleString("es-AR")} valor(es) cargados`);
+        }
+      } catch {
+        toast.error("Error al cargar valores de la columna");
+      } finally {
+        setLoadingColumnValuesKey(null);
+      }
+    },
+    [
+      connectionId,
+      selectedTable,
+      effectiveJoinItemsForOptions,
+      unionRightItems,
+      useUnion,
+    ]
+  );
+
+  const fetchTransformSample = useCallback(() => {
+    const body = buildGuidedConfigBody();
+    if (!body || !connectionId || !selectedTable) {
+      setTransformSampleRows(null);
+      setTransformSampleError(null);
+      return;
+    }
+    setLoadingTransformSample(true);
+    setTransformSampleError(null);
+    const previewBody = { ...body, transformSample: true, limit: ETL_TRANSFORM_SAMPLE_LIMIT } as Record<string, unknown>;
+    delete previewBody.end;
+
+    fetch("/api/etl/run-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(previewBody),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          let errMsg = `Error del servidor (${res.status})`;
+          try {
+            const j = JSON.parse(text) as { error?: string };
+            if (j?.error) errMsg = j.error;
+          } catch {
+            if (text?.trim()) errMsg = text.trim().slice(0, 200);
+          }
+          throw new Error(errMsg);
+        }
+        return safeJsonResponse(res) as Promise<{
+          ok?: boolean;
+          previewRows?: Record<string, unknown>[];
+          error?: string;
+        }>;
+      })
+      .then((data) => {
+        if (!data?.ok) throw new Error(data?.error || "Error al cargar muestra");
+        const rows = Array.isArray(data.previewRows) ? data.previewRows : [];
+        setTransformSampleRows(rows);
+        setTransformSampleError(null);
+      })
+      .catch((e: unknown) => {
+        setTransformSampleRows(null);
+        setTransformSampleError(e instanceof Error ? e.message : "Error al cargar muestra");
+      })
+      .finally(() => setLoadingTransformSample(false));
+  }, [buildGuidedConfigBody, connectionId, selectedTable]);
+
+  useEffect(() => {
+    if (step !== "transformacion" || !connectionId || !selectedTable) return;
+    fetchTransformSample();
+    // Solo al entrar al paso o cambiar conexión/tabla (evita re-fetch en cada render del body).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, connectionId, selectedTable]);
+
+  /** Preview síncrono (rápido); «Muestra ampliada» usa transformSample (10k filas). */
   const fetchPreview = useCallback(() => {
     const body = buildGuidedConfigBody();
     if (!body || !connectionId || !selectedTable) {
@@ -1134,96 +1904,59 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       previewPollTimeoutRef.current = null;
     }
     previewAbortRef.current = new AbortController();
-    previewLoadedOnceRef.current = false;
     setPreviewLoading(true);
     setPreviewError(null);
     const previewBody = { ...body } as Record<string, unknown>;
     delete previewBody.end;
+    const hasJoin = Boolean(previewBody.join);
     if (previewUnlimited) {
-      previewBody.unlimited = true;
+      previewBody.transformSample = true;
+      previewBody.limit = ETL_TRANSFORM_SAMPLE_LIMIT;
     } else {
-      previewBody.limit = 1000;
+      previewBody.limit = hasJoin ? ETL_PREVIEW_JOIN_INSTANT_LIMIT : ETL_PREVIEW_TABLE_LIMIT;
+      previewBody.previewFast = true;
     }
     if (previewBody.union && typeof previewBody.union === "object" && Array.isArray((previewBody.union as { rights?: unknown[] }).rights)) {
       const u = previewBody.union as { left: unknown; rights: unknown[]; unionAll?: boolean };
       if (u.rights.length > 0) (previewBody.union as Record<string, unknown>).right = u.rights[0];
     }
     const signal = previewAbortRef.current.signal;
-    const sleep = (ms: number) =>
-      new Promise<void>((resolve) => {
-        previewPollTimeoutRef.current = setTimeout(() => resolve(), ms);
+
+    const runSyncPreview = async () => {
+      const res = await fetch("/api/etl/run-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(previewBody),
+        signal,
       });
+      if (!res.ok) {
+        const text = await res.text();
+        let errMsg = `Error del servidor (${res.status})`;
+        try {
+          const j = JSON.parse(text) as { error?: string };
+          if (j?.error && typeof j.error === "string") errMsg = j.error;
+        } catch {
+          if (text?.trim()) errMsg = text.trim().slice(0, 200);
+        }
+        throw new Error(errMsg);
+      }
+      const data = await safeJsonResponse(res) as {
+        ok?: boolean;
+        previewRows?: Record<string, unknown>[];
+        rowsProcessed?: number;
+        error?: string;
+      };
+      if (!data?.ok) throw new Error(data?.error || "Error al cargar vista previa");
+      const rows = Array.isArray(data.previewRows) ? data.previewRows : [];
+      previewLoadedOnceRef.current = true;
+      setPreviewRows(rows);
+      setPreviewRowsProcessed(data.rowsProcessed ?? rows.length);
+      setPreviewError(null);
+    };
+
     (async () => {
       try {
-        const startRes = await fetch("/api/etl/run-preview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...previewBody, asyncPreviewAction: "start" }),
-          signal,
-        });
-        if (!startRes.ok) {
-          const text = await startRes.text();
-          let errMsg = `Error del servidor (${startRes.status})`;
-          try {
-            const j = JSON.parse(text) as { error?: string };
-            if (j?.error && typeof j.error === "string") errMsg = j.error;
-          } catch {
-            if (text?.trim()) errMsg = text.trim().slice(0, 200);
-          }
-          throw new Error(errMsg);
-        }
-        const startData = await safeJsonResponse(startRes) as { ok?: boolean; previewJobId?: string; error?: string };
-        if (!startData?.ok || !startData?.previewJobId) {
-          throw new Error(startData?.error || "No se pudo iniciar la vista previa asíncrona.");
-        }
-        const previewJobId = startData.previewJobId;
-        const startedAt = Date.now();
-        while (true) {
-          if (signal.aborted) return;
-          const statusRes = await fetch(`/api/etl/run-preview/status?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
-          const statusData = await safeJsonResponse(statusRes) as {
-            ok?: boolean;
-            status?: string;
-            rowsProcessed?: number;
-            rowsSample?: Record<string, unknown>[];
-            error?: string;
-          };
-          if (!statusRes.ok || !statusData?.ok) {
-            throw new Error(statusData?.error || `Error consultando estado (${statusRes.status})`);
-          }
-          if (Array.isArray(statusData.rowsSample)) {
-            previewLoadedOnceRef.current = true;
-            setPreviewRows(statusData.rowsSample);
-            setPreviewRowsProcessed(statusData.rowsProcessed ?? statusData.rowsSample.length);
-            setPreviewError(null);
-          }
-          if (statusData.status === "failed") {
-            throw new Error(statusData.error || "La vista previa asíncrona falló.");
-          }
-          if (statusData.status === "completed") {
-            const resultRes = await fetch(`/api/etl/run-preview/result?previewJobId=${encodeURIComponent(previewJobId)}`, { signal });
-            const resultData = await safeJsonResponse(resultRes) as {
-              ok?: boolean;
-              previewRows?: Record<string, unknown>[];
-              rowsProcessed?: number;
-              error?: string;
-            };
-            if (!resultRes.ok || !resultData?.ok) {
-              throw new Error(resultData?.error || `Error obteniendo resultado (${resultRes.status})`);
-            }
-            const rows = Array.isArray(resultData.previewRows) ? resultData.previewRows : [];
-            previewLoadedOnceRef.current = true;
-            setPreviewRows(rows);
-            setPreviewRowsProcessed(resultData.rowsProcessed ?? rows.length);
-            setPreviewError(null);
-            break;
-          }
-          // Evita polling infinito en jobs colgados.
-          if (Date.now() - startedAt > 15 * 60 * 1000) {
-            throw new Error("La vista previa tardó demasiado. Ajustá filtros o cantidad de joins.");
-          }
-          await sleep(1200);
-        }
+        await runSyncPreview();
       } catch (e: unknown) {
         if ((e as { name?: string }).name === "AbortError") return;
         setPreviewRows(null);
@@ -1247,8 +1980,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
   fetchPreviewRef.current = fetchPreview;
 
   useEffect(() => {
-    const t = setTimeout(() => fetchPreview(), 0);
-    return () => clearTimeout(t);
+    if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current);
+    const delay = useJoin ? 300 : 0;
+    previewDebounceRef.current = setTimeout(() => fetchPreview(), delay);
+    return () => {
+      if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current);
+    };
   }, [
     fetchPreview,
     step,
@@ -1278,7 +2015,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       if (!options?.silent) toast.error("Completá al menos la conexión para guardar.");
       return false;
     }
-    guidedConfig = mergeScheduleIntoGuidedConfig(guidedConfig, scheduleFrequency || null, scheduleLastRunAt);
+    const scheduleInput: ScheduleInput = {
+      frequency: scheduleFrequency || null,
+      runAtTime: scheduleRunAtTime,
+      runOnWeekdays: scheduleRunOnWeekdays,
+    };
+    guidedConfig = mergeScheduleIntoGuidedConfig(guidedConfig, scheduleInput, scheduleLastRunAt);
     // Persistir siempre la tabla seleccionada desde el estado
     const tableToSave = (selectedTable ?? "")?.trim() || undefined;
     if (tableToSave && typeof guidedConfig.filter === "object" && guidedConfig.filter !== null) {
@@ -1305,7 +2047,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       toast.error(msg);
       return false;
     }
-  }, [etlId, buildGuidedConfigBody, selectedTable, scheduleFrequency, scheduleLastRunAt]);
+  }, [etlId, buildGuidedConfigBody, selectedTable, scheduleFrequency, scheduleRunAtTime, scheduleRunOnWeekdays, scheduleLastRunAt]);
 
   const handleRun = useCallback(async () => {
     if (!canRun || !connectionId || !selectedTable) return;
@@ -1315,7 +2057,12 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       setRunning(false);
       return;
     }
-    const guidedBody = mergeScheduleIntoGuidedConfig(rawBody, scheduleFrequency || null, scheduleLastRunAt);
+    const scheduleInput: ScheduleInput = {
+      frequency: scheduleFrequency || null,
+      runAtTime: scheduleRunAtTime,
+      runOnWeekdays: scheduleRunOnWeekdays,
+    };
+    const guidedBody = mergeScheduleIntoGuidedConfig(rawBody, scheduleInput, scheduleLastRunAt);
     // Guardar toda la configuración antes de ejecutar para que layout tenga conexión, tabla, columnas, filtros, join/union, destino, etc.
     await saveGuidedConfigToServer({ silent: true });
     // waitForCompletion: false evita FUNCTION_INVOCATION_TIMEOUT en Vercel; el ETL corre en segundo plano
@@ -1345,7 +2092,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
       toast.error(e instanceof Error ? e.message : "Error al ejecutar");
       setRunning(false);
     }
-  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, saveGuidedConfigToServer, etlId, router, scheduleFrequency, scheduleLastRunAt]);
+  }, [canRun, connectionId, selectedTable, buildGuidedConfigBody, saveGuidedConfigToServer, etlId, router, scheduleFrequency, scheduleRunAtTime, scheduleRunOnWeekdays, scheduleLastRunAt]);
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
   const connectionName =
@@ -1573,8 +2320,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   ) : (
                     <Select
                       value={selectedTable ?? ""}
-                      onChange={(v: string) => setSelectedTable(v || null)}
-                      options={tables.map((t) => ({ value: `${t.schema}.${t.name}`, label: `${t.schema}.${t.name}` }))}
+                      onChange={handleSelectedTableChange}
+                      options={tables.map((t) => ({
+                        value: `${t.schema}.${t.name}`,
+                        label: (t as { label?: string }).label ?? `${t.schema}.${t.name}`,
+                      }))}
                       placeholder={connectionId && tables.length === 0 ? "No hay tablas. Configurá tablas en Conexiones." : "Seleccionar tabla…"}
                       disabled={!connectionId || tables.length === 0}
                       searchable
@@ -1677,7 +2427,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             color: active ? "var(--platform-accent)" : "var(--platform-fg-muted)",
                           }}
                         >
-                          {c.name}
+                          {getColumnDisplayLabel(c)}
                         </button>
                       );
                     })}
@@ -1692,7 +2442,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
                     <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna de fecha</Label>
-                    <div className="min-w-[180px]">
+                    <div className="flex-1 min-w-[220px] max-w-full">
                       <Select
                         value={
                           (dateFilterColumn && effectiveJoinItemsForOptions.length > 0 && !/^(primary|join_\d+)\./i.test(dateFilterColumn))
@@ -1702,6 +2452,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         onChange={(v: string) => setDateFilterColumn(v || null)}
                         options={leftColumnOptionsForNextJoin}
                         placeholder="Elegir columna"
+                        searchable
+                        searchPlaceholder="Buscar columna…"
                       />
                     </div>
                   </div>
@@ -1826,8 +2578,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <div className="space-y-4 pt-2">
                       <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                         <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Agregar tabla a apilar</Label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                          <div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-end">
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
                             <Select
                               value={unionRightConnectionId != null ? String(unionRightConnectionId) : ""}
@@ -1837,9 +2589,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
                               }))}
                               placeholder="Elegir conexión"
+                              searchable
+                              searchPlaceholder="Buscar conexión…"
                             />
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
                             <Select
                               value={unionRightTable ?? ""}
@@ -1851,7 +2605,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               disabled={!unionRightConnectionId || loadingUnionMeta}
                             />
                           </div>
-                          <div className="sm:col-span-2 lg:col-span-1 flex items-end">
+                          <div className="md:col-span-2 xl:col-span-1 flex items-end">
                             <Button
                               type="button"
                               variant="outline"
@@ -1921,15 +2675,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 </div>
                                 <div className="flex flex-wrap gap-2 items-center">
                                   {(item.availableColumns ?? []).map((col) => (
-                                    <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                                    <label key={col.name} className="flex items-start gap-1 text-xs cursor-pointer max-w-full" style={{ color: "var(--platform-fg)" }}>
                                       <input
                                         type="checkbox"
+                                        className="mt-0.5 shrink-0"
                                         checked={item.columns.includes(col.name)}
                                         onChange={(e) => {
                                           setUnionRightItems((prev) => prev.map((it, i) => i === idx ? { ...it, columns: e.target.checked ? [...it.columns, col.name] : it.columns.filter((c) => c !== col.name) } : it));
                                         }}
                                       />
-                                      {col.name}
+                                      <span className="break-all">{col.name}</span>
                                     </label>
                                   ))}
                                 </div>
@@ -1966,8 +2721,8 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <div className="space-y-4 pt-2">
                       <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                         <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Tabla secundaria y tipo de JOIN</Label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                          <div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-end">
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Conexión</Label>
                             <Select
                               value={joinSecondaryConnectionId != null ? String(joinSecondaryConnectionId) : ""}
@@ -1982,9 +2737,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 label: `${c.title || `Conexión ${c.id}`}${String(c.id) === String(connectionId) ? " (principal)" : ""}`,
                               }))}
                               placeholder="Elegir conexión"
+                              searchable
+                              searchPlaceholder="Buscar conexión…"
                             />
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Tabla</Label>
                             <Select
                               value={joinSecondaryTable ?? ""}
@@ -2011,23 +2768,27 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             />
                           </div>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                          <div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla principal</Label>
                             <Select
                               value={joinLeftColumn}
                               onChange={(v: string) => setJoinLeftColumn(v)}
                               options={leftColumnOptionsForNextJoin}
                               placeholder="Elegir columna"
+                              searchable
+                              searchPlaceholder="Buscar columna…"
                             />
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <Label className="text-xs block mb-1.5" style={{ color: "var(--platform-fg-muted)" }}>Columna tabla secundaria</Label>
                             <Select
                               value={joinRightColumn}
                               onChange={(v: string) => setJoinRightColumn(v)}
                               options={joinRightColumns.map((c) => ({ value: c, label: c }))}
                               placeholder="Elegir columna"
+                              searchable
+                              searchPlaceholder="Buscar columna…"
                             />
                           </div>
                           <div className="lg:col-span-2 flex items-end">
@@ -2067,30 +2828,34 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Tablas a combinar ({joinItems.length})</Label>
                             {joinItems.map((item, idx) => (
                               <div key={item.id} className="rounded-lg border p-3 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
-                                  <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>{item.joinType} · {(item.conditions || []).map((c) => `${c.leftColumn || "?"} = ${c.rightColumn || "?"}`).join(", ")}</span>
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <span className="text-sm font-medium min-w-0 break-all" style={{ color: "var(--platform-fg)" }}>{item.table}</span>
+                                  <span className="text-xs min-w-0 break-words" style={{ color: "var(--platform-fg-muted)" }}>{item.joinType} · {(item.conditions || []).map((c) => `${c.leftColumn || "?"} = ${c.rightColumn || "?"}`).join(", ")}</span>
                                   <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setJoinItems((prev) => prev.filter((_, i) => i !== idx))}>Quitar</button>
                                 </div>
                                 <div className="space-y-2">
                                   <div className="space-y-1.5">
                                     <span className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Condiciones de enlace (clave compuesta)</span>
                                     {(item.conditions || []).map((cond, condIdx) => (
-                                      <div key={condIdx} className="flex flex-wrap gap-2 items-center">
+                                      <div key={condIdx} className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr_auto] gap-2 items-center">
                                         <Select
                                           value={cond.leftColumn}
                                           onChange={(v: string) => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: (it.conditions || []).map((cc, ci) => ci === condIdx ? { ...cc, leftColumn: v } : cc) } : it))}
                                           options={leftColumnOptionsForNextJoin}
                                           placeholder="Col. principal"
-                                          className="min-w-[140px]"
+                                          className="min-w-0 w-full"
+                                          searchable
+                                          searchPlaceholder="Buscar columna…"
                                         />
-                                        <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>=</span>
+                                        <span className="text-xs text-center" style={{ color: "var(--platform-fg-muted)" }}>=</span>
                                         <Select
                                           value={cond.rightColumn}
                                           onChange={(v: string) => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: (it.conditions || []).map((cc, ci) => ci === condIdx ? { ...cc, rightColumn: v } : cc) } : it))}
                                           options={(item.availableColumns ?? []).map((c) => ({ value: c.name, label: c.name }))}
                                           placeholder="Col. secundaria"
-                                          className="min-w-[140px]"
+                                          className="min-w-0 w-full"
+                                          searchable
+                                          searchPlaceholder="Buscar columna…"
                                         />
                                         {(item.conditions?.length ?? 0) > 1 && (
                                           <button type="button" className="text-xs rounded px-2 py-1 hover:opacity-80" style={{ color: "var(--platform-fg-muted)", background: "var(--platform-surface-hover)" }} onClick={() => setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, conditions: (it.conditions || []).filter((_, ci) => ci !== condIdx) } : it))}>Quitar condición</button>
@@ -2124,15 +2889,16 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   </div>
                                   <div className="flex flex-wrap gap-2 items-center">
                                     {(item.availableColumns ?? []).map((col) => (
-                                      <label key={col.name} className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                                      <label key={col.name} className="flex items-start gap-1 text-xs cursor-pointer max-w-full" style={{ color: "var(--platform-fg)" }}>
                                         <input
                                           type="checkbox"
+                                          className="mt-0.5 shrink-0"
                                           checked={item.rightColumns.includes(col.name)}
                                           onChange={(e) => {
                                             setJoinItems((prev) => prev.map((it, i) => i === idx ? { ...it, rightColumns: e.target.checked ? [...it.rightColumns, col.name] : it.rightColumns.filter((c) => c !== col.name) } : it));
                                           }}
                                         />
-                                        {col.name}
+                                        <span className="break-all">{col.name}</span>
                                       </label>
                                     ))}
                                   </div>
@@ -2150,11 +2916,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                 <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                   <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Excluir filas (opcional)</Label>
                   <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                    Elegí una columna; se cargarán automáticamente los valores. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado. Se aplica al final, después de UNION y JOIN.
+                    Elegí una columna; se cargarán hasta {ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} valores distintos desde la base de datos. Marcá cuáles excluir. Solo se incluirán las filas cuyo valor no esté marcado. Se aplica al final, después de UNION y JOIN.
                   </p>
                   <div className="flex flex-wrap gap-2 items-center">
                     <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna</Label>
-                    <div className="min-w-[180px]">
+                    <div className="flex-1 min-w-[220px] max-w-full">
                       <Select
                         value={distinctColumn ?? ""}
                         onChange={(v: string) => {
@@ -2162,13 +2928,42 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           setDistinctColumn(col);
                           setDistinctValuesList([]);
                           setDistinctSearch("");
+                          if (!col) {
+                            setExcludedValues([]);
+                          }
                         }}
-                        options={(selectedTableInfo?.columns ?? []).map((col) => ({ value: col.name, label: col.name }))}
-                        placeholder="Elegir columna"
+                        options={datasetColumnOptions}
+                        placeholder={columns.length === 0 ? "Seleccioná columnas arriba" : "Elegir columna"}
+                        disabled={columns.length === 0}
+                        searchable
+                        searchPlaceholder="Buscar columna…"
                       />
                     </div>
                     {loadingDistinct && distinctColumn && (
-                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores…</span>
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>Cargando valores distintos…</span>
+                    )}
+                    {distinctColumn && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-lg text-xs"
+                        style={{ borderColor: "var(--platform-border)" }}
+                        disabled={loadingDistinct}
+                        onClick={() => {
+                          setDistinctColumn(null);
+                          setDistinctValuesList([]);
+                          setDistinctSearch("");
+                          setExcludedValues([]);
+                        }}
+                      >
+                        Cancelar
+                      </Button>
+                    )}
+                    {!loadingDistinct && distinctValuesList.length > 0 && distinctColumn && (
+                      <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+                        {distinctValuesList.length.toLocaleString("es-AR")} valor(es) distintos
+                      </span>
                     )}
                   </div>
                   {distinctValuesList.length > 0 && distinctColumn && (
@@ -2181,7 +2976,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         className="w-full rounded-lg border px-3 py-2 text-sm"
                         style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
                       />
-                      <div className="max-h-48 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
+                      <div className="max-h-72 overflow-y-auto rounded-lg border space-y-0.5 p-2" style={{ borderColor: "var(--platform-border)" }}>
                         {distinctValuesList
                           .filter((v) => !distinctSearch.trim() || String(v).toLowerCase().includes(distinctSearch.trim().toLowerCase()))
                           .map((val) => {
@@ -2308,10 +3103,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         const getInferred = (colName: string) =>
                           ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
                         const tableColumns = selectedTableInfo.columns as { name: string; dataType?: string; inferredType?: string }[];
-                        const columnsWithInferred = tableColumns.map((c) => ({
-                          ...c,
-                          inferredType: (getInferred(c.name) ?? dataTypeToLabel(c.dataType)) as "Fecha" | "Número" | "Texto",
-                        }));
+                        const columnsWithInferred = tableColumns.map((c) => {
+                          const meta = inferColumnMetadata({
+                            columnName: c.name,
+                            schemaDataType: c.dataType,
+                            sampleInferred: getInferred(c.name),
+                          });
+                          return { ...c, inferredType: meta.type, inferredFormat: meta.format };
+                        });
                         setTables((prev) =>
                           prev.map((t) =>
                             `${t.schema}.${t.name}` === selectedTable ? { ...t, columns: columnsWithInferred } : t
@@ -2329,7 +3128,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             const ct = r.inferJson.columnTypes as Record<string, "Fecha" | "Número" | "Texto">;
                             const getInferred = (colName: string) =>
                               ct[colName] ?? Object.entries(ct).find(([k]) => k.toLowerCase() === colName.toLowerCase())?.[1];
-                            const cols = (it.availableColumns ?? []).map((ac) => ({ ...ac, inferredType: getInferred(ac.name) ?? ac.inferredType }));
+                            const cols = (it.availableColumns ?? []).map((ac) => {
+                              const meta = inferColumnMetadata({
+                                columnName: ac.name,
+                                schemaDataType: ac.dataType,
+                                sampleInferred: getInferred(ac.name),
+                              });
+                              return { ...ac, inferredType: meta.type, inferredFormat: meta.format };
+                            });
                             return { ...it, availableColumns: cols.length ? cols : it.availableColumns };
                           })
                         );
@@ -2368,22 +3174,50 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       </tr>
                     </thead>
                     <tbody>
-                      {finalColumnsForTypes.map((c: { name: string; dataType?: string; inferredType?: string }) => {
-                        const disp = columnDisplay[c.name] ?? { label: "", format: "" };
-                        const rowKeyNorm = c.name.replace(/\./g, "_").toLowerCase();
-                        const fromPreview = inferredTypesFromPreview[rowKeyNorm];
-                        const tipoInferido = dataTypeToLabel(fromPreview ?? (c as { inferredType?: string }).inferredType ?? c.dataType);
+                      {finalColumnsForTypes.map((c: { name: string; label?: string; dataType?: string; inferredType?: string }) => {
+                        const disp = columnDisplay[c.name] ?? {
+                          label: c.label?.trim() || "",
+                          format: "",
+                        };
+                        const inferredMeta = resolveInferredMetadata(c.name, c.dataType);
+                        const tipoInferido = inferredMeta.type;
+                        const formatoInferido = inferredMeta.format;
                         const tipo = (disp.type as "Fecha" | "Número" | "Texto") ?? tipoInferido;
+                        const formatoEfectivo =
+                          disp.format?.trim() ||
+                          formatoInferido ||
+                          (tipo === "Fecha" ? "DD/MM/YYYY" : tipo === "Número" ? "number" : "");
                         const isDate = tipo === "Fecha";
                         const isNumber = tipo === "Número";
                         const formatOptions = isDate ? DATE_FORMAT_OPTIONS : isNumber ? NUMBER_FORMAT_OPTIONS : TEXT_FORMAT_OPTIONS;
                         return (
                           <tr key={c.name} style={{ borderBottom: "1px solid var(--platform-border)" }}>
-                            <td className="py-2 px-3 font-mono text-xs" style={{ color: "var(--platform-fg)" }}>{c.name}</td>
+                            <td className="py-2 px-3 text-xs" style={{ color: "var(--platform-fg)" }}>
+                              <div className="font-medium">{getColumnDisplayLabel(c)}</div>
+                              {getColumnDisplayLabel(c) !== c.name && (
+                                <div className="font-mono text-[11px] mt-0.5" style={{ color: "var(--platform-fg-muted)" }}>
+                                  {c.name}
+                                </div>
+                              )}
+                            </td>
                             <td className="py-1 px-2">
                               <Select
                                 value={tipo}
-                                onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), type: v as "Fecha" | "Número" | "Texto" } }))}
+                                onChange={(v: string) =>
+                                  setColumnDisplay((prev) => ({
+                                    ...prev,
+                                    [c.name]: {
+                                      ...(prev[c.name] ?? { label: "", format: "" }),
+                                      type: v as "Fecha" | "Número" | "Texto",
+                                      format:
+                                        v === "Fecha"
+                                          ? "DD/MM/YYYY"
+                                          : v === "Número"
+                                            ? (prev[c.name]?.format?.trim() || inferFormatForColumn(c.name, "Número"))
+                                            : "",
+                                    },
+                                  }))
+                                }
                                 options={TIPO_OPTIONS}
                                 placeholder="Tipo"
                                 className="min-w-[100px]"
@@ -2394,14 +3228,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               <Input
                                 value={disp.label}
                                 onChange={(e) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), label: e.target.value } }))}
-                                placeholder={c.name.replace(/^(primary|join_\d+)\./, "")}
+                                placeholder={c.label?.trim() || c.name.replace(/^(primary|join_\d+)\./, "")}
                                 className="h-8 text-sm rounded-lg"
                                 style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
                               />
                             </td>
                             <td className="py-1 px-2">
                               <Select
-                                value={disp.format}
+                                value={formatoEfectivo}
                                 onChange={(v: string) => setColumnDisplay((prev) => ({ ...prev, [c.name]: { ...(prev[c.name] ?? { label: "", format: "" }), format: v, type: (prev[c.name] as { type?: "Fecha" | "Número" | "Texto" })?.type } }))}
                                 options={formatOptions}
                                 placeholder="Formato"
@@ -2462,8 +3296,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               </p>
             </div>
             {(() => {
-              const effectiveColumns = columns.length > 0 ? columns : (selectedTableInfo?.columns?.map((c) => c.name) ?? []);
-              if (effectiveColumns.length === 0) {
+              if (datasetColumnKeys.length === 0) {
                 return (
                   <div className="rounded-xl border p-6 text-center" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Sparkles className="h-10 w-10 mx-auto mb-3 opacity-50" style={{ color: "var(--platform-fg-muted)" }} />
@@ -2518,7 +3351,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   patterns: next.length ? next : defaultNullPatterns,
                                   action: nullCleanup?.action ?? "null",
                                   replacement: nullCleanup?.replacement,
-                                  columns: nullCleanup?.columns ?? effectiveColumns,
+                                  columns: nullCleanup?.columns ?? datasetColumnKeys,
                                 });
                               }}
                               className="rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors"
@@ -2557,7 +3390,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                 patterns: [...patterns, v],
                                 action: nullCleanup?.action ?? "null",
                                 replacement: nullCleanup?.replacement,
-                                columns: nullCleanup?.columns ?? effectiveColumns,
+                                columns: nullCleanup?.columns ?? datasetColumnKeys,
                               });
                               setCustomNullValue("");
                             }
@@ -2583,7 +3416,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               patterns: [...patterns, v],
                               action: nullCleanup?.action ?? "null",
                               replacement: nullCleanup?.replacement,
-                              columns: nullCleanup?.columns ?? effectiveColumns,
+                              columns: nullCleanup?.columns ?? datasetColumnKeys,
                             });
                             setCustomNullValue("");
                           }}
@@ -2610,7 +3443,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                       patterns: patterns.length ? patterns : defaultNullPatterns,
                                       action: nullCleanup?.action ?? "null",
                                       replacement: nullCleanup?.replacement,
-                                      columns: nullCleanup?.columns ?? effectiveColumns,
+                                      columns: nullCleanup?.columns ?? datasetColumnKeys,
                                     });
                                   }}
                                   className="rounded-full p-0.5 hover:opacity-80"
@@ -2630,7 +3463,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <div className="min-w-[200px]">
                         <Select
                           value={nullCleanup?.action ?? "null"}
-                          onChange={(v: string) => setNullCleanup((prev) => prev ? { ...prev, action: v as "null" | "replace" } : { patterns: defaultNullPatterns, action: v as "null" | "replace", replacement: undefined, columns: effectiveColumns })}
+                          onChange={(v: string) => setNullCleanup((prev) => prev ? { ...prev, action: v as "null" | "replace" } : { patterns: defaultNullPatterns, action: v as "null" | "replace", replacement: undefined, columns: datasetColumnKeys })}
                           options={[
                             { value: "null", label: "Convertir a NULL" },
                             { value: "replace", label: "Reemplazar por valor" },
@@ -2662,7 +3495,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           patterns: nullCleanup?.patterns ?? defaultNullPatterns,
                           action: nullCleanup?.action ?? "null",
                           replacement: nullCleanup?.replacement,
-                          columns: effectiveColumns,
+                          columns: datasetColumnKeys,
                         })}
                       >
                         Activar en todas las columnas
@@ -2687,7 +3520,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   {/* Normalización de texto por columna */}
                   <div className="rounded-xl border p-4 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Normalización de texto por columna</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una operación por columna (opcional). Podés aplicar la misma operación a todas de una vez.</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegí una operación por columna. En «Reemplazar texto» podés cargar hasta {ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} valores distintos desde la base para elegir qué buscar.</p>
                     <div className="flex flex-wrap items-end gap-2 p-3 rounded-xl border" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
                       <span className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Aplicar a todas las columnas:</span>
                       <div className="flex-1 min-w-[200px] max-w-[240px]">
@@ -2710,7 +3543,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                           setCleanTransforms((prev) => {
                             const rest = prev.filter((x) => x.op === "replace");
                             return [
-                              ...effectiveColumns.map((col) =>
+                              ...datasetColumnKeys.map((col) =>
                                 bulkNormalizeOp === "replace"
                                   ? { column: col, op: "replace" as const, find: "", replaceWith: "" }
                                   : { column: col, op: bulkNormalizeOp }
@@ -2718,19 +3551,19 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                               ...rest,
                             ];
                           });
-                          toast.success(`Aplicado a ${effectiveColumns.length} columnas`);
+                          toast.success(`Aplicado a ${datasetColumnKeys.length} columnas`);
                         }}
                       >
                         Aplicar a todas
                       </Button>
                     </div>
                     <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {effectiveColumns.map((colName) => {
+                      {datasetColumnKeys.map((colName) => {
                         const t = cleanTransforms.find((t) => t.column === colName);
                         const op = t?.op ?? "";
                         return (
                           <div key={colName} className="flex gap-2 items-center flex-wrap">
-                            <span className="text-sm w-32 truncate" style={{ color: "var(--platform-fg-muted)" }}>{colName}</span>
+                            <span className="text-sm w-40 truncate" title={columnOptionLabel(colName)} style={{ color: "var(--platform-fg-muted)" }}>{columnOptionLabel(colName)}</span>
                             <div className="flex-1 min-w-[180px]">
                               <Select
                                 value={op}
@@ -2748,11 +3581,27 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             </div>
                             {op === "replace" && (
                               <>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="rounded-lg h-8 text-xs shrink-0"
+                                  style={{ borderColor: "var(--platform-border)" }}
+                                  disabled={loadingColumnValuesKey === colName}
+                                  onClick={() => fetchColumnDistinctValues(colName)}
+                                >
+                                  {loadingColumnValuesKey === colName ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    "Valores"
+                                  )}
+                                </Button>
                                 <input
                                   type="text"
                                   className="rounded-xl border px-2 py-1.5 text-xs w-24"
                                   style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
                                   placeholder="Buscar"
+                                  list={columnValueOptions[colName]?.length ? `norm-values-${colName.replace(/[^a-zA-Z0-9_-]/g, "_")}` : undefined}
                                   value={t?.find ?? ""}
                                   onChange={(ev) =>
                                     setCleanTransforms((prev) =>
@@ -2764,6 +3613,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                     )
                                   }
                                 />
+                                {columnValueOptions[colName]?.length ? (
+                                  <datalist id={`norm-values-${colName.replace(/[^a-zA-Z0-9_-]/g, "_")}`}>
+                                    {columnValueOptions[colName].map((v) => (
+                                      <option key={v} value={v} />
+                                    ))}
+                                  </datalist>
+                                ) : null}
                                 <input
                                   type="text"
                                   className="rounded-xl border px-2 py-1.5 text-xs w-24"
@@ -2791,7 +3647,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   {/* Correcciones permanentes */}
                   <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
                     <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Correcciones permanentes</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Reemplazar valor incorrecto → correcto (coincidencia exacta). La comparación es exacta (el valor en la celda debe coincidir con &apos;Incorrecto&apos;). Si no aplica, comprobá espacios o mayúsculas.</p>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Reemplazar valor incorrecto → correcto (coincidencia exacta). Usá «Valores» para cargar hasta {ETL_DISTINCT_VALUES_MAX_DEFAULT.toLocaleString("es-AR")} opciones desde la base.</p>
                     <div className="space-y-2 max-h-36 overflow-y-auto">
                       {dataFixes.map((fix, idx) => (
                         <div key={idx} className="flex gap-2 items-center flex-wrap">
@@ -2799,37 +3655,127 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             <Select
                               value={fix.column}
                               onChange={(v: string) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, column: v }; return n; })}
-                              options={effectiveColumns.map((c) => ({ value: c, label: c }))}
+                              options={datasetColumnOptions}
                               placeholder="Columna"
                             />
                           </div>
-                          <input type="text" className="rounded-xl border px-2 py-1.5 text-sm w-28" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }} placeholder="Incorrecto" value={fix.find} onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, find: e.target.value }; return n; })} />
+                          <input
+                            type="text"
+                            className="rounded-xl border px-2 py-1.5 text-sm w-28"
+                            style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }}
+                            placeholder="Incorrecto"
+                            list={columnValueOptions[fix.column]?.length ? `fix-values-${idx}` : undefined}
+                            value={fix.find}
+                            onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, find: e.target.value }; return n; })}
+                          />
+                          {columnValueOptions[fix.column]?.length ? (
+                            <datalist id={`fix-values-${idx}`}>
+                              {columnValueOptions[fix.column].map((v) => (
+                                <option key={v} value={v} />
+                              ))}
+                            </datalist>
+                          ) : null}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="rounded-lg h-8 text-xs shrink-0"
+                            style={{ borderColor: "var(--platform-border)" }}
+                            disabled={!fix.column || loadingColumnValuesKey === fix.column}
+                            onClick={() => fetchColumnDistinctValues(fix.column)}
+                          >
+                            {loadingColumnValuesKey === fix.column ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              "Valores"
+                            )}
+                          </Button>
                           <span style={{ color: "var(--platform-fg-muted)" }}>→</span>
                           <input type="text" className="rounded-xl border px-2 py-1.5 text-sm w-28" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)", color: "var(--platform-fg)" }} placeholder="Correcto" value={fix.replaceWith} onChange={(e) => setDataFixes((prev) => { const n = [...prev]; n[idx] = { ...fix, replaceWith: e.target.value }; return n; })} />
                           <button type="button" className="text-red-500 hover:bg-red-50 rounded-lg p-1.5" onClick={() => setDataFixes((prev) => prev.filter((_, i) => i !== idx))} aria-label="Quitar">×</button>
                         </div>
                       ))}
                     </div>
-                    <Button type="button" size="sm" variant="outline" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => setDataFixes((prev) => [...prev, { column: effectiveColumns[0] ?? "", find: "", replaceWith: "" }])}>
+                    <Button type="button" size="sm" variant="outline" className="rounded-lg" style={{ borderColor: "var(--platform-border)" }} onClick={() => setDataFixes((prev) => [...prev, { column: datasetColumnKeys[0] ?? "", find: "", replaceWith: "" }])}>
                       + Añadir corrección
                     </Button>
                   </div>
 
                   {/* Duplicados */}
-                  <div className="rounded-xl border p-4 space-y-2" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                    <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Duplicados</Label>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columnas clave para identificar duplicados. Se conserva una fila por clave.</p>
-                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Se agrupa por la combinación de valores de las columnas elegidas; si varias filas tienen la misma combinación, se mantiene solo la primera o la última según la opción seleccionada.</p>
+                  <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Label className="text-sm font-medium" style={{ color: "var(--platform-fg)" }}>Duplicados</Label>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="rounded-lg h-8"
+                        style={{ borderColor: "var(--platform-border)" }}
+                        disabled={loadingTransformSample || !connectionId || !selectedTable}
+                        onClick={() => fetchTransformSample()}
+                      >
+                        {loadingTransformSample ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                            Cargando…
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                            Recargar muestra ({ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas)
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                      Elegí dos columnas (o más) del dataset. Se analizan hasta {ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas del dataset; al ejecutar el ETL se conserva solo la primera o la última por combinación duplicada.
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna 1</Label>
+                        <Select
+                          value={dedupe?.keyColumns[0] ?? ""}
+                          onChange={(v: string) => {
+                            const rest = (dedupe?.keyColumns ?? []).slice(1).filter((c) => c !== v);
+                            setDedupe(v ? { keyColumns: [v, ...rest], keep: dedupe?.keep ?? "first" } : rest.length ? { keyColumns: rest, keep: dedupe?.keep ?? "first" } : null);
+                          }}
+                          options={datasetColumnOptions.filter((o) => o.value !== dedupe?.keyColumns[1])}
+                          placeholder="Elegir columna"
+                          searchable
+                          searchPlaceholder="Buscar columna…"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Columna 2</Label>
+                        <Select
+                          value={dedupe?.keyColumns[1] ?? ""}
+                          onChange={(v: string) => {
+                            const first = dedupe?.keyColumns[0];
+                            const extra = (dedupe?.keyColumns ?? []).slice(2).filter((c) => c !== v);
+                            const next = [first, v, ...extra].filter(Boolean) as string[];
+                            setDedupe(next.length ? { keyColumns: next, keep: dedupe?.keep ?? "first" } : null);
+                          }}
+                          options={datasetColumnOptions.filter((o) => o.value !== dedupe?.keyColumns[0])}
+                          placeholder="Elegir columna"
+                          searchable
+                          searchPlaceholder="Buscar columna…"
+                          disabled={!dedupe?.keyColumns[0]}
+                        />
+                      </div>
+                    </div>
                     <div className="flex flex-wrap gap-4 items-end">
                       <div className="min-w-[180px]">
                         <Select
                           value=""
                           onChange={(v: string) => {
-                            if (!v) return;
+                            if (!v || dedupe?.keyColumns.includes(v)) return;
                             setDedupe((prev) => ({ keyColumns: [...(prev?.keyColumns ?? []), v], keep: prev?.keep ?? "first" }));
                           }}
-                          options={effectiveColumns.filter((c) => !dedupe?.keyColumns.includes(c)).map((c) => ({ value: c, label: c }))}
-                          placeholder="Añadir columna clave"
+                          options={datasetColumnOptions.filter((o) => !(dedupe?.keyColumns ?? []).includes(o.value))}
+                          placeholder="Añadir otra columna (opcional)"
+                          searchable
+                          searchPlaceholder="Buscar columna…"
+                          disabled={(dedupe?.keyColumns.length ?? 0) < 2}
                         />
                       </div>
                       <div className="min-w-[160px]">
@@ -2841,6 +3787,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                             { value: "last", label: "Mantener última" },
                           ]}
                           placeholder="Al duplicado"
+                          disabled={(dedupe?.keyColumns.length ?? 0) < 2}
                         />
                       </div>
                     </div>
@@ -2848,12 +3795,57 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <div className="flex flex-wrap gap-1">
                         {dedupe.keyColumns.map((col) => (
                           <span key={col} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs" style={{ background: "var(--platform-surface-hover)", color: "var(--platform-fg)" }}>
-                            {col}
-                            <button type="button" className="hover:opacity-70" onClick={() => setDedupe((prev) => prev ? { ...prev, keyColumns: prev.keyColumns.filter((c) => c !== col) } : null)}>×</button>
+                            {columnOptionLabel(col)}
+                            <button
+                              type="button"
+                              className="hover:opacity-70"
+                              onClick={() => {
+                                setDedupe((prev) => {
+                                  if (!prev) return null;
+                                  const nextCols = prev.keyColumns.filter((c) => c !== col);
+                                  return nextCols.length ? { ...prev, keyColumns: nextCols } : null;
+                                });
+                              }}
+                            >
+                              ×
+                            </button>
                           </span>
                         ))}
                       </div>
                     ) : null}
+                    {(dedupe?.keyColumns.length ?? 0) >= 2 && (
+                      <div
+                        className="rounded-lg border px-3 py-2 text-xs"
+                        style={{
+                          borderColor: dedupeValidation?.duplicateRows
+                            ? "var(--platform-error, #dc2626)"
+                            : "var(--platform-border)",
+                          background: "var(--platform-surface)",
+                          color: "var(--platform-fg-muted)",
+                        }}
+                      >
+                        {!dedupeAnalysisRows?.length ? (
+                          <span>
+                            {loadingTransformSample
+                              ? `Cargando muestra de hasta ${ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas…`
+                              : transformSampleError
+                                ? `No se pudo cargar la muestra: ${transformSampleError}`
+                                : "Cargá la muestra con el botón de arriba para analizar duplicados."}
+                          </span>
+                        ) : dedupeValidation && dedupeValidation.duplicateRows > 0 ? (
+                          <span style={{ color: "var(--platform-error, #dc2626)" }}>
+                            Se detectaron <strong>{dedupeValidation.duplicateRows}</strong> fila(s) duplicada(s) en la muestra
+                            {dedupeValidation.fromTransformSample ? ` (${ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas máx.)` : ""}
+                            : {dedupeValidation.uniqueKeys} claves únicas en {dedupeValidation.totalRows} filas.
+                          </span>
+                        ) : dedupeValidation ? (
+                          <span style={{ color: "var(--platform-fg)" }}>
+                            Sin duplicados en la muestra para esa combinación ({dedupeValidation.totalRows} filas analizadas
+                            {dedupeValidation.fromTransformSample ? `, hasta ${ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")}` : ""}).
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -3022,7 +4014,14 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                   etlId={etlId}
                   embedded
                   frequency={scheduleFrequency}
+                  runAtTime={scheduleRunAtTime}
+                  runOnWeekdays={scheduleRunOnWeekdays}
                   onFrequencyChange={setScheduleFrequency}
+                  onScheduleChange={(input) => {
+                    setScheduleFrequency(input.frequency?.trim() ?? "");
+                    if (input.runAtTime) setScheduleRunAtTime(input.runAtTime);
+                    if (input.runOnWeekdays) setScheduleRunOnWeekdays(input.runOnWeekdays);
+                  }}
                   showEditFlowLink={false}
                 />
                 <div className="flex gap-3 pt-2">
@@ -3104,7 +4103,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     onChange={(e) => setPreviewUnlimited(e.target.checked)}
                     className="rounded border"
                   />
-                  Sin límite de filas
+                  Sin límite de filas ({ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} máx.)
                 </label>
                 <Button
                   type="button"
@@ -3146,9 +4145,11 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                     <dt className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Columnas</dt>
                     <dd className="font-medium" style={{ color: "var(--platform-fg)" }}>
                       {connectionId && selectedTable
-                        ? columns.length > 0
-                          ? `${columns.length} columna${columns.length !== 1 ? "s" : ""}`
-                          : "Todas"
+                        ? finalColumnsForTypes.length > 0
+                          ? `${finalColumnsForTypes.length} columna${finalColumnsForTypes.length !== 1 ? "s" : ""}`
+                          : columns.length > 0
+                            ? `${columns.length} columna${columns.length !== 1 ? "s" : ""}`
+                            : "Todas"
                         : "—"}
                     </dd>
                   </div>
@@ -3207,7 +4208,13 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                       <div className="font-medium" style={{ color: "var(--platform-fg)" }}>Filas mostradas: {previewLoading ? "…" : (previewRows != null ? String(previewDisplayRows.length) : "—")}</div>
                       <div className="font-medium" style={{ color: "var(--platform-fg)" }}>Total obtenido: {previewLoading ? "…" : previewError ? "Error al cargar" : (previewRows != null ? (previewRowsProcessed ?? previewRows.length) : "—")}</div>
                       {!previewLoading && previewRows != null && previewRows.length > 0 && (
-                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Mostrando hasta 1.000 filas (vista previa).</p>
+                        <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                          {previewUnlimited
+                            ? `Muestra ampliada: hasta ${ETL_TRANSFORM_SAMPLE_LIMIT.toLocaleString("es-AR")} filas.`
+                            : useJoin
+                            ? `Muestra rápida: hasta ${ETL_PREVIEW_JOIN_INSTANT_LIMIT} filas del JOIN (principal + tablas unidas).`
+                            : `Mostrando hasta ${ETL_PREVIEW_TABLE_LIMIT} filas (vista previa).`}
+                        </p>
                       )}
                     </dd>
                   </div>
@@ -3223,32 +4230,26 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
               )}
               {!previewError && previewRows && previewRows.length > 0 && (() => {
                 const rowKeys = Object.keys(previewRows[0] as Record<string, unknown>);
-                const keyByLower: Record<string, string> = Object.fromEntries(rowKeys.map((k: string) => [k.toLowerCase(), k]));
-                /** Alinea refs del guiado (primary.col, join_0.col) con claves de fila (primary_col, join_0_col). */
-                const configColToRowKeyGuess = (c: string) =>
-                  (c || "")
-                    .trim()
-                    .replace(/^primary\./i, "primary_")
-                    .replace(/^join_(\d+)\./i, (_, d) => `join_${parseInt(d, 10)}_`);
-                const mapped =
-                  columns.length > 0
-                    ? columns.map((c: string) => {
-                        if (keyByLower[c.toLowerCase()] != null) return keyByLower[c.toLowerCase()];
-                        const guess = configColToRowKeyGuess(c);
-                        if (keyByLower[guess.toLowerCase()] != null) return keyByLower[guess.toLowerCase()];
-                        return c;
-                      })
+                const columnPlan =
+                  previewColumnConfigKeys.length > 0
+                    ? buildPreviewColumnPlan(previewColumnConfigKeys, rowKeys)
                     : [];
-                const displayKeys = mapped.filter((k: string) => rowKeys.includes(k) || rowKeys.some((r: string) => r.toLowerCase() === k.toLowerCase()));
-                const keysToShow = columns.length > 0 ? (displayKeys.length > 0 ? displayKeys : rowKeys) : [];
-                /** Clave real en el objeto fila (evita celdas vacías si displayKeys quedó con primary.col pero el JSON trae primary_col). */
-                const resolveRowDataKey = (k: string): string => {
-                  if (rowKeys.includes(k)) return k;
-                  const byCi = rowKeys.find((r) => r.toLowerCase() === k.toLowerCase());
-                  if (byCi) return byCi;
-                  const g = configColToRowKeyGuess(k);
-                  const byGuess = rowKeys.find((r) => r.toLowerCase() === g.toLowerCase());
-                  return byGuess ?? k;
+                const keysToShow =
+                  columnPlan.length > 0
+                    ? columnPlan
+                    : previewColumnConfigKeys.length === 0
+                      ? []
+                      : sortPreviewRowKeys(rowKeys).map((dataKey) => ({ configKey: dataKey, dataKey }));
+                const previewHeaderLabel = (configKey: string, dataKey: string): string => {
+                  const normalized = normalizeConfigColumnKey(configKey);
+                  const fromOption = columnOptionLabel(normalized);
+                  if (fromOption && fromOption !== normalized) return fromOption;
+                  const fromConfig = columnDisplay[getColumnDisplayKey(normalized)]?.label?.trim();
+                  if (fromConfig) return fromConfig;
+                  const fromData = columnDisplay[getColumnDisplayKey(dataKey)]?.label?.trim();
+                  if (fromData) return fromData;
+                  const bare = normalized.includes(".") ? normalized.split(".").slice(1).join(".") : normalized;
+                  return bare.replace(/^(primary|join_\d+)_/i, "");
                 };
                 const showNoColumnsMessage = columns.length === 0;
                 return (
@@ -3263,10 +4264,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                         <table className="w-full text-sm border-collapse" style={{ color: "var(--platform-fg)" }}>
                           <thead>
                             <tr style={{ background: "var(--platform-bg-elevated)", borderBottom: "1px solid var(--platform-border)" }}>
-                              {keysToShow.map((key: string) => {
-                                const dataKey = resolveRowDataKey(key);
-                                const displayKey = getColumnDisplayKey(dataKey);
-                                return (
+                              {keysToShow.map(({ configKey, dataKey }) => (
                                 <th
                                   key={dataKey}
                                   role="columnheader"
@@ -3275,7 +4273,7 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                   onClick={() => handlePreviewSort(dataKey)}
                                 >
                                   <span className="inline-flex items-center gap-1">
-                                    {(columnDisplay[displayKey]?.label?.trim() || key)}
+                                    {previewHeaderLabel(configKey, dataKey)}
                                     {previewSortKey === dataKey ? (
                                       previewSortDir === "asc" ? (
                                         <ArrowUp className="h-3.5 w-3.5 opacity-80" />
@@ -3287,16 +4285,15 @@ const ETLGuidedFlowInner = forwardRef<ETLGuidedFlowHandle, Props>(function ETLGu
                                     )}
                                   </span>
                                 </th>
-                              ); })}
+                              ))}
                             </tr>
                           </thead>
                           <tbody>
                             {previewDisplayRows.map((row, idx) => (
                               <tr key={idx} className="border-b border-b-[var(--platform-border)] hover:bg-[var(--platform-surface-hover)]">
-                                {keysToShow.map((key: string) => {
-                                  const dataKey = resolveRowDataKey(key);
+                                {keysToShow.map(({ configKey, dataKey }) => {
                                   const raw = (row as Record<string, unknown>)[dataKey];
-                                  const displayKey = getColumnDisplayKey(dataKey);
+                                  const displayKey = getColumnDisplayKey(configKey) !== configKey ? getColumnDisplayKey(configKey) : getColumnDisplayKey(dataKey);
                                   const formatted = formatPreviewCell(displayKey, raw);
                                   return (
                                     <td key={dataKey} className="py-1.5 px-3 whitespace-nowrap max-w-[200px] truncate" title={formatted}>

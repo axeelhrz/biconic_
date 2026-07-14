@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, Search, Database, Loader2, ChevronRight, Pencil, BarChart3, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +34,9 @@ export default function AdminDatasetsPage() {
   const [wizardEtlId, setWizardEtlId] = useState<string | null>(null);
   const [wizardEtlTitle, setWizardEtlTitle] = useState("");
   const [wizardConnections, setWizardConnections] = useState<Connection[]>([]);
+  const [wizardDatasetId, setWizardDatasetId] = useState<string | null>(null);
+  const [wizardDatasetName, setWizardDatasetName] = useState<string | null>(null);
+  const [wizardDatasetConfig, setWizardDatasetConfig] = useState<Record<string, unknown> | null>(null);
   const [wizardLoading, setWizardLoading] = useState(false);
   /** Para autoabrir modal con ?etlId=: evitar reabrir en bucle; se resetea al cerrar el modal. */
   const autoOpenedEtlIdRef = useRef<string | null>(null);
@@ -88,6 +91,9 @@ export default function AdminDatasetsPage() {
       setWizardEtlId(selectedEtlId);
       setWizardEtlTitle(data.etlTitle);
       setWizardConnections(data.connections ?? []);
+      setWizardDatasetId(null);
+      setWizardDatasetName(null);
+      setWizardDatasetConfig(null);
     } catch {
       toast.error("Error al cargar el wizard del dataset");
     } finally {
@@ -99,21 +105,29 @@ export default function AdminDatasetsPage() {
     setWizardEtlId(null);
     setWizardEtlTitle("");
     setWizardConnections([]);
+    setWizardDatasetId(null);
+    setWizardDatasetName(null);
+    setWizardDatasetConfig(null);
     autoOpenedEtlIdRef.current = null;
   }, []);
 
   /** Abre el modal de edición para un dataset existente (mismo flujo que Crear). */
-  const openEditDataset = useCallback(async (etlId: string) => {
+  const openEditDataset = useCallback(async (ds: DatasetRow) => {
     setWizardLoading(true);
     try {
-      const data = await getDatasetWizardData(etlId);
+      const data = await getDatasetWizardData(ds.etl_id);
       if (!data.ok || !data.etlTitle) {
         toast.error(data.error ?? "No se pudo cargar el wizard");
         return;
       }
-      setWizardEtlId(etlId);
+      setWizardEtlId(ds.etl_id);
       setWizardEtlTitle(data.etlTitle);
       setWizardConnections(data.connections ?? []);
+      setWizardDatasetId(ds.id);
+      setWizardDatasetName(ds.name);
+      setWizardDatasetConfig(
+        ds.config && typeof ds.config === "object" ? (ds.config as Record<string, unknown>) : null
+      );
     } catch {
       toast.error("Error al cargar el wizard del dataset");
     } finally {
@@ -135,16 +149,42 @@ export default function AdminDatasetsPage() {
     }
   };
 
-  /** Autoabrir modal cuando se llega con ?etlId=... (ej. desde Métricas "Configurar dataset"). */
+  /** Autoabrir modal cuando se llega con ?etlId=... (ej. desde Métricas "Configurar dataset").
+   *  Espera a que cargue la lista para abrir en edición si el ETL ya tiene dataset, y limpia el
+   *  parámetro de la URL para que cerrar el modal no lo vuelva a abrir. */
   function AutoOpenWizardBySearchParams() {
     const searchParams = useSearchParams();
+    const router = useRouter();
 
     useEffect(() => {
       const etlIdFromUrl = searchParams.get("etlId");
-      if (!etlIdFromUrl || wizardEtlId || autoOpenedEtlIdRef.current === etlIdFromUrl) return;
+      if (!etlIdFromUrl || wizardEtlId || loading) return;
+      if (autoOpenedEtlIdRef.current === etlIdFromUrl) return;
       autoOpenedEtlIdRef.current = etlIdFromUrl;
-      openEditDataset(etlIdFromUrl);
-    }, [searchParams, openEditDataset, wizardEtlId]);
+      router.replace("/admin/datasets");
+      // La lista viene ordenada por updated_at DESC: find devuelve el dataset más reciente del ETL.
+      const dsFromList = datasets.find((d) => d.etl_id === etlIdFromUrl);
+      if (dsFromList) {
+        openEditDataset(dsFromList);
+      } else {
+        setWizardLoading(true);
+        getDatasetWizardData(etlIdFromUrl)
+          .then((data) => {
+            if (!data.ok || !data.etlTitle) {
+              toast.error(data.error ?? "No se pudo cargar el wizard");
+              return;
+            }
+            setWizardEtlId(etlIdFromUrl);
+            setWizardEtlTitle(data.etlTitle);
+            setWizardConnections(data.connections ?? []);
+            setWizardDatasetId(null);
+            setWizardDatasetName(null);
+            setWizardDatasetConfig(null);
+          })
+          .catch(() => toast.error("Error al cargar el wizard del dataset"))
+          .finally(() => setWizardLoading(false));
+      }
+    }, [searchParams, router, openEditDataset, wizardEtlId, loading, datasets]);
 
     return null;
   }
@@ -279,7 +319,7 @@ export default function AdminDatasetsPage() {
                 </div>
               ) : (
                 <ul className="space-y-1.5 py-1">
-                  {etlOptions.map((etl) => (
+                  {etlOptions.map((etl: any) => (
                     <li key={etl.id}>
                       <button
                         type="button"
@@ -368,11 +408,15 @@ export default function AdminDatasetsPage() {
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
             <EtlMetricsClient
+              key={`${wizardEtlId}-${wizardDatasetId ?? "new"}`}
               etlId={wizardEtlId}
               etlTitle={wizardEtlTitle}
               connections={wizardConnections}
               datasetOnly
               embeddedInDatasetsModal
+              datasetId={wizardDatasetId}
+              initialDatasetName={wizardDatasetName}
+              initialDatasetConfig={wizardDatasetConfig}
               onDatasetSaved={handleDatasetSaved}
             />
           </div>
@@ -424,7 +468,7 @@ export default function AdminDatasetsPage() {
               <div className="sm:col-span-3 text-right">Acciones</div>
             </div>
             <ul className="divide-y" style={{ borderColor: "var(--platform-border)" }}>
-              {datasets.map((ds) => (
+              {datasets.map((ds: any) => (
                 <li
                   key={ds.id}
                   className="grid grid-cols-1 sm:grid-cols-12 gap-3 px-4 py-3 items-center"
@@ -445,14 +489,14 @@ export default function AdminDatasetsPage() {
                       size="sm"
                       className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
                       style={{ color: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}
-                      onClick={() => openEditDataset(ds.etl_id)}
+                      onClick={() => openEditDataset(ds)}
                       disabled={wizardLoading}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                       Editar
                     </Button>
                     <Link
-                      href={`/admin/etl/${ds.etl_id}/metrics`}
+                      href={`/admin/etl/${ds.etl_id}/metrics?datasetId=${ds.id}`}
                       className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
                       style={{ color: "var(--platform-fg-muted)", border: "1px solid var(--platform-border)" }}
                     >

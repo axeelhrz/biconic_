@@ -75,4 +75,30 @@ describe("applyCompareSpecToRows", () => {
     expect(out[0]?.v_pct_total).toBe(25);
     expect(out[1]?.v_pct_total).toBe(75);
   });
+
+  it("ytd_running: reinicia acumulado en año fiscal (inicio julio)", () => {
+    const rows = [
+      { mes: "2024-06", m: 10 },
+      { mes: "2024-07", m: 20 },
+      { mes: "2024-08", m: 30 },
+      { mes: "2025-06", m: 5 },
+      { mes: "2025-07", m: 15 },
+    ];
+    const out = applyCompareSpecToRows(
+      rows,
+      ["m"],
+      { kind: "cumulative", mode: "ytd_running", timeColumn: "mes", granularity: "month" },
+      { dimensionColumns: ["mes"], fiscalYearStartMonth: 7 }
+    );
+    const jun24 = out.find((r) => r.mes === "2024-06");
+    const jul24 = out.find((r) => r.mes === "2024-07");
+    const ago24 = out.find((r) => r.mes === "2024-08");
+    const jun25 = out.find((r) => r.mes === "2025-06");
+    const jul25 = out.find((r) => r.mes === "2025-07");
+    expect(jun24?.m_ytd_run).toBe(10);
+    expect(jul24?.m_ytd_run).toBe(20);
+    expect(ago24?.m_ytd_run).toBe(50);
+    expect(jun25?.m_ytd_run).toBe(55);
+    expect(jul25?.m_ytd_run).toBe(15);
+  });
 });

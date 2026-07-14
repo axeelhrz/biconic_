@@ -6,6 +6,7 @@ import {
   type DateGranularity,
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
+import { fiscalMonthIndex, fiscalYearFromParts } from "@/lib/dashboard/fiscalYear";
 
 const norm = (s: string) => s.replace(/\s+/g, "").toUpperCase();
 
@@ -411,13 +412,17 @@ function attachCumulativeCompare(
   granularity: DateGranularity,
   dimensionColumns: string[],
   mode: "month_vs_ytd" | "vs_prior_year_ytd" | "ytd_running",
-  parseOpts?: ParseDateLikeOptions
+  parseOpts?: ParseDateLikeOptions,
+  fiscalYearStartMonth = 1
 ): Record<string, unknown>[] {
   const timeResolved = timeColumn;
   const yearPartition = (row: Record<string, unknown>) => {
     const ym = extractYearMonthFromBucket(getRowValue(row, timeResolved), granularity, parseOpts);
-    const y = ym?.year ?? NaN;
-    return `${partitionKey(row, dimensionColumns, timeColumn)}\t${y}`;
+    const fy =
+      ym != null
+        ? fiscalYearFromParts(ym.year, ym.month1, fiscalYearStartMonth)
+        : NaN;
+    return `${partitionKey(row, dimensionColumns, timeColumn)}\t${fy}`;
   };
 
   const groups = new Map<string, Record<string, unknown>[]>();
@@ -453,12 +458,14 @@ function attachCumulativeCompare(
         const ym = extractYearMonthFromBucket(getRowValue(row, timeResolved), granularity, parseOpts);
         const pk = partitionKey(row, dimensionColumns, timeColumn);
         if (ym) {
+          const fy = fiscalYearFromParts(ym.year, ym.month1, fiscalYearStartMonth);
+          const fmi = fiscalMonthIndex(ym.month1, fiscalYearStartMonth);
           for (const alias of metricAliases) {
             const k = resolveRowColumnKey(row, alias);
             if (!k) continue;
             const ytd = perRow[k];
             if (ytd == null) continue;
-            ytdIndex.set(`${pk}\t${ym.year}\t${ym.month1}\t${k}`, ytd);
+            ytdIndex.set(`${pk}\t${fy}\t${fmi}\t${k}`, ytd);
           }
         }
       }
@@ -482,7 +489,9 @@ function attachCumulativeCompare(
         next[`${k}_pct_mes_en_ytd`] = (v / ytd) * 100;
       }
       if (mode === "vs_prior_year_ytd" && ym) {
-        const lyKey = `${pk}\t${ym.year - 1}\t${ym.month1}\t${k}`;
+        const fy = fiscalYearFromParts(ym.year, ym.month1, fiscalYearStartMonth);
+        const fmi = fiscalMonthIndex(ym.month1, fiscalYearStartMonth);
+        const lyKey = `${pk}\t${fy - 1}\t${fmi}\t${k}`;
         const ytdLy = ytdIndex.get(lyKey);
         next[`${k}_vs_ytd_ly`] = ytd != null && ytdLy != null ? ytd - ytdLy : null;
         next[`${k}_delta_pct_ytd_yoy`] = deltaPct(ytd ?? null, ytdLy ?? null);
@@ -499,6 +508,8 @@ export type ApplyCompareRowsOptions = {
   parseDateOpts?: ParseDateLikeOptions;
   /** Columnas de dimensión presentes en cada fila (orden estable). Debe incluir la columna temporal si aplica. */
   dimensionColumns: string[];
+  /** Mes de inicio del año fiscal del dashboard (1–12). */
+  fiscalYearStartMonth?: number;
 };
 
 /**
@@ -534,7 +545,8 @@ export function applyCompareSpecToRows(
       spec.granularity,
       dimCols,
       spec.mode,
-      opts.parseDateOpts
+      opts.parseDateOpts,
+      opts.fiscalYearStartMonth ?? 1
     );
   }
   if (spec.kind === "temporal") {

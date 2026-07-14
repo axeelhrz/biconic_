@@ -56,9 +56,9 @@ export default function PreferencesSettings() {
         if (notifError) throw notifError;
         if (notifData && notifData.length > 0) {
           const enabledOnes = notifData
-            .filter((r) => r.enabled)
-            .map((r) => r.type)
-            .filter((t): t is string => !!t);
+            .filter((r: any) => r.enabled)
+            .map((r: any) => r.type)
+            .filter((t: any): t is string => !!t);
           if (enabledOnes.length > 0) loadedChannels = enabledOnes;
         }
 
@@ -69,8 +69,8 @@ export default function PreferencesSettings() {
           .eq("user_Id", user.id);
         if (alertError) throw alertError;
         if (alertData && alertData.length > 0) {
-          loadedAlerts = DEFAULT_ALERTS.map((a) => {
-            const found = alertData.find((d) => d.type === a.id);
+          loadedAlerts = DEFAULT_ALERTS.map((a: any) => {
+            const found = alertData.find((d: any) => d.type === a.id);
             return found ? { ...a, enabled: !!found.enabled } : a;
           });
         }
@@ -103,7 +103,7 @@ export default function PreferencesSettings() {
 
   const toggleAlert = (id: string) => {
     setAlerts((curr) =>
-      curr.map((a) => (a.id === id ? { ...a, enabled: !a.enabled } : a))
+      curr.map((a: any) => (a.id === id ? { ...a, enabled: !a.enabled } : a))
     );
   };
 
@@ -116,7 +116,7 @@ export default function PreferencesSettings() {
       if (!user) throw new Error("Sesión expirada");
 
       // Preparar payload para notificaciones: generar todas las filas reflejando selección múltiple
-      const notifPayload = NOTIFICATION_CHANNELS.map((ch) => ({
+      const notifPayload = NOTIFICATION_CHANNELS.map((ch: any) => ({
         user_id: user.id,
         type: ch.id,
         enabled: selectedChannels.includes(ch.id),
@@ -133,7 +133,7 @@ export default function PreferencesSettings() {
       if (notifInsertError) throw notifInsertError;
 
       // Alertas upsert
-      const alertPayload = alerts.map((a) => ({
+      const alertPayload = alerts.map((a: any) => ({
         type: a.id,
         enabled: a.enabled,
         user_Id: user.id,
@@ -182,7 +182,7 @@ export default function PreferencesSettings() {
           selectedChannels={selectedChannels}
           onToggle={(id: string) => {
             setSelectedChannels((prev) =>
-              prev.includes(id) ? prev.filter((ch) => ch !== id) : [...prev, id]
+              prev.includes(id) ? prev.filter((ch: any) => ch !== id) : [...prev, id]
             );
           }}
           loading={loading}

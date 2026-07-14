@@ -24,7 +24,20 @@ import {
   getValue,
   CastTargetType
 } from "@/lib/etl/transformations";
-import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT, ETL_PREVIEW_MAX_WHEN_UNLIMITED } from "@/lib/etl/limits";
+import { ETL_MAX_ROWS_CEILING, ETL_PREVIEW_DEFAULT_LIMIT, ETL_PREVIEW_MAX_WHEN_UNLIMITED, ETL_TRANSFORM_SAMPLE_LIMIT } from "@/lib/etl/limits";
+import {
+  buildFirebirdSelectList,
+  isFirebirdColumnQueryError,
+  projectRowsToConfiguredColumns,
+} from "@/lib/etl/firebird-query-helpers";
+import { EXCEL_PHYSICAL_SCHEMA, getInternalDbUrl } from "@/lib/db/internal-db-url";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelQualifiedTableFromRows,
+} from "@/lib/excel-import/excel-metadata";
+import { connectionsSelectColumns } from "@/lib/db/connections-query";
+import { hydrateConnectionRow } from "@/lib/connection/connection-persistence";
+import { resolveFirebirdAttachOptions } from "@/lib/connection/resolve-firebird-connection";
 
 // Reuse types from run/route.ts (duplicated here for independence)
 type FilterCondition = {
@@ -148,6 +161,9 @@ type RunBody = {
   inferTypes?: boolean;
   limit?: number;
   unlimited?: boolean;
+  /** Muestra ampliada (10k) para duplicados / transformación; evita async y previewFast en JOIN. */
+  transformSample?: boolean;
+  previewFast?: boolean;
   asyncPreviewAction?: "start" | "execute";
   previewJobId?: string;
 };
@@ -179,8 +195,11 @@ export async function POST(req: NextRequest) {
     body = (await req.json()) as RunBody | null;
     if (!body) throw new Error("Cuerpo vacío");
 
+    const transformSample = body?.transformSample === true;
     const effectiveLimit =
-      body?.unlimited === true
+      transformSample
+        ? ETL_TRANSFORM_SAMPLE_LIMIT
+        : body?.unlimited === true
         ? Math.min(ETL_MAX_ROWS_CEILING, ETL_PREVIEW_MAX_WHEN_UNLIMITED)
         : Math.min(
             Number(body?.limit) || ETL_PREVIEW_DEFAULT_LIMIT,
@@ -267,9 +286,9 @@ export async function POST(req: NextRequest) {
     const sqlConditions = allConditions.filter((c: FilterCondition) => c.operator !== "not in");
     const excludeRowsRules: { column: string; excluded: string[] }[] = allConditions
       .filter((c: FilterCondition) => c.operator === "not in")
-      .map((c) => ({
+      .map((c: any) => ({
         column: (c.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim(),
-        excluded: (c.value ?? "").split(",").map((v) => v.trim()).filter(Boolean),
+        excluded: (c.value ?? "").split(",").map((v: any) => v.trim()).filter(Boolean),
       }));
     const dateFilter = body?.filter?.dateFilter ?? undefined;
 
@@ -293,9 +312,17 @@ export async function POST(req: NextRequest) {
           const { data: c } = await supabaseAdmin.from("connections").select("*").eq("id", connId).single();
           if (!c) throw new Error(`Conexión ${connId} no encontrada.`);
           if (c.type === "excel_file") {
-            const { data: meta } = await supabaseAdmin.from("data_tables").select("physical_schema_name, physical_table_name").eq("connection_id", connId).single();
-            if (!meta?.physical_table_name) throw new Error(`Sin tabla física para conexión Excel ${connId}.`);
-            return `${meta.physical_schema_name || "data_warehouse"}.${meta.physical_table_name}`;
+            const { data: metaRows } = await supabaseAdmin
+              .from("data_tables")
+              .select("physical_schema_name, physical_table_name, table_name")
+              .eq("connection_id", connId);
+            const rows = normalizeExcelDataTableRows(metaRows);
+            return resolveExcelQualifiedTableFromRows(
+              String(connId),
+              (f?.table || "").trim() || undefined,
+              rows,
+              EXCEL_PHYSICAL_SCHEMA
+            );
           }
           return (f?.table || "").trim() || "";
         };
@@ -303,10 +330,13 @@ export async function POST(req: NextRequest) {
         const rightTable = await resolveTable(right.connectionId, right.filter);
         if (!leftTable || !rightTable) throw new Error("UNION: ambas fuentes deben tener tabla.");
 
-        const { data: leftConn } = await supabaseService.from("connections").select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted").eq("id", left.connectionId).single();
-        const { data: rightConn } = await supabaseService.from("connections").select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted").eq("id", right.connectionId).single();
-        if (!leftConn) throw new Error(`Conexión izquierda ${left.connectionId} no encontrada.`);
-        if (!rightConn) throw new Error(`Conexión derecha ${right.connectionId} no encontrada.`);
+        const connCols = connectionsSelectColumns();
+        const { data: leftConnRaw } = await supabaseService.from("connections").select(connCols).eq("id", left.connectionId).single();
+        const { data: rightConnRaw } = await supabaseService.from("connections").select(connCols).eq("id", right.connectionId).single();
+        if (!leftConnRaw) throw new Error(`Conexión izquierda ${left.connectionId} no encontrada.`);
+        if (!rightConnRaw) throw new Error(`Conexión derecha ${right.connectionId} no encontrada.`);
+        const leftConn = hydrateConnectionRow(leftConnRaw as Record<string, unknown>);
+        const rightConn = hydrateConnectionRow(rightConnRaw as Record<string, unknown>);
 
         const buildPgUrl = (conn: { db_host?: string | null; db_user?: string | null; db_port?: number | null; db_name?: string | null; db_password_encrypted?: string | null }) => {
           if (!conn.db_host || !conn.db_user || !conn.db_name) throw new Error("Conexión sin host, usuario o base de datos.");
@@ -318,8 +348,7 @@ export async function POST(req: NextRequest) {
         const leftType = (leftConn.type || "").toLowerCase();
         let dbUrlUnion: string | null = null;
         if (leftType === "excel_file") {
-          dbUrlUnion = process.env.SUPABASE_DB_URL || null;
-          if (!dbUrlUnion) throw new Error("Para vista previa UNION con archivos Excel configurá la variable de entorno SUPABASE_DB_URL.");
+          dbUrlUnion = getInternalDbUrl();
         } else if (leftType === "postgres" || leftType === "postgresql") {
           dbUrlUnion = buildPgUrl(leftConn);
         }
@@ -368,28 +397,21 @@ export async function POST(req: NextRequest) {
         };
 
         const runOneFirebird = async (
-          conn: { db_host?: string | null; db_port?: number | null; db_name?: string | null; db_user?: string | null; db_password_encrypted?: string | null },
+          conn: Record<string, unknown>,
           src: typeof left,
           tableQ: string
         ): Promise<Record<string, any>[]> => {
-          let password = (conn as any).db_password_encrypted
-            ? decryptConnectionPassword((conn as any).db_password_encrypted)
-            : (conn as any).db_password ?? "";
-          if (!password) password = process.env.FLEXXUS_PASSWORD ?? process.env.DB_PASSWORD_PLACEHOLDER ?? "";
-          const fbUser = (conn as any).db_user ?? "";
-          if (!fbUser) return Promise.reject(new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión."));
+          const fbOpts = resolveFirebirdAttachOptions(hydrateConnectionRow(conn));
           const safePart = (s: string) => (/^[A-Z0-9_]+$/i.test(String(s).trim()) ? String(s).trim().toUpperCase() : `"${String(s).trim().replace(/"/g, '""')}"`);
           const tablePart = tableQ.includes(".")
             ? (tableQ.split(".").pop() || tableQ.trim()).trim().toUpperCase()
             : safePart(tableQ);
-          // Firebird con solo nombre de tabla: usar SELECT * para evitar -206 (Column unknown) por diferencias de nombre/casing
-          const cols = "*";
+          if (!tablePart) throw new Error("Nombre de tabla vacío para Firebird.");
+          const configuredColumns = src.filter?.columns;
           const rawConditions = (src.filter?.conditions || []).filter(
             (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
           );
           const { clause, params } = buildWhereClauseFirebird(rawConditions);
-          if (!tablePart) return Promise.reject(new Error("Nombre de tabla vacío para Firebird."));
-          // Interpolar parámetros; evitar punto en literales numéricos (puede causar -104 en algunos entornos Firebird)
           const escapeFbLiteral = (v: any): string => {
             if (v == null) return "NULL";
             if (typeof v === "boolean") return v ? "1" : "0";
@@ -401,47 +423,50 @@ export async function POST(req: NextRequest) {
             return `'${s.replace(/'/g, "''")}'`;
           };
           let clauseInlined = clause;
-          let idx = 0;
           for (const p of params) {
             const pos = clauseInlined.indexOf("?");
             if (pos === -1) break;
             clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
-            idx++;
           }
           const limit = effectiveLimit;
           const Firebird = require("node-firebird");
-          const opts = {
-            host: conn.db_host || "localhost",
-            port: conn.db_port ? Number(conn.db_port) : 15421,
-            database: conn.db_name,
-            user: fbUser,
-            password: password || "",
-            lowercase_keys: false,
-          };
           const PREVIEW_FIREBIRD_TIMEOUT_MS = 25000;
-          return new Promise<Record<string, any>[]>((resolve, reject) => {
-            const timeoutId = setTimeout(() => {
-              reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s)."));
-            }, PREVIEW_FIREBIRD_TIMEOUT_MS);
-            Firebird.attach(opts, (err: Error | null, db: any) => {
-              if (err) {
-                clearTimeout(timeoutId);
-                return reject(err);
-              }
-              const sql = `SELECT FIRST ${limit} ${cols} FROM ${tablePart} ${clauseInlined}`.trim();
-              db.query(sql, [], (qerr: Error | null, rows: any[]) => {
-                clearTimeout(timeoutId);
-                if (db?.detach) try { db.detach(() => {}); } catch (_) {}
-                if (qerr) return reject(qerr);
-                const normalized = (rows || []).map((row: Record<string, any>) => {
-                  const out: Record<string, any> = {};
-                  for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
-                  return out;
+          const toSane = (k: string) => k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+          const runQuery = (selectList: string) =>
+            new Promise<Record<string, any>[]>((resolve, reject) => {
+              const timeoutId = setTimeout(() => {
+                reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s)."));
+              }, PREVIEW_FIREBIRD_TIMEOUT_MS);
+              Firebird.attach(fbOpts, (err: Error | null, db: any) => {
+                if (err) {
+                  clearTimeout(timeoutId);
+                  return reject(err);
+                }
+                const sql = `SELECT FIRST ${limit} ${selectList} FROM ${tablePart} ${clauseInlined}`.trim();
+                db.query(sql, [], (qerr: Error | null, rows: any[]) => {
+                  clearTimeout(timeoutId);
+                  if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                  if (qerr) return reject(qerr);
+                  const normalized = (rows || []).map((row: Record<string, any>) => {
+                    const out: Record<string, any> = {};
+                    for (const k in row) out[toSane(k)] = row[k];
+                    return out;
+                  });
+                  resolve(normalized);
                 });
-                resolve(normalized);
               });
             });
-          });
+          const selectList = buildFirebirdSelectList(configuredColumns, safePart);
+          try {
+            const rows = await runQuery(selectList);
+            return projectRowsToConfiguredColumns(rows, configuredColumns, toSane);
+          } catch (firstErr) {
+            if (selectList !== "*" && isFirebirdColumnQueryError(firstErr)) {
+              const rows = await runQuery("*");
+              return projectRowsToConfiguredColumns(rows, configuredColumns, toSane);
+            }
+            throw firstErr;
+          }
         };
 
         const sameConnection = String(left.connectionId) === String(right.connectionId);
@@ -498,8 +523,7 @@ export async function POST(req: NextRequest) {
         if (rightType === "firebird") {
           rightRows = await runOneFirebird(rightConn, right, rightTable);
         } else if (rightType === "excel_file") {
-          const rightUrl = process.env.SUPABASE_DB_URL || "";
-          if (!rightUrl) throw new Error("Para UNION con Excel en la tabla derecha configurá SUPABASE_DB_URL.");
+          const rightUrl = getInternalDbUrl();
           const clientRight = new PgClient({ connectionString: rightUrl });
           await clientRight.connect();
           try {
@@ -550,9 +574,75 @@ export async function POST(req: NextRequest) {
             const cookieHeader = req.headers.get("cookie");
             const joinsCount = joinsWithCols.length;
             const previewTargetRows = Math.min(
-              body?.unlimited === true ? 1_500 : effectiveLimit,
-              effectiveLimit
+              transformSample ? ETL_TRANSFORM_SAMPLE_LIMIT : effectiveLimit,
+              transformSample ? ETL_TRANSFORM_SAMPLE_LIMIT : effectiveLimit
             );
+            // Vista previa rápida: materialización acotada. transformSample usa paginación completa hasta 10k.
+            const fastJoinPreview = !transformSample;
+            const starJoinPrimaryTable =
+              starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "";
+            const starJoinConditions = body.filter?.conditions || [];
+            const starJoinDateFilter = body.filter?.dateFilter ?? undefined;
+
+            const runJoinQueryOnce = async (
+              limit: number,
+              offset: number,
+              matPrefix?: string,
+            ): Promise<{ rows: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number }> => {
+              const joinQueryBody: Record<string, unknown> = {
+                primaryConnectionId: starJoin.primaryConnectionId,
+                primaryTable: starJoinPrimaryTable,
+                joins: joinsWithCols,
+                conditions: starJoinConditions,
+                dateFilter: starJoinDateFilter,
+                primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
+                limit,
+                offset,
+                previewFast: fastJoinPreview,
+                ...(transformSample ? { fromEtlRun: true } : {}),
+              };
+              if (matPrefix) {
+                joinQueryBody._materializationPrefix = matPrefix;
+                joinQueryBody._skipMaterializationCleanup = true;
+              }
+              const res = await fetch(`${origin}/api/connection/join-query`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
+                body: JSON.stringify(joinQueryBody),
+              });
+              const text = await res.text();
+              let data: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number };
+              try {
+                data = text ? JSON.parse(text) : {};
+              } catch {
+                throw new Error(
+                  `El servidor de JOIN devolvió una respuesta no JSON. Detalle: ${(text || "").slice(0, 300)}`
+                );
+              }
+              if (!res.ok || !data?.ok) {
+                const detail = (data?.error && String(data.error).trim()) || `Error del servidor (${res.status})`;
+                throw new Error(`Error en JOIN múltiple: ${detail}`);
+              }
+              if (!Array.isArray(data.rows)) {
+                throw new Error("Error en JOIN múltiple: la respuesta no incluyó filas válidas.");
+              }
+              return {
+                rows: data.rows,
+                sourceExhausted: data.sourceExhausted,
+                nextSourceOffset: data.nextSourceOffset,
+              };
+            };
+
+            if (fastJoinPreview) {
+              const data = await runJoinQueryOnce(previewTargetRows, 0);
+              yield {
+                rows: data.rows.slice(0, previewTargetRows),
+                query: `Star JOIN (vista previa · ${Math.min(data.rows.length, previewTargetRows)} filas)`,
+              };
+              return;
+            }
+
+            // Rama legacy multi-chunk (ya no se alcanza con fastJoinPreview=true).
             const microChunkSize = Math.min(
               previewTargetRows,
               joinsCount >= 10 ? 250
@@ -575,39 +665,7 @@ export async function POST(req: NextRequest) {
             try {
             while (accumulatedRows.length < previewTargetRows) {
               const chunkSize = Math.min(previewTargetRows - accumulatedRows.length, microChunkSize);
-              const joinQueryBody: Record<string, unknown> = {
-                primaryConnectionId: starJoin.primaryConnectionId,
-                primaryTable: starJoin.primaryTable || (body.filter?.table as string | undefined)?.trim() || "",
-                joins: joinsWithCols,
-                conditions: body.filter?.conditions || [],
-                dateFilter: body.filter?.dateFilter ?? undefined,
-                primaryColumns: primaryColumns.length > 0 ? primaryColumns : undefined,
-                limit: chunkSize,
-                offset: starOffset,
-                _materializationPrefix: matPrefix,
-                _skipMaterializationCleanup: true,
-              };
-              const res = await fetch(`${origin}/api/connection/join-query`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
-                body: JSON.stringify(joinQueryBody),
-              });
-              const text = await res.text();
-              let data: { ok?: boolean; error?: string; rows?: unknown[]; sourceExhausted?: boolean; nextSourceOffset?: number };
-              try {
-                data = text ? JSON.parse(text) : {};
-              } catch {
-                throw new Error(
-                  `El servidor de JOIN devolvió una respuesta no JSON. Detalle: ${(text || "").slice(0, 300)}`
-                );
-              }
-              if (!res.ok || !data?.ok) {
-                const detail = (data?.error && String(data.error).trim()) || `Error del servidor (${res.status})`;
-                throw new Error(`Error en JOIN múltiple: ${detail}`);
-              }
-              if (!Array.isArray(data.rows)) {
-                throw new Error("Error en JOIN múltiple: la respuesta no incluyó filas válidas.");
-              }
+              const data = await runJoinQueryOnce(chunkSize, starOffset, matPrefix);
               if (data.rows.length > 0) accumulatedRows.push(...data.rows);
               const sourceExhausted = data.sourceExhausted === true;
               const nextSourceOffset = typeof data.nextSourceOffset === "number"
@@ -619,7 +677,7 @@ export async function POST(req: NextRequest) {
               starOffset = nextSourceOffset;
             }
             } finally {
-              const pgUrl = process.env.SUPABASE_DB_URL;
+              const pgUrl = getInternalDbUrl();
               if (pgUrl) {
                 import("@/lib/etl/materialize-firebird").then(({ cleanupTempTables }) =>
                   cleanupTempTables(pgUrl, matTempTables).catch((e: any) => console.error("[Preview materialize cleanup]", e))
@@ -641,19 +699,21 @@ export async function POST(req: NextRequest) {
           const primaryConnId = joinConf.connectionId;
           const secondaryConnId = joinConf.secondaryConnectionId;
 
-          const { data: conn1 } = await supabaseService
+          const { data: conn1Raw } = await supabaseService
             .from("connections")
-            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+            .select(connectionsSelectColumns())
             .eq("id", primaryConnId)
             .single();
 
-          const { data: conn2 } = await supabaseService
+          const { data: conn2Raw } = await supabaseService
             .from("connections")
-            .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+            .select(connectionsSelectColumns())
             .eq("id", secondaryConnId || "")
             .single();
 
-          if (!conn1 || !conn2) return;
+          if (!conn1Raw || !conn2Raw) return;
+          const conn1 = hydrateConnectionRow(conn1Raw as Record<string, unknown>);
+          const conn2 = hydrateConnectionRow(conn2Raw as Record<string, unknown>);
 
           const conn1Type = (conn1.type || "").toLowerCase();
           const conn2Type = (conn2.type || "").toLowerCase();
@@ -667,7 +727,7 @@ export async function POST(req: NextRequest) {
               ? joinConf.joinConditions!.map((c: { leftColumn?: string; rightColumn?: string }) => ({
                   leftColumn: (c.leftColumn ?? "").trim(),
                   rightColumn: (c.rightColumn ?? "").trim(),
-                })).filter((p) => p.leftColumn || p.rightColumn)
+                })).filter((p: any) => p.leftColumn || p.rightColumn)
               : (joinConf as { leftColumn?: string; rightColumn?: string }).leftColumn != null && (joinConf as { leftColumn?: string; rightColumn?: string }).rightColumn != null
                 ? [{ leftColumn: String((joinConf as any).leftColumn ?? "").trim(), rightColumn: String((joinConf as any).rightColumn ?? "").trim() }]
                 : [];
@@ -712,7 +772,7 @@ export async function POST(req: NextRequest) {
             };
             const COMPOSITE_KEY_SEP = "\u0001";
             const compositeKey = (row: Record<string, any>, pairs: Array<{ leftColumn: string; rightColumn: string }>, useRight: boolean) =>
-              pairs.map((p) => String(getVal(row, useRight ? p.rightColumn : p.leftColumn) ?? "")).join(COMPOSITE_KEY_SEP);
+              pairs.map((p: any) => String(getVal(row, useRight ? p.rightColumn : p.leftColumn) ?? "")).join(COMPOSITE_KEY_SEP);
 
             const fetchFromConn = async (
               conn: any,
@@ -734,7 +794,7 @@ export async function POST(req: NextRequest) {
                 const fbUser = (conn as any).db_user ?? "";
                 if (!fbUser) return Promise.reject(new Error("La conexión Firebird no tiene usuario definido. Revisá la configuración de la conexión."));
                 const tablePart = tableName.includes(".") ? (tableName.split(".").pop() || tableName.trim()).trim().toUpperCase() : tableName.trim().toUpperCase();
-                const { clause, params } = buildWhereClauseFirebird(conditions.filter((c) => (c.column ?? "").trim() !== ""));
+                const { clause, params } = buildWhereClauseFirebird(conditions.filter((c: any) => (c.column ?? "").trim() !== ""));
                 const colForFb = (dateFilterOpt?.column || "").replace(/^primary\./i, "").replace(/^join_\d+\./i, "").trim();
                 const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentFirebird(dateFilterOpt?.column ? { ...dateFilterOpt, column: colForFb } : dateFilterOpt);
                 const mergedClause = dfClause ? (clause ? `${clause} AND ${dfClause}` : `WHERE ${dfClause}`) : clause;
@@ -752,7 +812,7 @@ export async function POST(req: NextRequest) {
                   clauseInlined = clauseInlined.slice(0, pos) + escapeFbLiteral(p) + clauseInlined.slice(pos + 1);
                 }
                 const Firebird = require("node-firebird");
-                const opts = { host: conn.db_host || "localhost", port: conn.db_port ?? 15421, database: conn.db_name, user: fbUser, password: password || "", lowercase_keys: false };
+                const opts = resolveFirebirdAttachOptions(conn);
                 return new Promise((resolve, reject) => {
                   const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
                   Firebird.attach(opts, (err: Error | null, db: any) => {
@@ -771,7 +831,7 @@ export async function POST(req: NextRequest) {
               const client = new PgClient({ connectionString: dbUrl });
               await client.connect();
               try {
-                const sel = columns?.length ? columns.map((c) => quoteIdent(c)).join(", ") : "*";
+                const sel = columns?.length ? columns.map((c: any) => quoteIdent(c)).join(", ") : "*";
                 const { clause: condClause, params: condParams } = buildWhereClausePg(conditions);
                 const { clause: dfClause, params: dfParams } = buildDateFilterWhereFragmentPg(dateFilterOpt, condParams.length + 1);
                 const clause = dfClause ? (condClause ? `${condClause} AND ${dfClause}` : `WHERE ${dfClause}`) : condClause;
@@ -789,7 +849,7 @@ export async function POST(req: NextRequest) {
             const canPushDownIn = dateFilterForRight && joinPairs.length === 1;
             if (canPushDownIn) {
               rightRows = await fetchFromConn(conn2, rightTable, joinConf.rightColumns, rightConditions, dateFilterForRight);
-              const rightKeys = new Set(rightRows.map((r) => compositeKey(r, joinPairs, true)));
+              const rightKeys = new Set(rightRows.map((r: any) => compositeKey(r, joinPairs, true)));
               const leftConditionsWithIn =
                 rightKeys.size > 0
                   ? [
@@ -905,7 +965,7 @@ export async function POST(req: NextRequest) {
             );
 
             // Map filter conditions (primary. -> left., join_0. -> right.)
-            const mappedConds = (sqlConditions as FilterCondition[]).map((c) => {
+            const mappedConds = (sqlConditions as FilterCondition[]).map((c: any) => {
                const col = c.column || "";
                let mapped = col.replace(/^primary\./i, "left."); // or l.
                mapped = mapped.replace(/^join_\d+\./i, "right.");   // or r.
@@ -962,7 +1022,7 @@ export async function POST(req: NextRequest) {
           try {
             const res = await supabaseService
               .from("connections")
-              .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+              .select(connectionsSelectColumns())
               .eq("id", connectionIdStr)
               .single();
             if (res.data) conn = res.data as Record<string, unknown>;
@@ -973,7 +1033,7 @@ export async function POST(req: NextRequest) {
           if (!conn) {
             const adminRes = await supabaseAdmin
               .from("connections")
-              .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted, db_password_secret_id")
+              .select(connectionsSelectColumns())
               .eq("id", connectionIdStr)
               .single();
             if (adminRes.data) conn = adminRes.data as Record<string, unknown>;
@@ -984,32 +1044,30 @@ export async function POST(req: NextRequest) {
           }
           if (connError) console.error("[Preview] Connection fetch error:", connError);
           if (!conn) throw new Error(`Conexión no encontrada: ${connectionIdStr}`);
+          conn = hydrateConnectionRow(conn);
 
         let dbUrl: string;
         let tableToQuery = body.filter?.table;
 
         if (String(conn.type ?? "") === "excel_file") {
             console.log("[Preview] Detected Excel connection. Fetching metadata...");
-            // Lógica para Excel (similar a run/route.ts)
-            const { data: meta } = await supabaseAdmin
+            const selectedExcelTable = (tableToQuery || body.filter?.table || "").trim();
+            const { data: metaRows } = await supabaseAdmin
               .from("data_tables")
-              .select("physical_schema_name, physical_table_name")
-              .eq("connection_id", String(conn.id ?? ""))
-              .single();
-            
-            console.log("[Preview] Excel metadata:", meta);
-
-            if (!meta || !meta.physical_table_name) {
-                 throw new Error(`No se encontraron metadatos de tabla física para la conexión de Excel ID ${conn.id}.`);
+              .select("physical_schema_name, physical_table_name, table_name")
+              .eq("connection_id", String(conn.id ?? ""));
+            const rows = normalizeExcelDataTableRows(metaRows);
+            if (!rows.length) {
+              throw new Error(`No se encontraron metadatos de tabla física para la conexión de Excel ID ${conn.id}.`);
             }
-            const schema = meta.physical_schema_name || "excel_imports";
-            // Sobreescribimos la tabla a consultar con la física interna
-            tableToQuery = `${schema}.${meta.physical_table_name}`;
+            tableToQuery = resolveExcelQualifiedTableFromRows(
+              String(conn.id ?? ""),
+              selectedExcelTable || undefined,
+              rows,
+              EXCEL_PHYSICAL_SCHEMA
+            );
             console.log("[Preview] Table to query:", tableToQuery);
-            
-            const internalDbUrl = process.env.SUPABASE_DB_URL;
-            if (!internalDbUrl) throw new Error("Variable de entorno SUPABASE_DB_URL no encontrada para conexión interna.");
-            dbUrl = internalDbUrl;
+            dbUrl = getInternalDbUrl();
 
         } else if (String(conn.type ?? "").toLowerCase() === "firebird") {
             // Vista previa tabla única Firebird: misma lógica segura que en UNION (solo nombre de tabla, SELECT *, WHERE inlined)
@@ -1025,8 +1083,8 @@ export async function POST(req: NextRequest) {
             const tablePart = tableToQuery.includes(".")
               ? (tableToQuery.split(".").pop() || tableToQuery.trim()).trim().toUpperCase()
               : safePart(tableToQuery);
-            // Firebird con solo nombre de tabla: usar SELECT * para evitar -206 (Column unknown)
-            const colsFirebird = "*";
+            const configuredColumns = body.filter?.columns;
+            const toSane = (k: string) => k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
             const rawConditions = (sqlConditions as FilterCondition[]).filter(
               (c: FilterCondition) => (c.column ?? "").trim() !== "" && (c.column ?? "").trim() !== "."
             );
@@ -1061,35 +1119,41 @@ export async function POST(req: NextRequest) {
             }
             const limit = effectiveLimit;
             const Firebird = require("node-firebird");
-            const fbUser = String((conn as any).db_user ?? "").trim();
-            if (!fbUser) throw new Error("La conexión Firebird no tiene usuario definido. Revisá que la conexión tenga usuario guardado. Si la creaste con usuario y contraseña, asegurate de que ENCRYPTION_KEY en el servidor sea la misma que cuando se creó.");
-            const opts = {
-              host: conn.db_host || "localhost",
-              port: conn.db_port ? Number(conn.db_port) : 15421,
-              database: conn.db_name,
-              user: fbUser,
-              password: password || "",
-              lowercase_keys: false,
-            };
-            const baseQuery = `SELECT FIRST ${limit} ${colsFirebird} FROM ${tablePart} ${clauseInlined}`.trim();
-            const rows = await new Promise<Record<string, any>[]>((resolve, reject) => {
-              const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
-              Firebird.attach(opts, (err: Error | null, db: any) => {
-                if (err) { clearTimeout(t); return reject(err); }
-                db.query(baseQuery, [], (qerr: Error | null, r: any[]) => {
-                  clearTimeout(t);
-                  if (db?.detach) try { db.detach(() => {}); } catch (_) {}
-                  if (qerr) return reject(qerr);
-                  const normalized = (r || []).map((row: Record<string, any>) => {
-                    const out: Record<string, any> = {};
-                    for (const k in row) out[k.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase()] = row[k];
-                    return out;
+            const fbOpts = resolveFirebirdAttachOptions(conn);
+            const runFbPreview = (selectList: string) =>
+              new Promise<Record<string, any>[]>((resolve, reject) => {
+                const baseQuery = `SELECT FIRST ${limit} ${selectList} FROM ${tablePart} ${clauseInlined}`.trim();
+                const t = setTimeout(() => reject(new Error("Vista previa Firebird: tiempo de espera agotado (25s).")), 25000);
+                Firebird.attach(fbOpts, (err: Error | null, db: any) => {
+                  if (err) { clearTimeout(t); return reject(err); }
+                  db.query(baseQuery, [], (qerr: Error | null, r: any[]) => {
+                    clearTimeout(t);
+                    if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                    if (qerr) return reject(qerr);
+                    const normalized = (r || []).map((row: Record<string, any>) => {
+                      const out: Record<string, any> = {};
+                      for (const k in row) out[toSane(k)] = row[k];
+                      return out;
+                    });
+                    resolve(normalized);
                   });
-                  resolve(normalized);
                 });
               });
-            });
-            if (rows.length) yield { rows, query: baseQuery };
+            const selectList = buildFirebirdSelectList(configuredColumns, safePart);
+            let rows: Record<string, any>[];
+            let queryUsed = `SELECT FIRST ${limit} ${selectList} FROM ${tablePart} ${clauseInlined}`.trim();
+            try {
+              rows = await runFbPreview(selectList);
+            } catch (firstErr) {
+              if (selectList !== "*" && isFirebirdColumnQueryError(firstErr)) {
+                queryUsed = `SELECT FIRST ${limit} * FROM ${tablePart} ${clauseInlined}`.trim();
+                rows = await runFbPreview("*");
+              } else {
+                throw firstErr;
+              }
+            }
+            rows = projectRowsToConfiguredColumns(rows, configuredColumns, toSane);
+            if (rows.length) yield { rows, query: queryUsed };
             return;
         } else {
             // Lógica para Postgres externo
@@ -1121,7 +1185,7 @@ export async function POST(req: NextRequest) {
 
             const selectList =
               columns && columns.length
-                ? columns.map((c) => quoteIdent(c)).join(", ")
+                ? columns.map((c: any) => quoteIdent(c)).join(", ")
                 : "*";
 
             const { clause: condClause, params: condParams } = buildWhereClausePg(sqlConditions);

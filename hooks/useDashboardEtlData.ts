@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { formatFetchErrorMessage } from "@/lib/fetch/abortError";
 import type { DashboardDataset, DashboardDatasetWarnings } from "@/lib/dashboard/dashboardDataset";
 import type { DatasetDimensionsMap } from "@/types/dashboard";
 
@@ -77,7 +78,7 @@ export function useDashboardEtlData(
   const [data, setData] = useState<ETLDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const REQUEST_TIMEOUT_MS = 20000;
+  const REQUEST_TIMEOUT_MS = 30_000;
 
   const fetchData = async () => {
     try {
@@ -98,7 +99,7 @@ export function useDashboardEtlData(
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const timeoutId = setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
       let response: Response;
       try {
         response = await fetch(endpoint, { signal: controller.signal });
@@ -112,12 +113,9 @@ export function useDashboardEtlData(
       }
 
       setData(result.data ?? null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error fetching ETL data:", err);
-      const msg = err?.name === "AbortError"
-        ? "La carga del dashboard tardó demasiado. Reintentá en unos segundos."
-        : err.message || "Error al cargar datos del ETL";
-      setError(msg);
+      setError(formatFetchErrorMessage(err, "La carga del dashboard tardó demasiado"));
       setData(null);
     } finally {
       setLoading(false);

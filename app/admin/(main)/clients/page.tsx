@@ -73,7 +73,7 @@ export default function AdminClientsPage() {
           className="flex items-center gap-1 rounded-xl border p-1"
           style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
         >
-          {(["todos", "activos", "inactivos"] as const).map((f) => (
+          {(["todos", "activos", "inactivos"] as const).map((f: any) => (
             <button
               key={f}
               onClick={() => setFilter(f)}

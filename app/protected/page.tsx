@@ -40,7 +40,7 @@ export default async function ProtectedPage() {
             { label: "Todos", active: true },
             { label: "Publicados", active: false },
             { label: "Borradores", active: false },
-          ].map((f) => (
+          ].map((f: any) => (
             <button
               key={f.label}
               className={`rounded-full px-3 py-1.5 text-sm ${f.active ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-700"}`}
@@ -78,7 +78,7 @@ export default async function ProtectedPage() {
 
       {/* Grid of dashboard cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {dashboards.map((d) => (
+        {dashboards.map((d: any) => (
           <div key={d.id} className="rounded-xl border bg-white overflow-hidden">
             <div className="aspect-[16/10] bg-gray-100">
               {/* Thumbnail placeholder; replace with real screenshot */}

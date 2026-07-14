@@ -4,6 +4,69 @@ import {
   matchSqlKeywordAt,
   skipWsSql,
 } from "@/lib/dashboard/caseSqlBranchScan";
+import { looksLikeDateFieldName } from "@/lib/dashboard/isDashboardFilterDateField";
+import { safeDateCast } from "@/lib/dashboard/sqlDateCast";
+
+export type CoerceSqlExprOptions = {
+  slashOrder?: "DMY" | "MDY";
+  dateFields?: Iterable<string>;
+};
+
+function quotedColumnName(s: string): string | null {
+  const m = s.trim().match(/^"([^"]+)"$/);
+  return m ? m[1]! : null;
+}
+
+function resolveCoerceOptions(options?: CoerceSqlExprOptions): { slashOrder: "DMY" | "MDY"; dateFields: Set<string> } {
+  const dateFields = new Set<string>();
+  for (const f of options?.dateFields ?? []) {
+    const k = String(f ?? "").trim().toLowerCase();
+    if (k) dateFields.add(k);
+  }
+  return {
+    slashOrder: options?.slashOrder === "MDY" ? "MDY" : "DMY",
+    dateFields,
+  };
+}
+
+function isDateColumnName(name: string, dateFields: Set<string>): boolean {
+  const k = name.toLowerCase();
+  if (dateFields.has(k)) return true;
+  return looksLikeDateFieldName(name);
+}
+
+function isDateSqlExpr(s: string, opts: { slashOrder: "DMY" | "MDY"; dateFields: Set<string> }): boolean {
+  const t = s.trim();
+  if (/^CURRENT_DATE$/i.test(t)) return true;
+  if (/^CURRENT_TIMESTAMP$/i.test(t)) return true;
+  const col = quotedColumnName(t);
+  if (col && isDateColumnName(col, opts.dateFields)) return true;
+  if (t.includes("to_date(") || t.includes("::timestamp::date") || /\bDATE_TRUNC\s*\(\s*'month'/i.test(t)) {
+    return true;
+  }
+  if (t.startsWith("(") && findMatchingCloseParen(t, 0) === t.length - 1) {
+    return isDateSqlExpr(t.slice(1, -1), opts);
+  }
+  return false;
+}
+
+function coerceOperandSqlExpr(s: string, opts: { slashOrder: "DMY" | "MDY"; dateFields: Set<string> }): string {
+  const t = s.trim();
+  if (!t) return t;
+
+  while (t.startsWith("(") && findMatchingCloseParen(t, 0) === t.length - 1) {
+    const inner = t.slice(1, -1).trim();
+    if (isDateSqlExpr(inner, opts)) return `(${coerceOperandSqlExpr(inner, opts)})`;
+    break;
+  }
+
+  const col = quotedColumnName(t);
+  if (col && isDateColumnName(col, opts.dateFields)) {
+    return safeDateCast(t, opts.slashOrder);
+  }
+
+  return coerceNumericSqlExpr(t, opts);
+}
 
 /** Cast a numérico que devuelve NULL si el valor no es un número válido (evita "invalid input syntax for type numeric"). */
 export function safeNumericCast(expr: string): string {
@@ -176,7 +239,7 @@ function splitMultiplicativeSql(s: string): { left: string; op: string; right: s
   return { left: s.slice(0, last).trim(), op, right: s.slice(last + 1).trim() };
 }
 
-function tryCoerceNumericFuncCall(s: string): string | null {
+function tryCoerceNumericFuncCall(s: string, opts: { slashOrder: "DMY" | "MDY"; dateFields: Set<string> }): string | null {
   const t = s.trim();
   const m = t.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
   if (!m || m.index === undefined) return null;
@@ -187,11 +250,11 @@ function tryCoerceNumericFuncCall(s: string): string | null {
   if (closeIdx === -1 || closeIdx !== t.length - 1) return null;
   const inner = t.slice(openIdx + 1, closeIdx).trim();
   const args = splitCommaArgsDepthZero(inner);
-  const coerced = args.map((a) => coerceNumericSqlExpr(a.trim()));
+  const coerced = args.map((a) => coerceNumericSqlExpr(a.trim(), opts));
   return `${name}(${coerced.join(", ")})`;
 }
 
-function tryCoerceCaseWhenSql(s: string): string | null {
+function tryCoerceCaseWhenSql(s: string, opts: { slashOrder: "DMY" | "MDY"; dateFields: Set<string> }): string | null {
   let t = s.trim();
   while (t.startsWith("(") && findMatchingCloseParen(t, 0) === t.length - 1) {
     t = t.slice(1, -1).trim();
@@ -211,7 +274,7 @@ function tryCoerceCaseWhenSql(s: string): string | null {
       const boundary = findThenBranchBoundary(t, afterThen);
       if (boundary === -1) return null;
       const thenVal = t.slice(afterThen, boundary).trim();
-      parts.push(`WHEN ${cond} THEN ${coerceNumericSqlExpr(thenVal)}`);
+      parts.push(`WHEN ${cond} THEN ${coerceNumericSqlExpr(thenVal, opts)}`);
       i = boundary;
       continue;
     }
@@ -220,7 +283,7 @@ function tryCoerceCaseWhenSql(s: string): string | null {
       const endIdx = findElseBranchClosingEnd(t, afterElse);
       if (endIdx === -1) return null;
       const elseVal = t.slice(afterElse, endIdx).trim();
-      parts.push(`ELSE ${coerceNumericSqlExpr(elseVal)}`);
+      parts.push(`ELSE ${coerceNumericSqlExpr(elseVal, opts)}`);
       parts.push(t.slice(endIdx).trim());
       return parts.join(" ");
     }
@@ -236,7 +299,10 @@ function tryCoerceCaseWhenSql(s: string): string | null {
  * Tras expressionToSql: envuelve columnas citadas que participan en aritmética (y args numéricos de SUM/AVG/…) con safeNumericCast.
  * Evita el error Postgres «operator does not exist: text * text» sin castear condiciones WHEN de CASE.
  */
-function coerceNumericSqlExpr(s: string): string {
+function coerceNumericSqlExpr(
+  s: string,
+  opts: { slashOrder: "DMY" | "MDY"; dateFields: Set<string> } = { slashOrder: "DMY", dateFields: new Set() }
+): string {
   let t = s.trim();
   if (!t) return t;
 
@@ -244,7 +310,13 @@ function coerceNumericSqlExpr(s: string): string {
     t = t.slice(1, -1).trim();
   }
 
-  if (/^"[^"]+"$/.test(t)) return safeNumericCast(t);
+  if (/^"[^"]+"$/.test(t)) {
+    const col = quotedColumnName(t);
+    if (col && isDateColumnName(col, opts.dateFields)) {
+      return safeDateCast(t, opts.slashOrder);
+    }
+    return safeNumericCast(t);
+  }
 
   if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(t)) return t;
 
@@ -252,21 +324,28 @@ function coerceNumericSqlExpr(s: string): string {
 
   if (t.startsWith("'")) return t;
 
-  const caseSql = tryCoerceCaseWhenSql(t);
+  if (isDateSqlExpr(t, opts)) return t;
+
+  const caseSql = tryCoerceCaseWhenSql(t, opts);
   if (caseSql !== null) return caseSql;
 
-  const fnSql = tryCoerceNumericFuncCall(t);
+  const fnSql = tryCoerceNumericFuncCall(t, opts);
   if (fnSql !== null) return fnSql;
 
   const add = splitAdditiveSql(t);
-  if (add) return `${coerceNumericSqlExpr(add.left)} ${add.op} ${coerceNumericSqlExpr(add.right)}`;
+  if (add) {
+    if (add.op === "-" && isDateSqlExpr(add.left, opts) && isDateSqlExpr(add.right, opts)) {
+      return `(${coerceOperandSqlExpr(add.left, opts)} - ${coerceOperandSqlExpr(add.right, opts)})`;
+    }
+    return `${coerceNumericSqlExpr(add.left, opts)} ${add.op} ${coerceNumericSqlExpr(add.right, opts)}`;
+  }
 
   const mul = splitMultiplicativeSql(t);
-  if (mul) return `${coerceNumericSqlExpr(mul.left)} ${mul.op} ${coerceNumericSqlExpr(mul.right)}`;
+  if (mul) return `${coerceNumericSqlExpr(mul.left, opts)} ${mul.op} ${coerceNumericSqlExpr(mul.right, opts)}`;
 
   return t;
 }
 
-export function coerceArithmeticOperandsToNumeric(sql: string): string {
-  return coerceNumericSqlExpr(sql.trim());
+export function coerceArithmeticOperandsToNumeric(sql: string, options?: CoerceSqlExprOptions): string {
+  return coerceNumericSqlExpr(sql.trim(), resolveCoerceOptions(options));
 }

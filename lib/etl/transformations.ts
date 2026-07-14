@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import { parseDateLike } from "@/lib/dashboard/dateFormatting";
 
 // ===================================================================
 // TIPOS Y DEFINICIONES (Copiados/Adaptados de run/route.ts)
@@ -106,8 +107,7 @@ export function parseDateWithPattern(value: string, pattern?: string): Date | nu
   const s = (value ?? "").toString().trim();
   if (!s) return null;
   if (!pattern) {
-    const d = new Date(s);
-    return isNaN(d.getTime()) ? null : d;
+    return parseDateLike(s, { slashDateOrder: "DMY" });
   }
   const { regex, groups } = buildRegexFromPattern(pattern);
   const m = s.match(regex);
@@ -209,7 +209,7 @@ function inferSingleColumnType(values: any[]): CastTargetType {
       if (n % 1 !== 0) allInteger = false;
     }
     const str = String(v).trim();
-    if (DATE_PATTERNS.some((p) => p.test(str)) || !isNaN(Date.parse(str)))
+    if (parseDateLike(v, { slashDateOrder: "DMY" }) || DATE_PATTERNS.some((p) => p.test(str)))
       dateLike++;
   }
   if (allBoolean && values.length > 0) return "boolean";
@@ -356,15 +356,20 @@ function isNullLike(value: any, patterns: string[]): boolean {
   });
 }
 
-/** Resuelve el nombre de columna (payload) a la clave real en la fila (p. ej. primary_id, join_0_name o id en distinto casing). */
+/** Resuelve el nombre de columna (payload) a la clave real en la fila (p. ej. primary.col → primary_col, join_0.name → join_0_name). */
 function getKeyInRow(row: Record<string, any>, colName: string): string | undefined {
   if (colName in row) return colName;
+  const underscored = colName.replace(/\./g, "_");
+  if (underscored in row) return underscored;
   const keys = Object.keys(row);
   const colLower = colName.toLowerCase();
   const exact = keys.find((k) => k.toLowerCase() === colLower);
   if (exact) return exact;
+  const underscoredLower = underscored.toLowerCase();
+  const underscoredMatch = keys.find((k) => k.toLowerCase() === underscoredLower);
+  if (underscoredMatch) return underscoredMatch;
   const withPrefix = keys.find(
-    (k) => k.toLowerCase().endsWith("_" + colLower) || k === colName.replace(/\./g, "_")
+    (k) => k.toLowerCase().endsWith("_" + colLower) || k === underscored
   );
   return withPrefix;
 }
@@ -542,18 +547,16 @@ export function applyCastConversions(
             break;
           }
           case "date": {
-            const d = parseDateWithPattern(
-              String(v ?? ""),
-              cv.inputFormat || undefined
-            );
+            const d = cv.inputFormat
+              ? parseDateWithPattern(String(v ?? ""), cv.inputFormat)
+              : parseDateLike(v);
             out[key] = d ? `${d.toISOString().slice(0, 10)}` : null;
             break;
           }
           case "datetime": {
-            const d = parseDateWithPattern(
-              String(v ?? ""),
-              cv.inputFormat || undefined
-            );
+            const d = cv.inputFormat
+              ? parseDateWithPattern(String(v ?? ""), cv.inputFormat)
+              : parseDateLike(v);
             out[key] = d ? d.toISOString() : null;
             break;
           }

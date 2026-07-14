@@ -60,7 +60,7 @@ export default function AdminMonitorsPage() {
           className="flex items-center gap-1 rounded-xl border p-1"
           style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
         >
-          {(["all", "completed", "failed", "started"] as const).map((f) => {
+          {(["all", "completed", "failed", "started"] as const).map((f: any) => {
             const label = f === "all" ? "Todos" : f === "completed" ? "Exitosos" : f === "failed" ? "Fallidos" : "En curso";
             return (
               <button

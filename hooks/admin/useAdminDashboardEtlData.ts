@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { safeJsonResponse } from "@/lib/safe-json-response";
+import { formatFetchErrorMessage } from "@/lib/fetch/abortError";
 import type {
   DashboardDataset,
   DashboardDatasetWarnings,
@@ -47,17 +48,25 @@ export function useAdminDashboardEtlData(
   const [data, setData] = useState<ETLDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const REQUEST_TIMEOUT_MS = 30_000;
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   const fetchData = async () => {
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
     try {
       setLoading(true);
       setError(null);
 
-      // Admin always uses the main editor endpoint for now
-      // If admin needs a specific endpoint later, we change it here.
       const endpoint = `/api/dashboard/${dashboardId}/etl-data`;
-
-      const response = await fetch(endpoint);
+      const timeoutId = setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
+      let response: Response;
+      try {
+        response = await fetch(endpoint, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
       const result = await safeJsonResponse<{ data?: ETLDataResponse | null }>(response);
 
       if (!response.ok || !result.ok) {
@@ -65,19 +74,25 @@ export function useAdminDashboardEtlData(
       }
 
       setData(result.data ?? null);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      if (fetchAbortRef.current !== controller) return;
       console.error("Error fetching ETL data:", err);
-      setError(err.message || "Error al cargar datos del ETL");
+      setError(formatFetchErrorMessage(err, "La carga del dashboard tardó demasiado"));
       setData(null);
     } finally {
-      setLoading(false);
+      if (fetchAbortRef.current === controller) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     if (dashboardId) {
-      fetchData();
+      void fetchData();
     }
+    return () => {
+      fetchAbortRef.current?.abort();
+    };
   }, [dashboardId]);
 
   return {

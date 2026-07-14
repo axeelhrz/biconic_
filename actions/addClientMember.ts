@@ -1,80 +1,53 @@
 "use server";
 
-/**
- * Invoca la Edge Function `add-client-member` en Supabase.
- *
- * Contrato esperado (validar en el código de la función en el proyecto Supabase):
- * - Crear usuario Auth y fila en `profiles` con `app_role = 'VIEWER'` (usuario final).
- * - Insertar `client_members` con `client_id = existingClientId`, enlace al `user_id`
- *   creado y `is_active` coherente con el alta.
- * Sin esto, el middleware enviará al usuario a `/viewer` pero no verá datos de empresa.
- */
-// Server Action to invoke the Supabase Edge Function `add-client-member`.
-// Authorizes user, calls the function with the provided payload, and returns a
-// consistent Spanish response shape.
+import { getBackendApiUrl } from "@/lib/api/backend-config";
+import { normalizeClientRole } from "@/lib/admin/client-members-repository";
+import { getServerAuthUser } from "@/lib/supabase/server-backend";
 
 export interface AddClientMemberInput {
-  existingClientId: string; // UUID del cliente existente (empresa)
+  existingClientId: string;
   userEmail: string;
   userPassword: string;
   userFullName?: string;
-  userJobTitle?: string; // puede mapearse desde 'role'
+  userJobTitle?: string;
+  role?: string;
 }
 
 export async function addClientMember(input: AddClientMemberInput) {
   try {
-    const supabase = await (
-      await import("@/lib/supabase/server")
-    ).createClient();
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getServerAuthUser();
     if (!user) return { ok: false, error: "No autorizado" } as const;
 
-    const payload = {
-      existingClientId: input.existingClientId,
-      userEmail: input.userEmail,
-      userPassword: input.userPassword,
-      userFullName: input.userFullName,
-      userJobTitle: input.userJobTitle,
-    };
-
-    const { data, error } = await supabase.functions.invoke(
-      "add-client-member",
-      { body: payload }
-    );
-
-    if (error) {
-      console.error("Function Invoke Error (addClientMember):", error);
-      
-      let message = error.message || "No se pudo crear el miembro";
-      let details = "";
-      let code = "";
-
-      const context = (error as any).context;
-      if (context && typeof context.json === 'function') {
-        try {
-          const errorBody = await context.json();
-          message = errorBody.error || message;
-          details = errorBody.details || "";
-          code = errorBody.code || "";
-        } catch (jsonErr) {
-          console.error("Failed to parse edge function error response:", jsonErr);
-        }
-      }
-
+    const apiUrl = getBackendApiUrl();
+    const cookieStore = await (await import("next/headers")).cookies();
+    const role = normalizeClientRole(input.role ?? input.userJobTitle);
+    const res = await fetch(`${apiUrl}/admin/members`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        cookie: cookieStore.toString(),
+      },
+      body: JSON.stringify({
+        clientId: input.existingClientId,
+        email: input.userEmail,
+        password: input.userPassword,
+        fullName: input.userFullName,
+        role,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
       return {
         ok: false,
-        error: message,
-        details,
-        code,
+        error: data?.message ?? data?.error ?? "No se pudo crear el miembro",
       } as const;
     }
-
-    return { ok: true, userId: (data as any)?.userId } as const;
-  } catch (err: any) {
+    return { ok: true, userId: data?.userId } as const;
+  } catch (err: unknown) {
     console.error("Error en addClientMember:", err);
-    return { ok: false, error: err?.message ?? "Error interno" } as const;
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Error interno",
+    } as const;
   }
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
@@ -16,7 +17,8 @@ interface ImportStatusData {
 }
 
 type ImportStatusProps = {
-  dataTableId: string;
+  dataTableId?: string;
+  connectionId?: string;
   onProcessFinished: (result: {
     status: "completed" | "failed";
     errorMessage?: string | null;
@@ -28,6 +30,7 @@ type ImportStatusProps = {
 
 export default function ImportStatus({
   dataTableId,
+  connectionId,
   onProcessFinished,
   compact = false,
   importStartedAt,
@@ -40,23 +43,50 @@ export default function ImportStatus({
   );
 
   useEffect(() => {
-    if (!dataTableId) return;
+    if (!dataTableId && !connectionId) return;
     startedAt.current = importStartedAt
       ? new Date(importStartedAt).getTime()
       : Date.now();
 
-    const supabase = createClient();
-
     const pollStatus = async () => {
-      const { data, error } = await supabase
-        .from("data_tables")
-        .select("import_status, total_rows, error_message, physical_table_name")
-        .eq("id", dataTableId)
-        .single();
+      let data: ImportStatusData | null = null;
 
-      if (error) {
-        console.error("[Polling] Error al buscar el estado:", error);
-        return;
+      if (isOwnBackendEnabled()) {
+        const statusQuery = connectionId
+          ? `connectionId=${encodeURIComponent(connectionId)}`
+          : `dataTableId=${encodeURIComponent(dataTableId!)}`;
+        let res = await fetch(`/api/process-excel/status?${statusQuery}`, {
+          credentials: "include",
+        });
+        if (res.status === 401) {
+          const refresh = await fetch("/api/auth/refresh", {
+            method: "POST",
+            credentials: "include",
+          });
+          if (refresh.ok) {
+            res = await fetch(`/api/process-excel/status?${statusQuery}`, {
+              credentials: "include",
+            });
+          }
+        }
+        if (!res.ok) {
+          console.error("[Polling] Error al buscar el estado:", res.status);
+          return;
+        }
+        data = await safeJsonResponse<ImportStatusData>(res);
+      } else if (dataTableId) {
+        const supabase = createClient();
+        const { data: row, error } = await supabase
+          .from("data_tables")
+          .select("import_status, total_rows, error_message, physical_table_name")
+          .eq("id", dataTableId)
+          .single();
+
+        if (error) {
+          console.error("[Polling] Error al buscar el estado:", error);
+          return;
+        }
+        data = row as ImportStatusData | null;
       }
 
       if (data) {
@@ -64,7 +94,8 @@ export default function ImportStatus({
 
         switch (data.import_status) {
           case "downloading_file": setProgress(10); break;
-          case "creating_table": setProgress(30); break;
+          case "reading_workbook": setProgress(25); break;
+          case "creating_table": setProgress(35); break;
           case "inserting_rows": setProgress(60); break;
           case "processing":
             // En importación resumible evitamos "retroceder" visualmente cuando se re-encola el siguiente tramo.
@@ -135,7 +166,7 @@ export default function ImportStatus({
     return () => {
       if (intervalId.current) clearInterval(intervalId.current);
     };
-  }, [dataTableId, onProcessFinished, compact, importStartedAt]);
+  }, [dataTableId, connectionId, onProcessFinished, compact, importStartedAt]);
 
   const getStatusMessage = () => {
     if (!status) return "Iniciando...";
@@ -147,9 +178,11 @@ export default function ImportStatus({
           ? `Reanudando importación... (${status.total_rows} procesadas)`
           : "Preparando...";
       case "downloading_file":
-        return "Descargando archivo...";
+        return "Descargando archivo desde almacenamiento...";
+      case "reading_workbook":
+        return "Leyendo estructura del Excel (archivos grandes pueden tardar 1–3 min)...";
       case "creating_table":
-        return "Preparando importación...";
+        return "Preparando tabla de destino...";
       case "inserting_rows":
         return compact 
             ? `${status.total_rows || 0} filas` 

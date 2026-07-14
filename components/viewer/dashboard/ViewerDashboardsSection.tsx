@@ -89,7 +89,7 @@ export default function ViewerDashboardsSection() {
 
   return (
     <div
-      className="flex flex-col box-border w-full max-w-[1390px] px-10 py-8 mx-auto border rounded-[30px] gap-4"
+      className="mx-auto box-border flex w-full max-w-[1390px] flex-col gap-4 rounded-2xl border px-4 py-6 sm:rounded-[30px] sm:px-10 sm:py-8"
       style={{
         background: "var(--platform-bg-elevated)",
         borderColor: "var(--platform-border)",
@@ -159,7 +159,7 @@ export default function ViewerDashboardsSection() {
               <section
                 key={sectionId}
                 id={sectionId}
-                className={`scroll-mt-28 rounded-2xl border border-transparent p-1 -m-1 transition-shadow ${
+                className={`scroll-mt-24 rounded-2xl border border-transparent p-1 -m-1 transition-shadow sm:scroll-mt-28 ${
                   isHighlighted
                     ? "border-[var(--platform-accent)]/30 shadow-[0_0_0_3px_rgba(35,227,180,0.15)]"
                     : ""

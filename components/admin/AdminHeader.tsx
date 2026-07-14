@@ -93,7 +93,7 @@ export default function AdminHeader() {
         const { createClient } = await import("@/lib/supabase/client");
         const supabase = createClient();
         const { data: sub } = supabase.auth.onAuthStateChange(
-          (event, _session) => {
+          (event: any, _session: any) => {
             if (!mounted) return;
             // No recargar al volver a la pestaña (TOKEN_REFRESHED); solo en cambio real de sesión
             if (event === "TOKEN_REFRESHED") return;
@@ -146,7 +146,7 @@ export default function AdminHeader() {
 
       {/* Navegación */}
       <nav className="flex items-center gap-5">
-        {navLinks.map((link) => {
+        {navLinks.map((link: any) => {
           const baseClasses =
             "px-4 py-2 text-sm font-normal rounded-full transition-colors duration-300 flex items-center gap-1 cursor-pointer";
           const activeClasses =
@@ -155,7 +155,7 @@ export default function AdminHeader() {
             "text-[var(--platform-fg-muted)] hover:text-[var(--platform-accent)] hover:bg-[var(--platform-accent-dim)]";
 
           if (link.children) {
-            const isChildActive = link.children.some((child) =>
+            const isChildActive = link.children.some((child: any) =>
               pathname.startsWith(child.href)
             );
             return (
@@ -176,7 +176,7 @@ export default function AdminHeader() {
                     borderColor: "var(--platform-border)",
                   }}
                 >
-                  {link.children.map((child) => (
+                  {link.children.map((child: any) => (
                     <DropdownMenuItem key={child.href} asChild>
                       <Link
                         href={child.href}

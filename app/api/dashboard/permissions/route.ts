@@ -97,7 +97,7 @@ export async function GET(req: Request) {
 
   // Fetch related client_members
   const clientMemberIds = Array.from(
-    new Set(perms.map((p) => p.client_member_id).filter(Boolean))
+    new Set(perms.map((p: any) => p.client_member_id).filter(Boolean))
   ) as string[];
   const { data: members, error: membersErr } = await supabase
     .from("client_members")
@@ -112,7 +112,7 @@ export async function GET(req: Request) {
   }
 
   const userIds = Array.from(
-    new Set((members ?? []).map((m) => m.user_id).filter(Boolean))
+    new Set((members ?? []).map((m: any) => m.user_id).filter(Boolean))
   ) as string[];
   const { data: profiles, error: profilesErr } = await supabase
     .from("profiles")
@@ -126,10 +126,10 @@ export async function GET(req: Request) {
     );
   }
 
-  const memberById = new Map((members ?? []).map((m) => [m.id, m]));
-  const profileById = new Map((profiles ?? []).map((p) => [p.id, p]));
+  const memberById = new Map<string, any>((members ?? []).map((m: any) => [m.id, m]));
+  const profileById = new Map<string, any>((profiles ?? []).map((p: any) => [p.id, p]));
 
-  const result = perms.map((p) => {
+  const result = perms.map((p: any) => {
     const member = memberById.get(p.client_member_id as string);
     const profile = member
       ? profileById.get(member.user_id as string)

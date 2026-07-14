@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { createClient } from "@/lib/supabase/server";
-import { createServiceRoleClient } from "@/lib/supabase/service";
 import postgres from "postgres";
 
 async function resolveEtlTable(
@@ -109,8 +109,8 @@ async function fetchDistinctFromEtlOutputViaPostgres(
   column: string,
   dateLevel?: DateLevel
 ): Promise<{ values: string[]; error?: string }> {
-  const dbUrl = process.env.SUPABASE_DB_URL;
-  if (!dbUrl) return { values: [], error: "SUPABASE_DB_URL no configurado" };
+  const dbUrl = getInternalDbUrl();
+  if (!dbUrl) return { values: [], error: "DATABASE_URL no configurado" };
   const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
   const safeColumn = column.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "id";
   const colRef = `"${safeColumn}"`;
@@ -140,8 +140,8 @@ async function fetchDistinctViaPostgres(
   column: string,
   dateLevel: DateLevel
 ): Promise<{ values: string[]; error?: string }> {
-  const dbUrl = process.env.SUPABASE_DB_URL;
-  if (!dbUrl) return { values: [], error: "SUPABASE_DB_URL no configurado" };
+  const dbUrl = getInternalDbUrl();
+  if (!dbUrl) return { values: [], error: "DATABASE_URL no configurado" };
   const safeSchema = schema.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "public";
   const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
   const safeColumn = column.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "id";
@@ -216,14 +216,14 @@ export async function GET(
     let values: string[];
 
     // El esquema etl_output suele no tener permisos vía API Supabase (permission denied).
-    // Usamos la misma vía que la previsualización del dataset: Postgres directo con SUPABASE_DB_URL.
-    if (resolved.schema === "etl_output" && process.env.SUPABASE_DB_URL) {
+    // Usamos la misma vía que la previsualización del dataset: Postgres directo con DATABASE_URL.
+    if (resolved.schema === "etl_output" && getInternalDbUrl()) {
       const result = await fetchDistinctFromEtlOutputViaPostgres(resolved.tableName, column, dateLevel);
       if (result.error) {
         return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
       }
       values = result.values;
-    } else if (dateLevel && process.env.SUPABASE_DB_URL) {
+    } else if (dateLevel && getInternalDbUrl()) {
       // Con dateLevel usamos Postgres para poder aplicar la expresión de agregación
       const result = await fetchDistinctViaPostgres(resolved.schema, resolved.tableName, column, dateLevel);
       if (result.error) {
@@ -231,24 +231,41 @@ export async function GET(
       }
       values = result.values;
     } else {
-      if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      const dbUrl = getInternalDbUrl();
+      if (!dbUrl) {
         return NextResponse.json(
-          { ok: false, error: "Servidor sin SUPABASE_SERVICE_ROLE_KEY. Configurá la variable para leer tablas del ETL." },
+          { ok: false, error: "DATABASE_URL no configurado" },
           { status: 503 }
         );
       }
-      const schemaClient = createServiceRoleClient().schema(resolved.schema as "public" | "etl_output") as any;
-      const { data: rows, error } = await schemaClient
-        .from(resolved.tableName)
-        .select(column)
-        .limit(MAX_ROWS);
-
-      if (error) {
-        return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      const safeSchema =
+        resolved.schema.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "public";
+      const safeTable =
+        resolved.tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
+      const safeColumn = column.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "id";
+      const sql = postgres(dbUrl);
+      try {
+        const rows = await sql.unsafe(
+          `SELECT DISTINCT "${safeColumn}" AS val FROM "${safeSchema}"."${safeTable}" WHERE "${safeColumn}" IS NOT NULL AND trim("${safeColumn}"::text) != '' LIMIT ${MAX_ROWS}`
+        );
+        await sql.end();
+        const raw = Array.isArray(rows) ? rows : [];
+        values = [
+          ...new Set(
+            raw.map((r: { val?: unknown }) => String(r?.val ?? "").trim()).filter(Boolean)
+          ),
+        ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      } catch (err: unknown) {
+        try {
+          await sql.end();
+        } catch {
+          /* ignore */
+        }
+        return NextResponse.json(
+          { ok: false, error: err instanceof Error ? err.message : String(err) },
+          { status: 500 }
+        );
       }
-
-      const raw = (rows ?? []) as Record<string, unknown>[];
-      values = [...new Set(raw.map((r) => r[column]).filter((v) => v != null && v !== "").map((v) => String(v)))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     }
 
     return NextResponse.json({

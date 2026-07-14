@@ -88,47 +88,59 @@ function isArFeatureCollection(value: unknown): value is ArFeatureCollection {
   return v.type === "FeatureCollection" && Array.isArray(v.features);
 }
 
+const MAX_MAP_ROWS = 500;
+
+let arProvinceGeoJsonPromise: Promise<ArFeatureCollection> | null = null;
+
 async function fetchArProvinceGeoJson(): Promise<ArFeatureCollection> {
-  const sources = [AR_GEOJSON_PATH, AR_GEOJSON_API_PATH];
-  let lastStatus: number | undefined;
-  for (const url of sources) {
-    try {
-      const response = await fetch(url);
-      lastStatus = response.status;
-      if (!response.ok) continue;
-      const json: unknown = await response.json();
-      if (isArFeatureCollection(json)) return json;
-    } catch {
-      // try next source
-    }
+  if (!arProvinceGeoJsonPromise) {
+    arProvinceGeoJsonPromise = (async () => {
+      const sources = [AR_GEOJSON_PATH, AR_GEOJSON_API_PATH];
+      let lastStatus: number | undefined;
+      for (const url of sources) {
+        try {
+          const response = await fetch(url);
+          lastStatus = response.status;
+          if (!response.ok) continue;
+          const json: unknown = await response.json();
+          if (isArFeatureCollection(json)) return json;
+        } catch {
+          // try next source
+        }
+      }
+      arProvinceGeoJsonPromise = null;
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[DashboardMapWidget] No se pudo cargar GeoJSON de provincias", { lastStatus, sources });
+      }
+      throw new Error("ar-geo-load-failed");
+    })();
   }
-  if (process.env.NODE_ENV === "development") {
-    console.warn("[DashboardMapWidget] No se pudo cargar GeoJSON de provincias", { lastStatus, sources });
-  }
-  throw new Error("ar-geo-load-failed");
+  return arProvinceGeoJsonPromise;
 }
 
 function FitBounds({ points }: { points: [number, number][] }) {
   const map = useMap();
-  if (points.length === 0) return null;
-  const valid = points.filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
-  if (valid.length === 0) return null;
-  const lats = valid.map(([lat]) => lat);
-  const lons = valid.map(([, lon]) => lon);
-  const pad = 0.1;
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLon = Math.min(...lons);
-  const maxLon = Math.max(...lons);
-  const dLat = (maxLat - minLat) || 0.5;
-  const dLon = (maxLon - minLon) || 0.5;
-  map.fitBounds(
-    [
-      [minLat - dLat * pad, minLon - dLon * pad],
-      [maxLat + dLat * pad, maxLon + dLon * pad],
-    ],
-    { maxZoom: 14, padding: [20, 20] }
-  );
+  useEffect(() => {
+    if (points.length === 0) return;
+    const valid = points.filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
+    if (valid.length === 0) return;
+    const lats = valid.map(([lat]) => lat);
+    const lons = valid.map(([, lon]) => lon);
+    const pad = 0.1;
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLon = Math.min(...lons);
+    const maxLon = Math.max(...lons);
+    const dLat = (maxLat - minLat) || 0.5;
+    const dLon = (maxLon - minLon) || 0.5;
+    map.fitBounds(
+      [
+        [minLat - dLat * pad, minLon - dLon * pad],
+        [maxLat + dLat * pad, maxLon + dLon * pad],
+      ],
+      { maxZoom: 14, padding: [20, 20] }
+    );
+  }, [map, points]);
   return null;
 }
 
@@ -493,7 +505,8 @@ export function DashboardMapWidget({
   }, [argentinaMode]);
 
   const { markers, valueKey, unresolvedCount, provinceSums, provinceMetricBags, provinceMatchRows } = useMemo(() => {
-    if (!Array.isArray(rows) || rows.length === 0) {
+    const cappedRows = Array.isArray(rows) ? rows.slice(0, MAX_MAP_ROWS) : [];
+    if (cappedRows.length === 0) {
       return {
         markers: [] as Array<{
           lat: number;
@@ -510,7 +523,7 @@ export function DashboardMapWidget({
         provinceMatchRows: 0,
       };
     }
-    const first = rows[0] as Record<string, unknown>;
+    const first = cappedRows[0] as Record<string, unknown>;
     const keys = Object.keys(first);
 
     const geoLatKey = keys.find((k) => /^__geo_lat$/i.test(k));
@@ -587,7 +600,7 @@ export function DashboardMapWidget({
       }
     };
 
-    for (const row of rows.slice(0, 500)) {
+    for (const row of cappedRows) {
       const r = row as Record<string, unknown>;
       const rawLabel = labelKeyRes ? r[labelKeyRes] : "";
       const fromDim = rawLabel != null ? String(rawLabel) : "";
@@ -615,7 +628,11 @@ export function DashboardMapWidget({
     }
 
     if (!latColRes || !lonColRes) {
-      const unresolved = rows.length;
+      const unresolved = cappedRows.reduce((acc, row) => {
+        const r = row as Record<string, unknown>;
+        if (r.__geo_resolved === false) return acc + 1;
+        return acc;
+      }, 0);
       return {
         markers: [] as Array<{
           lat: number;
@@ -641,7 +658,7 @@ export function DashboardMapWidget({
       source: string;
       detailRow: Record<string, unknown>;
     }> = [];
-    for (const row of rows.slice(0, 500)) {
+    for (const row of cappedRows) {
       const r = row as Record<string, unknown>;
       const lat = Number(r[latColRes!]);
       const lon = Number(r[lonColRes!]);
@@ -660,7 +677,7 @@ export function DashboardMapWidget({
       });
     }
 
-    const unresolvedCountRes = rows.reduce((acc, row) => {
+    const unresolvedCountRes = cappedRows.reduce((acc, row) => {
       const r = row as Record<string, unknown>;
       const lat = Number(r[latColRes!]);
       const lon = Number(r[lonColRes!]);
@@ -1056,11 +1073,12 @@ export function DashboardMapWidget({
       >
         <TileLayer attribution={attribution} url={tileUrl} />
         <FitBounds points={points} />
-        {markers.map((marker, i) => {
+        {markers.map((marker) => {
           const mv = resolveMarkerVisual(marker.value, minValue, maxValue, mapVisual);
+          const markerKey = `${marker.lat}:${marker.lon}:${marker.label}`;
           return (
             <CircleMarker
-              key={i}
+              key={markerKey}
               center={[marker.lat, marker.lon]}
               radius={mv.radius}
               pathOptions={{
@@ -1074,7 +1092,7 @@ export function DashboardMapWidget({
               <Popup>
                 <MapMarkerDetailBody
                   marker={marker}
-                  sumRows={rows.slice(0, 500) as Record<string, unknown>[]}
+                  sumRows={rows.slice(0, MAX_MAP_ROWS) as Record<string, unknown>[]}
                   aggregationConfig={aggregationConfig}
                   valueKey={valueKey}
                 />

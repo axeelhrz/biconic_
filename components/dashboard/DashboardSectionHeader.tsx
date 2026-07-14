@@ -21,10 +21,10 @@ const DashboardSectionHeader: React.FC<DashboardSectionHeaderProps> = ({
   showButton = true,
 }) => {
   return (
-    <div className="flex w-full items-center justify-between">
+    <div className="flex w-full flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
       {/* Sección de Título y Subtítulo */}
-      <div className="flex flex-col gap-1">
-        <h1 className="font-exo2 text-[28px] font-semibold leading-none text-[#00030A]">
+      <div className="flex min-w-0 flex-col gap-1">
+        <h1 className="font-exo2 text-2xl font-semibold leading-tight text-[#00030A] sm:text-[28px] sm:leading-none">
           {title}
         </h1>
         <p className="text-sm font-normal leading-4 text-[#717182]">

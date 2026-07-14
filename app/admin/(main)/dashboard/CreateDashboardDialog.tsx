@@ -64,7 +64,7 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
 
   const toggleEtl = (etlId: string) => {
     setSelectedEtlIds((prev) =>
-      prev.includes(etlId) ? prev.filter((id) => id !== etlId) : [...prev, etlId]
+      prev.includes(etlId) ? prev.filter((id: any) => id !== etlId) : [...prev, etlId]
     );
   };
 
@@ -144,7 +144,7 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
                   </p>
                 ) : (
                   <div className="flex flex-col gap-0.5">
-                    {clients.map((client) => {
+                    {clients.map((client: any) => {
                       const selected = selectedClientId === client.id;
                       return (
                         <button
@@ -184,7 +184,7 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
               Fuentes de datos (ETLs)
             </Label>
             <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-              Ventas, clientes, productos, etc. Podés elegir varias; en el editor asignás qué fuente usa cada gráfico.
+              Obligatorio: elegí al menos un ETL. Sin fuente de datos el editor no puede cargar métricas ni columnas.
             </p>
             <Input
               placeholder="Buscar ETL..."
@@ -208,7 +208,7 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
                   </p>
                 ) : (
                   <div className="flex flex-col gap-0.5">
-                    {etls.map((etl) => {
+                    {etls.map((etl: any) => {
                       const selected = selectedEtlIds.includes(etl.id);
                       return (
                         <button
@@ -254,7 +254,7 @@ export function CreateDashboardDialog({ open, onOpenChange, initialEtlId }: Crea
           </Button>
           <Button
             onClick={handleCreate}
-            disabled={!selectedClientId || creating}
+            disabled={!selectedClientId || selectedEtlIds.length === 0 || creating}
             className="rounded-xl h-11 px-6 font-semibold gap-2"
             style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
           >

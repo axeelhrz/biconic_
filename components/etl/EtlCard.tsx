@@ -36,6 +36,7 @@ export interface Etl {
   owner?: { fullName: string | null };
   ownerId?: string;
   client?: { name: string | null };
+  clientLabel?: string | null;
 }
 
 export default function EtlCard({

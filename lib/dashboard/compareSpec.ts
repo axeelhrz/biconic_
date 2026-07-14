@@ -51,6 +51,12 @@ export type CompareSpec =
       timeColumn: string;
       granularity: DateGranularity;
       periodSource?: ComparePeriodSource;
+    }
+  | {
+      kind: "comparative";
+      relationId: string;
+      metricAlias: string;
+      comparativeField: string;
     };
 
 const VALID_GRAN: DateGranularity[] = ["day", "week", "month", "quarter", "semester", "year"];
@@ -128,6 +134,13 @@ function parseCompareSpecObject(raw: unknown): CompareSpec | null {
         return ps ? { periodSource: ps } : {};
       })(),
     };
+  }
+  if (kind === "comparative") {
+    const relationId = typeof o.relationId === "string" ? o.relationId.trim() : "";
+    const metricAlias = typeof o.metricAlias === "string" ? o.metricAlias.trim() : "";
+    const comparativeField = typeof o.comparativeField === "string" ? o.comparativeField.trim() : "";
+    if (!relationId || !metricAlias || !comparativeField) return null;
+    return { kind: "comparative", relationId, metricAlias, comparativeField };
   }
   return null;
 }

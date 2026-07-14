@@ -1,0 +1,117 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: biconic
+      POSTGRES_PASSWORD: biconic_dev_password
+      POSTGRES_DB: biconic
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biconic -d biconic"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.1-p0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://biconic:biconic_dev_password@postgres:5432/biconic
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 200
+      DEFAULT_POOL_SIZE: 25
+    ports:
+      - "6432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: biconic
+      MINIO_ROOT_PASSWORD: biconic_minio_password
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 biconic biconic_minio_password;
+      mc mb -p local/excel-uploads || true;
+      mc mb -p local/avatars || true;
+      exit 0;
+      "
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://biconic:biconic_dev_password@pgbouncer:5432/biconic
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: change-me-in-production-jwt-secret-32chars
+      JWT_REFRESH_SECRET: change-me-in-production-refresh-secret
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: biconic
+      S3_SECRET_KEY: biconic_minio_password
+      S3_BUCKET: excel-uploads
+      S3_REGION: us-east-1
+      S3_FORCE_PATH_STYLE: "true"
+      CORS_ORIGIN: http://localhost:3000
+    ports:
+      - "4000:4000"
+
+  etl-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/workers/etl.worker.js"]
+    depends_on:
+      - backend
+      - redis
+      - postgres
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://biconic:biconic_dev_password@pgbouncer:5432/biconic
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: change-me-in-production-jwt-secret-32chars
+      ENCRYPTION_KEY: change-me-32-char-encryption-key!!
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

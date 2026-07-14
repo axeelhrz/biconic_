@@ -1,4 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import {
+  normalizeExcelDataTableRows,
+  resolveExcelPhysicalTableForConnection,
+} from "@/lib/excel-import/excel-metadata";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
@@ -203,7 +208,7 @@ async function getPasswordFromSecret(
 
 function buildWhereClausePg(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = `"${c.column.replace(/"/g, '""')}"`;
     switch (c.operator) {
       case "is null":
@@ -220,16 +225,16 @@ function buildWhereClausePg(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} ILIKE $${params.length}`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
         return `${col} IN (${idxs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
-        const idxs = list.map((v) => {
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
+        const idxs = list.map((v: any) => {
           params.push(v);
           return `$${params.length}`;
         });
@@ -247,7 +252,7 @@ function buildWhereClausePg(conds: FilterCondition[]) {
 
 function buildWhereClauseMy(conds: FilterCondition[]) {
   const params: any[] = [];
-  const parts = conds.map((c) => {
+  const parts = conds.map((c: any) => {
     const col = `\`${c.column.replace(/`/g, "``")}\``;
     switch (c.operator) {
       case "is null":
@@ -264,13 +269,13 @@ function buildWhereClauseMy(conds: FilterCondition[]) {
         params.push(`%${c.value ?? ""}`);
         return `${col} LIKE ?`;
       case "in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} IN (${qs.join(", ")})`;
       }
       case "not in": {
-        const list = (c.value ?? "").split(",").map((v) => v.trim());
+        const list = (c.value ?? "").split(",").map((v: any) => v.trim());
         const qs = list.map(() => "?");
         params.push(...list);
         return `${col} NOT IN (${qs.join(", ")})`;
@@ -503,21 +508,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     if (type === ("excel" as any)) {
-      const { data: meta, error: metaError } = await supabase
+      const { data: metaRows, error: metaError } = await supabase
         .from("data_tables")
-        .select("physical_table_name")
-        .eq("connection_id", String(connectionId))
-        .single();
-      if (metaError || !meta) {
+        .select("physical_table_name, table_name")
+        .eq("connection_id", String(connectionId));
+      const rows = normalizeExcelDataTableRows(metaRows);
+      if (metaError || rows.length === 0) {
         return NextResponse.json(
           { ok: false, error: "Metadatos de Excel no encontrados" },
           { status: 404 }
         );
       }
-      const tableNamePhysical =
-        (meta as any).physical_table_name ||
-        `import_${String(connectionId).replaceAll("-", "_")}`;
-      const dbUrl = process.env.SUPABASE_DB_URL;
+      const tableNamePhysical = resolveExcelPhysicalTableForConnection(
+        String(connectionId),
+        table,
+        rows
+      );
+      const dbUrl = getInternalDbUrl();
       if (!dbUrl) {
         return NextResponse.json(
           {
@@ -577,7 +584,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // The frontend ConditionPreviewButton sends operations: arithmeticNode?.arithmetic?.operations
       
       if (operations && operations.length > 0) {
-         const arithCols = operations.map((op) => {
+         const arithCols = operations.map((op: any) => {
            const expr = buildArithmeticExpression(op, "postgres", conversions);
            const alias = `"${op.resultColumn.replace(/"/g, '""')}"`;
            return `${expr} AS ${alias}`;
@@ -632,7 +639,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
          currentSql = `SELECT ${originalCols.join(", ")} FROM ${fullTable} ${clause}`;
          
          if (operations.length > 0) {
-             const arithCols = operations.map((op) => {
+             const arithCols = operations.map((op: any) => {
                const expr = buildArithmeticExpression(op, "postgres", conversions); 
                // Note: conversions passed to arithmetic helper. verify helper uses them on base cols.
                const alias = `"${op.resultColumn.replace(/"/g, '""')}"`;
@@ -728,7 +735,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       (conversions || []).forEach((c) => convMap.set(c.column, c));
 
       const originalCols = columns && columns.length
-          ? columns.map((c) => {
+          ? columns.map((c: any) => {
              const conv = convMap.get(c);
              if (conv) {
                 return `${buildCastWrapper("postgres", c, conv.targetType)} AS "${c.replace(/"/g, '""')}"`;
@@ -743,7 +750,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         console.log("Building arithmetic expressions...");
         let arithCols: string[] = [];
         try {
-          arithCols = operations.map((op) => {
+          arithCols = operations.map((op: any) => {
             console.log("Building op:", op.id);
             const expr = buildArithmeticExpression(op, "postgres", conversions);
             const alias = `"${op.resultColumn.replace(/"/g, '""')}"`;
@@ -799,7 +806,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         await client.end();
         return NextResponse.json({ ok: true, rows: res.rows, total });
       } else {
-        const conditionCols = rules.map((r) => buildConditionExprPg(r));
+        const conditionCols = rules.map((r: any) => buildConditionExprPg(r));
         const allCols = [...originalCols, ...conditionCols].join(", ");
 
         const filterParts = rules.map(buildFilterPartPg).filter(Boolean);
@@ -839,7 +846,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
        (conversions || []).forEach((c) => convMap.set(c.column, c));
 
        const originalCols = columns && columns.length
-          ? columns.map((c) => {
+          ? columns.map((c: any) => {
              const conv = convMap.get(c);
              if (conv) {
                 return `${buildCastWrapper("mysql", c, conv.targetType)} AS \`${c.replace(/`/g, "``")}\``;
@@ -853,7 +860,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
        let currentParams = [...params];
 
        if (operations && operations.length > 0) {
-          const arithCols = operations.map((op) => {
+          const arithCols = operations.map((op: any) => {
             const expr = buildArithmeticExpression(op, "mysql", conversions);
             const alias = `\`${op.resultColumn.replace(/`/g, "``")}\``;
             return `${expr} AS ${alias}`;

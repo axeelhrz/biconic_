@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { shouldUseOwnBackend } from "@/lib/api/backend-proxy";
 
 /**
  * GET /api/admin/datasets
  * Lista todos los datasets con el título del ETL asociado.
- * Requiere APP_ADMIN. Usa service role para leer la tabla dataset (evita RLS).
- * Si la tabla no existe, devuelve 200 con datasets vacíos y warning para no romper la página.
+ * Requiere APP_ADMIN.
+ * Si la tabla no existe, devuelve 200 con datasets vacíos y warning.
  */
 export async function GET() {
   try {
@@ -26,9 +27,13 @@ export async function GET() {
     }
 
     const adminClient = createServiceRoleClient();
+    const datasetSelect = shouldUseOwnBackend()
+      ? "id, etl_id, name, config, created_at, updated_at"
+      : "id, etl_id, name, config, created_at, updated_at, etl(title)";
+
     const { data: rows, error: fetchError } = await adminClient
       .from("dataset")
-      .select("id, etl_id, name, config, created_at, updated_at, etl(title)")
+      .select(datasetSelect)
       .order("updated_at", { ascending: false });
 
     if (fetchError) {
@@ -39,20 +44,45 @@ export async function GET() {
         return NextResponse.json({
           ok: true,
           data: { datasets: [] },
-          warning: "Lista no disponible; ejecutá la migración de la tabla dataset en Supabase.",
+          warning: shouldUseOwnBackend()
+            ? "Lista no disponible; ejecutá la migración 006_dataset.sql en Postgres local."
+            : "Lista no disponible; falta la tabla dataset en la base de datos.",
         });
       }
       return NextResponse.json({ ok: false, error: fetchError.message }, { status: 500 });
     }
 
-    const datasets = (rows ?? []).map((row: Record<string, unknown>) => ({
+    const rawRows = (rows ?? []) as Record<string, unknown>[];
+    const etlTitleById = new Map<string, string>();
+
+    if (shouldUseOwnBackend() && rawRows.length > 0) {
+      const etlIds = Array.from(
+        new Set(rawRows.map((r) => String(r.etl_id ?? "")).filter(Boolean))
+      );
+      if (etlIds.length > 0) {
+        const { data: etls } = await adminClient
+          .from("etl")
+          .select("id, title, name")
+          .in("id", etlIds);
+        for (const etl of (etls ?? []) as { id: string; title?: string | null; name?: string | null }[]) {
+          etlTitleById.set(
+            String(etl.id),
+            (etl.title || etl.name || "Sin nombre").trim() || "Sin nombre"
+          );
+        }
+      }
+    }
+
+    const datasets = rawRows.map((row) => ({
       id: row.id,
       etl_id: row.etl_id,
       name: row.name ?? null,
       config: row.config,
       created_at: row.created_at,
       updated_at: row.updated_at,
-      etl_title: (row.etl as { title?: string } | null)?.title ?? null,
+      etl_title: shouldUseOwnBackend()
+        ? (etlTitleById.get(String(row.etl_id ?? "")) ?? null)
+        : ((row.etl as { title?: string } | null)?.title ?? null),
     }));
 
     return NextResponse.json({

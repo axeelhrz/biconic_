@@ -1,5 +1,5 @@
-import { createClient } from "@/lib/supabase/client";
 import { useEffect, useState } from "react";
+import { getCountries, getProvinces } from "@/actions/locations";
 
 export type Country = {
   id: string;
@@ -22,18 +22,8 @@ export function useLocationOptions() {
     async function loadCountries() {
       try {
         setLoadingCountries(true);
-        const supabase = createClient();
-        const { data, error } = await supabase
-          .from("countries")
-          .select("id, name")
-          .order("name");
-
-        if (error) {
-          console.error("Error loading countries:", error);
-          return;
-        }
-
-        setCountries(data || []);
+        const data = await getCountries();
+        setCountries(data);
       } catch (err) {
         console.error("Error in loadCountries:", err);
       } finally {
@@ -52,21 +42,10 @@ export function useLocationOptions() {
 
     try {
       setLoadingProvinces(true);
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("provinces")
-        .select("id, name, country_id")
-        .eq("country_id", countryId)
-        .order("name");
-
-      if (error) {
-        console.error("Error loading provinces:", error);
-        return;
-      }
-
-      setProvinces(data || []);
+      const data = await getProvinces(countryId);
+      setProvinces(data);
     } catch (err) {
-      // console.error("Error in fetchProvinces:", err);
+      console.error("Error in fetchProvinces:", err);
     } finally {
       setLoadingProvinces(false);
     }

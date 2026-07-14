@@ -1,0 +1,120 @@
+import { NextResponse } from "next/server";
+import { shouldUseOwnBackend, getBackendApiUrl } from "@/lib/api/backend-config";
+import { createExcelUploadToken } from "@/lib/auth/excel-upload-token";
+import {
+  createExcelConnectionRecord,
+  requireAuthUserId,
+} from "@/lib/excel-import/create-excel-connection";
+import {
+  EXCEL_UPLOAD_MAX_BYTES,
+  EXCEL_UPLOAD_MAX_MB,
+} from "@/lib/excel-import/upload-limits";
+import {
+  excelContentType,
+  getPresignedUploadUrl,
+  isVercelRuntime,
+} from "@/lib/storage/s3-excel-storage";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export async function POST(req: Request) {
+  if (!shouldUseOwnBackend()) {
+    return NextResponse.json({ error: "No disponible" }, { status: 404 });
+  }
+
+  try {
+    const userId = await requireAuthUserId();
+    const body = await req.json();
+    const connectionName = String(body?.connectionName ?? "").trim();
+    const clientId = String(body?.clientId ?? "").trim();
+    const fileName = String(body?.fileName ?? "").trim();
+    const fileSize = Number(body?.fileSize ?? 0);
+
+    if (!connectionName) {
+      return NextResponse.json({ error: "Nombre de conexión requerido" }, { status: 400 });
+    }
+    if (!clientId) {
+      return NextResponse.json({ error: "Cliente requerido" }, { status: 400 });
+    }
+    if (!fileName) {
+      return NextResponse.json({ error: "Nombre de archivo requerido" }, { status: 400 });
+    }
+    if (!Number.isFinite(fileSize) || fileSize <= 0) {
+      return NextResponse.json({ error: "Tamaño de archivo inválido" }, { status: 400 });
+    }
+    if (fileSize > EXCEL_UPLOAD_MAX_BYTES) {
+      return NextResponse.json(
+        { error: `Archivo demasiado grande (máx. ${EXCEL_UPLOAD_MAX_MB}MB)` },
+        { status: 413 }
+      );
+    }
+
+    const allowed = ["xlsx", "xls", "xlsm", "csv", "ods"];
+    const ext = fileName.split(".").pop()?.toLowerCase();
+    if (!ext || !allowed.includes(ext)) {
+      return NextResponse.json(
+        { error: "Formato no soportado. Usá .xlsx, .xls, .xlsm, .csv u .ods." },
+        { status: 400 }
+      );
+    }
+
+    const record = await createExcelConnectionRecord({
+      connectionName,
+      clientId,
+      userId,
+      fileName,
+      fileSizeBytes: fileSize,
+    });
+
+    const cookieHeader = req.headers.get("cookie");
+    const uploadToken = await createExcelUploadToken({
+      userId,
+      storagePath: record.storagePath,
+      connectionId: record.connectionId,
+      fileSize,
+    });
+    const directUploadUrl = `${getBackendApiUrl()}/storage/excel/direct-upload`;
+
+    let presigned: { url: string; key: string } | null = null;
+    try {
+      presigned = await getPresignedUploadUrl(
+        record.storagePath,
+        excelContentType(fileName),
+        cookieHeader
+      );
+    } catch (presignErr) {
+      if (!isVercelRuntime()) {
+        const detail =
+          presignErr instanceof Error ? presignErr.message : "No se pudo preparar la subida";
+        return NextResponse.json(
+          {
+            error: `Almacenamiento no disponible: ${detail}.`,
+            stage: "upload_storage",
+          },
+          { status: 503 }
+        );
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      connectionId: record.connectionId,
+      dataTableId: record.dataTableId,
+      storagePath: record.storagePath,
+      uploadMode: "direct",
+      uploadToken,
+      directUploadUrl,
+      uploadUrl: presigned?.url ?? null,
+    });
+  } catch (err) {
+    console.error("excel-upload/init:", err);
+    return NextResponse.json(
+      {
+        error: err instanceof Error ? err.message : "Error al iniciar la subida",
+        stage: "upload_storage",
+      },
+      { status: 500 }
+    );
+  }
+}

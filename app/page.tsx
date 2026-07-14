@@ -6,11 +6,32 @@ import { ThemeSwitcher } from "@/components/theme-switcher";
 import { ConnectSupabaseSteps } from "@/components/tutorial/connect-supabase-steps";
 import { SignUpUserSteps } from "@/components/tutorial/sign-up-user-steps";
 import { hasEnvVars } from "@/lib/utils";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
+import { jwtVerify } from "jose";
 import { createClient } from "@/lib/supabase/server";
+import { getJwtSecretKey } from "@/lib/auth/jwt-config";
+
+async function isAuthenticatedWithOwnBackend() {
+  const token = (await cookies()).get("biconic_access")?.value;
+  if (!token) return false;
+  try {
+    await jwtVerify(token, getJwtSecretKey());
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export default async function Home() {
+  if (shouldUseOwnBackend()) {
+    redirect(
+      (await isAuthenticatedWithOwnBackend()) ? "/dashboard" : "/auth/login"
+    );
+  }
+
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
   const isAuthenticated = Boolean(data?.claims);

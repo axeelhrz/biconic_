@@ -9,11 +9,14 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
+import { safeJsonResponse } from "@/lib/safe-json-response";
 import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { Table2, Database, Server, User, Hash, FileText, Loader2, Pencil, Building2 } from "lucide-react";
+import ConnectionScheduleSettings from "@/components/connections/ConnectionScheduleSettings";
 
 const CONNECTION_TYPE_OPTIONS: SelectOption[] = [
   { value: "mysql", label: "MySQL" },
@@ -53,6 +56,13 @@ type FormValues = {
   db_name: string;
   db_user: string;
   db_port: string;
+};
+
+type ExcelSheetRow = {
+  key: string;
+  label: string;
+  rows?: number | null;
+  status?: string | null;
 };
 
 type ClientOption = { id: string; company_name: string };
@@ -107,6 +117,7 @@ export default function ConnectionConfigDialog({
   const [error, setError] = useState<string | null>(null);
   const [tableSearch, setTableSearch] = useState("");
   const [clients, setClients] = useState<ClientOption[]>([]);
+  const [excelSheets, setExcelSheets] = useState<ExcelSheetRow[]>([]);
 
   const isView = mode === "view";
 
@@ -133,40 +144,107 @@ export default function ConnectionConfigDialog({
       setConn(null);
       setError(null);
       setTableSearch("");
+      setExcelSheets([]);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    const supabase = createClient();
-    Promise.all([
-      supabase
-        .from("connections")
-        .select("id, name, type, client_id, db_host, db_name, db_user, db_port, connection_tables, updated_at, original_file_name")
-        .eq("id", connectionId)
-        .single(),
-      supabase.from("clients").select("id, company_name").order("company_name", { ascending: true }),
-    ]).then(([connRes, clientsRes]) => {
-      if (cancelled) return;
-      setLoading(false);
-      if (connRes.error) {
-        setError(connRes.error.message);
-        setConn(null);
-        return;
+
+    const loadClients = async (): Promise<ClientOption[]> => {
+      if (isOwnBackendEnabled()) {
+        const res = await fetch("/api/admin/clients/options", { credentials: "include" });
+        const data = await safeJsonResponse<{ id: string; name: string }[]>(res);
+        return Array.isArray(data)
+          ? data.map((c) => ({ id: c.id, company_name: c.name }))
+          : [];
       }
-      const row = connRes.data as ConnectionRow;
-      setConn(row);
-      setError(null);
-      if (clientsRes.data) setClients(clientsRes.data as ClientOption[]);
-      reset({
-        name: row.name ?? "",
-        type: row.type ?? "",
-        client_id: row.client_id ?? "",
-        db_host: row.db_host ?? "",
-        db_name: row.db_name ?? "",
-        db_user: row.db_user ?? "",
-        db_port: row.db_port != null ? String(row.db_port) : "",
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("clients")
+        .select("id, company_name")
+        .order("company_name", { ascending: true });
+      return (data as ClientOption[]) ?? [];
+    };
+
+    const loadConnection = async (): Promise<ConnectionRow> => {
+      if (isOwnBackendEnabled()) {
+        const res = await fetch(`/api/admin/connections/${connectionId}`, {
+          credentials: "include",
+        });
+        const data = await safeJsonResponse<ConnectionRow & { error?: string }>(res);
+        if (!res.ok) {
+          throw new Error(data.error ?? "No se pudo cargar la conexión");
+        }
+        return data;
+      }
+      const supabase = createClient();
+      const { data, error: connError } = await supabase
+        .from("connections")
+        .select(
+          "id, name, type, client_id, db_host, db_name, db_user, db_port, connection_tables, updated_at, original_file_name"
+        )
+        .eq("id", connectionId)
+        .single();
+      if (connError) throw new Error(connError.message);
+      return data as ConnectionRow;
+    };
+
+    Promise.all([loadConnection(), loadClients()])
+      .then(async ([row, clientRows]) => {
+        if (cancelled) return;
+        setConn(row);
+        setError(null);
+        setClients(clientRows);
+        reset({
+          name: row.name ?? "",
+          type: row.type ?? "",
+          client_id: row.client_id ?? "",
+          db_host: row.db_host ?? "",
+          db_name: row.db_name ?? "",
+          db_user: row.db_user ?? "",
+          db_port: row.db_port != null ? String(row.db_port) : "",
+        });
+
+        const rowIsExcel = row.type === "excel" || row.type === "excel_file";
+        if (rowIsExcel && connectionId) {
+          try {
+            const metaRes = await fetch("/api/connection/metadata", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ connectionId, discoverTables: true }),
+            });
+            const metaData = await safeJsonResponse<{
+              ok?: boolean;
+              metadata?: {
+                tables?: { schema: string; name: string; label?: string }[];
+              };
+            }>(metaRes);
+            if (!cancelled && metaData?.ok && Array.isArray(metaData.metadata?.tables)) {
+              setExcelSheets(
+                metaData.metadata.tables.map((t) => ({
+                  key: `${t.schema || "data_warehouse"}.${t.name}`,
+                  label: t.label || t.name,
+                }))
+              );
+            } else if (!cancelled) {
+              setExcelSheets([]);
+            }
+          } catch {
+            if (!cancelled) setExcelSheets([]);
+          }
+        } else if (!cancelled) {
+          setExcelSheets([]);
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Error al cargar la conexión");
+        setConn(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
-    });
     return () => {
       cancelled = true;
     };
@@ -176,22 +254,42 @@ export default function ConnectionConfigDialog({
     if (!connectionId) return;
     setSaving(true);
     try {
-      const supabase = createClient();
-      const portNum = values.db_port.trim() ? parseInt(values.db_port, 10) : null;
-      const { error: updateError } = await supabase
-        .from("connections")
-        .update({
-          name: values.name.trim(),
-          type: values.type,
-          client_id: values.client_id.trim() || null,
-          db_host: values.db_host.trim() || null,
-          db_name: values.db_name.trim() || null,
-          db_user: values.db_user.trim() || null,
-          db_port: portNum,
-        })
-        .eq("id", connectionId);
+      if (isOwnBackendEnabled()) {
+        const res = await fetch(`/api/connections/${connectionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            name: values.name.trim(),
+            clientId: values.client_id.trim() || null,
+            config: {
+              db_host: values.db_host.trim() || null,
+              db_name: values.db_name.trim() || null,
+              db_user: values.db_user.trim() || null,
+              db_port: values.db_port.trim() ? parseInt(values.db_port, 10) : null,
+            },
+          }),
+        });
+        const data = await safeJsonResponse<{ message?: string; error?: string }>(res);
+        if (!res.ok) throw new Error(data.message ?? data.error ?? "Error al guardar");
+      } else {
+        const supabase = createClient();
+        const portNum = values.db_port.trim() ? parseInt(values.db_port, 10) : null;
+        const { error: updateError } = await supabase
+          .from("connections")
+          .update({
+            name: values.name.trim(),
+            type: values.type,
+            client_id: values.client_id.trim() || null,
+            db_host: values.db_host.trim() || null,
+            db_name: values.db_name.trim() || null,
+            db_user: values.db_user.trim() || null,
+            db_port: portNum,
+          })
+          .eq("id", connectionId);
 
-      if (updateError) throw updateError;
+        if (updateError) throw updateError;
+      }
       toast.success("Conexión actualizada");
       onOpenChange(false);
       onSaved?.();
@@ -203,11 +301,28 @@ export default function ConnectionConfigDialog({
   };
 
   const isExcel = conn?.type === "excel" || conn?.type === "excel_file";
-  const tables = Array.isArray(conn?.connection_tables) ? conn.connection_tables : [];
+  const tables = isExcel
+    ? excelSheets.map((s) => s.key)
+    : Array.isArray(conn?.connection_tables)
+      ? conn.connection_tables
+      : [];
   const tableSearchLower = tableSearch.trim().toLowerCase();
   const filteredTables = tableSearchLower
     ? tables.filter((t) => String(t).toLowerCase().includes(tableSearchLower))
     : tables;
+  const filteredExcelSheets = tableSearchLower
+    ? excelSheets.filter(
+        (s) =>
+          s.key.toLowerCase().includes(tableSearchLower) ||
+          s.label.toLowerCase().includes(tableSearchLower)
+      )
+    : excelSheets;
+  const showTablesEditor =
+    isExcel ||
+    conn?.type === "firebird" ||
+    conn?.type === "mysql" ||
+    conn?.type === "postgres" ||
+    conn?.type === "postgresql";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -299,6 +414,9 @@ export default function ConnectionConfigDialog({
                     )}
                     {isExcel && conn.original_file_name && (
                       <FieldRow icon={FileText} label="Archivo" value={conn.original_file_name} />
+                    )}
+                    {isExcel && tables.length > 0 && (
+                      <FieldRow icon={Table2} label="Tabla importada" value={tables[0]} />
                     )}
                   </div>
                 ) : (
@@ -393,7 +511,7 @@ export default function ConnectionConfigDialog({
               </div>
 
               {/* Tablas para ETL */}
-              {(conn.type === "firebird" || conn.type === "mysql" || conn.type === "postgres" || conn.type === "postgresql") && (
+              {showTablesEditor && (
                 <div
                   className="rounded-xl border overflow-hidden"
                   style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
@@ -402,7 +520,7 @@ export default function ConnectionConfigDialog({
                     <div className="flex items-center gap-2">
                       <Table2 className="h-4 w-4" style={{ color: "var(--platform-accent)" }} />
                       <span className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>
-                        Tablas para ETL
+                        {isExcel ? "Hojas / tablas importadas" : "Tablas para ETL"}
                       </span>
                       {tables.length > 0 && (
                         <span
@@ -437,7 +555,7 @@ export default function ConnectionConfigDialog({
                       <div className="px-4 py-2 border-b" style={{ borderColor: "var(--platform-border)" }}>
                         <input
                           type="text"
-                          placeholder="Buscar tabla…"
+                          placeholder={isExcel ? "Buscar hoja o tabla…" : "Buscar tabla…"}
                           value={tableSearch}
                           onChange={(e) => setTableSearch(e.target.value)}
                           className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--platform-accent)]/30"
@@ -452,7 +570,27 @@ export default function ConnectionConfigDialog({
                         className="max-h-[220px] overflow-y-auto py-1"
                         style={{ color: "var(--platform-fg-muted)" }}
                       >
-                        {filteredTables.length === 0 ? (
+                        {isExcel ? (
+                          filteredExcelSheets.length === 0 ? (
+                            <p className="px-4 py-6 text-center text-sm">Ninguna hoja coincide con la búsqueda.</p>
+                          ) : (
+                            <ul className="space-y-0">
+                              {filteredExcelSheets.map((sheet) => (
+                                <li
+                                  key={sheet.key}
+                                  className="px-4 py-2 transition-colors hover:bg-[var(--platform-surface-hover)]"
+                                >
+                                  <p className="text-sm font-medium truncate" style={{ color: "var(--platform-fg)" }} title={sheet.label}>
+                                    {sheet.label}
+                                  </p>
+                                  <p className="text-xs font-mono truncate" title={sheet.key}>
+                                    {sheet.key}
+                                  </p>
+                                </li>
+                              ))}
+                            </ul>
+                          )
+                        ) : filteredTables.length === 0 ? (
                           <p className="px-4 py-6 text-center text-sm">Ninguna tabla coincide con la búsqueda.</p>
                         ) : (
                           <ul className="space-y-0">
@@ -471,10 +609,19 @@ export default function ConnectionConfigDialog({
                     </>
                   ) : (
                     <p className="px-4 py-5 text-sm" style={{ color: "var(--platform-fg-muted)" }}>
-                      Ninguna tabla seleccionada. En el ETL se listarán todas las disponibles. Usá &quot;Editar tablas&quot; para elegir cuáles incluir.
+                      {isExcel
+                        ? "Todavía no hay hojas importadas. Esperá a que termine la importación o volvé a subir el archivo."
+                        : 'Ninguna tabla seleccionada. En el ETL se listarán todas las disponibles. Usá "Editar tablas" para elegir cuáles incluir.'}
                     </p>
                   )}
                 </div>
+              )}
+
+              {connectionId && (
+                <ConnectionScheduleSettings
+                  connectionId={connectionId}
+                  connectionType={conn.type}
+                />
               )}
 
               <p className="mt-4 text-xs" style={{ color: "var(--platform-muted)" }}>

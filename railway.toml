@@ -1,0 +1,13 @@
+# Servicio API NestJS (crear en Railway con este repo como root).
+# Workers ETL/Excel: mismo Dockerfile, otro servicio, otro startCommand (ver docs/DEPLOY_RAILWAY_VERCEL.md).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "backend/Dockerfile"
+watchPatterns = ["backend/**", "lib/**"]
+
+[deploy]
+healthcheckPath = "/v1/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

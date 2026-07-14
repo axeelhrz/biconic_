@@ -16,8 +16,13 @@ type CacheFromBuilder = {
   upsert: (payload: GeoCacheRow, options?: { onConflict?: string }) => Promise<{ error: unknown }>;
 };
 
+/**
+ * Cliente mínimo (compatible con el query-builder propio y con supabase-js) usado para
+ * persistir coordenadas ya geocodificadas. Columnas alineadas con la tabla real
+ * `public.geo_location_cache` creada en `migrations/001_initial_schema.sql`
+ * (cache_key, lat, lng — sin query_text/display_name/provider/updated_at).
+ */
 export type GeoCacheClient = {
-  rpc: (fn: string, params?: { sql_query?: string }) => Promise<{ data: unknown; error: unknown }>;
   from: (table: string) => CacheFromBuilder;
 };
 
@@ -34,9 +39,16 @@ const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 const NOMINATIM_TIMEOUT_MS = 7000;
 const NOMINATIM_MIN_INTERVAL_MS = 1100;
 const MAX_GEOCODE_ROWS = 500;
+/**
+ * Tope de tiempo dedicado a geocodificar ubicaciones NUEVAS (sin caché) en una sola request.
+ * Nominatim limita a ~1 req/seg, así que muchas ubicaciones nuevas pueden tardar minutos; sin este
+ * presupuesto el handler excede el timeout de la función serverless (FUNCTION_INVOCATION_TIMEOUT).
+ * Las ubicaciones que no llegan a resolverse quedan marcadas y se resuelven en cargas siguientes
+ * gracias al caché que se va completando.
+ */
+const GEOCODE_TIME_BUDGET_MS = 25000;
 
 let lastNominatimCallAt = 0;
-let ensureTablePromise: Promise<void> | null = null;
 
 export type GeoHints = {
   countryField?: string;
@@ -67,12 +79,8 @@ export type GeoInferencePreview = {
 
 type GeoCacheRow = {
   cache_key: string;
-  query_text: string;
   lat: number;
-  lon: number;
-  display_name: string | null;
-  provider: string | null;
-  updated_at?: string;
+  lng: number;
 };
 
 type GeocodeResult = {
@@ -311,45 +319,23 @@ const rateLimitNominatim = async () => {
   lastNominatimCallAt = Date.now();
 };
 
-const ensureGeoCacheTable = async (cacheClient?: GeoCacheClient | null) => {
-  if (!cacheClient) return;
-  if (ensureTablePromise) return ensureTablePromise;
-  ensureTablePromise = (async () => {
-    try {
-      await cacheClient.rpc("execute_sql", {
-        sql_query: `
-          CREATE TABLE IF NOT EXISTS public.geo_location_cache (
-            cache_key text PRIMARY KEY,
-            query_text text NOT NULL,
-            lat double precision NOT NULL,
-            lon double precision NOT NULL,
-            display_name text NULL,
-            provider text NOT NULL DEFAULT 'nominatim',
-            updated_at timestamptz NOT NULL DEFAULT now()
-          );
-          CREATE INDEX IF NOT EXISTS geo_location_cache_updated_at_idx ON public.geo_location_cache (updated_at DESC);
-        `,
-      });
-    } catch {
-      // Si no hay permisos de DDL o no existe RPC, continuar sin bloquear.
-    }
-  })();
-  await ensureTablePromise;
-};
-
+/** La tabla `public.geo_location_cache` ya existe vía migración; no se crea en runtime. */
 const readCache = async (
   cacheClient: GeoCacheClient | null | undefined,
   cacheKey: string
 ): Promise<GeoCacheRow | null> => {
   if (!cacheClient) return null;
-  await ensureGeoCacheTable(cacheClient);
-  const { data, error } = await cacheClient
-    .from("geo_location_cache")
-    .select("cache_key,query_text,lat,lon,display_name,provider,updated_at")
-    .eq("cache_key", cacheKey)
-    .maybeSingle();
-  if (error || !data) return null;
-  return data as GeoCacheRow;
+  try {
+    const { data, error } = await cacheClient
+      .from("geo_location_cache")
+      .select("cache_key,lat,lng")
+      .eq("cache_key", cacheKey)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data as GeoCacheRow;
+  } catch {
+    return null;
+  }
 };
 
 const writeCache = async (
@@ -357,8 +343,11 @@ const writeCache = async (
   payload: GeoCacheRow
 ) => {
   if (!cacheClient) return;
-  await ensureGeoCacheTable(cacheClient);
-  await cacheClient.from("geo_location_cache").upsert(payload, { onConflict: "cache_key" });
+  try {
+    await cacheClient.from("geo_location_cache").upsert(payload, { onConflict: "cache_key" });
+  } catch {
+    // best-effort: no bloquear la respuesta si falla el guardado en caché
+  }
 };
 
 const geocodeWithNominatim = async (
@@ -413,16 +402,11 @@ const resolveCoordinates = async (
   const cacheKey = cc ? `${baseKey}|cc:${cc}` : baseKey;
 
   const cacheHit = await readCache(cacheClient, cacheKey);
-  if (cacheHit && isFiniteNumber(cacheHit.lat) && isFiniteNumber(cacheHit.lon)) {
-    if (ctx?.restrictResultsToArgentinaBBox && !isPointInArgentinaBBox(cacheHit.lat, cacheHit.lon)) {
+  if (cacheHit && isFiniteNumber(cacheHit.lat) && isFiniteNumber(cacheHit.lng)) {
+    if (ctx?.restrictResultsToArgentinaBBox && !isPointInArgentinaBBox(cacheHit.lat, cacheHit.lng)) {
       // Caché obsoleta o clave heredada: no usar punto fuera de Argentina.
     } else {
-      return {
-        lat: cacheHit.lat,
-        lon: cacheHit.lon,
-        displayName: cacheHit.display_name ?? undefined,
-        source: "cache",
-      };
+      return { lat: cacheHit.lat, lon: cacheHit.lng, source: "cache" };
     }
   }
 
@@ -433,14 +417,7 @@ const resolveCoordinates = async (
     if (ctx?.restrictResultsToArgentinaBBox && !isPointInArgentinaBBox(geocoded.lat, geocoded.lon)) {
       continue;
     }
-    await writeCache(cacheClient, {
-      cache_key: cacheKey,
-      query_text: query,
-      lat: geocoded.lat,
-      lon: geocoded.lon,
-      display_name: geocoded.displayName ?? null,
-      provider: "nominatim",
-    });
+    await writeCache(cacheClient, { cache_key: cacheKey, lat: geocoded.lat, lng: geocoded.lon });
     return { ...geocoded, source: "nominatim" };
   }
   return null;
@@ -465,6 +442,23 @@ export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Prom
   const limitedRows = rows.slice(0, MAX_GEOCODE_ROWS);
   const restRows = rows.slice(MAX_GEOCODE_ROWS);
   const enriched: Record<string, unknown>[] = [];
+  const geocodeInFlight = new Map<string, Promise<GeocodeResult | null>>();
+  const geoStartedAt = Date.now();
+
+  const resolveCoordinatesDeduped = (
+    parts: GeoComponent,
+    resolveCtx: ResolveGeoContext | undefined
+  ): Promise<GeocodeResult | null> => {
+    const cc = resolveCtx?.nominatimCountryCodes?.trim().toLowerCase();
+    const baseKey = buildCacheKey(parts);
+    if (!baseKey.replace(/\|/g, "")) return Promise.resolve(null);
+    const cacheKey = cc ? `${baseKey}|cc:${cc}` : baseKey;
+    const existing = geocodeInFlight.get(cacheKey);
+    if (existing) return existing;
+    const pending = resolveCoordinates(parts, cacheClient, resolveCtx);
+    geocodeInFlight.set(cacheKey, pending);
+    return pending;
+  };
 
   for (const row of limitedRows) {
     const r = { ...row } as Record<string, unknown>;
@@ -523,7 +517,19 @@ export async function enrichRowsWithGeo(options: EnrichRowsWithGeoOptions): Prom
           }
         : undefined;
 
-    const resolved = await resolveCoordinates(withCountry, cacheClient, resolveCtx);
+    const budgetCc = resolveCtx?.nominatimCountryCodes?.trim().toLowerCase();
+    const budgetBaseKey = buildCacheKey(withCountry);
+    const budgetCacheKey = budgetCc ? `${budgetBaseKey}|cc:${budgetCc}` : budgetBaseKey;
+    const isNewLookup = !geocodeInFlight.has(budgetCacheKey);
+    if (isNewLookup && Date.now() - geoStartedAt > GEOCODE_TIME_BUDGET_MS) {
+      r.__geo_resolved = false;
+      r.__geo_source = "skipped_time_budget";
+      r.__geo_label = label ?? buildGeoQueryCandidates(withCountry)[0] ?? "";
+      enriched.push(r);
+      continue;
+    }
+
+    const resolved = await resolveCoordinatesDeduped(withCountry, resolveCtx);
     if (resolved) {
       r.__geo_lat = resolved.lat;
       r.__geo_lon = resolved.lon;

@@ -8,7 +8,7 @@ import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 const baseEtlData = {
   fields: { all: ["zona", "vendedor"], numeric: [], string: ["zona", "vendedor"], date: [] },
   dataSources: [{ id: "primary", etlId: "e1", alias: "Principal", etlName: "Test", schema: "etl_output", tableName: "t", rowCount: 1, fields: { all: [], numeric: [], string: [], date: [] } }],
-} as ETLDataResponse;
+} as unknown as ETLDataResponse;
 
 describe("buildGlobalFilterFieldOptions", () => {
   it("includes derived columns not present in physical fields", () => {

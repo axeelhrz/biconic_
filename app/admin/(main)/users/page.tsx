@@ -1,15 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { Search, Plus, Users } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Search, Users } from "lucide-react";
 import AdminUserTable from "@/components/admin/users/AdminUserTable";
+import { CreateUserDialog } from "@/components/admin/users/CreateUserDialog";
 
 export default function AdminUsersPage() {
-  const router = useRouter();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"todos" | "activos" | "inactivos">("todos");
+  const [refreshKey, setRefreshKey] = useState(0);
 
   return (
     <div className="flex w-full flex-col min-h-0">
@@ -39,14 +38,7 @@ export default function AdminUsersPage() {
               </p>
             </div>
           </div>
-          <Button
-            onClick={() => router.push("/admin/users/new")}
-            className="shrink-0 rounded-xl font-semibold gap-2 h-12 px-6 shadow-lg hover:shadow-xl transition-all"
-            style={{ background: "var(--platform-accent)", color: "var(--platform-accent-fg)" }}
-          >
-            <Plus className="h-5 w-5" />
-            Agregar usuario
-          </Button>
+          <CreateUserDialog onCreated={() => setRefreshKey((k) => k + 1)} />
         </div>
       </section>
 
@@ -73,7 +65,7 @@ export default function AdminUsersPage() {
           className="flex items-center gap-1 rounded-xl border p-1"
           style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}
         >
-          {(["todos", "activos", "inactivos"] as const).map((f) => (
+          {(["todos", "activos", "inactivos"] as const).map((f: any) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -89,7 +81,7 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
-      <AdminUserTable search={search} filter={filter} />
+      <AdminUserTable key={refreshKey} search={search} filter={filter} />
     </div>
   );
 }

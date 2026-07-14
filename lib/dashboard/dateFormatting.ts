@@ -11,6 +11,38 @@ function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
 
+/** Abreviaturas en inglés (p. ej. Sep-2024) usadas en relaciones comparativas. */
+export const MONTH_NAMES_EN_SHORT = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const PLAUSIBLE_DATE_YEAR_MIN = 1970;
+const PLAUSIBLE_DATE_YEAR_MAX = 2040;
+const EXCEL_SERIAL_YEAR_MIN = 1900;
+const EXCEL_SERIAL_YEAR_MAX = 2100;
+
+function parseExcelSerialDays(n: number): Date | null {
+  if (!Number.isFinite(n) || n <= 0 || n >= 1e7) return null;
+  const dt = new Date(EXCEL_EPOCH_MS + n * MS_PER_DAY);
+  if (Number.isNaN(dt.getTime())) return null;
+  const y = dt.getUTCFullYear();
+  if (y < EXCEL_SERIAL_YEAR_MIN || y > EXCEL_SERIAL_YEAR_MAX) return null;
+  return dt;
+}
+
 function safeDateFromParts(year: number, month1: number, day: number): Date | null {
   if (!Number.isFinite(year) || !Number.isFinite(month1) || !Number.isFinite(day)) return null;
   if (month1 < 1 || month1 > 12 || day < 1 || day > 31) return null;
@@ -54,17 +86,36 @@ function parseAmbiguousSlashDate(a: number, b: number, year: number, order: Date
   return safeDateFromParts(year, b, a);
 }
 
+function parseNumericToken(n: number): Date | null {
+  if (!Number.isFinite(n)) return null;
+  if (n > 1e12) {
+    const dt = new Date(n);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
+  if (n > 1e9 && n < 1e10) {
+    const dt = new Date(n * 1000);
+    if (Number.isNaN(dt.getTime())) return null;
+    const y = dt.getUTCFullYear();
+    return y >= PLAUSIBLE_DATE_YEAR_MIN && y <= PLAUSIBLE_DATE_YEAR_MAX ? dt : null;
+  }
+  return parseExcelSerialDays(n);
+}
+
 export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): Date | null {
   const slashOrder: DateSlashOrder = options?.slashDateOrder === "MDY" ? "MDY" : "DMY";
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) return null;
-    const dt = new Date(value > 1e12 ? value : value * 1000);
-    return Number.isNaN(dt.getTime()) ? null : dt;
+    return parseNumericToken(value);
   }
   if (typeof value !== "string") return null;
   const raw = value.trim();
   if (!raw) return null;
+
+  // Serial Excel / epoch como texto ("46113") — evita new Date("46113") → año 46113
+  const numericString = raw.match(/^(\d+(?:\.\d+)?)$/);
+  if (numericString) {
+    return parseNumericToken(Number(numericString[1]));
+  }
 
   // MM/yyyy (mes inequívoco)
   const my = raw.match(/^(\d{1,2})\/(\d{4})$/);
@@ -82,6 +133,17 @@ export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): D
     return safeDateFromParts(year, month, 1);
   }
 
+  // Mon-YYYY (p. ej. Sep-2024 en datasets comparativos)
+  const monYear = raw.match(/^([A-Za-z]{3})-(\d{4})$/);
+  if (monYear) {
+    const monthIdx = MONTH_NAMES_EN_SHORT.findIndex(
+      (name) => name.toLowerCase() === monYear[1]!.toLowerCase()
+    );
+    if (monthIdx >= 0) {
+      return safeDateFromParts(Number(monYear[2]), monthIdx + 1, 1);
+    }
+  }
+
   // yyyy-MM (periodo mes; inequívoco frente a dd/MM vs MM/dd)
   const ym = raw.match(/^(\d{4})-(\d{1,2})$/);
   if (ym) {
@@ -90,8 +152,8 @@ export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): D
     return safeDateFromParts(year, month, 1);
   }
 
-  // d/m/y o m/d/y con año de 4 dígitos
-  const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  // d/m/y o m/d/y con año de 4 dígitos (barras o puntos, común en Firebird / Excel regional)
+  const slash = raw.match(/^(\d{1,2})[\/\.](\d{1,2})[\/\.](\d{4})$/);
   if (slash) {
     const a = Number(slash[1]);
     const b = Number(slash[2]);
@@ -156,6 +218,35 @@ export function formatDateByGranularity(
 export type AnalysisDateDisplayFormat = "short" | "monthYear" | "year" | "datetime";
 
 const MONTH_NAMES_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+
+export function parseMonthYearEnLabel(raw: string): { year: number; month: number } | null {
+  const monYear = /^([A-Za-z]{3})-(\d{4})$/.exec(raw.trim());
+  if (!monYear) return null;
+  const monthIdx = MONTH_NAMES_EN_SHORT.findIndex(
+    (name) => name.toLowerCase() === monYear[1]!.toLowerCase()
+  );
+  if (monthIdx < 0) return null;
+  const year = Number(monYear[2]);
+  if (!Number.isFinite(year) || year < 1000 || year > 9999) return null;
+  return { year, month: monthIdx + 1 };
+}
+
+export function formatMonthYearEnLabel(
+  value: unknown,
+  parseOpts?: ParseDateLikeOptions
+): string | null {
+  if (typeof value === "string") {
+    const parsed = parseMonthYearEnLabel(value);
+    if (parsed) {
+      return `${MONTH_NAMES_EN_SHORT[parsed.month - 1]}-${parsed.year}`;
+    }
+  }
+  const dt = parseDateLike(value, parseOpts);
+  if (!dt) return null;
+  const month = dt.getUTCMonth() + 1;
+  const year = dt.getUTCFullYear();
+  return `${MONTH_NAMES_EN_SHORT[month - 1]}-${year}`;
+}
 
 /**
  * Extrae año y mes desde `YYYY-MM` o prefijo `YYYY-MM-DD` / ISO (`…T…`), sin `Date`.

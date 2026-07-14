@@ -2,6 +2,67 @@
 
 import type { Database } from "@/lib/supabase/database.types";
 import { revalidatePath } from "next/cache";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import {
+  deleteClientsFromDb,
+  listAdminClientsFromDb,
+  listCompanyOptionsFromDb,
+  type ListAdminClientsParams,
+} from "@/lib/admin/clients-repository";
+import {
+  addClientMemberInDb,
+  createUserAndAddToClientInDb,
+  getClientUsersFromDb,
+  searchUsersInDb,
+} from "@/lib/admin/client-members-repository";
+
+export async function getCompanyOptions(): Promise<{ id: string; name: string }[]> {
+  try {
+    if (shouldUseOwnBackend()) {
+      return await listCompanyOptionsFromDb();
+    }
+
+    const { createServiceRoleClient } = await import("@/lib/supabase/service");
+    const admin = createServiceRoleClient();
+    const { data, error } = await admin
+      .from("clients")
+      .select("id, company_name, individual_full_name, type")
+      .eq("type", "empresa")
+      .order("company_name", { ascending: true });
+
+    if (error) {
+      console.error("getCompanyOptions:", error);
+      return [];
+    }
+
+    return (data ?? [])
+      .map((r: { id: string; company_name?: string | null; individual_full_name?: string | null }) => ({
+        id: r.id,
+        name: r.company_name?.trim() || r.individual_full_name?.trim() || "",
+      }))
+      .filter((r: any) => r.name);
+  } catch (err) {
+    console.error("getCompanyOptions:", err);
+    return [];
+  }
+}
+
+export async function listAdminClients(params: ListAdminClientsParams) {
+  if (shouldUseOwnBackend()) {
+    try {
+      return { ok: true as const, ...(await listAdminClientsFromDb(params)) };
+    } catch (err) {
+      console.error("listAdminClients:", err);
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : "Error cargando clientes",
+        rows: [],
+        total: 0,
+      };
+    }
+  }
+  return { ok: false as const, error: "use_supabase_client", rows: [], total: 0 };
+}
 
 export type ClientMemberUser = {
   id: string; // client_member id
@@ -15,6 +76,11 @@ export type ClientMemberUser = {
 
 export async function getClientUsers(clientId: string): Promise<{ ok: boolean; data?: ClientMemberUser[]; error?: string }> {
   try {
+    if (shouldUseOwnBackend()) {
+      const data = await getClientUsersFromDb(clientId);
+      return { ok: true, data };
+    }
+
     const supabase = await (await import("@/lib/supabase/server")).createClient();
     
     // 1. Fetch members first
@@ -34,7 +100,7 @@ export async function getClientUsers(clientId: string): Promise<{ ok: boolean; d
     if (!members || members.length === 0) return { ok: true, data: [] };
 
     // 2. Fetch profiles for these users manually
-    const userIds = members.map((m) => m.user_id);
+    const userIds = members.map((m: any) => m.user_id);
     const { data: profiles, error: pError } = await supabase
         .from("profiles")
         .select("id, full_name, email")
@@ -42,9 +108,9 @@ export async function getClientUsers(clientId: string): Promise<{ ok: boolean; d
         
     if (pError) return { ok: false, error: pError.message };
 
-    const profileMap = new Map((profiles ?? []).map(p => [p.id, p]));
+    const profileMap = new Map<string, any>((profiles ?? []).map((p: any) => [p.id, p]));
 
-    const users: ClientMemberUser[] = members.map((m) => {
+    const users: ClientMemberUser[] = members.map((m: any) => {
       const p = profileMap.get(m.user_id);
       return {
         id: m.id,
@@ -99,6 +165,12 @@ export async function searchUserByEmail(email: string) {
 
 export async function addClientMember(clientId: string, userId: string, role: string) {
   try {
+    if (shouldUseOwnBackend()) {
+      await addClientMemberInDb(clientId, userId, role);
+      revalidatePath("/admin/clients/[clientId]");
+      return { ok: true };
+    }
+
     const supabase = await (await import("@/lib/supabase/server")).createClient();
     
     // Check if already member (locally)
@@ -155,12 +227,12 @@ export async function getClientMembersSimple(clientId: string) {
 
     if (!members) return { ok: true, data: [] };
     
-    const userIds = members.map(m => m.user_id);
+    const userIds = members.map((m: any) => m.user_id);
     const { data: profiles } = await supabase.from("profiles").select("id, email, full_name").in("id", userIds);
     
-    const map = new Map(profiles?.map(p => [p.id, p]));
+    const map = new Map<string, any>((profiles ?? []).map((p: any) => [p.id, p]));
     
-    const res = members.map(m => {
+    const res = members.map((m: any) => {
         const p = map.get(m.user_id);
         return {
             id: m.id, // client_member_id
@@ -199,6 +271,11 @@ export async function addClientPermission(clientMemberId: string, dashboardId: s
 
 export async function searchUsers(query: string) {
     try {
+        if (shouldUseOwnBackend()) {
+            const data = await searchUsersInDb(query);
+            return { ok: true, data };
+        }
+
         const supabase = await (await import("@/lib/supabase/server")).createClient();
         const { data, error } = await supabase
             .from("profiles")
@@ -220,14 +297,32 @@ export async function createAndAddMember(input: {
     email: string;
     password: string;
 }) {
-    // 1. Create user via edge function/action
+    if (shouldUseOwnBackend()) {
+      try {
+        const result = await createUserAndAddToClientInDb({
+          clientId: input.clientId,
+          email: input.email,
+          password: input.password,
+          fullName: input.fullName,
+          role: input.role,
+        });
+        revalidatePath("/admin/clients/[clientId]");
+        return { ok: true as const, userId: result.userId };
+      } catch (err) {
+        return {
+          ok: false as const,
+          error: err instanceof Error ? err.message : "Error al crear usuario",
+        };
+      }
+    }
+
     const { addClientMember: addMemberAction } = await import("@/actions/addClientMember");
     const res = await addMemberAction({
         existingClientId: input.clientId,
         userEmail: input.email,
         userPassword: input.password,
         userFullName: input.fullName,
-        userJobTitle: input.role
+        role: input.role,
     });
     
     if (!res.ok) return { ok: false, error: res.error };
@@ -318,6 +413,15 @@ export async function grantPermissionToEmail(clientId: string, email: string, da
 /** Eliminar uno o más clientes (solo admin). Dependencias con ON DELETE CASCADE se eliminan en cascada. */
 export async function deleteClients(clientIds: string[]): Promise<{ ok: boolean; error?: string }> {
   if (clientIds.length === 0) return { ok: true };
+  if (shouldUseOwnBackend()) {
+    try {
+      const res = await deleteClientsFromDb(clientIds);
+      revalidatePath("/admin/clients");
+      return res;
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "Error al eliminar" };
+    }
+  }
   try {
     const supabase = await (await import("@/lib/supabase/server")).createClient();
     const { data: { user } } = await supabase.auth.getUser();

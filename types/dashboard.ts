@@ -95,6 +95,8 @@ export type DashboardPersistedLayout = {
   cardLayoutMode?: DashboardCardLayoutMode;
   /** Comparación por defecto del dashboard (widgets heredan salvo override). */
   dashboardCompareDefaults?: DashboardCompareDefaults;
+  /** Mes de inicio del año fiscal (1–12). Por defecto 1 (enero, año calendario). */
+  fiscalYearStartMonth?: number;
 };
 
 export const DEFAULT_DASHBOARD_THEME: DashboardTheme = {

@@ -2,11 +2,31 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import { searchClientsFromDb } from "@/lib/admin/dashboard-repository";
+import {
+  createEtlFromDb,
+  deleteEtlFromDb,
+  getClientsListFromDb,
+  getEtlForPreviewFromDb,
+  getEtlsAdminFromDb,
+  updateEtlFromDb,
+} from "@/lib/admin/etl-repository";
+import { getServerAuthUser } from "@/lib/supabase/server-backend";
 import { formatNextExecutionDisplay, parseScheduleFromLayout } from "@/lib/etl/schedule";
 import postgres from "postgres";
 
 // Lista de clientes para filtros (id + nombre)
 export async function getClientsList() {
+  if (shouldUseOwnBackend()) {
+    try {
+      return await getClientsListFromDb();
+    } catch (err) {
+      console.error("getClientsList:", err);
+      return [];
+    }
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -38,6 +58,21 @@ export async function getClientsList() {
 
 // Lista de todos los ETLs para la vista Admin (bypasea RLS para que el admin vea todos)
 export async function getEtlsAdmin(options?: { clientId?: string | null }) {
+  if (shouldUseOwnBackend()) {
+    try {
+      return await getEtlsAdminFromDb(options);
+    } catch (err) {
+      console.error("getEtlsAdmin:", err);
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "Error cargando ETLs",
+        data: [],
+        owners: {},
+        clients: {},
+      };
+    }
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -113,7 +148,7 @@ export async function getEtlsAdmin(options?: { clientId?: string | null }) {
     return {
       ...r,
       lastExecution: lastRunByEtlId[String(r.id)] ?? null,
-      nextExecution: formatNextExecutionDisplay(schedule?.lastRunAt, frequency),
+      nextExecution: formatNextExecutionDisplay(schedule?.lastRunAt, frequency, schedule ?? undefined),
       createdAt: r.created_at ?? null,
     };
   });
@@ -123,6 +158,18 @@ export async function getEtlsAdmin(options?: { clientId?: string | null }) {
 
 /** Detalle de un ETL para vista previa (solo lectura). Incluye layout.guided_config. */
 export async function getEtlForPreview(etlId: string) {
+  if (shouldUseOwnBackend()) {
+    try {
+      return await getEtlForPreviewFromDb(etlId);
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "Error",
+        data: null,
+      };
+    }
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -209,6 +256,14 @@ export async function updateEtlAdmin(
   etlId: string,
   payload: { title?: string; status?: string; published?: boolean }
 ) {
+  if (shouldUseOwnBackend()) {
+    try {
+      return await updateEtlFromDb(etlId, payload);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "Error" };
+    }
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -245,6 +300,15 @@ export async function updateEtlAdmin(
 
 // Search Clients
 export async function searchClients(query: string) {
+  if (shouldUseOwnBackend()) {
+    try {
+      return await searchClientsFromDb(query);
+    } catch (err) {
+      console.error("Error searching clients:", err);
+      return [];
+    }
+  }
+
   const supabase = await createClient();
   
   let dbQuery = supabase
@@ -265,13 +329,23 @@ export async function searchClients(query: string) {
     return [];
   }
 
-  return data.map((c) => ({
+  return data.map((c: any) => ({
     id: c.id,
     name: c.company_name || c.individual_full_name || "Sin nombre",
   }));
 }
 
 export async function createEtlAdmin(clientId: string, title: string = "Nuevo ETL") {
+  if (shouldUseOwnBackend()) {
+    const authUser = await getServerAuthUser();
+    if (!authUser?.id) return { ok: false, error: "Unauthorized" };
+    try {
+      return await createEtlFromDb(clientId, title, authUser.id);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "Error al crear ETL" };
+    }
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -307,6 +381,15 @@ export async function createEtlAdmin(clientId: string, title: string = "Nuevo ET
 
 /** Eliminar ETL desde admin (service role). Refrescar lista tras eliminar. */
 export async function deleteEtlAdmin(etlId: string) {
+  if (shouldUseOwnBackend()) {
+    try {
+      return await deleteEtlFromDb(etlId);
+    } catch (err) {
+      console.error("deleteEtlAdmin:", err);
+      return { ok: false, error: err instanceof Error ? err.message : "Error al eliminar" };
+    }
+  }
+
   const supabase = await createClient();
   const {
     data: { user },

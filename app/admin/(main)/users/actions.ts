@@ -2,6 +2,15 @@
 
 import type { Database } from "@/lib/supabase/database.types";
 import { CLIENT_MEMBER_ACTIVE_OR_FILTER } from "@/lib/client-members/clientMembershipActive";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
+import {
+  listAdminUsersFromDb,
+  createAdminUserInDb,
+  deleteUsersFromDb,
+  updateUserAppRoleInDb,
+  getUserByIdFromDb,
+  updateUserInDb,
+} from "@/lib/admin/users-repository";
 
 // Server Actions para el panel de administración de usuarios.
 // Ya conectadas a Supabase con fallback a mock en desarrollo.
@@ -86,6 +95,35 @@ const MOCK_USERS: AdminUser[] = Array.from({ length: 68 }).map((_, i) => {
   };
 });
 
+export interface CreateAdminUserParams {
+  email: string;
+  password: string;
+  fullName?: string;
+  appRole?: Database["public"]["Enums"]["app_role"];
+  clientId?: string;
+  clientRole?: Database["public"]["Enums"]["client_role"];
+}
+
+export async function createAdminUser(
+  params: CreateAdminUserParams
+): Promise<{ ok: boolean; error?: string; userId?: string }> {
+  try {
+    if (shouldUseOwnBackend()) {
+      const result = await createAdminUserInDb(params);
+      return { ok: true, userId: result.id };
+    }
+    return {
+      ok: false,
+      error: "Creación de usuarios requiere backend propio o configuración Supabase",
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "No se pudo crear el usuario",
+    };
+  }
+}
+
 export async function getAdminUsers(
   params: GetAdminUsersParams = {}
 ): Promise<GetAdminUsersResult> {
@@ -95,6 +133,24 @@ export async function getAdminUsers(
   const filter = params.filter ?? "todos";
 
   try {
+    if (shouldUseOwnBackend()) {
+      const data = await listAdminUsersFromDb({ ...params, page, pageSize, search });
+      let users = data.users;
+      if (filter === "activos") {
+        users = users.filter((u: any) => u.status === "activo");
+      } else if (filter === "inactivos") {
+        users = users.filter((u: any) => u.status === "inactivo");
+      }
+      return {
+        ok: true,
+        data: {
+          users,
+          total: filter === "todos" ? data.total : users.length,
+          page: data.page,
+          pageSize: data.pageSize,
+        },
+      };
+    }
     // Intentamos usar Supabase (SSR-safe)
     const supabase = await (
       await import("@/lib/supabase/server")
@@ -131,7 +187,7 @@ export async function getAdminUsers(
     // Fetch companies (client_members) for these users
     // Cast to any[] until database.types.ts is regenerated with avatar_url
     const profilesList = (profiles ?? []) as any[];
-    const userIds = profilesList.map((p) => p.id);
+    const userIds = profilesList.map((p: any) => p.id);
     let companiesMap: Record<string, CompanyAccess[]> = {};
 
     if (userIds.length > 0) {
@@ -142,7 +198,7 @@ export async function getAdminUsers(
         .in("user_id", userIds)
         .or(CLIENT_MEMBER_ACTIVE_OR_FILTER);
 
-      const clientIds = (members ?? []).map((m) => m.client_id);
+      const clientIds = (members ?? []).map((m: any) => m.client_id);
 
       // Fetch dashboards accessible by these clients
       // Assumed relationship: dashboard_shared linked to client_id? Or dashboard linked to client?
@@ -165,7 +221,7 @@ export async function getAdminUsers(
           .select("id, title, client_id")
           .in("client_id", clientIds);
 
-        (dashboards ?? []).forEach((d) => {
+        (dashboards ?? []).forEach((d: any) => {
           if (d.client_id) {
             if (!dashboardsMap[d.client_id]) dashboardsMap[d.client_id] = [];
             dashboardsMap[d.client_id].push({
@@ -176,7 +232,7 @@ export async function getAdminUsers(
         });
       }
 
-      (members ?? []).forEach((m) => {
+      (members ?? []).forEach((m: any) => {
         const userId = m.user_id;
         // @ts-ignore
         const client = m.clients;
@@ -264,6 +320,11 @@ export async function setUserAppRole(
   role: Database["public"]["Enums"]["app_role"]
 ) {
   try {
+    if (shouldUseOwnBackend()) {
+      await updateUserAppRoleInDb(userId, role);
+      return { ok: true } as const;
+    }
+
     const supabase = await (
       await import("@/lib/supabase/server")
     ).createClient();
@@ -290,6 +351,14 @@ export async function setUserStatus(
   options?: { desiredRoleIfActivating?: string }
 ) {
   try {
+    if (shouldUseOwnBackend()) {
+      // Postgres local no tiene columna profiles.role; todos activos por ahora.
+      if (status === "inactivo") {
+        return { ok: false, error: "Estado inactivo no disponible en backend propio todavía" } as const;
+      }
+      return { ok: true } as const;
+    }
+
     const supabase = await (
       await import("@/lib/supabase/server")
     ).createClient();
@@ -316,6 +385,11 @@ export async function setUserStatus(
 
 export async function deleteProfile(userId: string) {
   try {
+    if (shouldUseOwnBackend()) {
+      await deleteUsersFromDb([userId]);
+      return { ok: true } as const;
+    }
+
     const supabase = await (
       await import("@/lib/supabase/server")
     ).createClient();
@@ -337,6 +411,11 @@ export async function deleteProfile(userId: string) {
 export async function deleteProfiles(userIds: string[]): Promise<{ ok: boolean; error?: string }> {
   if (userIds.length === 0) return { ok: true };
   try {
+    if (shouldUseOwnBackend()) {
+      await deleteUsersFromDb(userIds);
+      return { ok: true };
+    }
+
     const supabase = await (
       await import("@/lib/supabase/server")
     ).createClient();
@@ -365,6 +444,9 @@ export interface UserForEdit {
   app_role: Database["public"]["Enums"]["app_role"] | null;
   role: string | null; // active/inactive status
   avatar_url: string | null;
+  clientId?: string | null;
+  clientName?: string | null;
+  clientRole?: Database["public"]["Enums"]["client_role"] | null;
 }
 
 export async function getUserById(userId: string): Promise<{
@@ -373,6 +455,11 @@ export async function getUserById(userId: string): Promise<{
   data?: UserForEdit;
 }> {
   try {
+    if (shouldUseOwnBackend()) {
+      const data = await getUserByIdFromDb(userId);
+      return { ok: true, data };
+    }
+
     const supabase = await (
       await import("@/lib/supabase/server")
     ).createClient();
@@ -418,6 +505,8 @@ export interface UpdateUserParams {
   app_role?: Database["public"]["Enums"]["app_role"];
   role?: string; // for active/inactive status
   avatar_url?: string | null;
+  clientId?: string | null;
+  clientRole?: Database["public"]["Enums"]["client_role"];
 }
 
 export async function updateUser(params: UpdateUserParams): Promise<{
@@ -425,6 +514,18 @@ export async function updateUser(params: UpdateUserParams): Promise<{
   error?: string;
 }> {
   try {
+    if (shouldUseOwnBackend()) {
+      await updateUserInDb({
+        userId: params.userId,
+        full_name: params.full_name,
+        app_role: params.app_role,
+        avatar_url: params.avatar_url,
+        clientId: params.clientId,
+        clientRole: params.clientRole,
+      });
+      return { ok: true };
+    }
+
     const supabase = await (
       await import("@/lib/supabase/server")
     ).createClient();

@@ -97,7 +97,7 @@ export function ShareConnectionModal({
 
     if (membersErr) throw membersErr;
 
-    (members ?? []).forEach((m) => {
+    (members ?? []).forEach((m: any) => {
       if (m.user_id) {
         currentMemberUserIds.add(m.user_id);
         memberMap.set(m.user_id, m);
@@ -127,7 +127,7 @@ export function ShareConnectionModal({
     // But 'client_member_id' will be missing. logic needs to handle that.
 
     const options: ClientMemberOption[] = (profiles ?? [])
-      .map((p) => {
+      .map((p: any) => {
         const member = memberMap.get(p.id);
         
         // If we are filtering by existing permissions (excludeClientMemberIds), 
@@ -145,7 +145,7 @@ export function ShareConnectionModal({
           isMember: !!member, // Helper flag
         };
       })
-      .filter((o): o is ClientMemberOption & { isMember: boolean } => o !== null);
+      .filter((o: any): o is ClientMemberOption & { isMember: boolean } => o !== null);
 
     setClientMembers(options);
     console.debug("[ShareConnectionModal] Client members loaded", {
@@ -166,7 +166,7 @@ export function ShareConnectionModal({
         });
         const list = await fetchPermissions();
         if (cancelled) return;
-        const excludeIds = list.map((p) => p.client_member_id);
+        const excludeIds = list.map((p: any) => p.client_member_id);
         await fetchClientMembers(excludeIds);
       } catch (e) {
         console.error("[ShareConnectionModal] Init error", e);
@@ -232,7 +232,7 @@ export function ShareConnectionModal({
       console.debug("[ShareConnectionModal] Permission added, refreshing lists");
       // Refresh lists
       const list = await fetchPermissions();
-      const excludeIds = list.map((p) => p.client_member_id);
+      const excludeIds = list.map((p: any) => p.client_member_id);
       await fetchClientMembers(excludeIds);
       setSelectedMemberUserId(null);
       setSelectedPermission("VIEW");
@@ -260,7 +260,7 @@ export function ShareConnectionModal({
     }
     console.debug("[ShareConnectionModal] Permission removed, refreshing lists");
     const list = await fetchPermissions();
-    const excludeIds = list.map((p) => p.client_member_id);
+    const excludeIds = list.map((p: any) => p.client_member_id);
     await fetchClientMembers(excludeIds);
   };
 
@@ -287,7 +287,7 @@ export function ShareConnectionModal({
                 disabled={isLoading || clientMembers.length === 0}
               >
                 <option value="">Selecciona un miembro…</option>
-                {clientMembers.map((m) => (
+                {clientMembers.map((m: any) => (
                   <option key={m.client_member_id} value={m.userId}>
                     {m.full_name || "Sin nombre"}{" "}
                     {m.email ? `(${m.email})` : ""}
@@ -327,7 +327,7 @@ export function ShareConnectionModal({
                   Aún no hay permisos configurados.
                 </p>
               ) : (
-                permissions.map((p) => {
+                permissions.map((p: any) => {
                   const label =
                     p.permission_type === "UPDATE" ? "Editor" : "Visualizador";
                   return (

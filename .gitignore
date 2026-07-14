@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+/backend/node_modules
 /.pnp
 .pnp.*
 .pnpm-store
@@ -21,6 +22,9 @@
 # production
 /build
 
+# excel uploads (backend propio local)
+/data/excel-uploads/
+
 # misc
 .DS_Store
 *.pem
@@ -34,6 +38,7 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*.local
 .env
+.env.deploy.local
 
 # vercel
 .vercel
@@ -43,3 +48,4 @@ yarn-error.log*
 next-env.d.ts
 *.sql
 
+.env*

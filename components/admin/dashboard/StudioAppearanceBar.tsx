@@ -11,7 +11,7 @@ type StudioAppearanceBarProps = {
 };
 
 export function StudioAppearanceBar({ theme, onThemeChange }: StudioAppearanceBarProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="studio-appearance-bar border-b border-[var(--studio-border)] bg-[var(--studio-bg-elevated)]">

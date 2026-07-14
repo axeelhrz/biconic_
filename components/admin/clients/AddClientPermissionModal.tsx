@@ -84,7 +84,7 @@ export default function AddClientPermissionModal({ clientId, onPermissionAdded }
         searchUsers(debouncedExternalSearch).then(res => {
             setSearchingExternal(false);
             if (res.ok && res.data) {
-                const validUsers = res.data.filter((u): u is { id: string; email: string; full_name: string | null } => u.email !== null);
+                const validUsers = res.data.filter((u: any): u is { id: string; email: string; full_name: string | null } => u.email !== null);
                 setFoundUsers(validUsers);
             } else {
                 setFoundUsers([]);
@@ -187,7 +187,7 @@ export default function AddClientPermissionModal({ clientId, onPermissionAdded }
                               <CommandList>
                                 <CommandEmpty>No se encontraron usuarios.</CommandEmpty>
                                 <CommandGroup>
-                                  {members.map((member) => (
+                                  {members.map((member: any) => (
                                     <CommandItem
                                       key={member.id}
                                       value={member.name}
@@ -246,7 +246,7 @@ export default function AddClientPermissionModal({ clientId, onPermissionAdded }
                                             <CommandEmpty>No se encontraron usuarios.</CommandEmpty>
                                         )}
                                         <CommandGroup>
-                                            {foundUsers.map((user) => (
+                                            {foundUsers.map((user: any) => (
                                                 <CommandItem
                                                     key={user.id}
                                                     value={user.email}
@@ -298,7 +298,7 @@ export default function AddClientPermissionModal({ clientId, onPermissionAdded }
                           <CommandList>
                             <CommandEmpty>No se encontraron dashboards.</CommandEmpty>
                             <CommandGroup>
-                              {dashboards.map((dashboard) => (
+                              {dashboards.map((dashboard: any) => (
                                 <CommandItem
                                   key={dashboard.id}
                                   value={dashboard.title}

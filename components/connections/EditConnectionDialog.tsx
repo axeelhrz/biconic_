@@ -81,35 +81,31 @@ export default function EditConnectionDialog({
   const handleSubmit = async (values: FormValues) => {
     try {
       if (!connectionId) throw new Error("Conexión no encontrada");
-      const supabase = createClient();
 
-      // Verificar usuario (opcional pero consistente con create)
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-      if (userError) throw userError;
-      if (!user) throw new Error("No hay un usuario autenticado");
-
-      const { error } = await supabase
-        .from("connections")
-        .update({
-          name: values.connectionName,
-          db_host: values.host,
-          db_name: values.database,
-          db_user: values.user,
-          db_port: values.port,
-          // Nota: la contraseña ahora se almacena en secreto; no se actualiza aquí
-        })
-        .eq("id", connectionId);
-
-      if (error) throw error;
+      const res = await fetch("/api/connection/update", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionId,
+          connectionName: values.connectionName,
+          host: values.host,
+          database: values.database,
+          user: values.user,
+          port: values.port,
+        }),
+      });
+      const data = await safeJsonResponse<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "No se pudo actualizar la conexión");
+      }
 
       toast.success("Conexión actualizada correctamente");
       onOpenChange(false);
       onUpdated?.();
-    } catch (err: any) {
-      toast.error(err?.message || "No se pudo actualizar la conexión");
+    } catch (err: unknown) {
+      toast.error(
+        err instanceof Error ? err.message : "No se pudo actualizar la conexión"
+      );
       console.error("Update connection failed:", err);
     }
   };
@@ -117,7 +113,7 @@ export default function EditConnectionDialog({
   const handleTest = async (values: FormValues) => {
     try {
       toast.info("Probando conexión...");
-      const res = await fetch("/api/test-connection", {
+      const res = await fetch("/api/connection/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

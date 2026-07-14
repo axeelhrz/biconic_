@@ -2,14 +2,25 @@ import { NextRequest, NextResponse } from "next/server";
 import mysql from "mysql2/promise";
 import { Client as PgClient } from "pg";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service";
+import { shouldUseOwnBackend } from "@/lib/api/backend-config";
 import { decryptConnectionPassword } from "@/lib/connection-secret";
 import { deriveColumnTypesFromSample } from "@/lib/derive-column-types";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import { resolveExcelTableName, resolveExcelPhysicalTableFromSelection } from "@/lib/excel-import/excel-metadata";
+import { connectionsSelectColumns } from "@/lib/db/connections-query";
+import {
+  hydrateConnectionRow,
+  readCredentialsFromConnectionRow,
+} from "@/lib/connection/connection-persistence";
+import { formatFirebirdConnectError, resolveFirebirdAttachOptions } from "@/lib/connection/resolve-firebird-connection";
 
 type Body = { connectionId: string | number; tableName?: string };
 
 const SAMPLE_LIMIT = 300;
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  let hydrated: ReturnType<typeof hydrateConnectionRow> | null = null;
   try {
     const body = (await req.json()) as Body | null;
     if (!body?.connectionId) {
@@ -21,48 +32,79 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 401 });
     }
 
-    const { data: conn, error: connError } = await supabase
+    const dbClient = shouldUseOwnBackend() ? createServiceRoleClient() : supabase;
+    const { data: conn, error: connError } = await dbClient
       .from("connections")
-      .select("id, type, db_host, db_name, db_user, db_port, db_password_encrypted")
+      .select(connectionsSelectColumns())
       .eq("id", String(body.connectionId))
       .maybeSingle();
     if (connError || !conn) {
       return NextResponse.json({ ok: false, error: "Conexión no encontrada" }, { status: 404 });
     }
 
-    let type = (conn as any).type === "excel_file" || (conn as any).type === "excel" ? "excel" : (conn as any).type;
-    if (type === "postgresql") type = "postgres";
-    let host = (conn as any).db_host;
-    let database = (conn as any).db_name;
-    let userDb = (conn as any).db_user;
-    let port = (conn as any).db_port;
+    hydrated = hydrateConnectionRow(conn as Record<string, unknown>);
+    const creds = readCredentialsFromConnectionRow(conn as Record<string, unknown>);
     let password: string | undefined;
     try {
-      password = (conn as any).db_password_encrypted ? decryptConnectionPassword((conn as any).db_password_encrypted) : undefined;
+      password = creds.passwordEncrypted
+        ? decryptConnectionPassword(creds.passwordEncrypted)
+        : undefined;
     } catch {
       // ignore
     }
-    if (!password && (conn as any).type === "firebird") {
+    if (!password && hydrated.type === "firebird") {
       password = process.env.FLEXXUS_PASSWORD ?? undefined;
     }
+    const host = creds.host || undefined;
+    const database = creds.database || undefined;
+    const userDb = creds.user || undefined;
+    const port = Number.isFinite(creds.port) ? creds.port : undefined;
+    let type =
+      hydrated.type === "excel_file" || hydrated.type === "excel"
+        ? "excel"
+        : hydrated.type;
+    if (type === "postgresql") type = "postgres";
 
     let rows: Record<string, unknown>[] = [];
 
     if (type === "excel") {
-      const { data: meta, error: metaError } = await supabase
+      const tableNameParam = (body.tableName ?? "").trim();
+      const { data: metaRows, error: metaError } = await dbClient
         .from("data_tables")
-        .select("physical_table_name")
-        .eq("connection_id", String(body.connectionId))
-        .maybeSingle();
-      if (metaError || !meta) {
-        return NextResponse.json({ ok: false, error: "Metadatos de Excel no encontrados" }, { status: 404 });
+        .select("physical_table_name, table_name")
+        .eq("connection_id", String(body.connectionId));
+
+      const metaTableRows = Array.isArray(metaRows)
+        ? metaRows
+        : metaRows
+          ? [metaRows]
+          : [];
+
+      if (metaError || metaTableRows.length === 0) {
+        return NextResponse.json(
+          { ok: false, error: "Metadatos de Excel no encontrados" },
+          { status: 404 }
+        );
       }
-      const tableName = (meta as any).physical_table_name || `import_${String(body.connectionId).replaceAll("-", "_")}`;
-      const dbUrl = process.env.SUPABASE_DB_URL;
-      if (!dbUrl) {
-        return NextResponse.json({ ok: false, error: "Configuración de base de datos no disponible" }, { status: 500 });
+
+      const tableName = tableNameParam
+        ? resolveExcelPhysicalTableFromSelection(
+            tableNameParam,
+            metaTableRows as { physical_table_name?: string | null; table_name?: string | null }[]
+          )
+        : resolveExcelTableName(
+            String(body.connectionId),
+            metaTableRows[0] as { physical_table_name?: string | null }
+          );
+
+      if (!tableName) {
+        return NextResponse.json(
+          { ok: false, error: "No se pudo resolver la tabla de Excel" },
+          { status: 400 }
+        );
       }
-      const client = new PgClient({ connectionString: dbUrl } as any);
+
+      const client = new PgClient({ connectionString: getInternalDbUrl(), ssl: false } as { connectionString: string; ssl: boolean });
       await client.connect();
       try {
         const safeTable = tableName.replace(/"/g, '""');
@@ -116,27 +158,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         await connection.end();
       }
     } else if (type === "firebird") {
-      if (!password || !host || !database || !userDb) {
-        return NextResponse.json({ ok: false, error: "Credenciales incompletas para Firebird" }, { status: 400 });
-      }
       const tableName = (body.tableName ?? "").trim();
       if (!tableName) {
         return NextResponse.json({ ok: false, error: "tableName requerido para Firebird" }, { status: 400 });
       }
-      // Firebird: usar solo el nombre de la relación (sin esquema) para evitar -204 "Table/Procedure unknown"
       const tableNameOnly = tableName.includes(".") ? tableName.split(".").pop()!.trim() : tableName;
       const relationName = /^[A-Z0-9_]+$/i.test(tableNameOnly) ? tableNameOnly.toUpperCase() : `"${tableNameOnly.replace(/"/g, '""')}"`;
       const Firebird = require("node-firebird");
+      let fbOpts: ReturnType<typeof resolveFirebirdAttachOptions>;
+      try {
+        fbOpts = resolveFirebirdAttachOptions(hydrated);
+      } catch (e) {
+        return NextResponse.json(
+          { ok: false, error: e instanceof Error ? e.message : "Credenciales incompletas para Firebird" },
+          { status: 400 }
+        );
+      }
       rows = await new Promise<Record<string, unknown>[]>((resolve, reject) => {
-        const opts = {
-          host,
-          port: port ? Number(port) : 15421,
-          database,
-          user: userDb,
-          password: password || "",
-          lowercase_keys: false,
-        };
-        Firebird.attach(opts, (errAttach: Error | null, db: any) => {
+        Firebird.attach(fbOpts, (errAttach: Error | null, db: any) => {
           if (errAttach) {
             reject(errAttach);
             return;
@@ -156,7 +195,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const columnTypes = deriveColumnTypesFromSample(rows);
     return NextResponse.json({ ok: true, columnTypes });
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Error al inferir tipos";
+    const message = formatFirebirdConnectError(
+      e,
+      hydrated
+        ? (() => {
+            try {
+              return resolveFirebirdAttachOptions(hydrated).host;
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined
+    );
     console.error("[infer-column-types]", message);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }

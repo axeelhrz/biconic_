@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
+import { listAdminClients } from "@/app/admin/(main)/clients/actions";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -68,6 +70,14 @@ export default function AdminClientTable({ search = "", filter = "todos" }: Admi
   const loadData = useCallback(async () => {
       setLoading(true);
       try {
+        if (isOwnBackendEnabled()) {
+          const res = await listAdminClients({ page, pageSize, search, filter });
+          if (!res.ok) throw new Error(res.error ?? "Error cargando clientes");
+          setRows(res.rows);
+          setTotal(res.total);
+          return;
+        }
+
         const supabase = createClient();
         const { data: ures, error: uerr } = await supabase.auth.getUser();
         if (uerr) throw uerr;

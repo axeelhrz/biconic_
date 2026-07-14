@@ -778,7 +778,7 @@ export function buildPieDoughnutLegendShared(
         const dataset = chart.data.datasets[0];
         const bgArr = dataset?.backgroundColor;
         if (!Array.isArray(bgArr) || !labels.length) return [];
-        return labels.map((label, i) => {
+        return labels.map((label: unknown, i: number) => {
           const bg =
             (bgArr as string[])[i] ?? (typeof bgArr === "string" ? bgArr : "#0ea5e9");
           const text = truncatePieLegendText(String(label ?? ""));

@@ -67,6 +67,7 @@ type ConnectionFormProps = {
   // Nuevas props para recibir el estado del proceso desde el diálogo padre
   isProcessing?: boolean;
   currentImportId?: string | null;
+  currentConnectionId?: string | null;
   onProcessFinished?: (result: {
     status: "completed" | "failed";
     errorMessage?: string | null;
@@ -88,6 +89,7 @@ export default function ConnectionForm({
   // Recibimos las nuevas props para controlar la UI
   isProcessing,
   currentImportId,
+  currentConnectionId,
   onProcessFinished,
   clientOptions,
   selectedClientId = "",
@@ -173,9 +175,9 @@ export default function ConnectionForm({
         }
 
         if (file.size > LARGE_FILE_SHEET_INSPECTION_LIMIT_BYTES) {
-          setSelectedSheet("__ALL__");
+          setSelectedSheet("");
           setSheetInspectWarning(
-            "Archivo grande: se omite inspección de hojas para evitar bloqueos. Se importarán todas las hojas automáticamente."
+            "Archivo grande: se omite inspección de hojas. Se importará la primera hoja para evitar límites de disco en el servidor."
           );
           return;
         }
@@ -418,9 +420,10 @@ export default function ConnectionForm({
                   </div>
                 </div>
               )}
-              {isProcessing && currentImportId && onProcessFinished ? (
+              {isProcessing && (currentImportId || currentConnectionId) && onProcessFinished ? (
                 <ImportStatus
-                  dataTableId={currentImportId}
+                  dataTableId={currentImportId ?? undefined}
+                  connectionId={currentConnectionId ?? undefined}
                   onProcessFinished={onProcessFinished}
                 />
               ) : (

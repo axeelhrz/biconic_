@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import postgres from "postgres";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import {
@@ -55,9 +56,9 @@ interface AggregationRequest {
 const normalizeStr = (str: string) =>
   str ? str.replace(/\s+/g, "").toUpperCase() : "";
 
-/** Obtiene nombres de columnas de la tabla desde information_schema. Devuelve null si falla o no hay SUPABASE_DB_URL. */
+/** Obtiene nombres de columnas de la tabla desde information_schema. Devuelve null si falla o no hay DATABASE_URL. */
 async function fetchTableColumnNames(schemaName: string, tableName: string): Promise<string[] | null> {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getInternalDbUrl();
   if (!dbUrl) return null;
   const safeSchema = schemaName === "etl_output" ? "etl_output" : "public";
   const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase() || "table";
@@ -69,7 +70,7 @@ async function fetchTableColumnNames(schemaName: string, tableName: string): Pro
     ) as Array<{ column_name?: string }>;
     await sql.end();
     if (!Array.isArray(rows) || rows.length === 0) return null;
-    return rows.map((r) => String(r?.column_name ?? "").toLowerCase());
+    return rows.map((r: any) => String(r?.column_name ?? "").toLowerCase());
   } catch {
     try {
       await sql.end();
@@ -240,13 +241,13 @@ export async function POST(
     let dimensionGroupByClause = "";
 
     if (dimList.length > 0) {
-      const parts = dimList.map((d) => {
+      const parts = dimList.map((d: any) => {
         const safeDimension = d.replace(/"/g, '""');
         const coalesceExpression = `COALESCE("${safeDimension}"::text, 'Sin Categoría')`;
         return { select: `${coalesceExpression} AS "${safeDimension}"`, group: coalesceExpression };
       });
-      dimensionSelectClause = parts.map((p) => p.select).join(", ");
-      dimensionGroupByClause = parts.map((p) => p.group).join(", ");
+      dimensionSelectClause = parts.map((p: any) => p.select).join(", ");
+      dimensionGroupByClause = parts.map((p: any) => p.group).join(", ");
     }
 
     const selectClause = [dimensionSelectClause, metricClauses]
@@ -257,7 +258,7 @@ export async function POST(
     // 3. Filtros
     if (validFilters.length > 0) {
       const whereClauses = validFilters
-        .map((f) => {
+        .map((f: any) => {
           const safeField = f.field.replace(/"/g, '""');
           const op = (f.operator || "=").toUpperCase().trim();
 
@@ -284,8 +285,8 @@ export async function POST(
           if (op === "YEAR") {
             if (Array.isArray(f.value)) {
               const list = f.value
-                .map((v) => Number(v))
-                .filter((n) => !isNaN(n))
+                .map((v: any) => Number(v))
+                .filter((n: any) => !isNaN(n))
                 .join(", ");
               return `EXTRACT(YEAR FROM ${fieldExpression}) IN (${list})`;
             }
@@ -299,8 +300,8 @@ export async function POST(
           if (op === "QUARTER") {
             if (Array.isArray(f.value)) {
               const list = f.value
-                .map((v) => Number(v))
-                .filter((n) => !isNaN(n) && n >= 1 && n <= 4)
+                .map((v: any) => Number(v))
+                .filter((n: any) => !isNaN(n) && n >= 1 && n <= 4)
                 .join(", ");
               if (!list) return "TRUE";
               return `EXTRACT(QUARTER FROM ${fieldExpression}) IN (${list})`;
@@ -313,8 +314,8 @@ export async function POST(
             const semExpr = `(CASE WHEN EXTRACT(MONTH FROM ${fieldExpression}) <= 6 THEN 1 ELSE 2 END)`;
             if (Array.isArray(f.value)) {
               const list = f.value
-                .map((v) => Number(v))
-                .filter((n) => !isNaN(n) && (n === 1 || n === 2))
+                .map((v: any) => Number(v))
+                .filter((n: any) => !isNaN(n) && (n === 1 || n === 2))
                 .join(", ");
               if (!list) return "TRUE";
               return `${semExpr} IN (${list})`;
@@ -328,7 +329,7 @@ export async function POST(
           }
           if (op === "IN") {
             const list = (Array.isArray(f.value) ? f.value : [])
-              .map((x) => toSqlLiteral(x))
+              .map((x: any) => toSqlLiteral(x))
               .join(", ");
             if (!list) return "TRUE";
             return `${fieldExpression} IN (${list})`;

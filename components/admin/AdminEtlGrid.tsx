@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import EtlCard, { Etl } from "@/components/etl/EtlCard";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
 import { getEtlsAdmin, deleteEtlAdmin } from "@/app/admin/(main)/etl/actions";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,11 @@ import {
 import { Trash2, X, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatNextExecutionDisplay, parseScheduleFromLayout } from "@/lib/etl/schedule";
+import {
+  AdminClientGroupSection,
+  AdminResourceCardGrid,
+} from "@/components/admin/AdminClientGroupSections";
+import { groupItemsByClient } from "@/lib/admin/clientGrouping";
 
 // Optional shape to help with mapping Supabase rows to the Etl UI type
 type SupabaseEtlRow = {
@@ -71,12 +77,14 @@ interface AdminEtlGridProps {
   searchQuery?: string;
   filter?: FilterType;
   clientId?: string;
+  groupByClient?: boolean;
 }
 
 export default function AdminEtlGrid({
   searchQuery = "",
   filter = "todos",
   clientId = "",
+  groupByClient = true,
 }: AdminEtlGridProps) {
   const [etls, setEtls] = useState<Etl[]>([]);
   const [loading, setLoading] = useState(true);
@@ -157,9 +165,10 @@ export default function AdminEtlGrid({
         lastExecution: formatEtlDateTime(lastRunByEtlId[String(row.id)] ?? (row as SupabaseEtlRow).lastExecution),
         nextExecution:
           (row as SupabaseEtlRow).nextExecution ||
-          formatNextExecutionDisplay(schedule?.lastRunAt, frequency),
+          formatNextExecutionDisplay(schedule?.lastRunAt, frequency, schedule ?? undefined),
         createdAt: formatEtlDate((row as SupabaseEtlRow).created_at ?? (row as SupabaseEtlRow).createdAt),
         clientId: row.client_id ?? "",
+        clientLabel: row.client_id ? clientById[row.client_id] ?? undefined : undefined,
         ownerId: row.user_id,
         owner: row.user_id ? { fullName: ownerById[row.user_id] ?? null } : undefined,
         client: row.client_id ? { name: clientById[row.client_id] ?? null } : undefined,
@@ -177,6 +186,13 @@ export default function AdminEtlGrid({
         setTimeout(() => reject(new Error("timeout")), timeoutMs)
       );
       const res = await Promise.race([adminPromise, timeoutPromise]);
+      if (!res.ok) {
+        if (isOwnBackendEnabled()) {
+          setError(res.error ?? "Error cargando ETLs");
+          setEtls([]);
+          return;
+        }
+      }
       if (res.ok && res.data) {
         const rows = (res.data ?? []) as SupabaseEtlRow[];
         const owners: Record<string, string | null> = res.owners ?? {};
@@ -200,9 +216,10 @@ export default function AdminEtlGrid({
             lastExecution: formatEtlDateTime((row as SupabaseEtlRow).lastExecution),
             nextExecution:
               (row as SupabaseEtlRow).nextExecution ||
-              formatNextExecutionDisplay(schedule?.lastRunAt, frequency),
+              formatNextExecutionDisplay(schedule?.lastRunAt, frequency, schedule ?? undefined),
             createdAt: formatEtlDate((row as SupabaseEtlRow).created_at ?? (row as SupabaseEtlRow).createdAt),
             clientId: row.client_id ?? "",
+            clientLabel: row.client_id ? clients[row.client_id] ?? undefined : undefined,
             ownerId: row.user_id,
             owner: row.user_id ? { fullName: owners[row.user_id] ?? null } : undefined,
             client: row.client_id ? { name: clients[row.client_id] ?? null } : undefined,
@@ -213,14 +230,19 @@ export default function AdminEtlGrid({
       }
       const mapped = await loadFromClient();
       setEtls(mapped);
-    } catch {
-      try {
-        const mapped = await loadFromClient();
-        setEtls(mapped);
-        setError(null);
-      } catch (err: any) {
-        setError(err?.message ?? "Error cargando ETLs");
+    } catch (err: unknown) {
+      if (isOwnBackendEnabled()) {
+        setError(err instanceof Error ? err.message : "Error cargando ETLs");
         setEtls([]);
+      } else {
+        try {
+          const mapped = await loadFromClient();
+          setEtls(mapped);
+          setError(null);
+        } catch (fallbackErr: unknown) {
+          setError(fallbackErr instanceof Error ? fallbackErr.message : "Error cargando ETLs");
+          setEtls([]);
+        }
       }
     } finally {
       setLoading(false);
@@ -431,31 +453,44 @@ export default function AdminEtlGrid({
         </DialogContent>
       </Dialog>
 
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {(filtered.length > 0 ? filtered : []).map((etl) => (
-          <div key={etl.id} className="relative">
-            <div
-              className="absolute right-2.5 top-2.5 z-10"
-              onClick={(e) => e.stopPropagation()}
+      <div className="flex flex-col gap-10">
+        {(groupByClient ? groupItemsByClient(filtered) : [{ clientId: null, clientLabel: "", items: filtered }]).map(
+          (group) => (
+            <AdminClientGroupSection
+              key={group.clientId ?? "all"}
+              clientId={group.clientId}
+              clientLabel={groupByClient ? group.clientLabel : "ETLs"}
+              count={group.items.length}
             >
-              <Checkbox
-                checked={selectedSet.has(etl.id)}
-                onCheckedChange={() => toggleSelect(etl.id)}
-                className="h-4 w-4 rounded-md border-2 border-[var(--platform-fg-muted)] data-[state=checked]:border-[var(--platform-accent)] data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:text-white"
-              />
-            </div>
-            <EtlCard
-              etl={etl}
-              basePath="/admin/etl"
-              onDeleted={loadEtls}
-              onSaved={loadEtls}
-              useAdminDelete
-            />
-          </div>
-        ))}
+              <AdminResourceCardGrid>
+                {group.items.map((etl) => (
+                  <div key={etl.id} className="relative">
+                    <div
+                      className="absolute right-2.5 top-2.5 z-10"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Checkbox
+                        checked={selectedSet.has(etl.id)}
+                        onCheckedChange={() => toggleSelect(etl.id)}
+                        className="h-4 w-4 rounded-md border-2 border-[var(--platform-fg-muted)] data-[state=checked]:border-[var(--platform-accent)] data-[state=checked]:bg-[var(--platform-accent)] data-[state=checked]:text-white"
+                      />
+                    </div>
+                    <EtlCard
+                      etl={etl}
+                      basePath="/admin/etl"
+                      onDeleted={loadEtls}
+                      onSaved={loadEtls}
+                      useAdminDelete
+                    />
+                  </div>
+                ))}
+              </AdminResourceCardGrid>
+            </AdminClientGroupSection>
+          )
+        )}
         {filtered.length === 0 && (
           <div
-            className="col-span-full rounded-xl border p-6 text-center text-sm"
+            className="rounded-xl border p-6 text-center text-sm"
             style={{
               borderColor: "var(--platform-border)",
               background: "var(--platform-surface)",

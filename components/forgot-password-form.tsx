@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { isOwnBackendEnabled } from "@/lib/api/backend-client";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -28,11 +29,19 @@ export function ForgotPasswordForm({
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    const supabase = createClient();
     setIsLoading(true);
     setError(null);
 
+    if (isOwnBackendEnabled()) {
+      setError(
+        "Recuperación de contraseña aún no está disponible en modo backend propio. Contacta al administrador."
+      );
+      setIsLoading(false);
+      return;
+    }
+
     try {
+      const supabase = createClient();
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/auth/update-password`,
       });
