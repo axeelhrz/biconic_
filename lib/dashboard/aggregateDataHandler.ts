@@ -1252,11 +1252,10 @@ export async function runAggregateData(
     const cumulative = body.cumulative && body.cumulative !== "none" && dimList.length > 0;
     if (cumulative) {
       const orderDim = dimList[0].replace(/"/g, '""');
-      const dateColExpr = `"${body.dateDimension.replace(/"/g, '""')}"::date`;
       const fyStart = normalizeFiscalYearStartMonth(body.fiscalYearStartMonth);
       const partition =
         body.cumulative === "ytd" && body.dateDimension
-          ? `PARTITION BY ${sqlFiscalYearPartitionExpr(dateColExpr, fyStart)}`
+          ? `PARTITION BY ${sqlFiscalYearPartitionExpr(`"${body.dateDimension.replace(/"/g, '""')}"::date`, fyStart)}`
           : "";
       const windowExpr = body.metrics
         .map((m, i) => {

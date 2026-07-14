@@ -86,6 +86,7 @@ import {
   tableRowStyle,
 } from "@/lib/dashboard/tableStyle";
 import { applyTableQuickCalc, chartQuickCalcToPercentBasis, chartQuickCalcUsesPercentDisplay, normalizeChartQuickCalc } from "@/lib/dashboard/chartQuickCalc";
+import type { ChartQuickCalc } from "@/lib/dashboard/chartQuickCalcTypes";
 import { mergeChartVisualStyle, widgetAggregationWithStoredVisualOverrides, type AggregationLike } from "@/lib/dashboard/widgetRenderParity";
 import { CompareStatusStrip } from "@/components/dashboard/CompareStatusStrip";
 import { resolveEffectiveCompareSpec, resolveWidgetCompareUi } from "@/lib/dashboard/compareContext";
@@ -825,6 +826,7 @@ export function DashboardWidgetRenderer({
       pieLegendResponsive?: boolean;
       pieLegendMode?: "side" | "integrated";
       pieIntegratedNameOrder?: "above" | "below";
+      chartQuickCalc?: ChartQuickCalc;
     } | undefined;
     const style: ChartStyleConfig | undefined = {
       ...mergeChartVisualStyle(widget.aggregationConfig as AggregationLike),

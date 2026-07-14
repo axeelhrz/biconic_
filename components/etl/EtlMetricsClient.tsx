@@ -7302,7 +7302,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                           value={chartQuickCalc}
                           onChange={setChartQuickCalc}
                           groupField={chartPercentGroupField}
-                          onGroupFieldChange={setChartPercentGroupField}
+                          onGroupFieldChange={(field) => setChartPercentGroupField(field ?? "")}
                           columnOptions={[
                             ...formDimensions,
                             ...chartYAxes.filter((k) => !formDimensions.includes(k)),

@@ -72,7 +72,7 @@ export default function ViewerDashboardHeader() {
       setIsUserLoading(false);
     }
     loadUser();
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event: string) => {
       if (event === "TOKEN_REFRESHED") return;
       setIsUserLoading(true);
       loadUser();

@@ -349,7 +349,7 @@ export type GuidedConfig = {
   };
   end?: { target?: { table?: string }; mode?: "overwrite" | "append" };
   /** Frecuencia de actualización automática (15m, 1h, 6h, 12h, 24h, 1w, 1M). */
-  schedule?: { frequency?: string; lastRunAt?: string };
+  schedule?: { frequency?: string; lastRunAt?: string; runAtTime?: string; runOnWeekdays?: number[] };
 };
 
 type Props = {
