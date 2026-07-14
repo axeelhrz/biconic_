@@ -22,7 +22,7 @@ import {
   applyComparativeRelationToRows,
   buildComparativeAggregateSql,
 } from "@/lib/dashboard/applyComparativeRelation";
-import { findComparativeRelation } from "@/lib/dataset/comparativeRelation";
+import { findComparativeRelation, resolveActiveComparativeMappings } from "@/lib/dataset/comparativeRelation";
 import { compareNeedsTimeGroupedRows } from "@/lib/dashboard/compareDisplayKeys";
 import {
   expandAggregationFiltersForTemporalCompare,
@@ -1410,12 +1410,21 @@ export async function runAggregateData(
       const measureField = relation.comparativeFields.find((f) => f.column === compareSpec.comparativeField);
       const valueType = measureField?.valueType ?? "absolute";
 
+      // Agrega el comparativo al mismo grano que el análisis (dims + fecha).
+      // Sin dims → total 100% del dataset comparativo.
+      const activeMappings = resolveActiveComparativeMappings({
+        fieldMappings: relation.fieldMappings,
+        analysisDimensions: dimList,
+        dateField: body.dateGroupBy?.field,
+      });
+
       const compSql = buildComparativeAggregateSql({
         schema: compTable.schema,
         tableName: compTable.tableName,
         relation,
         comparativeField: compareSpec.comparativeField,
         valueType,
+        activeMappings,
       });
 
       const compResult = await deps.executeSql(compSql);
@@ -1433,6 +1442,7 @@ export async function runAggregateData(
         relation,
         compareSpec,
         metricAliases: metricExternalKeys,
+        activeMappings,
         parseOpts: body.dateSlashOrder === "MDY" ? { slashDateOrder: "MDY" } : { slashDateOrder: "DMY" },
       });
     }

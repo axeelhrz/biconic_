@@ -10,12 +10,16 @@ import {
   normalizeComparativeColumnRef,
   normalizeComparativeFieldMappings,
   parseComparativeRelation,
+  resolveActiveComparativeMappings,
   sqlDateTruncExpr,
 } from "@/lib/dataset/comparativeRelation";
 import { formatMonthYearEnLabel, parseMonthYearEnLabel } from "@/lib/dashboard/dateFormatting";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { validateComparativeCompare } from "@/lib/dashboard/validateComparativeCompare";
-import { applyComparativeRelationToRows } from "@/lib/dashboard/applyComparativeRelation";
+import {
+  applyComparativeRelationToRows,
+  buildComparativeAggregateSql,
+} from "@/lib/dashboard/applyComparativeRelation";
 
 describe("comparativeRelation", () => {
   it("derives comparison level from mappings", () => {
@@ -206,6 +210,101 @@ describe("applyComparativeRelationToRows", () => {
       metricAliases: ["ventas"],
     });
     expect(rows[0]?.ventas_valor_comparativo).toBe(80);
+  });
+
+  it("compares against comparative total when analysis has no dimensions", () => {
+    const relation = {
+      id: "r1",
+      name: "Objetivos",
+      comparativeDatasetId: "ds-2",
+      fieldMappings: [
+        { id: "m1", comparativeColumn: "zona", baseColumn: "zona" },
+        { id: "m2", comparativeColumn: "provincia", baseColumn: "provincia" },
+      ],
+      comparisonLevel: ["zona", "provincia"],
+      comparativeFields: [{ column: "meta", valueType: "absolute" as const }],
+    };
+    const rows = applyComparativeRelationToRows({
+      baseRows: [{ ventas: 1000 }],
+      comparativeRows: [{ meta: 800 }],
+      relation,
+      compareSpec: { kind: "comparative", relationId: "r1", metricAlias: "ventas", comparativeField: "meta" },
+      metricAliases: ["ventas"],
+      activeMappings: [],
+    });
+    expect(rows[0]?.ventas_valor_comparativo).toBe(800);
+    expect(rows[0]?.ventas_cumplimiento).toBe(125);
+  });
+
+  it("compares only by active analysis dimensions", () => {
+    const relation = {
+      id: "r1",
+      name: "Objetivos",
+      comparativeDatasetId: "ds-2",
+      fieldMappings: [
+        { id: "m1", comparativeColumn: "zona", baseColumn: "DESCRIPCION" },
+        { id: "m2", comparativeColumn: "provincia", baseColumn: "NOMBRE" },
+        {
+          id: "m3",
+          comparativeColumn: "mes_y_a_o",
+          baseColumn: "FECHACOMPROBANTE",
+          baseDateTransform: "monthYear" as const,
+        },
+      ],
+      comparisonLevel: ["FECHACOMPROBANTE", "NOMBRE", "DESCRIPCION"],
+      comparativeFields: [{ column: "meta", valueType: "absolute" as const }],
+    };
+    const active = resolveActiveComparativeMappings({
+      fieldMappings: relation.fieldMappings,
+      analysisDimensions: ["join_3_descripcion"],
+    });
+    expect(active).toHaveLength(1);
+    expect(active[0]?.comparativeColumn).toBe("zona");
+
+    const rows = applyComparativeRelationToRows({
+      baseRows: [{ join_3_descripcion: "NORTE", ventas: 100 }],
+      comparativeRows: [
+        { zona: "NORTE", meta: 40 },
+        { zona: "SUR", meta: 60 },
+      ],
+      relation,
+      compareSpec: { kind: "comparative", relationId: "r1", metricAlias: "ventas", comparativeField: "meta" },
+      metricAliases: ["ventas"],
+      activeMappings: active,
+    });
+    expect(rows[0]?.ventas_valor_comparativo).toBe(40);
+  });
+
+  it("builds SELECT without leading whitespace for execute_sql", () => {
+    const relation = {
+      id: "r1",
+      name: "Objetivos",
+      comparativeDatasetId: "ds-2",
+      fieldMappings: [{ id: "m1", comparativeColumn: "zona", baseColumn: "zona" }],
+      comparisonLevel: ["zona"],
+      comparativeFields: [{ column: "meta", valueType: "absolute" as const }],
+    };
+    const sql = buildComparativeAggregateSql({
+      schema: "etl_output",
+      tableName: "objetivos",
+      relation,
+      comparativeField: "meta",
+      valueType: "absolute",
+      activeMappings: relation.fieldMappings,
+    });
+    expect(sql.startsWith("SELECT ")).toBe(true);
+
+    const totalSql = buildComparativeAggregateSql({
+      schema: "etl_output",
+      tableName: "objetivos",
+      relation,
+      comparativeField: "meta",
+      valueType: "absolute",
+      activeMappings: [],
+    });
+    expect(totalSql).toBe(
+      'SELECT SUM("meta"::numeric) AS "meta" FROM "etl_output"."objetivos"'
+    );
   });
 });
 

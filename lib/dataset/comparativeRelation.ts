@@ -325,3 +325,36 @@ export function normalizeComparativeFieldMappings(
     };
   });
 }
+
+/** Normaliza nombres de columna base (quita join_N_ / primary_) para matchear dimensiones del análisis. */
+export function normalizeComparativeBaseColumnKey(column: string): string {
+  return column
+    .trim()
+    .replace(/^join_\d+_+/i, "")
+    .replace(/^primary_+/i, "")
+    .replace(/\s+/g, "")
+    .toUpperCase();
+}
+
+/**
+ * Mapeos activos según las dimensiones del análisis.
+ * Sin dimensiones → [] (agrega el 100% del comparativo a un total único).
+ */
+export function resolveActiveComparativeMappings(params: {
+  fieldMappings: ComparativeFieldMapping[];
+  analysisDimensions: string[];
+  dateField?: string;
+}): ComparativeFieldMapping[] {
+  const dimKeys = new Set(
+    [...params.analysisDimensions, params.dateField]
+      .map((d) => (d ?? "").trim())
+      .filter(Boolean)
+      .map(normalizeComparativeBaseColumnKey)
+  );
+
+  if (dimKeys.size === 0) return [];
+
+  return params.fieldMappings.filter((m) =>
+    dimKeys.has(normalizeComparativeBaseColumnKey(m.baseColumn))
+  );
+}

@@ -13,7 +13,10 @@ import type {
   ComparativeValueType,
   DateTransform,
 } from "@/lib/dataset/comparativeRelation";
-import { comparativeOutputColumns } from "@/lib/dataset/comparativeRelation";
+import {
+  comparativeOutputColumns,
+  normalizeComparativeBaseColumnKey,
+} from "@/lib/dataset/comparativeRelation";
 
 function toNum(v: unknown): number | null {
   if (v == null || v === "") return null;
@@ -23,6 +26,19 @@ function toNum(v: unknown): number | null {
 
 function norm(s: string): string {
   return s.replace(/\s+/g, "").toUpperCase();
+}
+
+/** Resuelve columna incluso si el mapeo guarda FECHACOMPROBANTE y la fila tiene join_0_fechacomprobante. */
+function getComparativeSideValue(
+  row: Record<string, unknown>,
+  col: string
+): unknown {
+  const direct = getRowValue(row, col);
+  if (direct !== undefined) return direct;
+  const target = normalizeComparativeBaseColumnKey(col);
+  if (!target) return undefined;
+  const found = Object.keys(row).find((k) => normalizeComparativeBaseColumnKey(k) === target);
+  return found != null ? row[found] : undefined;
 }
 
 function transformComparativeKeyValue(
@@ -64,10 +80,11 @@ export function buildComparativeJoinKey(
   side: "base" | "comparative",
   parseOpts?: ParseDateLikeOptions
 ): string {
+  if (mappings.length === 0) return "";
   const parts: string[] = [];
   for (const m of mappings) {
     const col = side === "base" ? m.baseColumn : m.comparativeColumn;
-    const raw = getRowValue(row, col);
+    const raw = side === "base" ? getComparativeSideValue(row, col) : getRowValue(row, col);
     const val =
       side === "base"
         ? transformBaseKeyValue(raw, m.baseDateTransform, parseOpts)
@@ -83,9 +100,12 @@ export function applyComparativeRelationToRows(params: {
   relation: ComparativeRelation;
   compareSpec: Extract<CompareSpec, { kind: "comparative" }>;
   metricAliases: string[];
+  /** Si se omite, usa todos los mapeos de la relación. [] = total vs total. */
+  activeMappings?: ComparativeFieldMapping[];
   parseOpts?: ParseDateLikeOptions;
 }): Record<string, unknown>[] {
   const { baseRows, comparativeRows, relation, compareSpec, metricAliases, parseOpts } = params;
+  const mappings = params.activeMappings ?? relation.fieldMappings;
 
   const measureField = relation.comparativeFields.find((f) => f.column === compareSpec.comparativeField);
   const valueType: ComparativeValueType = measureField?.valueType ?? "absolute";
@@ -93,7 +113,7 @@ export function applyComparativeRelationToRows(params: {
 
   const compMap = new Map<string, number>();
   for (const row of comparativeRows) {
-    const key = buildComparativeJoinKey(row, relation.fieldMappings, "comparative", parseOpts);
+    const key = buildComparativeJoinKey(row, mappings, "comparative", parseOpts);
     const colKey = resolveRowColumnKey(row, compCol) ?? compCol;
     const val = toNum(row[colKey]);
     if (val == null) continue;
@@ -112,7 +132,7 @@ export function applyComparativeRelationToRows(params: {
 
   return baseRows.map((row) => {
     const out = { ...row };
-    const joinKey = buildComparativeJoinKey(row, relation.fieldMappings, "base", parseOpts);
+    const joinKey = buildComparativeJoinKey(row, mappings, "base", parseOpts);
     const metricKey = resolveRowColumnKey(row, targetAlias) ?? targetAlias;
     const realVal = toNum(row[metricKey]);
     const compVal = compMap.get(joinKey) ?? null;
@@ -143,30 +163,29 @@ export function buildComparativeAggregateSql(params: {
   relation: ComparativeRelation;
   comparativeField: string;
   valueType: ComparativeValueType;
+  /** Mapeos activos del análisis. Si se omite, usa todos. [] = total sin GROUP BY. */
+  activeMappings?: ComparativeFieldMapping[];
 }): string {
   const { schema, tableName, relation, comparativeField, valueType } = params;
+  const mappings = params.activeMappings ?? relation.fieldMappings;
   const safeSchema = schema.replace(/"/g, '""');
   const safeTable = tableName.replace(/"/g, '""');
   const table = `"${safeSchema}"."${safeTable}"`;
-
-  const groupParts: string[] = [];
-
-  relation.fieldMappings.forEach((m) => {
-    const col = `"${m.comparativeColumn.replace(/"/g, '""')}"`;
-    groupParts.push(col);
-  });
 
   const measureCol = `"${comparativeField.replace(/"/g, '""')}"`;
   const aggFunc = valueType === "percent" ? "AVG" : "SUM";
   const safeAlias = comparativeField.replace(/"/g, '""');
 
+  if (mappings.length === 0) {
+    // Total 100% del dataset comparativo (sin dimensiones en el análisis).
+    return `SELECT ${aggFunc}(${measureCol}::numeric) AS "${safeAlias}" FROM ${table}`;
+  }
+
+  const groupParts = mappings.map((m) => `"${m.comparativeColumn.replace(/"/g, '""')}"`);
   const selectGroup = groupParts
-    .map((g, i) => `${g}::text AS "${relation.fieldMappings[i]!.comparativeColumn.replace(/"/g, '""')}"`)
+    .map((g, i) => `${g}::text AS "${mappings[i]!.comparativeColumn.replace(/"/g, '""')}"`)
     .join(", ");
 
-  return `
-    SELECT ${selectGroup}, ${aggFunc}(${measureCol}::numeric) AS "${safeAlias}"
-    FROM ${table}
-    GROUP BY ${groupParts.join(", ")}
-  `;
+  // Sin whitespace inicial: public.execute_sql exige ^(SELECT|WITH)\s
+  return `SELECT ${selectGroup}, ${aggFunc}(${measureCol}::numeric) AS "${safeAlias}" FROM ${table} GROUP BY ${groupParts.join(", ")}`;
 }
