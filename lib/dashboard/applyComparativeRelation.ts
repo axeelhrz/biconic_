@@ -1,5 +1,6 @@
 import type { CompareSpec } from "@/lib/dashboard/compareSpec";
 import { getRowValue, resolveRowColumnKey } from "@/lib/dashboard/compareMetricRows";
+import { safeNumericCast } from "@/lib/dashboard/coerceNumericSqlExpr";
 import {
   formatDateByGranularity,
   formatMonthYearEnLabel,
@@ -20,12 +21,22 @@ import {
 
 function toNum(v: unknown): number | null {
   if (v == null || v === "") return null;
-  const n = Number(v);
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  // Soporta "$3,626,400", "3.626.400", " 12% ", etc.
+  const cleaned = String(v).trim().replace(/[%$,\s]/g, "").replace(/\.(?=.*\.)/g, "");
+  if (!cleaned || cleaned === "-" || cleaned === ".") return null;
+  const n = Number(cleaned.replace(/[^0-9.\-]/g, ""));
   return Number.isFinite(n) ? n : null;
 }
 
 function norm(s: string): string {
   return s.replace(/\s+/g, "").toUpperCase();
+}
+
+/** Cast a numeric tolerando moneda formateada ($3,626,400) y texto mixto. */
+export function sqlComparativeMeasureNumeric(columnSql: string): string {
+  const cleaned = `regexp_replace(${columnSql}::text, '[^0-9.\\-]', '', 'g')`;
+  return safeNumericCast(cleaned);
 }
 
 /** Resuelve columna incluso si el mapeo guarda FECHACOMPROBANTE y la fila tiene join_0_fechacomprobante. */
@@ -173,12 +184,13 @@ export function buildComparativeAggregateSql(params: {
   const table = `"${safeSchema}"."${safeTable}"`;
 
   const measureCol = `"${comparativeField.replace(/"/g, '""')}"`;
+  const measureNumeric = sqlComparativeMeasureNumeric(measureCol);
   const aggFunc = valueType === "percent" ? "AVG" : "SUM";
   const safeAlias = comparativeField.replace(/"/g, '""');
 
   if (mappings.length === 0) {
     // Total 100% del dataset comparativo (sin dimensiones en el análisis).
-    return `SELECT ${aggFunc}(${measureCol}::numeric) AS "${safeAlias}" FROM ${table}`;
+    return `SELECT ${aggFunc}(${measureNumeric}) AS "${safeAlias}" FROM ${table}`;
   }
 
   const groupParts = mappings.map((m) => `"${m.comparativeColumn.replace(/"/g, '""')}"`);
@@ -187,5 +199,5 @@ export function buildComparativeAggregateSql(params: {
     .join(", ");
 
   // Sin whitespace inicial: public.execute_sql exige ^(SELECT|WITH)\s
-  return `SELECT ${selectGroup}, ${aggFunc}(${measureCol}::numeric) AS "${safeAlias}" FROM ${table} GROUP BY ${groupParts.join(", ")}`;
+  return `SELECT ${selectGroup}, ${aggFunc}(${measureNumeric}) AS "${safeAlias}" FROM ${table} GROUP BY ${groupParts.join(", ")}`;
 }

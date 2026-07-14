@@ -302,9 +302,11 @@ describe("applyComparativeRelationToRows", () => {
       valueType: "absolute",
       activeMappings: [],
     });
-    expect(totalSql).toBe(
-      'SELECT SUM("meta"::numeric) AS "meta" FROM "etl_output"."objetivos"'
-    );
+    expect(totalSql).toContain('SUM(');
+    expect(totalSql).toContain('regexp_replace');
+    expect(totalSql).toContain('"meta"');
+    expect(totalSql).toContain('FROM "etl_output"."objetivos"');
+    expect(totalSql.startsWith("SELECT ")).toBe(true);
   });
 });
 
