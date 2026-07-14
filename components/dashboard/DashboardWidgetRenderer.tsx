@@ -626,20 +626,22 @@ export function DashboardWidgetRenderer({
     );
   }, [chartType, tableRows, tablePresentation.rows, tablePresentation.columns, widget.type, widget.aggregationConfig, widget.source]);
   const compareTableExtraKeys = useMemo(() => {
-    if (chartType !== "table" || !Array.isArray(tableRows) || tableRows.length === 0) return [] as string[];
+    if (chartType !== "table" || !Array.isArray(tableDisplayRows) || tableDisplayRows.length === 0) {
+      return [] as string[];
+    }
     const agg = widget.aggregationConfig as Record<string, unknown> | undefined;
     const compareUiOpts = { widgetType: widget.type, chartType: effectiveWidgetChartType(widget) };
     if (!effectivePlacementEnabled(agg ?? {}, "table_extra_columns", compareUiOpts)) return [];
     const spec = normalizeAggregationCompare(legacyCompareInputFromWidgetAgg(agg as never));
     if (spec.kind === "none") return [];
-    const axis = resolveWidgetAxisKeys(tableDisplayRows as Record<string, unknown>[], {
+    const axis = resolveWidgetAxisKeys(tableDisplayRows, {
       type: widget.type,
       aggregationConfig: widget.aggregationConfig as BuildChartConfigWidget["aggregationConfig"],
       source: widget.source as BuildChartConfigWidget["source"],
     });
     const y0 = axis?.yKeys[0];
     if (!y0) return [];
-    const keys = getCompareColumnKeys(spec, y0, tableDisplayRows[0] as Record<string, unknown>);
+    const keys = getCompareColumnKeys(spec, y0, tableDisplayRows[0]);
     return keys.tableExtraKeys;
   }, [chartType, tableDisplayRows, widget.type, widget.aggregationConfig, widget.source]);
   const effectiveTableColumnOrder = useMemo(() => {
