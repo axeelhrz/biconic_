@@ -62,6 +62,7 @@ import {
 import {
   isAttributeResultKey,
   resolveDashboardKpiDisplayValue,
+  type MetricDisplayRoleLike,
 } from "@/lib/dashboard/metricDisplayRole";
 import {
   getEffectiveDashboardCompareUi,
@@ -455,7 +456,7 @@ export function DashboardWidgetRenderer({
       aggCfg?.enabled && aggCfg.metrics?.length
         ? aggCfg.metrics.map((m) => m.alias || `${m.func}(${m.field})`).filter(Boolean)
         : [];
-    const metricsKpi = (aggCfg?.metrics ?? []) as { alias?: string; func?: string; field?: string }[];
+    const metricsKpi = (aggCfg?.metrics ?? []) as MetricDisplayRoleLike[];
     const rawKpiY =
       Array.isArray(aggCfg?.chartYAxes) && aggCfg.chartYAxes[0] != null ? String(aggCfg.chartYAxes[0]).trim() : "";
     const resolvedKpiY = rawKpiY ? resolveChartYAxisEntryToResultKey(rawKpiY, metricsKpi, resultKeys) : null;
@@ -467,7 +468,6 @@ export function DashboardWidgetRenderer({
 
     if (yKey) {
       const scope = (widget as DashboardWidgetRendererWidget).kpiUserTimeScope ?? null;
-      const metricsKpi = (aggCfg?.metrics ?? []) as { alias?: string; func?: string; field?: string; displayRole?: string }[];
       const isAttribute = isAttributeResultKey(yKey, metricsKpi);
       if (isAttribute) {
         const display = resolveDashboardKpiDisplayValue(rows, yKey, true);
@@ -527,8 +527,7 @@ export function DashboardWidgetRenderer({
     const dataRow = pickDashboardKpiCompareRow(rows, spec, parseOpts) ?? rows[0]!;
     const resultKeys = Object.keys(dataRow);
     const metricsKpi =
-      (widget.aggregationConfig as { metrics?: { alias?: string; func?: string; field?: string }[] } | undefined)
-        ?.metrics ?? [];
+      (widget.aggregationConfig as { metrics?: MetricDisplayRoleLike[] } | undefined)?.metrics ?? [];
     const rawKpiY =
       Array.isArray((widget.aggregationConfig as { chartYAxes?: string[] } | undefined)?.chartYAxes) &&
       (widget.aggregationConfig as { chartYAxes?: string[] }).chartYAxes![0] != null
