@@ -36,7 +36,7 @@ export async function GET() {
       new Set(
         (etls ?? [])
           .map((e: { client_id?: string | null }) => e.client_id)
-          .filter((id): id is string => typeof id === "string" && id.trim() !== "")
+          .filter((id: string | null | undefined): id is string => typeof id === "string" && id.trim() !== "")
       )
     );
 
