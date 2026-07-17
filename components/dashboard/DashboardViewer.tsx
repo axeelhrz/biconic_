@@ -62,6 +62,7 @@ import {
   DASHBOARD_GRID_ROW_UNIT_PX,
 } from "@/lib/dashboard/gridLayout";
 import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
+import { MobileDashboardView } from "@/components/dashboard/mobile/MobileDashboardView";
 import {
   DATE_OPERATORS_WITH_MULTI_VALUE_SQL,
   expandMonthFilterValueWithYear,
@@ -2030,6 +2031,8 @@ export function DashboardViewer({
   }, [title, pageLayout, globalFilters, filtersForDataLoad]);
 
   const { packCols, packRowGapPx } = useDashboardPackLayout("client");
+  /** Vista mobile dedicada: < 768px (packCols === 1). Desktop conserva el grid actual. */
+  const isMobileView = packCols === 1;
 
   const placements = useMemo(
     () => computeDashboardGridPlacementsPacked(orderedWidgets, packCols, undefined, packRowGapPx),
@@ -2152,6 +2155,266 @@ export function DashboardViewer({
 
   const exportVisualDisabled = exportBusy || exportWidgetsLoading;
 
+  const renderViewerWidget = useCallback(
+    (
+      widget: Widget,
+      options?: { mobile?: boolean; focus?: boolean; compact?: boolean }
+    ) => {
+      const nonApplicableLabels = nonApplicableFilterLabelsByWidget[widget.id] ?? [];
+      const filterWarningTooltip =
+        nonApplicableLabels.length > 0
+          ? `El filtro${nonApplicableLabels.length === 1 ? "" : "s"} "${nonApplicableLabels.join('", "')}" no afecta a este gráfico porque no utiliza ese campo.`
+          : undefined;
+      const ddfsList = widget.aggregationConfig?.dimensionDefaultFilters;
+      const dimensionDefaultDistinctSlice: Record<string, unknown[]> = {};
+      if (Array.isArray(ddfsList)) {
+        for (const ddf of ddfsList) {
+          const did = String((ddf as DimensionDefaultFilterEdit).id ?? "").trim();
+          if (!did) continue;
+          const vals = dimensionDefaultDistinctValues[dimensionDefaultDistinctCacheKey(widget.id, did)];
+          if (vals) dimensionDefaultDistinctSlice[did] = vals;
+        }
+      }
+      const effectiveTheme = mergeCardTheme(themeMerged, widget.cardTheme);
+      const cellThemeVars = useClientTheme
+        ? (themeToCssVars(effectiveTheme) as React.CSSProperties)
+        : {};
+      const mobile = options?.mobile === true;
+      const focus = options?.focus === true;
+      const compact = options?.compact === true;
+      const minH = focus
+        ? Math.max(widget.minHeight ?? 280, 420)
+        : compact
+          ? Math.min(widget.minHeight ?? 280, widget.type === "kpi" ? 160 : 280)
+          : widget.minHeight ?? 280;
+
+      return (
+        <div
+          className={useClientTheme ? "client-view-widget" : undefined}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            minHeight: mobile ? (focus ? "100%" : compact && widget.type === "kpi" ? "100%" : minH) : 0,
+            height: mobile ? "100%" : undefined,
+            minWidth: 0,
+            overflow: useClientTheme || mobile ? "hidden" : undefined,
+            position: "relative",
+            flex: mobile ? 1 : undefined,
+            ...cellThemeVars,
+          }}
+        >
+          {filterWarningTooltip && !mobile && (
+            <div
+              data-export-chrome
+              className="absolute right-2 top-2 z-10 flex shrink-0"
+              title={filterWarningTooltip}
+              style={{ color: "var(--platform-fg-muted)" }}
+            >
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+            </div>
+          )}
+          {widget.cardTheme?.logoUrl?.trim() ? (
+            <DashboardLogoOverlay theme={effectiveTheme} />
+          ) : null}
+          <DashboardWidgetRenderer
+            widget={{
+              ...widget,
+              chartStyle: buildResolvedChartStyle(
+                widget.aggregationConfig,
+                widget.chartStyle as ChartStyleConfig | null | undefined,
+                effectiveTheme.fontFamily
+              ),
+              chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
+              labelDisplayMode: resolveWidgetLabelDisplayMode(
+                widget as {
+                  labelDisplayMode?: import("@/lib/dashboard/chartOptions").ChartLabelDisplayMode;
+                  analysisId?: unknown;
+                },
+                String(widget.type ?? "")
+              ),
+            } as DashboardWidgetRendererWidget}
+            isLoading={widget.isLoading === true}
+            filterValue={uiFilterValues[widget.id]}
+            onFilterChange={handleFilterChange}
+            dimensionDefaultValuesByDdfId={dimensionDefaultFilterValues[widget.id] ?? {}}
+            dimensionDefaultDistinctByDdfId={dimensionDefaultDistinctSlice}
+            onDimensionDefaultFilterChange={(ddfId, v) =>
+              handleDimensionDefaultFilterChange(widget.id, ddfId, v)
+            }
+            minHeight={minH}
+            darkChartTheme={resolveDarkChartTheme(effectiveTheme, true)}
+            dashboardCompareDefaults={dashboardCompareDefaults}
+            presentation={mobile && widget.type === "table" ? "mobileCards" : "default"}
+          />
+        </div>
+      );
+    },
+    [
+      nonApplicableFilterLabelsByWidget,
+      dimensionDefaultDistinctValues,
+      themeMerged,
+      useClientTheme,
+      uiFilterValues,
+      handleFilterChange,
+      dimensionDefaultFilterValues,
+      handleDimensionDefaultFilterChange,
+      dashboardCompareDefaults,
+    ]
+  );
+
+  const globalFiltersPanel = useMemo(() => {
+    if (globalFilters.length === 0) return null;
+    return (
+      <>
+        {globalFilters.map((gf) => {
+          const label = (gf as { label?: string }).label || gf.field;
+          const physicalGf =
+            globalFilterDateMeta.datasetDimensions?.[gf.field!]?.[globalFilterDateMeta.primarySourceId] ??
+            gf.field!;
+          const isDateFieldGf = globalFilterDateMeta.primaryDateFields.some(
+            (d: string) => (d || "").toLowerCase() === String(physicalGf || "").toLowerCase()
+          );
+          const rawDistinct = (globalFilterDistinctValues[gf.id] ??
+            (gf as { distinctValues?: unknown[] }).distinctValues) as unknown[] | undefined;
+          const options = isMonthOperator((gf as AggregationFilter).operator)
+            ? Array.isArray(rawDistinct) && rawDistinct.length > 0
+              ? rawDistinct
+              : [...GLOBAL_MONTH_FILTER_VALUES]
+            : isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf
+              ? getGlobalDayFilterOptions(gf.field!, globalFilters, uiFilterValues)
+              : isYearOperator((gf as AggregationFilter).operator) && Array.isArray(rawDistinct)
+                ? normalizeDistinctYearOptions(rawDistinct)
+                : rawDistinct;
+          const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
+          const isYearOp = isYearOperator((gf as AggregationFilter).operator);
+          const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
+          const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
+          const selectedArrayRaw = isMulti
+            ? ((Array.isArray(uiFilterValues[gf.id])
+                ? uiFilterValues[gf.id]
+                : uiFilterValues[gf.id] != null && uiFilterValues[gf.id] !== ""
+                  ? [uiFilterValues[gf.id]]
+                  : []) as string[])
+            : [];
+          const selectedArray = isMonthOperator((gf as AggregationFilter).operator)
+            ? selectedArrayRaw.map((x) =>
+                String(normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, x))
+              )
+            : selectedArrayRaw;
+          const hasOptions = Array.isArray(options) && options.length > 0;
+
+          return (
+            <div key={gf.id} className="flex w-full min-w-0 flex-col gap-1.5 text-sm sm:w-auto sm:min-w-[10rem]">
+              <span style={{ color: "var(--platform-fg-muted)" }}>{label}</span>
+              {isMulti && hasOptions ? (
+                <GlobalFilterMultiSelect
+                  label={String(label)}
+                  operator={(gf as AggregationFilter).operator}
+                  options={options as unknown[]}
+                  selectedArray={selectedArray}
+                  onChangeSelected={(next) =>
+                    setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))
+                  }
+                />
+              ) : ((gf as { inputType?: string }).inputType === "select" ||
+                  isYearOp ||
+                  isYearMonthOp ||
+                  (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf)) &&
+                hasOptions ? (
+                <GlobalFilterSingleSelect
+                  label={String(label)}
+                  operator={(gf as AggregationFilter).operator}
+                  options={options as unknown[]}
+                  value={
+                    isYearOp
+                      ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
+                      : isYearMonthOp
+                        ? String(uiFilterValues[gf.id] ?? "")
+                        : isDayOperator((gf as AggregationFilter).operator)
+                          ? dayFilterSelectDisplayValue(
+                              (gf as AggregationFilter).operator,
+                              uiFilterValues[gf.id]
+                            )
+                          : monthFilterSelectDisplayValue(
+                              (gf as AggregationFilter).operator,
+                              uiFilterValues[gf.id]
+                            )
+                  }
+                  onChange={(next) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))}
+                />
+              ) : (
+                <input
+                  type={
+                    (gf as { inputType?: string }).inputType === "number"
+                      ? "number"
+                      : (gf as { inputType?: string }).inputType === "date"
+                        ? "date"
+                        : "text"
+                  }
+                  className="w-full rounded-md border px-2 py-1 text-sm sm:w-32"
+                  style={{
+                    borderColor: "var(--platform-border)",
+                    background: "var(--platform-surface, var(--platform-bg))",
+                    color: "var(--platform-fg)",
+                  }}
+                  value={String(uiFilterValues[gf.id] ?? "")}
+                  onChange={(e) =>
+                    setUiFilterValues((prev) => ({
+                      ...prev,
+                      [gf.id]:
+                        (gf as { inputType?: string }).inputType === "number"
+                          ? e.target.valueAsNumber
+                          : e.target.value,
+                    }))
+                  }
+                />
+              )}
+            </div>
+          );
+        })}
+      </>
+    );
+  }, [
+    globalFilters,
+    globalFilterDateMeta,
+    globalFilterDistinctValues,
+    uiFilterValues,
+    setUiFilterValues,
+  ]);
+
+  const mobileFilterWidgets = useMemo(
+    () => orderedWidgets.filter((w) => w.type === "filter"),
+    [orderedWidgets]
+  );
+
+  const mobileFiltersContent = useMemo(() => {
+    if (!globalFiltersPanel && mobileFilterWidgets.length === 0) return null;
+    return (
+      <>
+        {globalFiltersPanel}
+        {mobileFilterWidgets.map((w) => (
+          <div key={w.id} className="rounded-lg border p-2" style={{ borderColor: "var(--platform-border)" }}>
+            {renderViewerWidget(w, { mobile: true, compact: true })}
+          </div>
+        ))}
+      </>
+    );
+  }, [globalFiltersPanel, mobileFilterWidgets, renderViewerWidget]);
+
+  const clearMobileFilterDraft = useCallback(() => {
+    setUiFilterValues(() => {
+      const next: Record<string, unknown> = {};
+      for (const gf of globalFilters) next[gf.id] = "";
+      for (const w of mobileFilterWidgets) next[w.id] = "";
+      return next;
+    });
+  }, [globalFilters, mobileFilterWidgets, setUiFilterValues]);
+
+  const hasMobileFilters =
+    globalFilters.length > 0 ||
+    mobileFilterWidgets.length > 0 ||
+    (filterCommitMode === "onButton" && hasFilterWidgetsOnActivePage);
+
   return (
     <div
       ref={exportRootRef}
@@ -2159,6 +2422,40 @@ export function DashboardViewer({
       data-theme={useClientTheme ? "client" : undefined}
       style={{ ...themeVars, ...wrapperBackground }}
     >
+      {isMobileView ? (
+        <MobileDashboardView
+          title={title}
+          backHref={backHref}
+          backLabel={backLabel}
+          pages={pageLayout?.pagesMeta}
+          activePageId={pageLayout?.activePageId}
+          onPageChange={(pageId) =>
+            setPageLayout((prev) => (prev ? { ...prev, activePageId: pageId } : null))
+          }
+          widgets={orderedWidgets}
+          hasFilters={hasMobileFilters}
+          filtersContent={mobileFiltersContent}
+          filtersPendingCommit={filtersPendingCommit}
+          onApplyFilters={filterCommitMode === "onButton" ? commitAppliedFilters : undefined}
+          onClearFiltersDraft={clearMobileFilterDraft}
+          isLoading={!etlData && !initialWidgets?.length && !etlDataError}
+          emptyMessage={
+            etlDataError
+              ? etlDataError
+              : orderedWidgets.length === 0
+                ? "No hay widgets en este dashboard"
+                : undefined
+          }
+          renderWidget={(widget, ctx) =>
+            renderViewerWidget(widget, {
+              mobile: true,
+              compact: ctx.compact,
+              focus: ctx.focus,
+            })
+          }
+        />
+      ) : (
+        <>
       {!hideHeader && (
         <header
           className={`flex flex-shrink-0 flex-col gap-2 border-b px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4 sm:py-3${useClientTheme ? " client-view-header" : ""}`}
@@ -2271,94 +2568,7 @@ export function DashboardViewer({
           className={`flex flex-shrink-0 flex-wrap items-center gap-2 px-3 py-2 sm:gap-4 sm:px-4${globalFilters.length === 0 ? " justify-end" : ""}`}
           style={{ background: "var(--platform-bg, var(--client-bg, #f8fafc))", borderBottom: "1px solid var(--platform-border)" }}
         >
-          {globalFilters.map((gf) => {
-            const label = (gf as any).label || gf.field;
-            const physicalGf =
-              globalFilterDateMeta.datasetDimensions?.[gf.field!]?.[globalFilterDateMeta.primarySourceId] ??
-              gf.field!;
-            const isDateFieldGf = globalFilterDateMeta.primaryDateFields.some(
-              (d: string) => (d || "").toLowerCase() === String(physicalGf || "").toLowerCase()
-            );
-            const rawDistinct = (globalFilterDistinctValues[gf.id] ?? (gf as any).distinctValues) as unknown[] | undefined;
-            const options = isMonthOperator((gf as AggregationFilter).operator)
-              ? Array.isArray(rawDistinct) && rawDistinct.length > 0
-                ? rawDistinct
-                : [...GLOBAL_MONTH_FILTER_VALUES]
-              : isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf
-                ? getGlobalDayFilterOptions(gf.field!, globalFilters, uiFilterValues)
-                : isYearOperator((gf as AggregationFilter).operator) && Array.isArray(rawDistinct)
-                  ? normalizeDistinctYearOptions(rawDistinct)
-                  : rawDistinct;
-            const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
-            const isYearOp = isYearOperator((gf as AggregationFilter).operator);
-            const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
-            const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
-            const selectedArrayRaw = isMulti
-              ? (Array.isArray(uiFilterValues[gf.id])
-                  ? uiFilterValues[gf.id]
-                  : uiFilterValues[gf.id] != null && uiFilterValues[gf.id] !== ""
-                    ? [uiFilterValues[gf.id]]
-                    : []) as string[]
-              : [];
-            const selectedArray = isMonthOperator((gf as AggregationFilter).operator)
-              ? selectedArrayRaw.map((x) => String(normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, x)))
-              : selectedArrayRaw;
-            const hasOptions = Array.isArray(options) && options.length > 0;
-
-            return (
-              <div key={gf.id} className="flex w-full min-w-0 flex-col gap-1.5 text-sm sm:w-auto sm:min-w-[10rem]">
-                <span style={{ color: "var(--platform-fg-muted)" }}>{label}</span>
-                {isMulti && hasOptions ? (
-                  <GlobalFilterMultiSelect
-                    label={String(label)}
-                    operator={(gf as AggregationFilter).operator}
-                    options={options as unknown[]}
-                    selectedArray={selectedArray}
-                    onChangeSelected={(next) =>
-                      setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))
-                    }
-                  />
-                ) : (((gf as any).inputType === "select" ||
-                  isYearOp ||
-                  isYearMonthOp ||
-                  (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf)) &&
-                  hasOptions) ? (
-                  <GlobalFilterSingleSelect
-                    label={String(label)}
-                    operator={(gf as AggregationFilter).operator}
-                    options={options as unknown[]}
-                    value={
-                      isYearOp
-                        ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
-                        : isYearMonthOp
-                          ? String(uiFilterValues[gf.id] ?? "")
-                          : isDayOperator((gf as AggregationFilter).operator)
-                            ? dayFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
-                            : monthFilterSelectDisplayValue((gf as AggregationFilter).operator, uiFilterValues[gf.id])
-                    }
-                    onChange={(next) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))}
-                  />
-                ) : (
-                  <input
-                    type={(gf as any).inputType === "number" ? "number" : (gf as any).inputType === "date" ? "date" : "text"}
-                    className="w-full rounded-md border px-2 py-1 text-sm sm:w-32"
-                    style={{
-                      borderColor: "var(--platform-border)",
-                      background: "var(--platform-surface, var(--platform-bg))",
-                      color: "var(--platform-fg)",
-                    }}
-                    value={String(uiFilterValues[gf.id] ?? "")}
-                    onChange={(e) =>
-                      setUiFilterValues((prev) => ({
-                        ...prev,
-                        [gf.id]: (gf as any).inputType === "number" ? e.target.valueAsNumber : e.target.value,
-                      }))
-                    }
-                  />
-                )}
-              </div>
-            );
-          })}
+          {globalFiltersPanel}
           {filterCommitMode === "onButton" && (
             <div className={globalFilters.length > 0 ? "ml-auto flex shrink-0 items-center pt-1 sm:pt-0" : "flex shrink-0 items-center"}>
               <Button
@@ -2406,35 +2616,11 @@ export function DashboardViewer({
             }}
           >
             {placements.map(({ widget, gridColumn, gridRow }) => {
-              const nonApplicableLabels = nonApplicableFilterLabelsByWidget[widget.id] ?? [];
-              const filterWarningTooltip =
-                nonApplicableLabels.length > 0
-                  ? `El filtro${nonApplicableLabels.length === 1 ? "" : "s"} "${nonApplicableLabels.join('", "')}" no afecta a este gráfico porque no utiliza ese campo.`
-                  : undefined;
-              const ddfsList = widget.aggregationConfig?.dimensionDefaultFilters;
-              const dimensionDefaultDistinctSlice: Record<string, unknown[]> = {};
-              if (Array.isArray(ddfsList)) {
-                for (const ddf of ddfsList) {
-                  const did = String((ddf as DimensionDefaultFilterEdit).id ?? "").trim();
-                  if (!did) continue;
-                  const vals = dimensionDefaultDistinctValues[dimensionDefaultDistinctCacheKey(widget.id, did)];
-                  if (vals) dimensionDefaultDistinctSlice[did] = vals;
-                }
-              }
-              const effectiveTheme = mergeCardTheme(themeMerged, widget.cardTheme);
-              const cellThemeVars = useClientTheme
-                ? (themeToCssVars(effectiveTheme) as React.CSSProperties)
-                : {};
-              // Sin themeToWrapperBackground aquí: usa el color de página del dashboard y anula
-              // `background: var(--client-card)` en `.client-view-widget`. El Card interno es
-              // transparente en tema cliente; sin esto, al quitar el overlay de carga se veía
-              // el fondo del lienzo en lugar del color de tarjeta del editor.
               const isExportableWidget = exportableWidgetIds.has(widget.id);
               return (
                 <div
                   key={widget.id}
                   {...(isExportableWidget ? { "data-export-widget": widget.id } : {})}
-                  className={useClientTheme ? "client-view-widget" : undefined}
                   style={{
                     gridColumn,
                     gridRow,
@@ -2442,51 +2628,11 @@ export function DashboardViewer({
                     flexDirection: "column",
                     minHeight: 0,
                     minWidth: 0,
-                    overflow: useClientTheme ? "hidden" : undefined,
                     position: "relative",
                     zIndex: typeof (widget as Widget).zIndex === "number" ? (widget as Widget).zIndex : 0,
-                    ...cellThemeVars,
                   }}
                 >
-                  {filterWarningTooltip && (
-                    <div
-                      data-export-chrome
-                      className="absolute right-2 top-2 z-10 flex shrink-0"
-                      title={filterWarningTooltip}
-                      style={{ color: "var(--platform-fg-muted)" }}
-                    >
-                      <AlertTriangle className="h-4 w-4" aria-hidden />
-                    </div>
-                  )}
-                  {widget.cardTheme?.logoUrl?.trim() ? (
-                    <DashboardLogoOverlay theme={effectiveTheme} />
-                  ) : null}
-                  <DashboardWidgetRenderer
-                    widget={{
-                      ...widget,
-                      chartStyle: buildResolvedChartStyle(
-                        widget.aggregationConfig,
-                        widget.chartStyle as ChartStyleConfig | null | undefined,
-                        effectiveTheme.fontFamily
-                      ),
-                      chartMetricStyles: buildChartMetricStyles(widget.aggregationConfig),
-                      labelDisplayMode: resolveWidgetLabelDisplayMode(
-                        widget as { labelDisplayMode?: import("@/lib/dashboard/chartOptions").ChartLabelDisplayMode; analysisId?: unknown },
-                        String(widget.type ?? "")
-                      ),
-                    } as DashboardWidgetRendererWidget}
-                    isLoading={widget.isLoading === true}
-                    filterValue={uiFilterValues[widget.id]}
-                    onFilterChange={handleFilterChange}
-                    dimensionDefaultValuesByDdfId={dimensionDefaultFilterValues[widget.id] ?? {}}
-                    dimensionDefaultDistinctByDdfId={dimensionDefaultDistinctSlice}
-                    onDimensionDefaultFilterChange={(ddfId, v) =>
-                      handleDimensionDefaultFilterChange(widget.id, ddfId, v)
-                    }
-                    minHeight={widget.minHeight ?? 280}
-                    darkChartTheme={resolveDarkChartTheme(effectiveTheme, true)}
-                    dashboardCompareDefaults={dashboardCompareDefaults}
-                  />
+                  {renderViewerWidget(widget)}
                 </div>
               );
             })}
@@ -2494,6 +2640,8 @@ export function DashboardViewer({
         )}
       </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

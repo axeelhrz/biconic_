@@ -388,6 +388,8 @@ interface DashboardWidgetRendererProps {
   /** Muestra vista técnica del payload efectivo (editor/admin). */
   showTechnicalPreview?: boolean;
   dashboardCompareDefaults?: DashboardCompareDefaults;
+  /** En mobile: tablas como cards por registro (además de scroll horizontal). */
+  presentation?: "default" | "mobileCards";
 }
 
 export function DashboardWidgetRenderer({
@@ -404,6 +406,7 @@ export function DashboardWidgetRenderer({
   hideHeader = false,
   showTechnicalPreview = false,
   dashboardCompareDefaults,
+  presentation = "default",
 }: DashboardWidgetRendererProps) {
   const chartDevicePixelRatio = useDevicePixelRatio();
   const chartPlugins = useMemo(() => [ChartDataLabels], []);
@@ -2003,57 +2006,80 @@ export function DashboardWidgetRenderer({
             )}
             {chartType === "table" && Array.isArray(tableDisplayRows) && tableDisplayRows.length > 0 && (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <div
-                  className="dashboard-widget-table-scroll min-h-0 min-w-0 flex-1 overflow-auto rounded-md border"
-                  style={{ borderColor: "var(--platform-border)", fontSize: resolvedTableStyle.fontSize }}
-                >
-                  <table
-                    className="w-full min-w-max border-collapse"
-                    style={{
-                      tableLayout: resolvedTableStyle.hasFixedColumnWidths ? "fixed" : "auto",
-                    }}
-                  >
-                    <thead>
-                      <tr className="border-b text-left" style={{ borderColor: "var(--platform-border)" }}>
-                        {effectiveTableColumnOrder.map((k) => (
-                          <th
-                            key={k}
-                            className="sticky top-0 z-[1] font-medium"
-                            style={{
-                              color: "var(--platform-fg-muted)",
-                              background: "var(--platform-surface, #fff)",
-                              boxShadow: "inset 0 -1px 0 var(--platform-border, #e2e8f0)",
-                              ...tableHeaderCellStyle(resolvedTableStyle, k),
-                            }}
-                          >
-                            {String(effectiveTableHeaderLabels?.[k] ?? "").trim() || k}
-                          </th>
+                {presentation === "mobileCards" ? (
+                  <div className="mobile-dash-table-cards">
+                    {tableDisplayRows.map((row, i) => (
+                      <div
+                        key={i}
+                        className="mobile-dash-table-card"
+                        style={tableRowStyle(resolvedTableStyle, i)}
+                      >
+                        {effectiveTableColumnOrder.map((columnKey) => (
+                          <div key={columnKey} className="mobile-dash-table-card-row">
+                            <span className="mobile-dash-table-card-label">
+                              {String(effectiveTableHeaderLabels?.[columnKey] ?? "").trim() || columnKey}
+                            </span>
+                            <span className="mobile-dash-table-card-value">
+                              {formatTableCellValue(columnKey, row[columnKey])}
+                            </span>
+                          </div>
                         ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tableDisplayRows.map((row, i) => (
-                        <tr
-                          key={i}
-                          className="border-b"
-                          style={{ borderColor: "var(--platform-border)", ...tableRowStyle(resolvedTableStyle, i) }}
-                        >
-                          {effectiveTableColumnOrder.map((columnKey) => (
-                            <td
-                              key={columnKey}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div
+                    className="dashboard-widget-table-scroll min-h-0 min-w-0 flex-1 overflow-auto rounded-md border"
+                    style={{ borderColor: "var(--platform-border)", fontSize: resolvedTableStyle.fontSize }}
+                  >
+                    <table
+                      className="w-full min-w-max border-collapse"
+                      style={{
+                        tableLayout: resolvedTableStyle.hasFixedColumnWidths ? "fixed" : "auto",
+                      }}
+                    >
+                      <thead>
+                        <tr className="border-b text-left" style={{ borderColor: "var(--platform-border)" }}>
+                          {effectiveTableColumnOrder.map((k) => (
+                            <th
+                              key={k}
+                              className="sticky top-0 z-[1] font-medium"
                               style={{
-                                color: "var(--platform-fg)",
-                                ...tableBodyCellStyle(resolvedTableStyle, columnKey),
+                                color: "var(--platform-fg-muted)",
+                                background: "var(--platform-surface, #fff)",
+                                boxShadow: "inset 0 -1px 0 var(--platform-border, #e2e8f0)",
+                                ...tableHeaderCellStyle(resolvedTableStyle, k),
                               }}
                             >
-                              {formatTableCellValue(columnKey, row[columnKey])}
-                            </td>
+                              {String(effectiveTableHeaderLabels?.[k] ?? "").trim() || k}
+                            </th>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {tableDisplayRows.map((row, i) => (
+                          <tr
+                            key={i}
+                            className="border-b"
+                            style={{ borderColor: "var(--platform-border)", ...tableRowStyle(resolvedTableStyle, i) }}
+                          >
+                            {effectiveTableColumnOrder.map((columnKey) => (
+                              <td
+                                key={columnKey}
+                                style={{
+                                  color: "var(--platform-fg)",
+                                  ...tableBodyCellStyle(resolvedTableStyle, columnKey),
+                                }}
+                              >
+                                {formatTableCellValue(columnKey, row[columnKey])}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
             {chartType === "text" && (
