@@ -164,7 +164,7 @@ function MobileFilterSheet({
                 Limpiar
               </Button>
             )}
-            {onApplyFilters && (
+            {onApplyFilters ? (
               <Button
                 type="button"
                 disabled={!filtersPendingCommit}
@@ -173,11 +173,25 @@ function MobileFilterSheet({
                   onOpenChange(false);
                 }}
                 style={{
+                  background: filtersPendingCommit
+                    ? "var(--platform-accent, var(--client-accent, #0ea5e9))"
+                    : undefined,
+                  color: filtersPendingCommit ? "#08080b" : undefined,
+                  opacity: filtersPendingCommit ? 1 : 0.55,
+                }}
+              >
+                {filtersPendingCommit ? "Aplicar filtros" : "Sin cambios"}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                onClick={() => onOpenChange(false)}
+                style={{
                   background: "var(--platform-accent, var(--client-accent, #0ea5e9))",
                   color: "#08080b",
                 }}
               >
-                Aplicar filtros
+                Listo
               </Button>
             )}
           </div>
@@ -376,7 +390,7 @@ export function MobileDashboardView<T extends MobileDashWidgetLike>({
         )}
       </div>
 
-      {hasFilters && filtersContent ? (
+      {hasFilters ? (
         <MobileFilterSheet
           open={filtersOpen}
           onOpenChange={setFiltersOpen}
@@ -384,7 +398,11 @@ export function MobileDashboardView<T extends MobileDashWidgetLike>({
           onApplyFilters={onApplyFilters}
           onClearFiltersDraft={onClearFiltersDraft}
         >
-          {filtersContent}
+          {filtersContent ?? (
+            <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
+              No hay filtros disponibles.
+            </p>
+          )}
         </MobileFilterSheet>
       ) : null}
 

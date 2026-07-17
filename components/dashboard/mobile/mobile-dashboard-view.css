@@ -295,6 +295,41 @@
   flex: 1;
 }
 
+.mobile-dash-filter-block {
+  width: 100%;
+}
+
+.mobile-dash-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mobile-dash-filter-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--platform-border, rgba(255, 255, 255, 0.12));
+  background: var(--platform-surface, rgba(255, 255, 255, 0.04));
+  color: var(--platform-fg, inherit);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: left;
+}
+
+.mobile-dash-filter-panel {
+  margin-top: 0.15rem;
+  padding: 0.65rem 0.7rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--platform-border, rgba(255, 255, 255, 0.1));
+  background: color-mix(in srgb, var(--platform-bg, #0f1218) 70%, transparent);
+}
+
 /* Focus mode */
 .mobile-dash-focus {
   position: fixed;

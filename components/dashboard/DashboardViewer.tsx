@@ -411,20 +411,115 @@ function GlobalFilterMultiSelect({
   options,
   selectedArray,
   onChangeSelected,
+  layout = "popover",
 }: {
   label: string;
   operator: unknown;
   options: unknown[];
   selectedArray: string[];
   onChangeSelected: (next: string[]) => void;
+  /** `inline` = listas dentro del bottom sheet mobile (sin Popover). */
+  layout?: "popover" | "inline";
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(layout === "inline");
   const [search, setSearch] = useState("");
   const filtered = useMemo(() => {
     return options.filter((v) =>
       filterOptionMatchesSearch(optionDisplayLabel(operator, v), search)
     );
   }, [options, operator, search]);
+
+  const list = (
+    <div className={layout === "inline" ? "mobile-dash-filter-panel" : undefined}>
+      <GlobalFilterSearchInput
+        value={search}
+        onChange={setSearch}
+        placeholder={`Buscar en ${label}…`}
+      />
+      <div className="mb-2 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs rounded-md"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={() => onChangeSelected(filtered.map(String))}
+        >
+          Seleccionar todo
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs rounded-md"
+          style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
+          onClick={() => onChangeSelected([])}
+        >
+          Deseleccionar todo
+        </Button>
+      </div>
+      <div
+        className={`flex flex-col gap-1.5 pr-1 ${layout === "inline" ? "max-h-48" : "max-h-60"} overflow-y-auto`}
+      >
+        {filtered.length === 0 ? (
+          <p className="px-1 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+            Sin coincidencias
+          </p>
+        ) : (
+          filtered.map((v) => {
+            const s = String(v);
+            const checked = selectedArray.includes(s);
+            return (
+              <label
+                key={s}
+                className="flex min-h-10 items-center gap-3 cursor-pointer text-sm py-1"
+                style={{ color: "var(--platform-fg)" }}
+              >
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border shrink-0"
+                  style={{ borderColor: "var(--platform-border)" }}
+                  checked={checked}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                      ? selectedArray.includes(s)
+                        ? selectedArray
+                        : [...selectedArray, s]
+                      : selectedArray.filter((x) => x !== s);
+                    onChangeSelected(next);
+                  }}
+                />
+                <span>{optionDisplayLabel(operator, v)}</span>
+              </label>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+
+  if (layout === "inline") {
+    return (
+      <div className="mobile-dash-filter-field w-full">
+        <button
+          type="button"
+          className="mobile-dash-filter-trigger"
+          style={filterTriggerStyle}
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className="truncate text-left">
+            {globalMultiFilterTriggerLabel(operator, selectedArray, options)}
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 opacity-60 transition-transform ${open ? "rotate-180" : ""}`}
+            aria-hidden
+          />
+        </button>
+        {open ? list : null}
+      </div>
+    );
+  }
 
   return (
     <Popover
@@ -450,69 +545,12 @@ function GlobalFilterMultiSelect({
           <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-3 border shadow-lg" style={filterPopoverPanelStyle}>
-        <GlobalFilterSearchInput
-          value={search}
-          onChange={setSearch}
-          placeholder={`Buscar en ${label}…`}
-        />
-        <div className="flex flex-wrap gap-2 mb-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs rounded-md"
-            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-            onClick={() => onChangeSelected(filtered.map(String))}
-          >
-            Seleccionar todo
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs rounded-md"
-            style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }}
-            onClick={() => onChangeSelected([])}
-          >
-            Deseleccionar todo
-          </Button>
-        </div>
-        <div className="max-h-60 overflow-y-auto flex flex-col gap-1.5 pr-1">
-          {filtered.length === 0 ? (
-            <p className="px-1 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-              Sin coincidencias
-            </p>
-          ) : (
-            filtered.map((v) => {
-              const s = String(v);
-              const checked = selectedArray.includes(s);
-              return (
-                <label
-                  key={s}
-                  className="flex items-center gap-2 cursor-pointer text-xs py-0.5"
-                  style={{ color: "var(--platform-fg)" }}
-                >
-                  <input
-                    type="checkbox"
-                    className="rounded border shrink-0"
-                    style={{ borderColor: "var(--platform-border)" }}
-                    checked={checked}
-                    onChange={(e) => {
-                      const next = e.target.checked
-                        ? selectedArray.includes(s)
-                          ? selectedArray
-                          : [...selectedArray, s]
-                        : selectedArray.filter((x) => x !== s);
-                      onChangeSelected(next);
-                    }}
-                  />
-                  <span>{optionDisplayLabel(operator, v)}</span>
-                </label>
-              );
-            })
-          )}
-        </div>
+      <PopoverContent
+        align="start"
+        className="z-[80] w-72 p-3 border shadow-lg"
+        style={filterPopoverPanelStyle}
+      >
+        {list}
       </PopoverContent>
     </Popover>
   );
@@ -524,14 +562,16 @@ function GlobalFilterSingleSelect({
   options,
   value,
   onChange,
+  layout = "popover",
 }: {
   label: string;
   operator: unknown;
   options: unknown[];
   value: string;
   onChange: (next: string) => void;
+  layout?: "popover" | "inline";
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(layout === "inline");
   const [search, setSearch] = useState("");
   const singleLabel = !value ? "Todos" : optionDisplayLabel(operator, value);
   const filtered = useMemo(() => {
@@ -539,6 +579,86 @@ function GlobalFilterSingleSelect({
       filterOptionMatchesSearch(optionDisplayLabel(operator, v), search)
     );
   }, [options, operator, search]);
+
+  const list = (
+    <div className={layout === "inline" ? "mobile-dash-filter-panel" : undefined}>
+      <GlobalFilterSearchInput
+        value={search}
+        onChange={setSearch}
+        placeholder={`Buscar en ${label}…`}
+      />
+      <div className={`${layout === "inline" ? "max-h-48" : "max-h-60"} overflow-y-auto`}>
+        <button
+          type="button"
+          className="flex w-full min-h-10 items-center rounded-md px-2.5 py-2 text-left text-sm transition-colors"
+          style={{
+            color: "var(--platform-fg)",
+            background:
+              value === ""
+                ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
+                : "transparent",
+          }}
+          onClick={() => {
+            onChange("");
+            if (layout !== "inline") setOpen(false);
+          }}
+        >
+          Todos
+        </button>
+        {filtered.length === 0 ? (
+          <p className="px-2.5 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+            Sin coincidencias
+          </p>
+        ) : (
+          filtered.map((v) => {
+            const s = String(v);
+            const selected = value === s;
+            return (
+              <button
+                key={s}
+                type="button"
+                className="flex w-full min-h-10 items-center rounded-md px-2.5 py-2 text-left text-sm transition-colors"
+                style={{
+                  color: "var(--platform-fg)",
+                  background: selected
+                    ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
+                    : "transparent",
+                }}
+                onClick={() => {
+                  onChange(s);
+                  if (layout !== "inline") setOpen(false);
+                }}
+              >
+                {optionDisplayLabel(operator, v)}
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+
+  if (layout === "inline") {
+    return (
+      <div className="mobile-dash-filter-field w-full">
+        <button
+          type="button"
+          className="mobile-dash-filter-trigger"
+          style={filterTriggerStyle}
+          aria-expanded={open}
+          aria-label={`${label}: ${singleLabel}`}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className="truncate text-left">{singleLabel}</span>
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 opacity-60 transition-transform ${open ? "rotate-180" : ""}`}
+            aria-hidden
+          />
+        </button>
+        {open ? list : null}
+      </div>
+    );
+  }
 
   return (
     <Popover
@@ -562,60 +682,12 @@ function GlobalFilterSingleSelect({
           <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-56 p-2 border shadow-lg" style={filterPopoverPanelStyle}>
-        <GlobalFilterSearchInput
-          value={search}
-          onChange={setSearch}
-          placeholder={`Buscar en ${label}…`}
-        />
-        <div className="max-h-60 overflow-y-auto">
-          <button
-            type="button"
-            className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
-            style={{
-              color: "var(--platform-fg)",
-              background:
-                value === ""
-                  ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
-                  : "transparent",
-            }}
-            onClick={() => {
-              onChange("");
-              setOpen(false);
-            }}
-          >
-            Todos
-          </button>
-          {filtered.length === 0 ? (
-            <p className="px-2.5 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-              Sin coincidencias
-            </p>
-          ) : (
-            filtered.map((v) => {
-              const s = String(v);
-              const selected = value === s;
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-xs transition-colors"
-                  style={{
-                    color: "var(--platform-fg)",
-                    background: selected
-                      ? "color-mix(in srgb, var(--platform-accent, #0ea5e9) 16%, transparent)"
-                      : "transparent",
-                  }}
-                  onClick={() => {
-                    onChange(s);
-                    setOpen(false);
-                  }}
-                >
-                  {optionDisplayLabel(operator, v)}
-                </button>
-              );
-            })
-          )}
-        </div>
+      <PopoverContent
+        align="start"
+        className="z-[80] w-56 p-2 border shadow-lg"
+        style={filterPopoverPanelStyle}
+      >
+        {list}
       </PopoverContent>
     </Popover>
   );
@@ -2262,125 +2334,158 @@ export function DashboardViewer({
     ]
   );
 
-  const globalFiltersPanel = useMemo(() => {
-    if (globalFilters.length === 0) return null;
-    return (
-      <>
-        {globalFilters.map((gf) => {
-          const label = (gf as { label?: string }).label || gf.field;
-          const physicalGf =
-            globalFilterDateMeta.datasetDimensions?.[gf.field!]?.[globalFilterDateMeta.primarySourceId] ??
-            gf.field!;
-          const isDateFieldGf = globalFilterDateMeta.primaryDateFields.some(
-            (d: string) => (d || "").toLowerCase() === String(physicalGf || "").toLowerCase()
-          );
-          const rawDistinct = (globalFilterDistinctValues[gf.id] ??
-            (gf as { distinctValues?: unknown[] }).distinctValues) as unknown[] | undefined;
-          const options = isMonthOperator((gf as AggregationFilter).operator)
-            ? Array.isArray(rawDistinct) && rawDistinct.length > 0
-              ? rawDistinct
-              : [...GLOBAL_MONTH_FILTER_VALUES]
-            : isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf
-              ? getGlobalDayFilterOptions(gf.field!, globalFilters, uiFilterValues)
-              : isYearOperator((gf as AggregationFilter).operator) && Array.isArray(rawDistinct)
-                ? normalizeDistinctYearOptions(rawDistinct)
-                : rawDistinct;
-          const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
-          const isYearOp = isYearOperator((gf as AggregationFilter).operator);
-          const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
-          const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
-          const selectedArrayRaw = isMulti
-            ? ((Array.isArray(uiFilterValues[gf.id])
-                ? uiFilterValues[gf.id]
-                : uiFilterValues[gf.id] != null && uiFilterValues[gf.id] !== ""
-                  ? [uiFilterValues[gf.id]]
-                  : []) as string[])
-            : [];
-          const selectedArray = isMonthOperator((gf as AggregationFilter).operator)
-            ? selectedArrayRaw.map((x) =>
-                String(normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, x))
-              )
-            : selectedArrayRaw;
-          const hasOptions = Array.isArray(options) && options.length > 0;
+  const renderGlobalFiltersPanel = useCallback(
+    (layout: "popover" | "inline") => {
+      if (globalFilters.length === 0) return null;
+      return (
+        <>
+          {globalFilters.map((gf) => {
+            const label = (gf as { label?: string }).label || gf.field;
+            const physicalGf =
+              globalFilterDateMeta.datasetDimensions?.[gf.field!]?.[globalFilterDateMeta.primarySourceId] ??
+              gf.field!;
+            const isDateFieldGf = globalFilterDateMeta.primaryDateFields.some(
+              (d: string) => (d || "").toLowerCase() === String(physicalGf || "").toLowerCase()
+            );
+            const rawDistinct = (globalFilterDistinctValues[gf.id] ??
+              (gf as { distinctValues?: unknown[] }).distinctValues) as unknown[] | undefined;
+            const options = isMonthOperator((gf as AggregationFilter).operator)
+              ? Array.isArray(rawDistinct) && rawDistinct.length > 0
+                ? rawDistinct
+                : [...GLOBAL_MONTH_FILTER_VALUES]
+              : isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf
+                ? getGlobalDayFilterOptions(gf.field!, globalFilters, uiFilterValues)
+                : isYearOperator((gf as AggregationFilter).operator) && Array.isArray(rawDistinct)
+                  ? normalizeDistinctYearOptions(rawDistinct)
+                  : rawDistinct;
+            const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
+            const isYearOp = isYearOperator((gf as AggregationFilter).operator);
+            const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
+            const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
+            const selectedArrayRaw = isMulti
+              ? ((Array.isArray(uiFilterValues[gf.id])
+                  ? uiFilterValues[gf.id]
+                  : uiFilterValues[gf.id] != null && uiFilterValues[gf.id] !== ""
+                    ? [uiFilterValues[gf.id]]
+                    : []) as string[])
+              : [];
+            const selectedArray = isMonthOperator((gf as AggregationFilter).operator)
+              ? selectedArrayRaw.map((x) =>
+                  String(normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, x))
+                )
+              : selectedArrayRaw;
+            const hasOptions = Array.isArray(options) && options.length > 0;
+            const fieldClass =
+              layout === "inline"
+                ? "mobile-dash-filter-block flex w-full min-w-0 flex-col gap-2 text-sm"
+                : "flex w-full min-w-0 flex-col gap-1.5 text-sm sm:w-auto sm:min-w-[10rem]";
 
-          return (
-            <div key={gf.id} className="flex w-full min-w-0 flex-col gap-1.5 text-sm sm:w-auto sm:min-w-[10rem]">
-              <span style={{ color: "var(--platform-fg-muted)" }}>{label}</span>
-              {isMulti && hasOptions ? (
-                <GlobalFilterMultiSelect
-                  label={String(label)}
-                  operator={(gf as AggregationFilter).operator}
-                  options={options as unknown[]}
-                  selectedArray={selectedArray}
-                  onChangeSelected={(next) =>
-                    setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))
-                  }
-                />
-              ) : ((gf as { inputType?: string }).inputType === "select" ||
-                  isYearOp ||
-                  isYearMonthOp ||
-                  (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf)) &&
-                hasOptions ? (
-                <GlobalFilterSingleSelect
-                  label={String(label)}
-                  operator={(gf as AggregationFilter).operator}
-                  options={options as unknown[]}
-                  value={
-                    isYearOp
-                      ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
-                      : isYearMonthOp
-                        ? String(uiFilterValues[gf.id] ?? "")
-                        : isDayOperator((gf as AggregationFilter).operator)
-                          ? dayFilterSelectDisplayValue(
-                              (gf as AggregationFilter).operator,
-                              uiFilterValues[gf.id]
-                            )
-                          : monthFilterSelectDisplayValue(
-                              (gf as AggregationFilter).operator,
-                              uiFilterValues[gf.id]
-                            )
-                  }
-                  onChange={(next) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))}
-                />
-              ) : (
-                <input
-                  type={
-                    (gf as { inputType?: string }).inputType === "number"
-                      ? "number"
-                      : (gf as { inputType?: string }).inputType === "date"
-                        ? "date"
-                        : "text"
-                  }
-                  className="w-full rounded-md border px-2 py-1 text-sm sm:w-32"
-                  style={{
-                    borderColor: "var(--platform-border)",
-                    background: "var(--platform-surface, var(--platform-bg))",
-                    color: "var(--platform-fg)",
-                  }}
-                  value={String(uiFilterValues[gf.id] ?? "")}
-                  onChange={(e) =>
-                    setUiFilterValues((prev) => ({
-                      ...prev,
-                      [gf.id]:
-                        (gf as { inputType?: string }).inputType === "number"
-                          ? e.target.valueAsNumber
-                          : e.target.value,
-                    }))
-                  }
-                />
-              )}
-            </div>
-          );
-        })}
-      </>
-    );
-  }, [
-    globalFilters,
-    globalFilterDateMeta,
-    globalFilterDistinctValues,
-    uiFilterValues,
-    setUiFilterValues,
-  ]);
+            return (
+              <div key={gf.id} className={fieldClass}>
+                <span
+                  className={layout === "inline" ? "text-sm font-semibold" : undefined}
+                  style={{ color: "var(--platform-fg-muted)" }}
+                >
+                  {label}
+                </span>
+                {isMulti && hasOptions ? (
+                  <GlobalFilterMultiSelect
+                    label={String(label)}
+                    operator={(gf as AggregationFilter).operator}
+                    options={options as unknown[]}
+                    selectedArray={selectedArray}
+                    layout={layout}
+                    onChangeSelected={(next) =>
+                      setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))
+                    }
+                  />
+                ) : ((gf as { inputType?: string }).inputType === "select" ||
+                    isYearOp ||
+                    isYearMonthOp ||
+                    (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf)) &&
+                  hasOptions ? (
+                  <GlobalFilterSingleSelect
+                    label={String(label)}
+                    operator={(gf as AggregationFilter).operator}
+                    options={options as unknown[]}
+                    layout={layout}
+                    value={
+                      isYearOp
+                        ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
+                        : isYearMonthOp
+                          ? String(uiFilterValues[gf.id] ?? "")
+                          : isDayOperator((gf as AggregationFilter).operator)
+                            ? dayFilterSelectDisplayValue(
+                                (gf as AggregationFilter).operator,
+                                uiFilterValues[gf.id]
+                              )
+                            : monthFilterSelectDisplayValue(
+                                (gf as AggregationFilter).operator,
+                                uiFilterValues[gf.id]
+                              )
+                    }
+                    onChange={(next) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))}
+                  />
+                ) : (
+                  <input
+                    type={
+                      (gf as { inputType?: string }).inputType === "number"
+                        ? "number"
+                        : (gf as { inputType?: string }).inputType === "date"
+                          ? "date"
+                          : "text"
+                    }
+                    className={
+                      layout === "inline"
+                        ? "mobile-dash-filter-trigger w-full"
+                        : "w-full rounded-md border px-2 py-1 text-sm sm:w-32"
+                    }
+                    style={{
+                      borderColor: "var(--platform-border)",
+                      background: "var(--platform-surface, var(--platform-bg))",
+                      color: "var(--platform-fg)",
+                    }}
+                    value={String(uiFilterValues[gf.id] ?? "")}
+                    onChange={(e) =>
+                      setUiFilterValues((prev) => ({
+                        ...prev,
+                        [gf.id]:
+                          (gf as { inputType?: string }).inputType === "number"
+                            ? e.target.valueAsNumber
+                            : e.target.value,
+                      }))
+                    }
+                    placeholder={hasOptions ? undefined : "Escribí un valor…"}
+                  />
+                )}
+                {layout === "inline" && !hasOptions && !isMulti && (
+                  <p className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>
+                    {(gf as { inputType?: string }).inputType === "select" ||
+                    isYearOp ||
+                    isYearMonthOp
+                      ? "Cargando opciones…"
+                      : null}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </>
+      );
+    },
+    [
+      globalFilters,
+      globalFilterDateMeta,
+      globalFilterDistinctValues,
+      uiFilterValues,
+      setUiFilterValues,
+    ]
+  );
+
+  const globalFiltersPanel = useMemo(
+    () => renderGlobalFiltersPanel("popover"),
+    [renderGlobalFiltersPanel]
+  );
 
   const mobileFilterWidgets = useMemo(
     () => orderedWidgets.filter((w) => w.type === "filter"),
@@ -2388,27 +2493,38 @@ export function DashboardViewer({
   );
 
   const mobileFiltersContent = useMemo(() => {
-    if (!globalFiltersPanel && mobileFilterWidgets.length === 0) return null;
+    const panel = renderGlobalFiltersPanel("inline");
+    if (!panel && mobileFilterWidgets.length === 0) {
+      return (
+        <p className="text-sm py-6 text-center" style={{ color: "var(--platform-fg-muted)" }}>
+          No hay filtros configurados en este dashboard.
+        </p>
+      );
+    }
     return (
       <>
-        {globalFiltersPanel}
+        {panel}
         {mobileFilterWidgets.map((w) => (
-          <div key={w.id} className="rounded-lg border p-2" style={{ borderColor: "var(--platform-border)" }}>
+          <div
+            key={w.id}
+            className="mobile-dash-filter-block rounded-xl border p-3"
+            style={{ borderColor: "var(--platform-border)" }}
+          >
             {renderViewerWidget(w, { mobile: true, compact: true })}
           </div>
         ))}
       </>
     );
-  }, [globalFiltersPanel, mobileFilterWidgets, renderViewerWidget]);
+  }, [renderGlobalFiltersPanel, mobileFilterWidgets, renderViewerWidget]);
 
   const clearMobileFilterDraft = useCallback(() => {
     setUiFilterValues(() => {
       const next: Record<string, unknown> = {};
-      for (const gf of globalFilters) next[gf.id] = "";
+      for (const gf of globalFilters) next[gf.id] = Array.isArray(uiFilterValues[gf.id]) ? [] : "";
       for (const w of mobileFilterWidgets) next[w.id] = "";
       return next;
     });
-  }, [globalFilters, mobileFilterWidgets, setUiFilterValues]);
+  }, [globalFilters, mobileFilterWidgets, setUiFilterValues, uiFilterValues]);
 
   const hasMobileFilters =
     globalFilters.length > 0 ||
