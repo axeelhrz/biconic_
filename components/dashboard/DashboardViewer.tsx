@@ -1090,6 +1090,7 @@ export function DashboardViewer({
       fiscalYearStartMonth?: number;
     } | undefined;
     setCardLayoutMode(normalizeCardLayoutMode(layout?.cardLayoutMode));
+    const loadedCardLayoutMode = normalizeCardLayoutMode(layout?.cardLayoutMode);
     if (layout?.dashboardCompareDefaults) {
       setDashboardCompareDefaults({
         ...EMPTY_DASHBOARD_COMPARE_DEFAULTS,
@@ -1127,11 +1128,16 @@ export function DashboardViewer({
     const rawWidgets = Array.isArray(layout?.widgets) ? layout.widgets : [];
     const loadedWidgets = rawWidgets.map((w, i) => {
       const base = w as Widget;
-      const normalized = normalizeLoadedDashboardWidget({
+      let normalized = normalizeLoadedDashboardWidget({
         ...base,
         gridOrder: base.gridOrder ?? i,
         pageId: normalizeWidgetPageId(base.pageId),
       });
+      // En auto, fixedGrid stale anula gridSpan/minHeight al reabrir.
+      if (loadedCardLayoutMode === "auto" && normalized.fixedGrid) {
+        const { fixedGrid: _fg, ...without } = normalized;
+        normalized = without as typeof normalized;
+      }
       const needsData =
         normalized.type !== "filter" &&
         normalized.type !== "text" &&

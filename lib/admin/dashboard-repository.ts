@@ -149,9 +149,12 @@ export async function publishDashboardFromDb(dashboardId: string, published: boo
   await requireAppAdmin();
   const sql = getSql();
   try {
+    const visibility = published ? "public" : "private";
     const rows = await sql<{ id: string }[]>`
       UPDATE public.dashboard
-      SET published = ${published}, updated_at = now()
+      SET published = ${published},
+          visibility = ${visibility},
+          updated_at = now()
       WHERE id = ${dashboardId}
       RETURNING id
     `;

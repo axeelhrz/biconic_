@@ -410,7 +410,10 @@ export async function publishDashboardAdmin(
 
   const { error } = await supabase
     .from("dashboard")
-    .update({ visibility: published ? "public" : "private" })
+    .update({
+      published,
+      visibility: published ? "public" : "private",
+    })
     .eq("id", dashboardId);
 
   if (error) {

@@ -1,11 +1,19 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
-import { LayoutDashboard, Send } from "lucide-react";
+import { LayoutDashboard, Send, Trash2, Undo2, MoreHorizontal, Share2 } from "lucide-react";
 import EyeIcon from "../icons/EyeIcon";
-import EllipsisHorizontalIcon from "../icons/EllipsisHorizontalIcon";
-import ShareDashboardModal from "./ShareDashboardModal"; // Import the modal
+import ShareDashboardModal from "./ShareDashboardModal";
 import { DashboardCardMiniPreview } from "./DashboardCardMiniPreview";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // Layout guardado (widgets con posición/span) para previsualización en la tarjeta
 export type DashboardLayoutPreview = {
@@ -43,34 +51,21 @@ export interface Dashboard {
 }
 
 interface DashboardCardProps {
-    dashboard: Dashboard;
-    href?: string;
-    onDelete?: (dashboard: Dashboard) => void;
-    /** Si se define, en borrador se muestra acción para publicar (p. ej. admin). */
-    onPublish?: (dashboard: Dashboard) => void | Promise<void>;
+  dashboard: Dashboard;
+  href?: string;
+  onDelete?: (dashboard: Dashboard) => void;
+  /** Si se define, en borrador se muestra acción para publicar (p. ej. admin). */
+  onPublish?: (dashboard: Dashboard) => void | Promise<void>;
+  /** Despublicar cuando ya está publicado. */
+  onUnpublish?: (dashboard: Dashboard) => void | Promise<void>;
 }
 
-// Inline Share Icon if not available (copying from EtlCard for consistency)
-const InlineShareIcon = ({ className }: { className?: string }) => (
-  <svg
-    className={className}
-    viewBox="0 0 24 24"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <path
-      d="M18 16.08C17.24 16.08 16.56 16.38 16.04 16.85L8.91 12.7C8.96 12.47 9 12.24 9 12C9 11.76 8.96 11.53 8.91 11.3L15.96 7.19C16.5 7.69 17.21 8 18 8C19.66 8 21 6.66 21 5C21 3.34 19.66 2 18 2C16.34 2 15 3.34 15 5C15 5.24 15.04 5.47 15.09 5.7L8.04 9.81C7.5 9.31 6.79 9 6 9C4.34 9 3 10.34 3 12C3 13.66 4.34 15 6 15C6.79 15 7.5 15.31 8.04 15.81L15.12 19.95C15.08 20.17 15.04 20.4 15.04 20.62C15.04 22.28 16.38 23.62 18.04 23.62C19.7 23.62 21.04 22.28 21.04 20.62C21.04 18.96 19.7 17.62 18 17.62"
-      fill="currentColor"
-    />
-  </svg>
-);
-
-// El componente recibe un objeto de tipo Dashboard
 export default function DashboardCard({
   dashboard,
   href,
   onDelete,
   onPublish,
+  onUnpublish,
 }: DashboardCardProps) {
   const {
     id,
@@ -86,22 +81,31 @@ export default function DashboardCard({
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const activePageId = layout?.activePageId ?? layout?.pages?.[0]?.id;
-  const hasLayoutPreview = Array.isArray(layout?.widgets)
-    && layout.widgets.some((w) => !activePageId || w.pageId === activePageId);
+  const hasLayoutPreview =
+    Array.isArray(layout?.widgets) &&
+    layout.widgets.some((w) => !activePageId || w.pageId === activePageId);
 
-  // Badge de estado: verde/amarillo con tema oscuro
   const statusClasses =
     status === "Publicado"
       ? "bg-[var(--platform-success-dim)] text-[var(--platform-success)]"
       : status === "Borrador"
-      ? "bg-[var(--platform-warning)]/20 text-[var(--platform-warning)]"
-      : "bg-[var(--platform-surface-hover)] text-[var(--platform-fg-muted)]";
+        ? "bg-[var(--platform-warning)]/20 text-[var(--platform-warning)]"
+        : "bg-[var(--platform-surface-hover)] text-[var(--platform-fg-muted)]";
+
+  const runPublish = async (fn: (d: Dashboard) => void | Promise<void>) => {
+    setPublishing(true);
+    try {
+      await fn(dashboard);
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const hasActions = Boolean(onPublish || onUnpublish || onDelete);
 
   return (
     <>
-      <Link
-        href={href ?? `/dashboard/${id}`}
-        aria-label={`Abrir dashboard ${title}`}
+      <div
         className="flex w-full flex-col overflow-hidden border transition-shadow hover:border-[var(--platform-accent)]"
         style={{
           background: "var(--platform-surface)",
@@ -111,47 +115,54 @@ export default function DashboardCard({
           boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
         }}
       >
-        {/* Previsualización: layout del dashboard creado o placeholder */}
-        <div className="relative h-[193px] w-full overflow-hidden bg-[var(--platform-bg)]">
-          {hasLayoutPreview ? (
-            <DashboardCardMiniPreview dashboardId={id} layout={layout!} />
-          ) : imageUrl && imageUrl !== "/Image.svg" ? (
-            <Image
-              src={imageUrl}
-              alt={`Vista previa de ${title}`}
-              fill
-              className="object-cover"
-            />
-          ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4" style={{ color: "var(--platform-fg-muted)" }}>
-              <LayoutDashboard className="h-10 w-10 opacity-50" />
-              <span className="text-xs font-medium">Sin previsualización</span>
-              <span className="text-[10px] opacity-80">Abrí el dashboard para diseñar</span>
-            </div>
-          )}
-        </div>
+        <Link
+          href={href ?? `/dashboard/${id}`}
+          aria-label={`Abrir dashboard ${title}`}
+          className="block"
+        >
+          <div className="relative h-[193px] w-full overflow-hidden bg-[var(--platform-bg)]">
+            {hasLayoutPreview ? (
+              <DashboardCardMiniPreview dashboardId={id} layout={layout!} />
+            ) : imageUrl && imageUrl !== "/Image.svg" ? (
+              <Image
+                src={imageUrl}
+                alt={`Vista previa de ${title}`}
+                fill
+                className="object-cover"
+              />
+            ) : (
+              <div
+                className="flex h-full w-full flex-col items-center justify-center gap-2 p-4"
+                style={{ color: "var(--platform-fg-muted)" }}
+              >
+                <LayoutDashboard className="h-10 w-10 opacity-50" />
+                <span className="text-xs font-medium">Sin previsualización</span>
+                <span className="text-[10px] opacity-80">Abrí el dashboard para diseñar</span>
+              </div>
+            )}
+          </div>
+        </Link>
 
-        {/* Contenido de la Tarjeta */}
         <div className="flex flex-col gap-2.5 p-5">
-          <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>{title}</h3>
+          <Link href={href ?? `/dashboard/${id}`} className="block">
+            <h3 className="text-lg font-semibold" style={{ color: "var(--platform-fg)" }}>
+              {title}
+            </h3>
+          </Link>
 
           {clientLabel ? (
-            <p
-              className="text-xs font-medium -mt-1"
-              style={{ color: "var(--platform-fg-muted)" }}
-            >
+            <p className="text-xs font-medium -mt-1" style={{ color: "var(--platform-fg-muted)" }}>
               {clientLabel}
             </p>
           ) : null}
 
-          {/* Badge de Estado */}
-          <span
-            className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-medium ${statusClasses}`}
-          >
+          <span className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-medium ${statusClasses}`}>
             {status}
           </span>
 
-          <p className="h-8 text-xs font-normal" style={{ color: "var(--platform-fg-muted)" }}>{description}</p>
+          <p className="h-8 text-xs font-normal" style={{ color: "var(--platform-fg-muted)" }}>
+            {description}
+          </p>
 
           {owner && owner.fullName && (
             <p className="mt-1 text-xs font-medium" style={{ color: "var(--platform-accent)" }}>
@@ -159,104 +170,112 @@ export default function DashboardCard({
             </p>
           )}
 
-          {/* Divisor */}
           <hr className="my-1 border-t" style={{ borderColor: "var(--platform-border)" }} />
 
-          {/* Pie de la Tarjeta */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5" style={{ color: "var(--platform-fg-muted)" }}>
               <EyeIcon className="h-4 w-4" />
               <span className="text-[10px] font-normal">{views}</span>
             </div>
-            
-            <div className="flex items-center gap-2">
-                {/* Botón Eliminar - Solo si se pasa onDelete */}
-                {onPublish && status === "Borrador" && (
+
+            <div className="flex items-center gap-1">
+              {onPublish && status === "Borrador" && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold transition-colors hover:opacity-80 disabled:opacity-40"
+                  style={{ color: "var(--platform-accent)" }}
+                  disabled={publishing}
+                  onClick={() => void runPublish(onPublish)}
+                  title="Publicar para clientes"
+                  aria-label="Publicar dashboard"
+                >
+                  <Send className="h-4 w-4" />
+                  Publicar
+                </button>
+              )}
+
+              {hasActions && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
                     <button
-                        className="transition-colors hover:opacity-80 disabled:opacity-40"
-                        style={{ color: "var(--platform-accent)" }}
+                      type="button"
+                      className="rounded-md p-1.5 transition-colors hover:opacity-80"
+                      style={{ color: "var(--platform-fg-muted)" }}
+                      aria-label="Más acciones"
+                      title="Más acciones"
+                    >
+                      <MoreHorizontal className="h-5 w-5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-[180px]">
+                    {onPublish && status === "Borrador" && (
+                      <DropdownMenuItem
                         disabled={publishing}
-                        onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            void (async () => {
-                              setPublishing(true);
-                              try {
-                                await onPublish(dashboard);
-                              } finally {
-                                setPublishing(false);
-                              }
-                            })();
+                        onSelect={(e) => {
+                          e.preventDefault();
+                          void runPublish(onPublish);
                         }}
-                        title="Publicar para clientes"
-                        aria-label="Publicar dashboard"
+                      >
+                        <Send className="mr-2 h-4 w-4" />
+                        Publicar para clientes
+                      </DropdownMenuItem>
+                    )}
+                    {onUnpublish && status === "Publicado" && (
+                      <DropdownMenuItem
+                        disabled={publishing}
+                        onSelect={(e) => {
+                          e.preventDefault();
+                          void runPublish(onUnpublish);
+                        }}
+                      >
+                        <Undo2 className="mr-2 h-4 w-4" />
+                        Despublicar
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setShareModalOpen(true);
+                      }}
                     >
-                        <Send className="h-5 w-5" />
-                    </button>
-                )}
-
-                {onDelete && (
-                    <button
-                        className="transition-colors hover:opacity-80"
-                        style={{ color: "var(--platform-fg-muted)" }}
-                        onClick={(e) => {
+                      <Share2 className="mr-2 h-4 w-4" />
+                      Compartir
+                    </DropdownMenuItem>
+                    {onDelete && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="text-red-500 focus:text-red-500"
+                          onSelect={(e) => {
                             e.preventDefault();
-                            e.stopPropagation();
                             onDelete(dashboard);
-                        }}
-                        title="Eliminar Dashboard"
-                    >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="h-5 w-5"
+                          }}
                         >
-                          <path d="M3 6h18" />
-                          <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                          <path d="M8 6V4c0-1 1-2 2-2h4c0 1 2 2 2v2" />
-                          <line x1="10" x2="10" y1="11" y2="17" />
-                          <line x1="14" x2="14" y1="11" y2="17" />
-                        </svg>
-                    </button>
-                )}
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Eliminar
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
 
-                {/* Botón Compartir */}
+              {!hasActions && (
                 <button
-                className="transition-colors"
-                style={{ color: "var(--platform-fg-muted)" }}
-                onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setShareModalOpen(true);
-                }}
-                title="Compartir Dashboard"
+                  type="button"
+                  className="rounded-md p-1.5 transition-colors"
+                  style={{ color: "var(--platform-fg-muted)" }}
+                  onClick={() => setShareModalOpen(true)}
+                  title="Compartir Dashboard"
                 >
-                <InlineShareIcon className="h-5 w-5" />
+                  <Share2 className="h-5 w-5" />
                 </button>
-
-                <button
-                className="transition-colors"
-                style={{ color: "var(--platform-fg-muted)" }}
-                onClick={(e) => {
-                    // Evita navegar cuando se hace click en el botón de opciones
-                    e.preventDefault();
-                    e.stopPropagation();
-                    // TODO: abrir menú contextual
-                }}
-                >
-                <EllipsisHorizontalIcon className="h-5 w-5" />
-                </button>
+              )}
             </div>
           </div>
         </div>
-      </Link>
-      
-      {/* Share Modal - rendered outside Link prevents hydration issues usually, but fragment works */}
+      </div>
+
       <ShareDashboardModal
         dashboardId={dashboard.id}
         clientId={dashboard.clientId}

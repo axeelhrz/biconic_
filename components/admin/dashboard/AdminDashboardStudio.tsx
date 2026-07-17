@@ -37,6 +37,8 @@ import {
   themeToWrapperBackground,
 } from "@/types/dashboard";
 import { StudioHeader, type DashboardStatus, type StudioMode } from "./StudioHeader";
+import { publishDashboardAdmin } from "@/app/admin/(main)/dashboard/actions";
+import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
 import { StudioCardLayoutToolbar } from "./StudioCardLayoutToolbar";
 import { StudioPageTabs } from "./StudioPageTabs";
 import { StudioEmptyState } from "./StudioEmptyState";
@@ -399,8 +401,32 @@ function studioWidgetAggForVisualMerge(
   return widgetAggregationWithStoredVisualOverrides(w);
 }
 
-function normalizeLoadedStudioWidget(w: StudioWidget): StudioWidget {
-  return normalizeLoadedDashboardWidget(w) as StudioWidget;
+function normalizeLoadedStudioWidget(
+  w: StudioWidget,
+  cardLayoutMode: DashboardCardLayoutMode = "auto"
+): StudioWidget {
+  const normalized = normalizeLoadedDashboardWidget(w) as StudioWidget;
+  // En modo auto, gridSpan/minHeight son la fuente de verdad. Un fixedGrid
+  // stale (p. ej. de un snapshot previo) hace que al reabrir solo algunas
+  // tarjetas recuperen un tamaño incorrecto.
+  if (cardLayoutMode === "auto" && normalized.fixedGrid) {
+    const { fixedGrid: _fg, ...without } = normalized;
+    return without as StudioWidget;
+  }
+  return normalized;
+}
+
+/** Quita fixedGrid al persistir en modo auto para no congelar tamaños stale. */
+function stripFixedGridForAutoSave(
+  widgets: StudioWidget[],
+  cardLayoutMode: DashboardCardLayoutMode
+): StudioWidget[] {
+  if (cardLayoutMode !== "auto") return widgets;
+  return widgets.map((w) => {
+    if (!w.fixedGrid) return w;
+    const { fixedGrid: _fg, ...rest } = w;
+    return rest as StudioWidget;
+  });
 }
 
 /** Regenera config del canvas con la aggregationConfig/color actuales del widget (estilos del panel). */
@@ -483,6 +509,7 @@ export function AdminDashboardStudio({
   const [studioFilterValues, setStudioFilterValues] = useState<Record<string, unknown>>({});
   const [dashboardTheme, setDashboardTheme] = useState<DashboardTheme>({ ...DEFAULT_DASHBOARD_THEME });
   const [mode, setMode] = useState<StudioMode>("disenar");
+  const [isPublished, setIsPublished] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -592,6 +619,11 @@ export function AdminDashboardStudio({
         }
         const data = json.data;
         if (cancelled || !data) return;
+        const publishedStatus = dashboardPublishedStatusFromRow({
+          published: (data as { published?: boolean | null }).published,
+          visibility: (data as { visibility?: string | null }).visibility,
+        });
+        if (!cancelled) setIsPublished(publishedStatus === "Publicado");
         const rawLayout = (data as {
           layout?: {
             widgets?: unknown[];
@@ -634,7 +666,8 @@ export function AdminDashboardStudio({
                   gridOrder: (w as StudioWidget).gridOrder ?? i,
                   gridSpan: (w as StudioWidget).gridSpan ?? 2,
                   pageId: (w as StudioWidget).pageId ?? firstPageId,
-                } as StudioWidget
+                } as StudioWidget,
+                loadedCardLayoutMode
               );
               const needsData =
                 normalized.type !== "filter" &&
@@ -740,7 +773,10 @@ export function AdminDashboardStudio({
   const saveDashboard = useCallback(async (overrides?: { widgets?: StudioWidget[]; silent?: boolean }) => {
     setIsSaving(true);
     try {
-      const widgetsToSave = overrides?.widgets ?? widgetsRef.current;
+      const widgetsToSave = stripFixedGridForAutoSave(
+        overrides?.widgets ?? widgetsRef.current,
+        cardLayoutMode
+      );
       const cleanWidgets = widgetsToSave.map(({ rows, config, columns, facetValues, diagnosticPreview, ...rest }) => {
         const agg = (rest.aggregationConfig ?? {}) as Record<string, unknown>;
         const dashboardVisualOverrides = extractDashboardWidgetOverrides(agg);
@@ -1988,6 +2024,26 @@ export function AdminDashboardStudio({
     saveDashboard();
   }, [saveDashboard]);
 
+  const handlePublishChange = useCallback(
+    async (published: boolean) => {
+      if (isDirty) {
+        await saveDashboard({ silent: true });
+      }
+      const res = await publishDashboardAdmin(dashboardId, published);
+      if (!res.ok) {
+        toast.error(res.error ?? "No se pudo actualizar la publicación");
+        return;
+      }
+      setIsPublished(published);
+      toast.success(
+        published
+          ? "Dashboard publicado; los viewers del cliente ya pueden verlo."
+          : "Dashboard despublicado; ya no aparece para viewers."
+      );
+    },
+    [dashboardId, isDirty, saveDashboard]
+  );
+
   const snapshotPageFixedGrids = useCallback(
     (pageWidgets: StudioWidget[], pageId: string): StudioWidget[] => {
       const pageWs = pageWidgets
@@ -2006,12 +2062,17 @@ export function AdminDashboardStudio({
 
   const handleBeforePreview = useCallback(async () => {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    const pageId = activePageId ?? "page-1";
-    const snapshotted = snapshotPageFixedGrids(widgetsRef.current, pageId);
-    setWidgets(snapshotted);
-    widgetsRef.current = snapshotted;
-    await saveDashboard({ widgets: snapshotted, silent: true });
-  }, [activePageId, snapshotPageFixedGrids, saveDashboard]);
+    // Solo congelar fixedGrid en modo manual; en auto se empaqueta desde gridSpan/minHeight.
+    if (cardLayoutMode === "manual") {
+      const pageId = activePageId ?? "page-1";
+      const snapshotted = snapshotPageFixedGrids(widgetsRef.current, pageId);
+      setWidgets(snapshotted);
+      widgetsRef.current = snapshotted;
+      await saveDashboard({ widgets: snapshotted, silent: true });
+      return;
+    }
+    await saveDashboard({ silent: true });
+  }, [activePageId, cardLayoutMode, snapshotPageFixedGrids, saveDashboard]);
 
   const updateTheme = useCallback((patch: Partial<DashboardTheme>) => {
     setDashboardTheme((prev) => ({ ...prev, ...patch }));
@@ -2053,10 +2114,14 @@ export function AdminDashboardStudio({
             if (fg) next.fixedGrid = fg;
             if (patch.gridSpan != null) next.gridSpan = patch.gridSpan;
             if (patch.minHeight != null) next.minHeight = patch.minHeight;
+          } else if (next.fixedGrid) {
+            const { fixedGrid: _fg, ...rest } = next;
+            next = rest as StudioWidget;
           }
           return next;
         });
-        return snapshotPageFixedGrids(updated, pageId);
+        // En auto no snapshotear fixedGrid: el packer lo prioriza sobre gridSpan/minHeight.
+        return cardLayoutMode === "manual" ? snapshotPageFixedGrids(updated, pageId) : updated;
       });
       setIsDirty(true);
     },
@@ -2314,6 +2379,9 @@ export function AdminDashboardStudio({
             if (cardLayoutMode === "manual") {
               const fg = reconcileManualFixedGrid(next, layoutSizePatch, packCols, packRowGapPx, pageWs);
               if (fg) next.fixedGrid = fg;
+            } else if (next.fixedGrid) {
+              const { fixedGrid: _fg, ...rest } = next;
+              next = rest as StudioWidget;
             }
           }
           const percentLayoutPatch =
@@ -2359,7 +2427,9 @@ export function AdminDashboardStudio({
           }
           return next;
         });
-        return layoutSizePatch ? snapshotPageFixedGrids(mapped, pageId) : mapped;
+        return layoutSizePatch && cardLayoutMode === "manual"
+          ? snapshotPageFixedGrids(mapped, pageId)
+          : mapped;
       });
       setIsDirty(true);
 
@@ -2422,6 +2492,7 @@ export function AdminDashboardStudio({
           etlName={etlName}
           onEtlChange={refetchEtlData}
           status={status}
+          isPublished={isPublished}
           lastUpdateLabel={lastUpdateLabel}
           mode={mode}
           onModeChange={setMode}
@@ -2429,6 +2500,7 @@ export function AdminDashboardStudio({
           isSaving={isSaving}
           onSave={handleSave}
           onBeforePreview={handleBeforePreview}
+          onPublishChange={handlePublishChange}
           onRun={runAllMetrics}
           hideRunButton
         />

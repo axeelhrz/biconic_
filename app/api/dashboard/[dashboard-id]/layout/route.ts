@@ -73,7 +73,7 @@ export async function GET(
 
     const { data, error } = await supabase
       .from("dashboard")
-      .select("id, title, layout, global_filters_config, etl_id")
+      .select("id, title, layout, global_filters_config, etl_id, published, visibility")
       .eq("id", dashboardId)
       .maybeSingle();
 

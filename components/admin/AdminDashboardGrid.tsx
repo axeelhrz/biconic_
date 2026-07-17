@@ -168,6 +168,18 @@ export default function AdminDashboardGrid({
     );
   };
 
+  const handleUnpublish = async (d: Dashboard) => {
+    const res = await publishDashboardAdmin(d.id, false);
+    if (!res.ok) {
+      toast.error(res.error ?? "No se pudo despublicar el dashboard");
+      return;
+    }
+    toast.success("Dashboard despublicado.");
+    setDashboards((prev) =>
+      prev.map((x) => (x.id === d.id ? { ...x, status: "Borrador" } : x))
+    );
+  };
+
   // Existing code had [] dep array, meaning it loaded ONCE and filtered client-side.
   // I will respect that pattern.
 
@@ -249,6 +261,7 @@ export default function AdminDashboardGrid({
                     href={`${basePath}/${dashboard.id}`}
                     onDelete={handleDeleteClick}
                     onPublish={handlePublish}
+                    onUnpublish={handleUnpublish}
                   />
                 ))}
               </AdminResourceCardGrid>
@@ -264,6 +277,7 @@ export default function AdminDashboardGrid({
               href={`${basePath}/${dashboard.id}`}
               onDelete={handleDeleteClick}
               onPublish={handlePublish}
+              onUnpublish={handleUnpublish}
             />
           ))}
         </AdminResourceCardGrid>
