@@ -29,6 +29,7 @@ export type ViewerDashboardAccessRow = {
   title: string | null;
   name: string | null;
   layout: unknown;
+  global_filters_config: unknown;
 };
 
 /**
@@ -48,8 +49,12 @@ export async function resolveViewerDashboardAccess(
       columnExists(sql, "dashboard_has_client_permissions", "is_active"),
     ]);
 
+    const hasGlobalFilters = await columnExists(sql, "dashboard", "global_filters_config");
     const publishedSelect = hasPublished ? "published" : "false AS published";
     const visibilitySelect = hasVisibility ? "visibility" : "NULL::text AS visibility";
+    const globalFiltersSelect = hasGlobalFilters
+      ? "global_filters_config"
+      : "NULL::jsonb AS global_filters_config";
 
     const dashRows = (await sql.unsafe(
       `
@@ -62,7 +67,8 @@ export async function resolveViewerDashboardAccess(
         etl_id,
         title,
         name,
-        layout
+        layout,
+        ${globalFiltersSelect}
       FROM public.dashboard
       WHERE id = $1
       LIMIT 1

@@ -839,6 +839,7 @@ function applyPersistedViewerFilterState(params: {
   filterCommitMode: "onChange" | "onButton";
   dashboardId: string;
   persistFilters: boolean;
+  persistUserId?: string | null;
 }): {
   filterValues: Record<string, unknown>;
   filterDraft: Record<string, unknown>;
@@ -848,7 +849,7 @@ function applyPersistedViewerFilterState(params: {
 } {
   const layoutDefaults = readLayoutFilterDefaults(params.gfs);
   const persisted = params.persistFilters
-    ? loadPersistedDashboardViewerFilters(params.dashboardId)
+    ? loadPersistedDashboardViewerFilters(params.dashboardId, params.persistUserId)
     : null;
   const validIds = collectDashboardFilterIds(params.gfs, params.widgets);
   const mergedApplied = mergeFilterValuesFromPersistence(
@@ -1006,6 +1007,7 @@ export function DashboardViewer({
 }: DashboardViewerProps) {
   const persistFilters =
     persistFiltersProp ?? (!isPublic && !(initialWidgets && initialWidgets.length > 0));
+  const [persistUserId, setPersistUserId] = useState<string | null>(null);
   const [title, setTitle] = useState("Dashboard");
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [globalFilters, setGlobalFilters] = useState<AggregationFilter[]>([]);
@@ -1055,6 +1057,23 @@ export function DashboardViewer({
 
   const uiFilterValues = filterCommitMode === "onButton" ? filterDraft : filterValues;
   const filtersForDataLoad = filterCommitMode === "onButton" ? filterApplied : filterValues;
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { createClient } = await import("@/lib/supabase/client");
+        const supabase = createClient();
+        const { data } = await supabase.auth.getUser();
+        if (!cancelled) setPersistUserId(data?.user?.id ? String(data.user.id) : null);
+      } catch {
+        if (!cancelled) setPersistUserId(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const setUiFilterValues = useCallback(
     (action: React.SetStateAction<Record<string, unknown>>) => {
@@ -1121,6 +1140,7 @@ export function DashboardViewer({
           filterCommitMode,
           dashboardId,
           persistFilters,
+          persistUserId,
         });
         if (filterCommitMode === "onButton") {
           setFilterDraft(applied.filterDraft);
@@ -1224,6 +1244,7 @@ export function DashboardViewer({
       filterCommitMode,
       dashboardId,
       persistFilters,
+      persistUserId,
     });
     if (persistedState.activePageId && pageIds.has(persistedState.activePageId)) {
       activePageId = persistedState.activePageId;
@@ -1251,6 +1272,7 @@ export function DashboardViewer({
     filterCommitMode,
     dashboardId,
     persistFilters,
+    persistUserId,
   ]);
 
   // Distinct values para filtros globales (multi-fuente cuando hay dataset semántico)
@@ -2015,17 +2037,18 @@ export function DashboardViewer({
     setDimensionDefaultDistinctValues({});
   }, [dashboardId]);
 
-  useEffect(() => {
-    if (!persistFilters || !dashboardId || !initialLoadedRef.current) return;
-    const timer = window.setTimeout(() => {
-      savePersistedDashboardViewerFilters(dashboardId, {
+  const persistFiltersSnapshot = useCallback(() => {
+    if (!persistFilters || !dashboardId) return;
+    savePersistedDashboardViewerFilters(
+      dashboardId,
+      {
         filters: filtersForDataLoad,
         filterDraft: uiFilterValues,
         dimensionDefaultFilterValues,
         activePageId: pageLayout?.activePageId,
-      });
-    }, 400);
-    return () => window.clearTimeout(timer);
+      },
+      persistUserId
+    );
   }, [
     persistFilters,
     dashboardId,
@@ -2033,7 +2056,35 @@ export function DashboardViewer({
     uiFilterValues,
     dimensionDefaultFilterValues,
     pageLayout?.activePageId,
+    persistUserId,
   ]);
+
+  useEffect(() => {
+    if (!persistFilters || !dashboardId || !initialLoadedRef.current) return;
+    const timer = window.setTimeout(() => {
+      persistFiltersSnapshot();
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [persistFilters, dashboardId, persistFiltersSnapshot]);
+
+  // Flush al cerrar pestaña / salir: el debounce de 400ms se cancela en unmount y perdía la sesión.
+  useEffect(() => {
+    if (!persistFilters || !dashboardId) return;
+    const flush = () => {
+      if (!initialLoadedRef.current) return;
+      persistFiltersSnapshot();
+    };
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      flush();
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  }, [persistFilters, dashboardId, persistFiltersSnapshot]);
 
   const handleFilterChange = useCallback((widgetId: string, value: unknown) => {
     setUiFilterValues((prev) => ({ ...prev, [widgetId]: value }));
@@ -2123,8 +2174,29 @@ export function DashboardViewer({
 
   const commitAppliedFilters = useCallback(() => {
     if (filterCommitMode !== "onButton") return;
-    setFilterApplied(cloneFilterValuesRecord(filterDraft));
-  }, [filterCommitMode, filterDraft]);
+    const next = cloneFilterValuesRecord(filterDraft);
+    setFilterApplied(next);
+    if (persistFilters && dashboardId) {
+      savePersistedDashboardViewerFilters(
+        dashboardId,
+        {
+          filters: next,
+          filterDraft: next,
+          dimensionDefaultFilterValues,
+          activePageId: pageLayout?.activePageId,
+        },
+        persistUserId
+      );
+    }
+  }, [
+    filterCommitMode,
+    filterDraft,
+    persistFilters,
+    dashboardId,
+    dimensionDefaultFilterValues,
+    pageLayout?.activePageId,
+    persistUserId,
+  ]);
 
   const runExportExcel = useCallback(async () => {
     setExportBusy(true);

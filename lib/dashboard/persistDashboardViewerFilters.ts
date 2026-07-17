@@ -11,7 +11,13 @@ export type PersistedDashboardViewerFilters = {
   updatedAt: string;
 };
 
-function storageKey(dashboardId: string): string {
+function storageKey(dashboardId: string, userId?: string | null): string {
+  const uid = userId && String(userId).trim() ? String(userId).trim() : "anon";
+  return `biconic:dashboard-viewer-filters:${uid}:${dashboardId}`;
+}
+
+/** Clave legacy (sin userId) para migrar sesiones guardadas antes del scope por usuario. */
+function legacyStorageKey(dashboardId: string): string {
   return `biconic:dashboard-viewer-filters:${dashboardId}`;
 }
 
@@ -81,11 +87,21 @@ export function mergeDimensionDefaultsFromPersistence(
 }
 
 export function loadPersistedDashboardViewerFilters(
-  dashboardId: string
+  dashboardId: string,
+  userId?: string | null
 ): PersistedDashboardViewerFilters | null {
   if (typeof window === "undefined" || !dashboardId.trim()) return null;
   try {
-    const raw = window.localStorage.getItem(storageKey(dashboardId));
+    const key = storageKey(dashboardId, userId);
+    let raw = window.localStorage.getItem(key);
+    if (!raw && userId) {
+      // Migrar una vez desde la clave legacy sin userId (admin/viewer mismo dispositivo).
+      const legacy = window.localStorage.getItem(legacyStorageKey(dashboardId));
+      if (legacy) {
+        raw = legacy;
+        window.localStorage.setItem(key, legacy);
+      }
+    }
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PersistedDashboardViewerFilters;
     if (parsed?.version !== DASHBOARD_VIEWER_FILTERS_STORAGE_VERSION) return null;
@@ -101,7 +117,8 @@ export function loadPersistedDashboardViewerFilters(
 
 export function savePersistedDashboardViewerFilters(
   dashboardId: string,
-  data: Omit<PersistedDashboardViewerFilters, "version" | "updatedAt">
+  data: Omit<PersistedDashboardViewerFilters, "version" | "updatedAt">,
+  userId?: string | null
 ): void {
   if (typeof window === "undefined" || !dashboardId.trim()) return;
   try {
@@ -113,7 +130,10 @@ export function savePersistedDashboardViewerFilters(
       ...(data.activePageId ? { activePageId: data.activePageId } : {}),
       updatedAt: new Date().toISOString(),
     };
-    window.localStorage.setItem(storageKey(dashboardId), JSON.stringify(payload));
+    window.localStorage.setItem(
+      storageKey(dashboardId, userId),
+      JSON.stringify(payload)
+    );
   } catch {
     // quota / private mode
   }
