@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import postgres from "postgres";
+import { getInternalDbUrl } from "@/lib/db/internal-db-url";
+import { getServerAuthUser } from "@/lib/supabase/server-backend";
+import { toSqlParams } from "@/lib/db/sql-params";
 
+/** Listado legacy de dashboards para el shim del viewer. */
 export async function GET(req: NextRequest) {
+  const sql = postgres(getInternalDbUrl(), { max: 3 });
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError || !user) {
+    const user = await getServerAuthUser();
+    if (!user?.id) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
 
@@ -25,34 +25,39 @@ export async function GET(req: NextRequest) {
       .filter(Boolean);
 
     if (eqUserId) {
-      const { data, error } = await supabase
-        .from("dashboard")
-        .select("*")
-        .eq("user_id", eqUserId);
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      return NextResponse.json(data ?? []);
+      // Solo el propio usuario (o admin) puede pedir por user_id.
+      if (eqUserId !== user.id && user.app_role !== "APP_ADMIN") {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      const rows = await sql`
+        SELECT * FROM public.dashboard WHERE user_id = ${eqUserId}
+      `;
+      return NextResponse.json(rows);
     }
 
     if (inIds.length > 0) {
-      const { data, error } = await supabase.from("dashboard").select("*").in("id", inIds);
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      return NextResponse.json(data ?? []);
+      const rows = await sql`
+        SELECT * FROM public.dashboard WHERE id = ANY(${inIds}::uuid[])
+      `;
+      return NextResponse.json(rows);
     }
 
     if (inClientIds.length > 0) {
-      const { data, error } = await supabase
-        .from("dashboard")
-        .select("*")
-        .in("client_id", inClientIds);
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      return NextResponse.json(data ?? []);
+      const rows = await sql`
+        SELECT * FROM public.dashboard WHERE client_id = ANY(${inClientIds}::uuid[])
+      `;
+      return NextResponse.json(rows);
     }
 
-    const { data, error } = await supabase.from("dashboard").select("*").eq("user_id", user.id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json(data ?? []);
+    const rows = (await sql.unsafe(
+      `SELECT * FROM public.dashboard WHERE user_id = $1`,
+      toSqlParams([user.id])
+    )) as unknown[];
+    return NextResponse.json(rows);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error interno";
     return NextResponse.json({ error: message }, { status: 500 });
+  } finally {
+    await sql.end();
   }
 }
