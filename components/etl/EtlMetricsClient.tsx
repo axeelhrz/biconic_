@@ -3379,7 +3379,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                   ...w,
                   type: mergedChartType,
                   title: metricItem.name,
-                  minHeight: isHorizontalBar ? Math.max(Number(w.minHeight ?? 0), 360) : w.minHeight,
+                  minHeight: w.minHeight ?? (isHorizontalBar ? 360 : w.minHeight),
                   ...(mergedAnalysisId ? { analysisId: mergedAnalysisId } : {}),
                   ...(mergedMetricIds?.length ? { metricIds: mergedMetricIds } : {}),
                   ...(mergedLabelDisplayMode
@@ -3460,10 +3460,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           labelDisplayMode:
             patch.labelDisplayMode ??
             (isHorizontalBar ? ("percent" as const) : w.labelDisplayMode),
-          minHeight:
-            patch.minHeight != null
-              ? Math.max(Number(w.minHeight ?? 0), patch.minHeight)
-              : w.minHeight,
+          minHeight: w.minHeight ?? patch.minHeight,
           aggregationConfig: patch.aggregationConfig,
           config: undefined,
           rows: undefined,

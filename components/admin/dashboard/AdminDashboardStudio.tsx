@@ -924,10 +924,8 @@ export function AdminDashboardStudio({
             analysisId: analysisPatch.analysisId,
             metricIds: analysisPatch.metricIds ?? (widget as { metricIds?: string[] }).metricIds,
             labelDisplayMode: analysisPatch.labelDisplayMode ?? widget.labelDisplayMode,
-            minHeight:
-              analysisPatch.minHeight != null
-                ? Math.max(typeof widget.minHeight === "number" ? widget.minHeight : 0, analysisPatch.minHeight)
-                : widget.minHeight,
+            // Conservar altura del layout; no subir con un piso del análisis.
+            minHeight: widget.minHeight,
           }
         : widget;
       const dataAgg = (
@@ -1465,10 +1463,8 @@ export function AdminDashboardStudio({
           ) as AggregationConfig,
           metricIds: patch.metricIds ?? (w as { metricIds?: string[] }).metricIds,
           labelDisplayMode: patch.labelDisplayMode ?? w.labelDisplayMode,
-          minHeight:
-            patch.minHeight != null
-              ? Math.max(typeof w.minHeight === "number" ? w.minHeight : 0, patch.minHeight)
-              : w.minHeight,
+          // Conservar altura del layout del dashboard (no reaplicar piso del análisis).
+          minHeight: w.minHeight,
           config: undefined,
           rows: undefined,
         };

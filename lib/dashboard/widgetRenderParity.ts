@@ -492,11 +492,22 @@ export const DASHBOARD_GEO_OVERRIDE_KEYS = new Set([
   "mapChoroplethLabelSize",
 ]);
 
-/** Todas las claves de override del widget del dashboard (visuales + compare + geo). */
+/** Claves de layout de datos editables en el dashboard (tabla / ejes), no del análisis ETL. */
+export const DASHBOARD_DATA_LAYOUT_OVERRIDE_KEYS = new Set([
+  "tableRowFields",
+  "tableColumnFields",
+  "chartYAxes",
+  "dimensions",
+  "dimension",
+  "dimension2",
+]);
+
+/** Todas las claves de override del widget del dashboard (visuales + compare + geo + layout de datos). */
 export const DASHBOARD_WIDGET_OVERRIDE_KEYS = new Set([
   ...DASHBOARD_VISUAL_OVERRIDE_KEYS,
   ...DASHBOARD_COMPARE_OVERRIDE_KEYS,
   ...DASHBOARD_GEO_OVERRIDE_KEYS,
+  ...DASHBOARD_DATA_LAYOUT_OVERRIDE_KEYS,
 ]);
 
 /** Extrae overrides visuales del layout del dashboard (solo valores definidos). */
@@ -881,7 +892,8 @@ export function mergeSavedAnalysisIntoWidget(
     title: String(analysis.name ?? widget.title ?? "").trim() || undefined,
     metricIds: [...(analysis.metricIds ?? [])],
     labelDisplayMode,
-    minHeight: chartType === "horizontalBar" ? 360 : undefined,
+    // No forzar minHeight: el layout del dashboard es la fuente de verdad.
+    // El piso 360 solo aplica al crear widgets nuevos en el studio.
   };
 }
 
